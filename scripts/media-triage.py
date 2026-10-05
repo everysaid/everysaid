@@ -57,7 +57,7 @@ def twins(rows):
     if not os.path.exists(SIMILAR):
         return {}
     import numpy as np
-    group = dict(line.rstrip("\n").split("\t", 1)[::-1] for line in open(SIMILAR))
+    group = dict(line.rstrip("\n").split("\t", 1)[::-1] for line in open(SIMILAR, encoding="utf-8"))
     v = np.load(VECTORS)
     vec = dict(zip(v["paths"].tolist(), v["vectors"]))
     gone = {p for p, a, _, _ in rows if a == "delete"}
@@ -123,7 +123,7 @@ def history(dec):
     # immich-review.py's, by SHA-1: the path it was recorded with, and the one match.db has now
     paths = {}
     if os.path.exists(MATCH):
-        for sha1, path in sqlite3.connect(f"file:{MATCH}?mode=ro", uri=True).execute("SELECT sha1, path FROM match"):
+        for sha1, path in aside_mod.config.read_only(MATCH).execute("SELECT sha1, path FROM match"):
             paths.setdefault(sha1, set()).add(path)
     for table, what, at in (("decision", "approved", "decided_at"), ("date_from", "source", "decided_at")):
         if has(dec, table):
@@ -166,7 +166,7 @@ def main():
     dec.execute("CREATE TABLE IF NOT EXISTS aside (sha256 TEXT PRIMARY KEY, label TEXT NOT NULL, at INTEGER NOT NULL)")
     rows = dec.execute(f"SELECT path, action, label, at FROM {args.table}").fetchall() if has(dec, args.table) else []
     if args.only:
-        with open(args.only) as f:
+        with open(args.only, encoding="utf-8") as f:
             planned = {tuple(l.rstrip("\n").split("\t", 1)) for l in f if l.strip()}
         rows = [r for r in rows if (r[1], r[0]) in planned]
     already = {r[0] for r in dec.execute("SELECT sha256 FROM aside")}
@@ -174,7 +174,7 @@ def main():
     apart = already | ({sha_of(p) for (p,) in dec.execute("SELECT path FROM aside_decision")}
                        if has(dec, "aside_decision") else set())
     decided = history(dec)
-    arch = sqlite3.connect(f"file:{ARCHIVE_DB}?mode=ro", uri=True)
+    arch = aside_mod.config.read_only(ARCHIVE_DB)
     info = {sha: (path, mime, ts) for sha, path, mime, ts in arch.execute(
         "SELECT md.sha256, md.path, md.mime, min(m.ts) FROM media md JOIN attachment a ON a.sha256 = md.sha256 "
         "JOIN message m ON m.id = a.message_id GROUP BY md.sha256")}
@@ -247,11 +247,11 @@ def main():
         result = subprocess.run(cmd).returncode
         os.remove(f.name)
         if os.path.exists(done):
-            with open(done) as d:
+            with open(done, encoding="utf-8") as d:
                 plan += [f"delete\t{p}" for p in d]
             os.remove(done)
     if args.plan:
-        with open(args.plan, "w") as f:
+        with open(args.plan, "w", encoding="utf-8") as f:
             f.writelines(plan)
     sys.exit(result)
 

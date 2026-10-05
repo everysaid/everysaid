@@ -43,11 +43,11 @@ def main():
     os.umask(0o077)
     os.makedirs(config.CACHE, exist_ok=True)
     match_mod, review = load("immich_match", "immich-match.py"), load("immich_review", "immich-review.py")
-    match = sqlite3.connect(f"file:{review.MATCH}?mode=ro", uri=True)
+    match = config.read_only(review.MATCH)
     undated = {p for (p,) in match.execute("SELECT path FROM match WHERE taken IS NULL")}
     paths = sorted(p for p in review.kept() if p in undated)
 
-    index = sqlite3.connect(f"file:{match_mod.INDEX}?mode=ro", uri=True)
+    index = config.read_only(match_mod.INDEX)
     assets = [a for a in index.execute("SELECT id, embedding FROM asset") if a[1]]
     ids = [a[0] for a in assets]
     device = common.device()

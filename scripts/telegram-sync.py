@@ -37,13 +37,13 @@ import sqlite3
 import sys
 import time
 from collections import Counter
-from datetime import datetime
 
 from telethon import TelegramClient, utils
 from telethon.sessions import StringSession
 from telethon.tl.types import Channel, Chat, InputMessagesFilterPhotoVideo, InputMessagesFilterRoundVoice, User
 
 from common import config
+from chronika import telegram_store
 
 SESSION = "telegram-session"
 OUT = os.path.join(config.CACHE, "telegram")
@@ -52,28 +52,7 @@ MEDIA = os.path.join(OUT, "media")
 
 os.umask(0o077)
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS chat (
-    id INTEGER PRIMARY KEY,             -- Telethon's marked peer id (groups negative, -100... supergroups)
-    kind TEXT NOT NULL,                 -- user, saved, group, supergroup
-    title TEXT,
-    archived INTEGER NOT NULL,
-    json TEXT NOT NULL,                 -- the entity
-    synced_at INTEGER
-);
-CREATE TABLE IF NOT EXISTS entity (    -- people (and chats) seen as senders, by marked peer id
-    id INTEGER PRIMARY KEY,
-    json TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS message (
-    chat_id INTEGER NOT NULL,
-    id INTEGER NOT NULL,                -- unique only within the chat
-    date INTEGER NOT NULL,              -- Unix seconds
-    json TEXT NOT NULL,
-    file TEXT,                          -- the downloaded media, relative to media/
-    PRIMARY KEY (chat_id, id)
-) WITHOUT ROWID;
-"""
+SCHEMA = telegram_store.SCHEMA
 
 
 def save_credentials():
@@ -109,19 +88,7 @@ def kind(d):
     return "supergroup" if d.is_channel else "group"
 
 
-def plain(value):
-    """Telethon's to_dict() made JSON: dates as Unix seconds, binary fields left out."""
-    if isinstance(value, dict):
-        return {k: plain(v) for k, v in value.items() if not isinstance(v, bytes)}
-    if isinstance(value, list):
-        return [plain(v) for v in value if not isinstance(v, bytes)]
-    if isinstance(value, datetime):
-        return int(value.timestamp())
-    return value
-
-
-def dump(obj):
-    return json.dumps(plain(obj.to_dict()), ensure_ascii=False, separators=(",", ":"))
+plain, dump = telegram_store.plain, telegram_store.dump
 
 
 async def count(c, entity, **kw):
@@ -144,7 +111,7 @@ async def survey(c):
         print(f"\r{len(rows)} chats", end="", file=sys.stderr)
     print(file=sys.stderr)
     path = os.path.join(OUT, "survey.tsv")
-    with open(path, "w", newline="") as f:
+    with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, rows[0].keys() if rows else ["kind"], delimiter="\t")
         w.writeheader()
         w.writerows(rows)
@@ -214,15 +181,17 @@ def wanted(m):
     return False, 0
 
 
-async def media(c, dry_run):
-    if not config.get("telegram", "media", True):
+async def media(c, dry_run, only=None):
+    """only: the chats whose media are wanted (the app's choice per chat); then config's
+    `media = false` and `no_media` do not apply, the choice being explicit."""
+    if only is None and not config.get("telegram", "media", True):
         sys.exit("[telegram] media = false in config: no media are downloaded")
     db = store()
     todo = {}
     size = 0
-    skip = {int(i) for i in config.get("telegram", "no_media", [])}
+    skip = {int(i) for i in config.get("telegram", "no_media", [])} if only is None else set()
     for chat_id, mid, js in db.execute("SELECT chat_id, id, json FROM message WHERE file IS NULL"):
-        if chat_id in skip:
+        if chat_id in skip or (only is not None and chat_id not in only):
             continue
         ok, n = wanted(json.loads(js))
         if ok:
@@ -261,11 +230,13 @@ async def main():
     p.add_argument("--survey", action="store_true")
     p.add_argument("--media", action="store_true")
     p.add_argument("--dry-run", action="store_true", help="with --media: only how many and how big")
+    p.add_argument("--chats", type=int, nargs="*", help="with --media: only these chats (ids)")
     a = p.parse_args()
     if a.save_credentials:
         return save_credentials()
+    only = set(a.chats) if a.chats is not None else None
     if a.media and a.dry_run:
-        return await media(None, True)
+        return await media(None, True, only)
     c = client()
     if a.login:
         await c.start()                 # asks for the phone, the code and the 2FA password
@@ -276,7 +247,7 @@ async def main():
         await c.connect()
         if not await c.is_user_authorized():
             sys.exit("not logged in: run with --login first")
-        await (survey(c) if a.survey else media(c, False) if a.media else sync(c))
+        await (survey(c) if a.survey else media(c, False, only) if a.media else sync(c))
         keep_session(c)
     await c.disconnect()
 

@@ -165,7 +165,7 @@ os.makedirs(parts, exist_ok=True)
 # library or was removed) are not fetched again
 taken = set()
 if os.path.exists(ARCHIVE_DB):
-    taken = {p for (p,) in sqlite3.connect(f"file:{ARCHIVE_DB}?mode=ro", uri=True).execute(
+    taken = {p for (p,) in config.read_only(ARCHIVE_DB).execute(
         "SELECT a.source_path FROM attachment a JOIN source s ON s.id = a.source_id WHERE s.name = ?",
         (f"{os.path.basename(OUT)}/mms",))}
 saved = 0

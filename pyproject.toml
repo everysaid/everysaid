@@ -7,6 +7,8 @@ dependencies = [
     "keyring>=25",
     "phonenumbers>=9.0.40",
     "platformdirs>=4.12.3",
+    "tzdata>=2025.2 ; sys_platform == 'win32'",
+    "tzlocal>=5.3",
 ]
 
 # What the scripts need beyond the archive, by kind of work (`uv run --extra NAME ...`):
@@ -21,6 +23,15 @@ torch = ["torch>=2.9"]
 rocm = ["torch>=2.9; sys_platform == 'linux'", "triton-rocm; sys_platform == 'linux'"]
 # Telegram through its API, with the owner's account: telegram-sync
 telegram = ["telethon>=1.40"]
+# the app: `chronika serve` (API, UI, plugins, passkeys, push)
+server = ["fastapi>=0.120", "httpx>=0.28", "pillow>=11", "pywebpush>=2.1", "uvicorn[standard]>=0.38", "webauthn>=2.7"]
+# the MCP server for an assistant: `chronika mcp`
+mcp = ["mcp>=1.20"]
+# everything the app uses, live Telegram included
+app = ["chronika[server,mcp,telegram]"]
+
+[project.scripts]
+chronika = "chronika.cli:main"
 
 [tool.uv]
 conflicts = [[{ extra = "torch" }, { extra = "rocm" }]]
@@ -37,3 +48,8 @@ explicit = true
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

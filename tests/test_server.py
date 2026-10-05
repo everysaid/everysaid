@@ -1,0 +1,193 @@
+import shutil
+
+import pytest
+from fastapi.testclient import TestClient
+
+from tests.conftest import PRISTINE
+
+BASE = "http://localhost:8520"
+H = {"X-Chronika": "1"}
+
+
+@pytest.fixture
+def app(tmp_path):
+    from chronika.server.app import create_app
+    db = tmp_path / "archive.db"
+    shutil.copy(PRISTINE, db)
+    app = create_app(str(db), str(tmp_path / "server.db"))
+    with TestClient(app, base_url=BASE) as c:
+        yield app, c
+
+
+def login(app, c):
+    auth = app.state.auth
+    uid = auth.create_user("Test", app.state.store.path)
+    c.cookies.set("chronika_session", auth.new_session(uid, "pytest", "127.0.0.1"))
+    return uid
+
+
+def test_guards(app):
+    app, c = app
+    assert c.get("/api/chats").status_code == 401
+    assert c.get("/api/health").json() == {"ok": True}
+    r = c.get("/api/health")
+    assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
+    assert r.headers["x-frame-options"] == "DENY"
+    assert TestClient(app, base_url="http://evil.example").get("/api/health").status_code == 421
+    login(app, c)
+    assert c.get("/api/chats").status_code == 200
+    first = c.get("/api/chats").json()["items"][0]["id"]
+    assert c.post(f"/api/chats/{first}/read").status_code == 403                 # no X-Chronika
+    assert c.post(f"/api/chats/{first}/read", headers={**H, "Origin": "https://evil.example"}).status_code == 403
+    assert c.post(f"/api/chats/{first}/read", headers=H).status_code == 200
+
+
+def test_status_and_setup(app):
+    app, c = app
+    s = c.get("/api/auth/status").json()
+    assert s["needs_setup"] and not s["logged_in"]
+    r = c.post("/api/auth/register/options", json={"token": "wrong"}, headers=H)
+    assert r.status_code == 403
+    token = app.state.auth.setup_link()
+    r = c.post("/api/auth/register/options", json={"token": token, "name": "Me"}, headers=H)
+    assert r.status_code == 200 and r.json()["options"]["authenticatorSelection"]["residentKey"] == "required"
+    assert c.post("/api/auth/login/options", headers=H).json()["options"]["rpId"] == "localhost"
+
+
+def test_recovery(app):
+    app, c = app
+    uid = app.state.auth.create_user("Me", app.state.store.path)
+    codes = app.state.auth.new_recovery_codes(uid)
+    assert c.post("/api/auth/recover", json={"code": "nope"}, headers=H).status_code == 403
+    r = c.post("/api/auth/recover", json={"code": codes[0]}, headers=H)
+    assert r.status_code == 200 and r.json()["left"] == 9
+    assert c.get("/api/auth/account").json()["user"]["name"] == "Me"
+    c.cookies.clear()
+    assert c.post("/api/auth/recover", json={"code": codes[0]}, headers=H).status_code == 403
+
+
+def test_api_flow(app):
+    app, c = app
+    login(app, c)
+    chats = c.get("/api/chats").json()["items"]
+    person = next(x for x in chats if x["type"] == "person")
+    page = c.get(f"/api/chats/{person['id']}/stream?limit=20").json()
+    assert len(page["items"]) <= 20
+    assert c.get(f"/api/chats/{person['id']}").json()["person"]["name"] == person["title"]
+    assert c.get("/api/search", params={"q": "καλημερα"}).json()["total"] > 0
+    pid = person["person_id"]
+    r = c.patch(f"/api/people/{pid}", json={"name": "Νέο Όνομα"}, headers=H)
+    assert r.json()["name"] == "Νέο Όνομα"
+    m = c.get("/api/media?kind=image").json()["items"][0]
+    r = c.get(f"/api/media/{m['sha256']}/thumb")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/webp"
+    assert c.get(f"/api/media/{m['sha256']}/original").status_code == 200
+    assert c.get("/api/stats").json()["messages"] > 1000
+    assert len(c.get("/api/plugins/catalog").json()["items"]) >= 10
+    assert c.get("/api/plugins").json()["items"]
+    assert c.get("/api/avatar/999999").status_code == 404
+
+
+def test_library_folder(app, tmp_path):
+    app, c = app
+    login(app, c)
+    lib = tmp_path / "photos"
+    lib.mkdir()
+    r = c.post("/api/plugins", json={"plugin": "folder", "label": "Test photos", "settings": {"path": str(lib)}}, headers=H)
+    iid = r.json()["id"]
+    m = c.get("/api/media?kind=image").json()["items"][0]
+    r = c.post(f"/api/media/{m['sha256']}/library", json={"instance_id": iid}, headers=H)
+    assert r.status_code == 200 and not r.json()["already"], r.text
+    assert list(lib.rglob("*.jpg"))
+    r = c.post(f"/api/media/{m['sha256']}/library", json={"instance_id": iid}, headers=H)
+    assert r.json()["already"]
+
+
+def test_websocket(app):
+    app, c = app
+    with pytest.raises(Exception):
+        with c.websocket_connect("/api/events") as ws:
+            ws.receive_json()
+    login(app, c)
+    with c.websocket_connect("/api/events") as ws:
+        assert ws.receive_json()["type"] == "hello"
+
+
+def test_password_with_code(app):
+    from chronika.server.auth import totp_at
+    import time
+    app, c = app
+    token = app.state.auth.setup_link()
+    o = c.post("/api/auth/password/options", json={"token": token, "name": "Me"}, headers=H).json()
+    assert o["uri"].startswith("otpauth://totp/")
+    assert c.post("/api/auth/password/set", json={"nonce": "nope", "password": "a long enough password", "code": "000000"}, headers=H).status_code == 410
+    assert c.post("/api/auth/password/set", json={"nonce": o["nonce"], "password": "short", "code": "000000"}, headers=H).status_code == 400
+    assert c.post("/api/auth/password/set", json={"nonce": o["nonce"], "password": "a long enough password", "code": "000000"}, headers=H).status_code == 400
+    code = totp_at(o["secret"], int(time.time()) // 30)
+    r = c.post("/api/auth/password/set", json={"nonce": o["nonce"], "password": "a long enough password", "code": code}, headers=H)
+    assert r.status_code == 200 and len(r.json()["recovery_codes"]) == 10      # mistakes did not use the setup up
+    assert c.post("/api/auth/password/set", json={"nonce": o["nonce"], "password": "a long enough password", "code": code}, headers=H).status_code == 410
+    assert c.get("/api/auth/account").json()["has_password"]
+    c.cookies.clear()
+    bad = c.post("/api/auth/password/login", json={"name": "Me", "password": "wrong password!", "code": code}, headers=H)
+    assert bad.status_code == 403
+    reused = c.post("/api/auth/password/login", json={"name": "me", "password": "a long enough password", "code": code}, headers=H)
+    assert reused.status_code == 403            # a code is accepted once
+    nxt = totp_at(o["secret"], int(time.time()) // 30 + 1)
+    ok = c.post("/api/auth/password/login", json={"name": "me", "password": "a long enough password", "code": nxt}, headers=H)
+    assert ok.status_code == 200
+    assert c.get("/api/chats").status_code == 200
+
+
+
+def test_password_lockout(app):
+    from chronika.server.auth import totp_at, totp_secret
+    import time
+    app, c = app
+    auth = app.state.auth
+    uid = auth.create_user("Lock", app.state.store.path)
+    secret = totp_secret()
+    auth.set_password(uid, "a long enough password", secret)
+    for _ in range(5):
+        assert auth.check_password("Lock", "wrong password!!", "000000") is None
+    code = totp_at(secret, int(time.time()) // 30)
+    assert auth.check_password("Lock", "a long enough password", code) is None      # locked now
+    assert auth.locked(uid)
+
+
+def test_plugins_declare_names_services_and_sending(app):
+    app, c = app
+    login(app, c)
+    looks = c.get("/api/services?lang=el").json()
+    assert looks and all({"name", "color", "short", "messages"} <= set(v) for v in looks.values())
+    names = c.get("/api/names").json()
+    ids = [x["id"] for x in names["order"]]
+    weights = [x["weight"] for x in names["order"]]
+    assert not names["custom"] and weights == sorted(weights, reverse=True)     # the plugins' order
+    mine = ids[::-1]
+    c.put("/api/settings", json={"name_order": mine}, headers=H)
+    assert [x["id"] for x in c.get("/api/names").json()["order"]] == mine
+    assert c.put("/api/settings", json={"name_order": ["no-such-source"]}, headers=H).status_code == 200
+    assert [x["id"] for x in c.get("/api/names").json()["order"]] == mine        # refused, kept
+    c.put("/api/settings", json={"name_order": None}, headers=H)
+    back = c.get("/api/names").json()
+    assert not back["custom"] and [x["id"] for x in back["order"]] == ids
+    chat = next(x for x in c.get("/api/chats").json()["items"] if x["type"] == "person")
+    detail = c.get(f"/api/chats/{chat['id']}").json()
+    assert set(detail["sendable"]) <= set(detail["services"])
+    for p in c.get("/api/plugins").json()["items"]:
+        if p["kind"] == "source":
+            c.patch(f"/api/plugins/{p['id']}", json={"enabled": False}, headers=H)
+    assert c.get(f"/api/chats/{chat['id']}").json()["sendable"] == []           # no source can send now
+
+
+def test_changing_ways_in_needs_a_recent_sign_in(app):
+    app, c = app
+    login(app, c)
+    assert c.post("/api/auth/password/options", json={}, headers=H).status_code == 200
+    app.state.auth.x("UPDATE session SET created_at = created_at - 3600")        # signed in an hour ago
+    for method, path in (("post", "/api/auth/password/options"), ("post", "/api/auth/recovery-codes"),
+                         ("post", "/api/auth/register/options"), ("delete", "/api/auth/password")):
+        r = getattr(c, method)(path, **({"json": {}} if method == "post" else {}), headers=H)
+        assert r.status_code == 403, path
+    assert c.get("/api/chats").status_code == 200                                 # everything else still works

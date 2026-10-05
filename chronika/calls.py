@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import os
 import sqlite3
 
-from . import extras
+from . import config, extras
 from .archive import IPHONE, IPHONE_DATA, APPLE_EPOCH, address, android_exports
 
 IPHONE_DB = f"{IPHONE_DATA}/CallHistory.storedata"
@@ -57,7 +57,7 @@ def service_of(provider):
 
 
 def read_iphone(path):
-    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    db = config.read_only(path)
     db.row_factory = sqlite3.Row
     handle = {}
     for call, value in db.execute(
@@ -80,7 +80,7 @@ def read_iphone(path):
 
 
 def read_android(path, device):
-    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    db = config.read_only(path)
     db.row_factory = sqlite3.Row
     recs = []
     for r in db.execute("SELECT * FROM calls ORDER BY CAST(_id AS INTEGER)"):

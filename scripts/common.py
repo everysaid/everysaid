@@ -19,7 +19,7 @@ from chronika import config, media  # noqa: E402
 link_or_copy = media.link_or_copy       # a hard link, or a copy across file systems
 
 VIDEO = (".mp4", ".mov", ".3gp", ".webm", ".m4v")
-MEDIA = os.path.join(config.CACHE, "media") + os.sep     # the archive's media, until the photo library
+MEDIA = os.path.join(config.MEDIA_STORE, "media") + os.sep     # the archive's media, until the photo library
 TOOLS = {"exiftool": "ExifTool, https://exiftool.org", "ffmpeg": "FFmpeg", "ffprobe": "FFmpeg",
          "idevicebackup2": "libimobiledevice", "idevice_id": "libimobiledevice",
          "adb": "Android platform-tools"}
@@ -114,7 +114,7 @@ def dimensions(path):
     """(width, height) as stored (not turned), (0, 0) when it cannot be read."""
     if path.lower().endswith(VIDEO):
         r = run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
-                 "-of", "csv=p=0:s=x", path], capture_output=True, text=True)
+                 "-of", "csv=p=0:s=x", path], capture_output=True, text=True, encoding="utf-8")
         try:
             w, h = r.stdout.strip().split("x")[:2]
             return int(w), int(h)
@@ -132,7 +132,7 @@ def exiftool_json(args, paths, chunk=500):
     """exiftool -j over many files, in chunks; the records it returns."""
     out = []
     for i in range(0, len(paths), chunk):
-        r = run(["exiftool", "-q", "-j", *args, *paths[i:i + chunk]], capture_output=True, text=True)
+        r = run(["exiftool", "-q", "-j", *args, *paths[i:i + chunk]], capture_output=True, text=True, encoding="utf-8")
         if r.returncode not in (0, 1):  # 1: some files had nothing to say, or could not be read
             sys.exit(f"exiftool: {r.stderr.strip()[:500]}")
         out += json.loads(r.stdout or "[]")

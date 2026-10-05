@@ -11,3 +11,11 @@ wheels/
 
 # Notes about one installation (devices, paths, history): not shared
 LOCAL.md
+
+# The interface's dependencies and builds, test output, a demo archive
+web/node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/
+demo/
+.coverage

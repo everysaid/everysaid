@@ -23,7 +23,7 @@ from datetime import datetime
 import common
 from common import config, link_or_copy
 
-ARCHIVE = config.CACHE                                            # media/<ab>/<sha256><ext>
+ARCHIVE = config.MEDIA_STORE                                      # media/<ab>/<sha256><ext>
 ARCHIVE_DB = os.path.join(config.DATA, "archive.db")
 ASIDE = config.ASIDE
 DECISIONS = os.path.join(config.DATA, "review.db")
@@ -47,7 +47,7 @@ def main():
     if any(c in args.label for c in '/\\:') or args.label in ("", ".", ".."):
         sys.exit("μη έγκυρη ετικέτα")
     os.umask(0o077)
-    db = sqlite3.connect(f"file:{ARCHIVE_DB}?mode=ro", uri=True)
+    db = config.read_only(ARCHIVE_DB)
     marks = ",".join("?" * len(args.conversations))
     rows = db.execute(
         f"SELECT md.sha256, md.path, md.mime, min(m.ts) FROM attachment a JOIN message m ON m.id = a.message_id "

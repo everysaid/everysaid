@@ -20,7 +20,6 @@ import argparse
 from collections import defaultdict
 import os
 import re
-import sqlite3
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -48,7 +47,7 @@ def v1_address(raw):
 
 
 def ro(path):
-    return sqlite3.connect(f"file:{path}?mode=ro", uri=True) if os.path.exists(path) else None
+    return config.read_only(path) if os.path.exists(path) else None
 
 
 def raw_numbers(db):
@@ -75,7 +74,7 @@ ap = argparse.ArgumentParser(description="Dry run of phonenumbers normalisation 
 ap.add_argument("db")
 ap.add_argument("out", nargs="?", default=os.path.join(config.CACHE, "phonenumbers-dry-run.tsv"))
 args = ap.parse_args()
-db = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
+db = config.read_only(args.db)
 print(f"περιοχή: {config.REGION or '(καμία)'}")
 
 uses = defaultdict(lambda: [0, 0, 0, 0])
@@ -119,7 +118,7 @@ for source, raw in raw_numbers(db):
                  "in archive" if old[1] in values else "-"))
 
 os.umask(0o077)
-with open(args.out, "w") as f:
+with open(args.out, "w", encoding="utf-8") as f:
     f.write("category\told\tnew\twhere\tuses (sent/calls/conversations/reactions)\n")
     for r in rows:
         f.write("\t".join(r) + "\n")

@@ -53,7 +53,7 @@ ROOTS = (common.MEDIA,)
 VIDEO = common.VIDEO
 SKIPPED = "στην άκρη"
 DOG = config.DOG_THRESHOLD
-ARCHIVE = config.CACHE                                            # media/<ab>/<sha256><ext>
+ARCHIVE = config.MEDIA_STORE                                      # media/<ab>/<sha256><ext>
 ARCHIVE_DB = os.path.join(config.DATA, "archive.db")
 DATA = os.path.join(config.CACHE, "iphone")
 DESKTOP = config.VIBER_DESKTOP                                    # optional, and may be gone
@@ -71,7 +71,7 @@ def last10(number):
 
 
 def ro(path):
-    return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    return config.read_only(path)
 
 
 def names():
@@ -79,7 +79,7 @@ def names():
     nextcloud MCP server), then the name Viber or WhatsApp shows, unless that is just the number."""
     out = {}
     if os.path.exists(NAMES):
-        for line in open(NAMES):
+        for line in open(NAMES, encoding="utf-8"):
             number, name = line.rstrip("\n").split("\t")
             out[last10(number)] = name
     clean = lambda t: (t or "").strip("\u2068\u2069\u202a\u202c ").strip()
@@ -253,7 +253,7 @@ def kept():
     paths = sorted(p for p in set(paths) if os.path.exists(p) and sha_of(p) not in hidden)
     group = {}
     if Handler.similar:                     # only the look-alikes media-similar.py found, group by group
-        for line in open(SIMILAR):
+        for line in open(SIMILAR, encoding="utf-8"):
             n, p = line.rstrip("\n").split("\t", 1)
             group[p] = int(n)
         paths = [p for p in set(paths) | {p for p, a in done.items() if a == "delete"}    # marked to go: still shown
@@ -729,8 +729,9 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 if not req.get("id"):   # first click: what would be done, exactly (a dry run)
                     plan = os.path.join(self.cache, f"plan-{time.time_ns()}.tsv")
-                    r = subprocess.run([sys.executable, TRIAGE, "--dry-run", "--plan", plan], capture_output=True, text=True)
-                    lines = open(plan).read() if os.path.exists(plan) else ""
+                    r = subprocess.run([sys.executable, TRIAGE, "--dry-run", "--plan", plan], capture_output=True, text=True,
+                                       encoding="utf-8", env={**os.environ, "PYTHONUTF8": "1"})
+                    lines = open(plan, encoding="utf-8").read() if os.path.exists(plan) else ""
                     pid = hashlib.sha256(lines.encode()).hexdigest()
                     Handler.plans[pid] = plan
                     todo = [l.split("\t", 1) for l in lines.splitlines()]
@@ -743,7 +744,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not plan or not os.path.exists(plan):
                     return self.send(200, json.dumps({"ok": False, "text": "άγνωστη ή παλιά λίστα· ξανά από την αρχή"},
                                                      ensure_ascii=False).encode(), "application/json")
-                r = subprocess.run([sys.executable, TRIAGE, "--only", plan], capture_output=True, text=True)
+                r = subprocess.run([sys.executable, TRIAGE, "--only", plan], capture_output=True, text=True,
+                                   encoding="utf-8", env={**os.environ, "PYTHONUTF8": "1"})
                 os.remove(plan)
             out = (r.stdout + r.stderr).strip().splitlines()
             return self.send(200, json.dumps({"ok": r.returncode == 0, "text": " · ".join(out[-3:])},

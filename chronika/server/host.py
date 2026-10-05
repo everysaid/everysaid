@@ -1,0 +1,313 @@
+"""The plugin host: runs plugin instances for one archive, and tells the open apps what happened.
+
+Imports run in a thread each (one import at a time: they write a lot); live connections are asyncio
+tasks that stay up while the server runs, restarted after an error with a growing pause. Every
+event (a plugin's log line, its state, new messages) goes to the apps listening on the WebSocket;
+new incoming messages also go out as push notifications, except for muted chats.
+"""
+import asyncio
+import json
+import os
+import threading
+import time
+import traceback
+
+from .. import archive as archive_mod, plugins
+from ..core import queries
+from ..plugins.base import Context
+from ..plugins.i18n import tr
+from ..errors import UserError
+
+
+class Host:
+    def __init__(self, store, push=None):
+        self.store = store
+        self.push = push
+        self.loop = None
+        self.listeners = set()
+        self.import_lock = threading.Lock()
+        self.contexts = {}
+        self.running = {}           # instance id -> "import" | "live"
+        self.live_tasks = {}
+
+    # events
+    def listen(self):
+        q = asyncio.Queue(maxsize=1000)
+        self.listeners.add(q)
+        return q
+
+    def unlisten(self, q):
+        self.listeners.discard(q)
+
+    def emit(self, event):
+        if self.loop is None:
+            return
+        self.loop.call_soon_threadsafe(self._dispatch, event)
+
+    def _dispatch(self, event):
+        if event.get("type") == "new":
+            event = self._describe_new(event)
+        for q in list(self.listeners):
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                pass
+
+    def _describe_new(self, event):
+        """Which chats got what: the apps refresh those; push for incoming ones."""
+        db = self.store.read()
+        (m0, m1), (c0, c1) = event.get("messages", (0, 0)), event.get("calls", (0, 0))
+        chats, incoming = {}, []
+        for mid, conv, outgoing, txt, kind in db.execute(
+                "SELECT m.id, m.conversation_id, m.outgoing, m.text, k.name FROM message m "
+                "JOIN message_kind k ON k.id = m.kind_id WHERE m.id > ? AND m.id <= ? ORDER BY m.id", (m0, m1)):
+            cid = queries.chat_of_conversation(self.store, conv)
+            if cid:
+                chats[cid] = chats.get(cid, 0) + 1
+                if not outgoing:
+                    incoming.append((cid, mid, txt, kind))
+        if self.push and incoming:
+            self.push.notify(self.store, incoming)
+        return {"type": "new", "chats": chats, "calls": c1 - c0}
+
+    # instances
+    def ctx(self, iid):
+        row = plugins.instance(self.store, iid)
+        if not row:
+            raise KeyError(iid)
+        old = self.contexts.get(iid)
+        c = Context(self, row)
+        if old:
+            c.lines = old.lines
+        self.contexts[iid] = c
+        return c
+
+    def status(self, iid, lang="en"):
+        row = plugins.instance(self.store, iid)
+        p = plugins.get(row["plugin"])
+        c = self.contexts.get(iid)
+        ready = p.check(self.ctx(iid)) if p else (False, "unknown plugin")
+        out = plugins.public(row, lang)
+        out.update({"running": self.running.get(iid), "ready": ready[0], "ready_text": tr(ready[1], lang),
+                    "live_capable": bool(p and "live" in p.modes), "live": iid in self.live_tasks,
+                    "can_send": bool(p and p.can_send), "log": [line for _, line in (c.lines[-30:] if c else [])]})
+        return out
+
+    def _set_status(self, iid, status):
+        with self.store.write() as db:
+            db.execute("UPDATE plugin_instance SET last_run = ?, last_status = ? WHERE id = ?",
+                       (int(time.time()), status[:500], iid))
+
+    async def run(self, iid, action=None):
+        """An import (or a plugin's own action) of one instance, in a thread."""
+        if self.running.get(iid):
+            raise UserError("host.running", 409)
+        ctx = self.ctx(iid)
+        p = plugins.get(ctx.plugin_id)
+        self.running[iid] = "import"
+        self.emit({"type": "plugin", "instance": iid, "running": "import"})
+
+        def work():
+            try:
+                ctx.log("— {what} —", what=tr(action or "import", ctx.lang))
+                (p.action(ctx, action) if action else (p.sync(ctx) if hasattr(p, "sync") else p.run_import(ctx)))
+                self._set_status(iid, "ok")
+                if self.loop:
+                    self.loop.call_soon_threadsafe(self.auto_live, iid)     # now set up, perhaps
+            except Exception as e:
+                ctx.log("error: {e}", e=e)
+                ctx.log(traceback.format_exc().strip().splitlines()[-1])
+                self._set_status(iid, tr("error: {e}", ctx.lang).format(e=e))
+            finally:
+                self.running.pop(iid, None)
+                self.emit({"type": "plugin", "instance": iid, "running": None})
+                self.emit({"type": "changed"})
+
+        threading.Thread(target=work, name=f"plugin-{iid}", daemon=True).start()
+
+    def auto_live(self, iid):
+        """Start a live connection the plugin wants by default, unless the user turned it off or it
+        is not set up yet."""
+        row = plugins.instance(self.store, iid)
+        p = row and plugins.get(row["plugin"])
+        if (not p or iid in self.live_tasks or not row["enabled"] or "live" not in p.modes
+                or not json.loads(row["settings"] or "{}").get("_live", p.live_default) or not p.check(self.ctx(iid))[0]):
+            return
+        try:
+            self.start_live(iid)
+        except Exception as e:
+            self.ctx(iid).log(f"live: {e}")
+
+    def start_live(self, iid):
+        if iid in self.live_tasks:
+            return
+        ctx = self.ctx(iid)
+        p = plugins.get(ctx.plugin_id)
+        if not p or "live" not in p.modes:
+            raise UserError("host.no_live")
+
+        async def keep():
+            pause = 5
+            while True:
+                try:
+                    ctx = self.ctx(iid)
+                    ok, why = p.check(ctx)
+                    if not ok:
+                        ctx.log(f"live: {why}")
+                        await asyncio.sleep(60)
+                        continue
+                    self.emit({"type": "plugin", "instance": iid, "live": True})
+                    await p.live(ctx)
+                    pause = 5
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    self.ctx(iid).log("live: error {e}; again in {pause}s", e=repr(e), pause=pause)
+                await asyncio.sleep(pause)
+                pause = min(pause * 2, 600)
+
+        self.live_tasks[iid] = asyncio.get_running_loop().create_task(keep())
+        plugins.update(self.store, iid, settings={"_live": True})
+
+    def stop_live(self, iid, remember=True):
+        t = self.live_tasks.pop(iid, None)
+        if t:
+            t.cancel()
+        if remember:
+            plugins.update(self.store, iid, settings={"_live": False})
+        self.emit({"type": "plugin", "instance": iid, "live": False})
+
+    async def startup(self):
+        self.loop = asyncio.get_running_loop()
+        for row in plugins.instances(self.store, "source"):
+            self.auto_live(row["id"])       # if the user turned it on, or by the plugin's default once set up
+
+    async def shutdown(self):
+        for iid in list(self.live_tasks):
+            self.stop_live(iid, remember=False)
+
+    # sending
+    def senders(self):
+        """[(instance id, plugin)] of the sources that may send now, as each plugin says."""
+        out = []
+        for row in plugins.instances(self.store, "source"):
+            p = plugins.get(row["plugin"])
+            if row["enabled"] and p and p.can_send and p.sending(self.ctx(row["id"])):
+                out.append((row["id"], p))
+        return out
+
+    def replyable(self):
+        """The services something can send an answer to a given message to now."""
+        return self.store.cached(f"replyable:{int(time.time() // 60)}",
+                                 lambda: {s for _, p in self.senders() if p.can_reply for s in p.services})
+
+    def sendable(self):
+        """The services something can send to now (kept until the archive, its plugins included, changes:
+        a plugin's check may read the keyring, too slow for every chat opened)."""
+        # and at most a minute: a login outside the app changes only the keyring
+        return self.store.cached(f"sendable:{int(time.time() // 60)}",
+                                 lambda: {s for _, p in self.senders() for s in p.services})
+
+    async def send(self, chat_id, text, conversation_id=None, service=None, reply_to=None):
+        """Send text in a chat through the plugin that reaches its service; returns what it said.
+        reply_to: the id of a message of the chat it answers: then through its conversation, by a
+        plugin that can reply."""
+        c = queries.chat(self.store, chat_id)
+        if not c:
+            raise KeyError(chat_id)
+        convs = c["conversations"]
+        answered = None
+        if reply_to:
+            row = self.store.read().execute("SELECT conversation_id, key FROM message WHERE id = ?", (int(reply_to),)).fetchone()
+            if not row or row[0] not in convs:
+                raise UserError("chat.not_in_chat")
+            if not row[1]:
+                raise UserError("chat.cannot_reply", 409)
+            conversation_id, answered = row[0], {"id": int(reply_to), "key": row[1]}
+        if conversation_id:
+            if conversation_id not in convs:
+                raise UserError("chat.not_in_chat")
+            convs = [conversation_id]
+        db = self.store.read()
+        options = []
+        senders = self.senders()
+        for conv in convs:
+            key, svc = db.execute("SELECT c.key, s.name FROM conversation c JOIN service s ON s.id = c.service_id "
+                                      "WHERE c.id = ?", (conv,)).fetchone()
+            last = db.execute("SELECT max(ts) FROM message WHERE conversation_id = ?", (conv,)).fetchone()[0] or 0
+            for iid, p in senders:
+                if svc in p.services and (answered is None or p.can_reply):
+                    options.append((last, conv, key, svc, iid, p))
+        if service:
+            options = [o for o in options if o[3] == service]
+        if not options:
+            raise UserError("chat.cannot_reply" if answered else "chat.no_sender", 409)
+        options.sort(key=lambda o: o[0], reverse=True)          # where the chat was last active
+        _, conv, key, service, iid, p = options[0]
+        ctx = self.ctx(iid)
+        result = await (p.send(ctx, {"id": conv, "key": key, "service": service}, text, answered) if answered
+                        else p.send(ctx, {"id": conv, "key": key, "service": service}, text))
+        self.emit({"type": "changed"})
+        return {"service": service, "conversation_id": conv, "result": result}
+
+    # libraries
+    def libraries(self):
+        return [r for r in plugins.instances(self.store, "library") if r["enabled"]]
+
+    def default_library(self):
+        libs = self.libraries()
+        return next((r for r in libs if r["is_default"]), libs[0] if libs else None)
+
+    def local_file(self, sha256):
+        row = self.store.read().execute("SELECT path FROM media WHERE sha256 = ?", (sha256,)).fetchone()
+        if not row:
+            return None
+        p = os.path.join(archive_mod.MEDIA_ROOT, row[0])
+        return p if os.path.exists(p) else None
+
+    def to_library(self, sha256, iid=None, date_ms=None):
+        """Store a file in a library (the default one unless named), unless it is there already;
+        either way the archive records the link. Runs in the caller's thread."""
+        from ..plugins.libraries import link
+        row = plugins.instance(self.store, iid) if iid else self.default_library()
+        if not row:
+            raise UserError("library.none", 409)
+        path = self.local_file(sha256)
+        p = plugins.get(row["plugin"])
+        ctx = self.ctx(row["id"])
+        known = self.store.read().execute("SELECT asset_id FROM library_link WHERE sha256 = ? AND instance_id = ?",
+                                          (sha256, row["id"])).fetchone()
+        if known:       # stored there before (the stored copy may differ: a date or a make written in)
+            return {"already": True, "ref": known[0], "library": row["label"]}
+        if not path:
+            raise UserError("file_gone", 409)
+        found = p.find(ctx, sha256, path)
+        if found:
+            link(self.store, row["id"], row["label"], sha256, found, "checksum")
+            return {"already": True, "ref": found, "library": row["label"]}
+        db = self.store.read()
+        mime, msg_ts, service = db.execute(
+            "SELECT md.mime, min(m.ts), s.name FROM media md JOIN attachment a ON a.sha256 = md.sha256 "
+            "JOIN message m ON m.id = a.message_id JOIN service s ON s.id = m.service_id WHERE md.sha256 = ?",
+            (sha256,)).fetchone()
+        decided = db.execute("SELECT date_ms FROM media_decision WHERE sha256 = ?", (sha256,)).fetchone()
+        when = date_ms or (decided[0] if decided and decided[0] else None) or msg_ts
+        ref = p.store(ctx, path, {"sha256": sha256, "mime": mime, "date_ms": when, "service": service})
+        link(self.store, row["id"], row["label"], sha256, ref, "upload")
+        return {"already": False, "ref": ref, "library": row["label"]}
+
+    def fetch(self, sha256, size):
+        """A file from the library that holds it: ("path", p) or ("bytes", data, type), or None."""
+        for iid, ref in self.store.read().execute(
+                "SELECT instance_id, asset_id FROM library_link WHERE sha256 = ? AND instance_id IS NOT NULL", (sha256,)):
+            row = plugins.instance(self.store, iid)
+            p = plugins.get(row["plugin"]) if row else None
+            if not p or not row["enabled"]:
+                continue
+            try:
+                got = p.fetch(self.ctx(iid), ref, size)
+                if got:
+                    return got
+            except Exception:
+                continue
+        return None

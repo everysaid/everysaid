@@ -52,8 +52,8 @@ ASIDE = os.path.join(os.path.normpath(config.ASIDE), "")
 db = sqlite3.connect(ARCHIVE_DB)
 db.execute("PRAGMA foreign_keys = ON")
 done = skipped = 0
-removed = open(args.done, "w") if args.done else None
-for line in open(args.list):
+removed = open(args.done, "w", encoding="utf-8") if args.done else None
+for line in open(args.list, encoding="utf-8"):
     path, asset, method, score, *extra = line.rstrip("\n").split("\t")
     sha = os.path.splitext(os.path.basename(path))[0]
     row = db.execute("SELECT path FROM media WHERE sha256 = ?", (sha,)).fetchone()

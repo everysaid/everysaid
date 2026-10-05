@@ -48,7 +48,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     os.umask(0o077)
-    db = sqlite3.connect(f"file:{ARCHIVE_DB}?mode=ro", uri=True)
+    db = config.read_only(ARCHIVE_DB)
     todo = []
     for sha in args.sha256:
         row = db.execute("SELECT path FROM media WHERE sha256 = ?", (sha,)).fetchone()

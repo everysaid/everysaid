@@ -29,7 +29,7 @@ from transformers import AutoModel, AutoProcessor
 import common
 from common import config
 
-ARCHIVE = config.CACHE                                            # media/<ab>/<sha256><ext>
+ARCHIVE = config.MEDIA_STORE                                      # media/<ab>/<sha256><ext>
 ARCHIVE_DB = os.path.join(config.DATA, "archive.db")
 INDEX = os.path.join(config.CACHE, "immich.db")
 OUT = os.path.join(config.CACHE, "match.db")
@@ -96,7 +96,7 @@ def capture_ms(value, offset):
 
 def candidates():
     """(path, origin, message date in Unix ms or None)"""
-    db = sqlite3.connect(f"file:{ARCHIVE_DB}?mode=ro", uri=True)
+    db = config.read_only(ARCHIVE_DB)
     rows = [(common.media_file(path), "archive", ts) for path, ts in db.execute(
         "SELECT m.path, min(msg.ts) FROM media m JOIN attachment a ON a.sha256 = m.sha256 "
         "JOIN message msg ON msg.id = a.message_id "
@@ -112,7 +112,7 @@ def main():
     model = AutoModel.from_pretrained(MODEL).to(device).eval()
     proc = AutoProcessor.from_pretrained(MODEL)
     embed_missing(model, proc, device)
-    index = sqlite3.connect(f"file:{INDEX}?mode=ro", uri=True)
+    index = config.read_only(INDEX)
     assets = index.execute("SELECT id, sha1, taken, created, embedding FROM asset").fetchall()
     by_sha1 = {a[1]: a[0] for a in assets if a[1]}
     with_emb = [a for a in assets if a[4]]
@@ -130,7 +130,7 @@ def main():
     cands = [c for c in cands if c[0] not in gone]
     kept = []
     if os.path.exists(OUT):
-        old = sqlite3.connect(f"file:{OUT}?mode=ro", uri=True)
+        old = config.read_only(OUT)
         kept = [r for r in old.execute("SELECT path, origin, sha1, exact, best, similarity, taken, message, "
                                        "immich_date FROM match") if r[0] in gone]
         old.close()

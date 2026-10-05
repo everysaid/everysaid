@@ -64,7 +64,7 @@ def review_module():
 
 
 def ro(path):
-    return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    return config.read_only(path)
 
 
 def to_ms(text):
@@ -134,7 +134,7 @@ def local(ms):
 def tag(item, dest):
     """Write the date, camera and identifier into the staged copy."""
     args = ["exiftool", "-q", "-overwrite_original", "-P", f"-XMP-dc:Identifier={item['sha256']}"]
-    has_make = common.run(["exiftool", "-s3", "-Make", dest], capture_output=True, text=True).stdout.strip()
+    has_make = common.run(["exiftool", "-s3", "-Make", dest], capture_output=True, text=True, encoding="utf-8").stdout.strip()
     if not has_make:
         args += [f"-Make={MAKE}", f"-Model={item['service']}"]
         if item["ext"] in VIDEO:
@@ -149,7 +149,7 @@ def tag(item, dest):
         else:
             args += [f"-DateTimeOriginal={stamp}", f"-CreateDate={stamp}", f"-OffsetTimeOriginal={off}",
                      f"-OffsetTimeDigitized={off}", f"-OffsetTime={off}"]
-    r = common.run(args + [dest], capture_output=True, text=True)
+    r = common.run(args + [dest], capture_output=True, text=True, encoding="utf-8")
     if r.returncode != 0:
         raise RuntimeError(f"exiftool: {r.stderr.strip()}")
 
@@ -190,7 +190,7 @@ def main():
     items = plan()
     if args.only:
         items = [x for x in items if x["path"] in set(args.only)]
-    with open(PLAN if not args.only else os.devnull, "w") as f:     # the full plan only
+    with open(PLAN if not args.only else os.devnull, "w", encoding="utf-8") as f:     # the full plan only
         for x in items:
             stamp = "EXIF" if not x["when"] else " ".join(local(x["when"]))
             f.write(f"{x['path']}\t{x['how']}\t{stamp}\t{x['service']}\t{x['name']}\n")
