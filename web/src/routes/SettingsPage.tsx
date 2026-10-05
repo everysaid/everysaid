@@ -95,9 +95,6 @@ export function SettingsPage() {
               <Line label={t("settings.language")}>
                 <Segmented value={i18n.language} onChange={(l) => setLanguage(l)} options={[{ value: "el", label: "Ελληνικά" }, { value: "en", label: "English" }]} />
               </Line>
-              <Line label={t("settings.hiddenReturns")} hint={t("settings.hiddenReturnsHint")}>
-                <Switch checked={(settings.data?.hidden_returns as boolean | undefined) ?? false} onChange={(v) => put.mutate({ hidden_returns: v })} />
-              </Line>
               <Line label={t("settings.sendEnter")}>
                 <Switch checked={(settings.data?.send_enter as boolean | undefined) ?? true} onChange={(v) => put.mutate({ send_enter: v })} />
               </Line>

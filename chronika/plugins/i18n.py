@@ -2,6 +2,7 @@
 is given in the user's language through tr(). A text without a translation stays in English."""
 
 EL = {
+    "Backup only (no import)": "Μόνο backup (χωρίς εισαγωγή)",
     "Demo (sends into the demo archive)": "Demo (στέλνει στο αρχείο του demo)",
     "Invented: what is sent is only written into the demo archive.": "Επινοημένη: ό,τι στέλνεται γράφεται μόνο στο αρχείο του demo.",
     "Serial": "Σειριακός αριθμός",

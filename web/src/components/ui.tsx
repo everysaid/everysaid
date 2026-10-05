@@ -172,13 +172,13 @@ export function Dialog({ open, onOpenChange, title, description, children, class
 export const Menu = DropdownPrimitive.Root;
 export const MenuTrigger = DropdownPrimitive.Trigger;
 
-export function MenuContent({ children, align = "end" }: { children: React.ReactNode; align?: "start" | "end" | "center" }) {
+export function MenuContent({ children, align = "end", className }: { children: React.ReactNode; align?: "start" | "end" | "center"; className?: string }) {
   return (
     <DropdownPrimitive.Portal>
       <DropdownPrimitive.Content
         align={align}
         sideOffset={6}
-        className="z-50 min-w-48 overflow-hidden rounded-2xl border border-line bg-panel p-1 shadow-xl"
+        className={cn("z-50 min-w-48 overflow-hidden rounded-2xl border border-line bg-panel p-1 shadow-xl", className)}
       >
         {children}
       </DropdownPrimitive.Content>
@@ -280,6 +280,28 @@ export function ServiceBadge({ id, className }: { id: string; className?: string
 
 export function Spinner({ className }: { className?: string }) {
   return <Loader2 className={cn("size-5 animate-spin text-muted", className)} />;
+}
+
+/** A thin bar at the top of a list, moving while something loads. */
+export function LoadingBar({ active }: { active: boolean }) {
+  return (
+    <div data-loading={active || undefined} aria-hidden className={cn("pointer-events-none absolute inset-x-0 top-0 z-20 h-0.5 overflow-hidden transition-opacity", active ? "opacity-100" : "opacity-0")}>
+      <div className="loading-bar h-full w-1/3 rounded-full bg-accent" />
+    </div>
+  );
+}
+
+/** The end of a list that loads more by itself as it comes near (no button); a spinner while it does. */
+export function MoreOnScroll({ hasMore, loading, onMore }: { hasMore: boolean; loading: boolean; onMore: () => void }) {
+  const ref = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    const el = ref.current;
+    if (!el || !hasMore) return;
+    const io = new IntersectionObserver((e) => { if (e[0].isIntersecting && !loading) onMore(); }, { rootMargin: "600px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasMore, loading, onMore]);
+  return <div ref={ref} className="flex justify-center py-4">{hasMore && loading && <Spinner />}</div>;
 }
 
 export function Center({ children, className }: { children: React.ReactNode; className?: string }) {

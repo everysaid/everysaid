@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Virtuoso } from "react-virtuoso";
@@ -8,16 +8,20 @@ import { api, qs, type CallItem } from "@/lib/api";
 import { duration, fullDate } from "@/lib/format";
 import { service } from "@/lib/services";
 import { cn } from "@/lib/utils";
-import { Avatar, Empty, Segmented, Spinner } from "@/components/ui";
+import { Avatar, Empty, LoadingBar, Segmented, Spinner } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
+import { ChatFilter } from "@/components/ChatFilter";
+import { callsRoute } from "@/router";
 
 export function CallsPage() {
   const { t } = useTranslation();
   const [missed, setMissed] = useState<"all" | "missed">("all");
+  const { chat } = callsRoute.useSearch();
+  const navigate = useNavigate();
   const res = useInfiniteQuery({
-    queryKey: ["calls", missed],
+    queryKey: ["calls", missed, chat],
     initialPageParam: undefined as number | undefined,
-    queryFn: ({ pageParam }) => api.get<{ items: CallItem[]; has_more: boolean }>(`/api/calls${qs({ missed: missed === "missed" || undefined, before: pageParam, limit: 80 })}`),
+    queryFn: ({ pageParam }) => api.get<{ items: CallItem[]; has_more: boolean }>(`/api/calls${qs({ chat, missed: missed === "missed" || undefined, before: pageParam, limit: 80 })}`),
     getNextPageParam: (last) => (last.has_more ? last.items[last.items.length - 1]?.ts : undefined),
   });
   const items = res.data?.pages.flatMap((p) => p.items) ?? [];
@@ -26,13 +30,16 @@ export function CallsPage() {
       <PageHeader title={t("nav.calls")} actions={
         <Segmented value={missed} onChange={setMissed} options={[{ value: "all", label: t("call.all") }, { value: "missed", label: t("call.missedOnly") }]} />
       } />
-      <div className="min-h-0 flex-1 bg-panel">
+      {chat && <div className="flex bg-panel px-4 pb-3 md:px-6"><ChatFilter chat={chat} onClear={() => navigate({ to: "/calls", search: {} })} /></div>}
+      <div className="relative min-h-0 flex-1 bg-panel">
+        <LoadingBar active={res.isFetching} />
         {res.isLoading ? <div className="grid h-40 place-items-center"><Spinner /></div> : items.length === 0 ? (
           <Empty icon={<Phone />} title={t("common.none")} />
         ) : (
           <Virtuoso
             data={items}
-            endReached={() => res.hasNextPage && res.fetchNextPage()}
+            endReached={() => res.hasNextPage && !res.isFetchingNextPage && res.fetchNextPage()}
+            components={{ Footer: () => (res.isFetchingNextPage ? <div className="flex justify-center py-4"><Spinner /></div> : null) }}
             itemContent={(_, c) => {
               const miss = !c.outgoing && !c.answered;
               const Icon = c.video ? Video : miss ? PhoneMissed : c.outgoing ? PhoneOutgoing : PhoneIncoming;

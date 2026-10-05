@@ -897,7 +897,7 @@ migrations.
 | `source` | `name` (`<device>/sms`...), `path`, `imported_at`, `device_id`, `media_root` (the folder `attachment.source_path` is relative to; `{cache}` and `{data}` stand for those folders), `instance_id` (the plugin instance that reads it) |
 | `plugin_instance` | `plugin` (its id), `kind` (source, library, contacts), `label`, `settings` and `state` (JSON), `enabled`, `device_id`, `is_default` (the library kept files go to), `created_at`, `last_run`, `last_status` |
 | `contact`, `contact_address` | an address book's contacts (`instance_id`, `uid`, `url`, `name`, `organization`, `photo` in `<cache>/avatars/`) and the addresses they list, joined only to addresses the archive has |
-| `state_report` | what a source says about a conversation: `conversation_id`, `instance_id`, `field` (`hidden`, `muted`, `pinned`, `read_until`), `value` (muted: until, Unix ms, -1 for ever), `observed_at` (when the source's data was so), `changed_at` (when it became so) |
+| `state_report` | what a source says about a conversation: `conversation_id`, `instance_id`, `field` (`archived`, which only starts the app's own in `chat_state`; `muted`, `pinned`, `read_until`), `value` (muted: until, Unix ms, -1 for ever), `observed_at` (when the source's data was so), `changed_at` (when it became so) |
 | `chat_state` | what the user chose in the app per chat (`p<person>`, `c<conversation>`): `field`, `value`, `set_at`, `always`; `core/queries.py` combines it with the reports (see `docs/design.md`) |
 | `setting` | the user's settings shared by every device (JSON values), e.g. `unread_since`, `push_preview` |
 

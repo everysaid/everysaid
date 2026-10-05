@@ -323,12 +323,14 @@ Everything above is built, with these differences from the draft:
   when ("also known as"). Names shared across people are suggested merges (a contact listing both,
   the same name in a service's address book copy, the same rare name), never applied; the user can
   turn one down. Self-chosen names are marked (~) in groups.
-- **A chat's state** (hidden, muted, pinned, read up to) comes from what the sources report
+- **A chat's state**: muted, pinned and read up to come from what the sources report
   (`state_report`: the iPhone's WhatsApp, the bridge's store, Telegram live as it changes) and what
   the user chose (`chat_state`). Between services the plugins' weights decide; between the user
-  and the services the later change wins, unless the user chose "always". A chat hidden by a
-  service stays hidden on a new message from another service, unless the user turns on
-  "hidden chats come back" (Settings). Chat info shows what each service says.
+  and the services the later change wins, unless the user chose "always". Chat info shows what
+  each service says. **Archived is the app's own**: it starts, once, from what the services say
+  (`Archive.init_archived`: a person's chat archived only if every conversation a service reports
+  on is archived there; one in view keeps them in view), and from then on only the user changes it.
+  When two people are merged, the chat is archived only if both were.
 - **Changing the ways in** (a password, a passkey, recovery codes, an MCP token) needs a setup link,
   or a session that signed in within the last 15 minutes. A stolen session cannot add its own way in.
   Failed password sign-ins lock that address only, so whoever knows the name cannot lock the user

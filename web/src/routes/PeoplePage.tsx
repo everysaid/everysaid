@@ -1,22 +1,28 @@
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Virtuoso } from "react-virtuoso";
 import { Search, Sparkles, Users, X } from "lucide-react";
 import { api, qs, type Person } from "@/lib/api";
 import { useDebounced } from "@/lib/hooks";
-import { Avatar, Empty, Spinner } from "@/components/ui";
+import { Avatar, Empty, LoadingBar, Spinner } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 
 export function PeoplePage() {
   const { t } = useTranslation();
   const [q, setQ] = useState("");
   const dq = useDebounced(q, 200);
-  const list = useQuery({
+  const list = useInfiniteQuery({
     queryKey: ["people", dq],
-    queryFn: () => api.get<{ items: { id: number; name: string; handles: number }[]; total: number }>(`/api/people${qs({ q: dq, limit: 500 })}`),
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => api.get<{ items: { id: number; name: string; handles: number }[]; total: number }>(`/api/people${qs({ q: dq, limit: 200, offset: pageParam })}`),
+    getNextPageParam: (last, pages) => {
+      const n = pages.reduce((a, p) => a + p.items.length, 0);
+      return n < last.total ? n : undefined;
+    },
   });
+  const people = list.data?.pages.flatMap((p) => p.items) ?? [];
   const qc = useQueryClient();
   const sugg = useQuery({
     queryKey: ["people-suggestions"],
@@ -29,7 +35,7 @@ export function PeoplePage() {
   const WHY: Record<string, string> = { contact: "people.whyContact", book: "people.whyBook", name: "people.whyName" };
   return (
     <div className="flex h-full flex-col">
-      <PageHeader title={t("people.title")} subtitle={list.data ? `${list.data.total}` : undefined} />
+      <PageHeader title={t("people.title")} subtitle={list.data ? `${list.data.pages[0].total}` : undefined} />
       <div className="bg-panel px-4 pb-3 md:px-6">
         <div className="relative">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" />
@@ -57,11 +63,14 @@ export function PeoplePage() {
           </div>
         </div>
       )}
-      <div className="min-h-0 flex-1 bg-panel">
-        {list.isLoading ? <div className="grid h-40 place-items-center"><Spinner /></div> : !list.data?.items.length ? (
+      <div className="relative min-h-0 flex-1 bg-panel">
+        <LoadingBar active={list.isFetching} />
+        {list.isLoading ? <div className="grid h-40 place-items-center"><Spinner /></div> : !people.length ? (
           <Empty icon={<Users />} title={t("common.none")} />
         ) : (
-          <Virtuoso data={list.data.items} itemContent={(_, p) => (
+          <Virtuoso data={people} endReached={() => list.hasNextPage && !list.isFetchingNextPage && list.fetchNextPage()}
+            components={{ Footer: () => (list.isFetchingNextPage ? <div className="flex justify-center py-4"><Spinner /></div> : null) }}
+            itemContent={(_, p) => (
             <Link to="/people/$personId" params={{ personId: String(p.id) }} className="mx-auto flex max-w-3xl items-center gap-3 px-4 py-2 hover:bg-panel-2 md:px-6">
               <Avatar name={p.name} size={40} />
               <span className="min-w-0 flex-1 truncate">{p.name}</span>

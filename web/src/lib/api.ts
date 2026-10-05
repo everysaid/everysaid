@@ -88,7 +88,7 @@ export interface ChatSummary {
   unread: number;
   pinned: boolean;
   muted: boolean;
-  hidden: boolean;
+  archived: boolean;
   avatar: boolean;
 }
 
@@ -118,7 +118,7 @@ export interface Person {
   groups: { chat_id: string; title: string | null }[];
 }
 
-export type StateField = "hidden" | "muted" | "pinned" | "read_until";
+export type StateField = "archived" | "muted" | "pinned" | "read_until";
 
 export interface ChatDetail {
   id: string;
@@ -133,7 +133,7 @@ export interface ChatDetail {
   last_ts: number;
   pinned: boolean;
   muted: boolean;
-  hidden: boolean;
+  archived: boolean;
   state_from: Partial<Record<StateField, string | null>>;                    // "user" or the service that decided
   state_reports: Partial<Record<StateField, { service: string; value: number | boolean }[]>>;
   state_user: Partial<Record<StateField, { value: number; set_at: number; always: number }>>;

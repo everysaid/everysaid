@@ -3,7 +3,7 @@ import { Link, useParams } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Virtuoso } from "react-virtuoso";
-import { BellOff, Check, EyeOff, Image, MessagesSquare, Mic, MoreVertical, Phone, PhoneMissed, Pin, PinOff, Search, Video, X } from "lucide-react";
+import { Archive, ArchiveRestore, BellOff, Check, Image, MessagesSquare, Mic, MoreVertical, Phone, PhoneMissed, Pin, PinOff, Search, Video, X } from "lucide-react";
 import { api, type ChatSummary } from "@/lib/api";
 import { useChats, useDebounced } from "@/lib/hooks";
 import { shortWhen } from "@/lib/format";
@@ -69,6 +69,7 @@ function ChatRow({ c, active }: { c: ChatSummary; active: boolean }) {
           <div className="mt-0.5 flex items-center gap-2 text-sm text-muted">
             <span className="min-w-0 flex-1"><Preview c={c} /></span>
             <span className="flex shrink-0 items-center gap-1.5">
+              {c.archived && <Archive data-archived className="size-3.5" aria-label={t("chats.archivedOne")} />}
               {c.muted && <BellOff className="size-3.5" />}
               {c.pinned && <Pin className="size-3.5 rotate-45" />}
               <span className="flex -space-x-0.5">{c.services.filter((s) => service(s).messages).slice(0, 4).map((s) => <ServiceDot key={s} id={s} className="ring-2 ring-panel" />)}</span>
@@ -96,8 +97,8 @@ function ChatRow({ c, active }: { c: ChatSummary; active: boolean }) {
             {c.muted ? t("chats.unmute") : t("chats.mute")}
           </MenuItem>
           {c.unread > 0 && <MenuItem icon={<Check />} onSelect={() => read.mutate()}>{t("chats.markRead")}</MenuItem>}
-          <MenuItem icon={<EyeOff />} onSelect={() => set.mutate({ hidden: !c.hidden })}>
-            {c.hidden ? t("chats.unhide") : t("chats.hide")}
+          <MenuItem icon={c.archived ? <ArchiveRestore /> : <Archive />} onSelect={() => set.mutate({ archived: !c.archived })}>
+            {c.archived ? t("chats.unarchive") : t("chats.archive")}
           </MenuItem>
         </MenuContent>
       </Menu>
@@ -109,32 +110,32 @@ export function ChatList() {
   const { t } = useTranslation();
   const [filter, setFilter] = useState<Filter>("all");
   const [q, setQ] = useState("");
-  const [hidden, setHidden] = useState(false);
+  const [archived, setArchived] = useState(false);
   const dq = useDebounced(q, 150);
-  const chats = useChats({ q: dq || undefined, hidden: hidden || undefined });
+  const chats = useChats({ q: dq || undefined, archived: archived || undefined });
   const params = useParams({ strict: false }) as { chatId?: string };
   const items = useMemo(() => {
     let list = chats.data?.items ?? [];
-    if (hidden) list = list.filter((c) => c.hidden);
+    if (archived) list = list.filter((c) => c.archived);
     if (filter === "unread") return list.filter((c) => c.unread > 0);
     if (filter === "person") return list.filter((c) => c.type === "person");
     if (filter === "group") return list.filter((c) => c.type !== "person");
     return list;
-  }, [chats.data, filter, hidden]);
+  }, [chats.data, filter, archived]);
 
   return (
     <div className="flex h-full flex-col bg-panel">
       <div className="space-y-3 px-4 pb-3 pt-[max(1rem,env(safe-area-inset-top))]">
         <div className="flex items-center gap-2">
           <Logo className="size-8 md:hidden" />
-          <h1 className="text-xl font-semibold tracking-tight">{hidden ? t("chats.showHidden") : t("chats.title")}</h1>
+          <h1 className="text-xl font-semibold tracking-tight">{archived ? t("chats.showArchived") : t("chats.title")}</h1>
           <button
-            onClick={() => setHidden(!hidden)}
-            className={cn("ml-auto grid size-9 place-items-center rounded-full text-muted hover:bg-panel-2", hidden && "bg-accent/12 text-accent")}
-            aria-label={t("chats.showHidden")}
-            title={t("chats.showHidden")}
+            onClick={() => setArchived(!archived)}
+            className={cn("ml-auto grid size-9 place-items-center rounded-full text-muted hover:bg-panel-2", archived && "bg-accent/12 text-accent")}
+            aria-label={t("chats.showArchived")}
+            title={t("chats.showArchived")}
           >
-            <EyeOff className="size-4" />
+            <Archive className="size-4" />
           </button>
         </div>
         <div className="relative">

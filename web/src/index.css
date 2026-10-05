@@ -74,3 +74,5 @@
 }
 @keyframes flash { from { box-shadow: 0 0 0 3px var(--accent); } to { box-shadow: 0 0 0 3px transparent; } }
 .flash { animation: flash 1.6s ease-out; }
+@keyframes loading-bar { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+.loading-bar { animation: loading-bar 1.1s ease-in-out infinite; }

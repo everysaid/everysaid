@@ -372,9 +372,9 @@ def create_app(archive_path=None, auth_path=None):
         return x
 
     @app.get("/api/chats")
-    def chats(kind: str | None = None, q: str | None = None, hidden: bool = False, limit: int | None = None,
+    def chats(kind: str | None = None, q: str | None = None, archived: bool = False, limit: int | None = None,
               offset: int = 0):
-        return {"items": queries.chats(store, include_hidden=hidden, kind=kind, q=q, limit=limit, offset=offset)}
+        return {"items": queries.chats(store, include_archived=archived, kind=kind, q=q, limit=limit, offset=offset)}
 
     @app.get("/api/chats/{chat_id}")
     def chat(chat_id: str):
@@ -394,7 +394,7 @@ def create_app(archive_path=None, auth_path=None):
 
     @app.patch("/api/chats/{chat_id}")
     def chat_state(chat_id: str, body: dict = Body(...)):
-        fields = {k: body[k] for k in ("pinned", "muted", "hidden", "read_until") if k in body}
+        fields = {k: body[k] for k in ("pinned", "muted", "archived", "read_until") if k in body}
         try:
             changes.set_chat_state(store, chat_id, always=bool(body.get("always")), **fields)
         except KeyError:
@@ -669,7 +669,7 @@ def create_app(archive_path=None, auth_path=None):
     @app.put("/api/settings")
     def settings_put(body: dict = Body(...)):
         for k, v in body.items():
-            if k in ("theme", "language", "push_preview", "density", "send_enter", "unread_since", "hidden_returns"):
+            if k in ("theme", "language", "push_preview", "density", "send_enter", "unread_since"):
                 changes.set_setting(store, k, v)
             elif k == "name_order" and (v is None or isinstance(v, list) and all(isinstance(x, str) for x in v)
                                         and len(set(v)) == len(v) and set(v) <= set(plugins.name_weights())):

@@ -87,6 +87,7 @@ def _report_states(ctx, items):
             a.db.execute("UPDATE source SET instance_id = ? WHERE id = ? AND instance_id IS NULL", (ctx.id, src))
             for chat_id, field, value in items:
                 a.report_state(src, a.find_conversation("telegram", str(chat_id)), field, value, now)
+            a.init_archived()
             a.db.commit()
         finally:
             a.db.close()
@@ -99,7 +100,7 @@ def _dialog_states(dialogs):
         if telegram_store.entity_kind(d.entity) in ("channel", "bot"):
             continue
         ns = getattr(d.dialog, "notify_settings", None)
-        out += [(d.id, "hidden", int(d.archived)), (d.id, "pinned", int(d.pinned)),
+        out += [(d.id, "archived", int(d.archived)), (d.id, "pinned", int(d.pinned)),
                 (d.id, "muted", _until_ms(getattr(ns, "mute_until", None)))]
     return out
 
@@ -154,7 +155,7 @@ async def run(ctx, plugin):
         items = []
         try:
             if isinstance(update, types.UpdateFolderPeers):
-                items = [(utils.get_peer_id(fp.peer), "hidden", int(fp.folder_id == 1)) for fp in update.folder_peers]
+                items = [(utils.get_peer_id(fp.peer), "archived", int(fp.folder_id == 1)) for fp in update.folder_peers]
             elif isinstance(update, types.UpdateDialogPinned) and isinstance(update.peer, types.DialogPeer):
                 items = [(utils.get_peer_id(update.peer.peer), "pinned", int(bool(update.pinned)))]
             elif isinstance(update, types.UpdateNotifySettings) and isinstance(update.peer, types.NotifyPeer):

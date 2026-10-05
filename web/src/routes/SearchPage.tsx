@@ -1,17 +1,20 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Search, X } from "lucide-react";
+import { Check, ChevronDown, Search, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { api, qs, type ChatDetail, type MessageItem } from "@/lib/api";
+import { api, qs, type MessageItem } from "@/lib/api";
 import { fullDate } from "@/lib/format";
 import { useDebounced } from "@/lib/hooks";
 import { SERVICES } from "@/lib/services";
 import { searchRoute } from "@/router";
-import { Avatar, Button, Empty, ServiceBadge, Spinner } from "@/components/ui";
+import { Avatar, Empty, LoadingBar, Menu, MenuContent, MenuItem, MenuTrigger, MoreOnScroll, ServiceBadge, Spinner } from "@/components/ui";
+import { ChatFilter } from "@/components/ChatFilter";
 import { RichText } from "@/components/Message";
 import { PageHeader } from "@/components/PageHeader";
+
+interface Found { chat_id: string; title: string; type: string; count: number }
 
 export function SearchPage() {
   const { t } = useTranslation();
@@ -30,7 +33,6 @@ export function SearchPage() {
     return next;
   });
   const dq = useDebounced(q.trim(), 300);
-  const chat = useQuery({ queryKey: ["chat", search.chat], queryFn: () => api.get<ChatDetail>(`/api/chats/${search.chat}`), enabled: !!search.chat });
 
   useEffect(() => {
     navigate({ to: "/search", search: { q: dq || undefined, service: service || undefined, chat: search.chat }, replace: true });
@@ -41,7 +43,7 @@ export function SearchPage() {
     queryKey: ["search", dq, service, search.chat, since, until, who, mode.case, mode.whole],
     enabled: dq.length > 0,
     initialPageParam: 0,
-    queryFn: ({ pageParam }) => api.get<{ items: MessageItem[]; total: number }>(`/api/search${qs({
+    queryFn: ({ pageParam }) => api.get<{ items: MessageItem[]; total: number; chats: Found[] | null }>(`/api/search${qs({
       q: dq, service, chat: search.chat, since: toMs(since), until: until ? toMs(until)! + 86400_000 : undefined,
       outgoing: who || undefined, limit: 40, offset: pageParam, case: mode.case || undefined, whole: mode.whole || undefined,
     })}`),
@@ -52,6 +54,13 @@ export function SearchPage() {
   });
   const items = res.data?.pages.flatMap((p) => p.items) ?? [];
   const total = res.data?.pages[0]?.total ?? 0;
+  // where it was found: each person or group, with how many; one tap keeps only that one
+  const [found, setFound] = useState<Found[]>([]);
+  const firstChats = res.data?.pages[0]?.chats;
+  useEffect(() => { if (firstChats) setFound(firstChats); }, [firstChats]);
+  useEffect(() => { if (!dq) setFound([]); }, [dq]);
+  const picked = found.find((c) => c.chat_id === search.chat);
+  const only = (id?: string) => navigate({ to: "/search", search: { q: dq || undefined, chat: id } });
 
   return (
     <div className="flex h-full flex-col">
@@ -77,12 +86,7 @@ export function SearchPage() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-sm">
-          {search.chat && chat.data && (
-            <span className="flex items-center gap-1.5 rounded-full bg-accent/12 py-1 pl-1 pr-2 text-accent">
-              <Avatar name={chat.data.title} size={22} /> {chat.data.title}
-              <button onClick={() => navigate({ to: "/search", search: { q: dq || undefined } })} aria-label={t("common.close")}><X className="size-3.5" /></button>
-            </span>
-          )}
+          {found.length <= 1 && <ChatFilter chat={search.chat} onClear={() => only(undefined)} />}
           <select value={service} onChange={(e) => setService(e.target.value)} className="h-9 rounded-xl border border-line bg-panel px-2">
             <option value="">{t("search.anyService")}</option>
             {Object.entries(SERVICES).filter(([, s]) => s.messages).map(([k, s]) => <option key={k} value={k}>{s.name}</option>)}
@@ -96,7 +100,8 @@ export function SearchPage() {
           <label className="flex items-center gap-1 text-muted">{t("search.to")}<input type="date" value={until} onChange={(e) => setUntil(e.target.value)} className="h-9 rounded-xl border border-line bg-panel px-2 text-fg" /></label>
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="relative min-h-0 flex-1 overflow-y-auto">
+        <LoadingBar active={res.isFetching} />
         {!dq ? (
           <Empty icon={<Search />} title={t("search.placeholder")} hint={t("search.hint")} />
         ) : res.isLoading ? (
@@ -104,8 +109,34 @@ export function SearchPage() {
         ) : items.length === 0 ? (
           <Empty icon={<Search />} title={t("search.none")} hint={t("search.hint")} />
         ) : (
-          <div className="mx-auto max-w-3xl space-y-2 p-4 md:p-6">
+          <div data-results className="mx-auto max-w-3xl space-y-2 p-4 md:p-6">
             <div className="px-1 text-sm text-muted">{t("search.results", { count: total })}</div>
+            {found.length > 1 && (
+              <Menu>
+                <MenuTrigger asChild>
+                  <button data-found className="flex max-w-full items-center gap-2 rounded-xl border border-line bg-panel py-1.5 pl-1.5 pr-3 text-sm hover:border-accent/40 data-[state=open]:border-accent">
+                    {picked ? <Avatar name={picked.title} size={24} group={picked.type === "group"} /> : <span className="grid size-6 place-items-center rounded-full bg-panel-2"><Users className="size-3.5 text-muted" /></span>}
+                    <span className="truncate font-medium">{picked ? picked.title : t("search.everywhere")}</span>
+                    <span className="text-xs text-muted">{picked ? picked.count : found.reduce((a, c) => a + c.count, 0)}</span>
+                    <ChevronDown className="size-4 shrink-0 text-muted" />
+                  </button>
+                </MenuTrigger>
+                <MenuContent align="start" className="max-h-80 w-72 overflow-y-auto">
+                  <MenuItem onSelect={() => only(undefined)} icon={<Users />}>
+                    <span className="flex-1">{t("search.everywhere")}</span>
+                    {!search.chat && <Check className="size-4 text-accent" />}
+                  </MenuItem>
+                  {found.map((c) => (
+                    <MenuItem key={c.chat_id} onSelect={() => only(c.chat_id)}>
+                      <Avatar name={c.title} size={24} group={c.type === "group"} />
+                      <span className="min-w-0 flex-1 truncate">{c.title}</span>
+                      <span className="text-xs tabular-nums text-muted">{c.count}</span>
+                      {search.chat === c.chat_id && <Check className="size-4 text-accent" />}
+                    </MenuItem>
+                  ))}
+                </MenuContent>
+              </Menu>
+            )}
             {items.map((m) => (
               <Link
                 key={m.id}
@@ -125,11 +156,7 @@ export function SearchPage() {
                 </div>
               </Link>
             ))}
-            {res.hasNextPage && (
-              <div className="flex justify-center py-4">
-                <Button onClick={() => res.fetchNextPage()} loading={res.isFetchingNextPage}>{t("common.more")}</Button>
-              </div>
-            )}
+            <MoreOnScroll hasMore={!!res.hasNextPage} loading={res.isFetchingNextPage} onMore={res.fetchNextPage} />
           </div>
         )}
       </div>

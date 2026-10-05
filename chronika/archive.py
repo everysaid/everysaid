@@ -30,7 +30,7 @@ Names: `handle_name` keeps every name a service has shown for a handle, of a kin
 service's copy of the user's address book, a chat's name, a name people chose for themselves), with
 when it was seen; `core/names.py` picks a person's name from them.
 
-State: what the sources say about a conversation (hidden, muted, pinned, read up to) is in
+State: what the sources say about a conversation (archived, muted, pinned, read up to) is in
 `state_report`, one row per source; what the user chose in the app, per chat, in `chat_state`;
 settings in `setting`, so every device sees them. `core/queries.py` combines them.
 
@@ -340,8 +340,8 @@ CREATE INDEX IF NOT EXISTS contact_address_address ON contact_address (address_i
 CREATE TABLE IF NOT EXISTS state_report (   -- what a source says about a conversation's state
     conversation_id INTEGER NOT NULL REFERENCES conversation,
     instance_id INTEGER NOT NULL REFERENCES plugin_instance,
-    field TEXT NOT NULL CHECK (field IN ('hidden', 'muted', 'pinned', 'read_until')),
-    value INTEGER NOT NULL,             -- hidden, pinned: 0/1; muted: until (Unix ms, -1 for ever, 0 not);
+    field TEXT NOT NULL CHECK (field IN ('archived', 'muted', 'pinned', 'read_until')),
+    value INTEGER NOT NULL,             -- archived, pinned: 0/1; muted: until (Unix ms, -1 for ever, 0 not);
                                         -- read_until: Unix ms
     observed_at INTEGER NOT NULL,       -- Unix ms: when the source's data was so (a backup's time)
     changed_at INTEGER NOT NULL,        -- Unix ms: when it became so (the service's, else first seen)
@@ -349,7 +349,7 @@ CREATE TABLE IF NOT EXISTS state_report (   -- what a source says about a conver
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS chat_state (     -- what the user chose in the app, per chat (p<person>, c<conversation>)
     chat TEXT NOT NULL,
-    field TEXT NOT NULL CHECK (field IN ('hidden', 'muted', 'pinned', 'read_until')),
+    field TEXT NOT NULL CHECK (field IN ('archived', 'muted', 'pinned', 'read_until')),
     value INTEGER NOT NULL,             -- as in state_report (muted: 0/1)
     set_at INTEGER NOT NULL,            -- Unix ms; a later change by a service wins, unless `always`
     always INTEGER NOT NULL DEFAULT 0,
@@ -574,7 +574,7 @@ class Archive:
         return row[0] if row else None
 
     def report_state(self, source_id, conversation_id, field, value, observed_at, changed_at=None):
-        """What a source says about a conversation: hidden, muted (until, Unix ms; -1 for ever),
+        """What a source says about a conversation: archived, muted (until, Unix ms; -1 for ever),
         pinned, read_until. observed_at: when its data was so (ms); changed_at: when it became so,
         if the service says; else the first time it was seen so."""
         if conversation_id is None:
@@ -679,10 +679,41 @@ class Archive:
             self.db.execute("INSERT INTO reaction (message_id, emoji, code, count, address_id, outgoing) "
                             "VALUES (?, ?, ?, ?, ?, ?)", (message_id, emoji, code, count or 1, who, outgoing))
 
+    def init_archived(self):
+        """The app's own "archived", for chats it has not set yet that a source has reported on: a
+        person's chat archived if every one of their conversations a source reports on is archived
+        there (one in view keeps them in view), a group if it is. From then on it is the app's alone:
+        what the services do later does not change it. Nothing is overwritten."""
+        db = self.db
+        own = {r[0] for r in db.execute("SELECT address_id FROM account")}
+        person = dict(db.execute("SELECT address_id, person_id FROM person_address"))
+        me = {person[a] for a in own if a in person}
+        newest = {}         # conversation -> archived, as its newest report says
+        for conv, value in db.execute("SELECT conversation_id, value FROM state_report WHERE field = 'archived' "
+                                      "ORDER BY observed_at"):
+            newest[conv] = value
+        if not newest:
+            return
+        members = {}
+        for conv, aid in db.execute("SELECT conversation_id, address_id FROM conversation_member"):
+            members.setdefault(conv, []).append(aid)
+        chats = {}          # chat id -> [archived per reported conversation]
+        for conv, is_group in db.execute("SELECT id, is_group FROM conversation"):
+            if conv not in newest:
+                continue
+            others = {person.get(a) for a in members.get(conv, []) if a not in own} - {None} - me
+            chat = f"p{others.pop()}" if not is_group and len(others) == 1 else f"c{conv}"
+            chats.setdefault(chat, []).append(newest[conv])
+        now = int(time.time() * 1000)
+        db.executemany("INSERT OR IGNORE INTO chat_state (chat, field, value, set_at) VALUES (?, 'archived', ?, ?)",
+                       [(chat, int(all(vs)), now) for chat, vs in chats.items()])
+
     def resolve(self):
         """After an import: link replies to the messages they answer (keeping the quoted text only
         where that is not in the archive), mark the messages that edit events edited, and turn
-        reactions sent as messages (tapbacks) into reactions on their message."""
+        reactions sent as messages (tapbacks) into reactions on their message; and start the app's own
+        "archived" for chats new to it (init_archived)."""
+        self.init_archived()
         db = self.db
         db.execute("UPDATE message SET reply_to = (SELECT t.id FROM message t WHERE t.service_id = "
                    "message.service_id AND t.key = message.reply_key AND t.key_scope IS message.key_scope) "

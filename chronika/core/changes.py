@@ -46,10 +46,15 @@ def merge_people(store, into, other):
         db.execute("UPDATE person SET name = ?, note = ?, contact_uid = ?, contact_url = ?, name_source = ? WHERE id = ?",
                    (name or oname, "\n\n".join(n for n in (note, onote) if n) or None, uid or ouid, url or ourl,
                     source or osource, into))
+        # archived only if both were: one of them in view keeps the whole person in view
+        both_archived = len({c for (c,) in db.execute(
+            "SELECT chat FROM chat_state WHERE field = 'archived' AND value = 1 AND chat IN (?, ?)", (f"p{into}", f"p{other}"))}) == 2
         # the user's choices for the other's chat: kept where theirs for `into` are older or missing
         db.execute("INSERT INTO chat_state SELECT ?, field, value, set_at, always FROM chat_state WHERE chat = ? "
                    "ON CONFLICT (chat, field) DO UPDATE SET value = excluded.value, set_at = excluded.set_at, "
                    "always = excluded.always WHERE excluded.set_at > chat_state.set_at", (f"p{into}", f"p{other}"))
+        if not both_archived:
+            db.execute("UPDATE chat_state SET value = 0 WHERE chat = ? AND field = 'archived'", (f"p{into}",))
         db.execute("DELETE FROM chat_state WHERE chat = ?", (f"p{other}",))
         db.execute("DELETE FROM merge_dismissed WHERE a = ? OR b = ?", (other, other))
         db.execute("DELETE FROM person WHERE id = ?", (other,))
@@ -70,9 +75,9 @@ def split_address(store, address_id):
 
 
 def set_chat_state(store, chat_id, always=False, **fields):
-    """The user's choice for a chat: pinned, muted, hidden (bools), read_until (Unix ms, or 'now'),
+    """The user's choice for a chat: pinned, muted, archived (bools), read_until (Unix ms, or 'now'),
     or None to follow the services again. A service's later change wins over it, unless `always`."""
-    allowed = {"pinned", "muted", "hidden", "read_until"}
+    allowed = {"pinned", "muted", "archived", "read_until"}
     if set(fields) - allowed:
         raise ValueError(set(fields) - allowed)
     index, _ = _chat_index(store)

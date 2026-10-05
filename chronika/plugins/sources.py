@@ -105,7 +105,7 @@ class IphoneBackup(Plugin):
     services = ("sms", "imessage", "rcs", "phone", "facetime", "whatsapp", "viber")
     service_info = looks(*services)
     name_weights = {"whatsapp/book": 80, "whatsapp/chat": 50, "whatsapp/profile": 30}
-    state_weights = {"hidden": 70, "muted": 60}
+    state_weights = {"muted": 60}
     description = ("Messages, iMessage, calls, WhatsApp and Viber from an encrypted iPhone backup, made over "
                    "the cable with libimobiledevice. The backup must be encrypted: only then does it hold calls.")
     platforms = ("linux", "darwin")
@@ -115,7 +115,8 @@ class IphoneBackup(Plugin):
         Setting("backup", "A new backup before importing", "bool", default=True,
                 help="Off: only decrypt the backup already there"),
     )
-    actions = (("import_only", "Import only (no backup)"),)
+    # the two steps apart: the backup over the cable; the import from the backup that is there
+    actions = (("backup_only", "Backup only (no import)"), ("import_only", "Import only (no backup)"))
 
     def check(self, ctx):
         if not config.secret("backup-password"):
@@ -134,7 +135,10 @@ class IphoneBackup(Plugin):
         return self._import(ctx)
 
     def action(self, ctx, name):
-        if name == "import_only":
+        if name == "backup_only":
+            return run_script(ctx, "iphone-sync.py", "--backup-only")
+        if name == "import_only":           # the databases taken out of the backup that is there, then imported
+            run_script(ctx, "iphone-sync.py", "--no-backup")
             return self._import(ctx)
         return super().action(ctx, name)
 
@@ -178,7 +182,7 @@ class WhatsappBridge(Plugin):
     services = ("whatsapp",)
     service_info = looks(*services)
     name_weights = {"whatsapp/book": 80, "whatsapp/chat": 50, "whatsapp/profile": 30}
-    state_weights = {"hidden": 70, "muted": 60, "pinned": 0}
+    state_weights = {"muted": 60, "pinned": 0}
     description = ("WhatsApp as it arrives, through a whatsmeow bridge linked as a device "
                    "(whatsapp-mcp's whatsapp-bridge). Unofficial: WhatsApp may block accounts that use one; "
                    "sending raises that risk.")
@@ -248,7 +252,7 @@ class Telegram(Plugin):
     services = ("telegram",)
     service_info = looks(*services)
     name_weights = {"telegram/profile": 40}     # chosen by each person
-    state_weights = {"hidden": 70, "muted": 60, "pinned": 0}
+    state_weights = {"muted": 60, "pinned": 0}
     description = ("Every chat but channels and bots, through Telegram's API with the user's own account "
                    "(Telethon): the whole history, then live.")
     modes = ("import", "live")

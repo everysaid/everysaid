@@ -27,8 +27,12 @@ export const searchRoute = createRoute({
   }),
   component: lazyRouteComponent(() => import("./routes/SearchPage"), "SearchPage"),
 });
-const calls = createRoute({ getParentRoute: () => rootRoute, path: "/calls", component: lazyRouteComponent(() => import("./routes/CallsPage"), "CallsPage") });
-const media = createRoute({ getParentRoute: () => rootRoute, path: "/media", component: lazyRouteComponent(() => import("./routes/MediaPage"), "MediaPage") });
+// a chat's own calls or media: ?chat=<id> (from its info); none: all of them
+const chatFilter = (s: Record<string, unknown>): { chat?: string } => ({ chat: (s.chat as string) || undefined });
+export const callsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/calls", validateSearch: chatFilter,
+  component: lazyRouteComponent(() => import("./routes/CallsPage"), "CallsPage") });
+export const mediaRoute = createRoute({ getParentRoute: () => rootRoute, path: "/media", validateSearch: chatFilter,
+  component: lazyRouteComponent(() => import("./routes/MediaPage"), "MediaPage") });
 const people = createRoute({ getParentRoute: () => rootRoute, path: "/people", component: lazyRouteComponent(() => import("./routes/PeoplePage"), "PeoplePage") });
 export const personRoute = createRoute({ getParentRoute: () => rootRoute, path: "/people/$personId", component: lazyRouteComponent(() => import("./routes/PersonPage"), "PersonPage") });
 const sources = createRoute({ getParentRoute: () => rootRoute, path: "/sources", component: lazyRouteComponent(() => import("./routes/SourcesPage"), "SourcesPage") });
@@ -37,7 +41,7 @@ export const dayRoute = createRoute({ getParentRoute: () => rootRoute, path: "/d
 const overview = createRoute({ getParentRoute: () => rootRoute, path: "/overview", component: OverviewPage });
 const setup = createRoute({ getParentRoute: () => rootRoute, path: "/setup", component: () => <Outlet /> });
 
-const routeTree = rootRoute.addChildren([index, chatRoute, searchRoute, calls, media, people, personRoute, sources,
+const routeTree = rootRoute.addChildren([index, chatRoute, searchRoute, callsRoute, mediaRoute, people, personRoute, sources,
   settings, dayRoute, overview, setup]);
 
 export const router = createRouter({ routeTree, context: { queryClient: undefined! }, defaultPreload: "intent", scrollRestoration: true });
