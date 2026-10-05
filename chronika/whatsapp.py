@@ -11,6 +11,7 @@ known number stay as they are. Groups are keyed by their jid. Channels (`@newsle
 from collections import defaultdict
 from datetime import datetime
 import os
+import re
 import sqlite3
 
 from . import config, extras
@@ -34,7 +35,7 @@ BRIDGE_KINDS = {"": "text", "image": "image", "video": "video", "audio": "voice"
 
 
 def ro(path):
-    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    db = config.read_only(path)
     db.row_factory = sqlite3.Row
     return db
 
@@ -146,6 +147,38 @@ class People:
         for (jid,) in bridge.execute("SELECT chat_jid FROM messages WHERE chat_jid LIKE '%@lid' UNION "
                                      "SELECT sender FROM messages WHERE sender LIKE '%@lid'") if bridge else ():
             self.lids.add(user(jid))
+        # The names WhatsApp shows for people, by kind (book: its copy of the phone's address
+        # book; chat: a chat's name; profile: the name they chose, a push name): one per handle
+        # and kind, the first found.
+        self.names = {}
+        rows = []
+        if contacts:
+            rows += [(j, n, "book") for j, n in contacts.execute(
+                "SELECT ZWHATSAPPID, ZFULLNAME FROM ZWAADDRESSBOOKCONTACT UNION ALL "
+                "SELECT ZLID, ZFULLNAME FROM ZWAADDRESSBOOKCONTACT")]
+        if store:
+            rows += [(j, n, "book") for j, n in store.execute("SELECT their_jid, full_name FROM whatsmeow_contacts")]
+        if iphone:
+            rows += [(j, n, "chat") for j, n in iphone.execute(
+                "SELECT ZCONTACTJID, ZPARTNERNAME FROM ZWACHATSESSION "
+                "WHERE ZCONTACTJID LIKE '%@s.whatsapp.net' OR ZCONTACTJID LIKE '%@lid'")]
+            rows += [(j, n, "profile") for j, n in iphone.execute("SELECT ZJID, ZPUSHNAME FROM ZWAPROFILEPUSHNAME")]
+        if bridge:
+            rows += [(j, n, "chat") for j, n in bridge.execute(
+                "SELECT jid, name FROM chats WHERE jid LIKE '%@s.whatsapp.net' OR jid LIKE '%@lid'")]
+        if store:
+            rows += [(j, n, "profile") for j, n in store.execute("SELECT their_jid, push_name FROM whatsmeow_contacts")]
+        for jid, name, kind in rows:
+            handle = self(jid if jid and "@" in jid else f"{jid}@s.whatsapp.net") if jid else None
+            if handle and name:
+                self.names.setdefault((handle, kind), name)
+
+    def conversation_key(self, jid):
+        """The archive's key of a WhatsApp chat: a group's jid, a person's handle value."""
+        if jid.endswith("@s.whatsapp.net") or jid.endswith("@lid"):
+            p = self(jid)
+            return p[1] if p else jid
+        return jid
 
     def __call__(self, jid):
         if not jid:
@@ -244,6 +277,37 @@ def run(archive, iphone_db=IPHONE_DB, contacts_db=CONTACTS_DB, bridge_db=BRIDGE_
             int(datetime.fromisoformat(r["timestamp"]).timestamp() * 1000), outgoing,
             None if outgoing else person(r["sender"] or jid),
             BRIDGE_KINDS.get(r["media_type"] or "", "file"), r["content"] or None, r["id"])
+
+    # The names WhatsApp shows, for the handles in the archive (core/names.py orders them against an
+    # address book and other services).
+    seen = {}
+    if iphone:
+        seen["iphone"] = int(os.path.getmtime(iphone_db))
+    if bridge:
+        seen["bridge"] = int(os.path.getmtime(store_db if store_db and os.path.exists(store_db) else bridge_db))
+    for (handle, kind), name in person.names.items():
+        if handle not in own:
+            archive.handle_name(handle, "whatsapp", name, kind, max(seen.values()))
+
+    # The state of chats: hidden (archived), muted, pinned, as each source last saw it.
+    def report(where, jid, field, value, at):
+        conv = archive.find_conversation("whatsapp", person.conversation_key(jid))
+        archive.report_state(src[where], conv, field, value, at * 1000)
+    if iphone:
+        for jid, archived in iphone.execute("SELECT ZCONTACTJID, ZARCHIVED FROM ZWACHATSESSION WHERE ZCONTACTJID IS NOT NULL"):
+            report("iphone", jid, "hidden", int(bool(archived)), seen["iphone"])
+        muted = dict(iphone.execute("SELECT ZJID, ZMUTEDUNTIL FROM ZWACHATPUSHCONFIG WHERE ZJID IS NOT NULL"))
+        for (jid,) in iphone.execute("SELECT ZCONTACTJID FROM ZWACHATSESSION WHERE ZCONTACTJID IS NOT NULL"):
+            until = muted.get(jid) or 0
+            until = 0 if until <= 0 else -1 if until > 32503680000 else int((until + APPLE_EPOCH) * 1000)  # past 3000: for ever
+            report("iphone", jid, "muted", until, seen["iphone"])
+    store = ro_bridge(store_db) if bridge else None
+    if store:
+        for jid, until, pinned, archived in store.execute(
+                "SELECT chat_jid, muted_until, pinned, archived FROM whatsmeow_chat_settings"):
+            report("bridge", jid, "hidden", int(bool(archived)), seen["bridge"])
+            report("bridge", jid, "pinned", int(bool(pinned)), seen["bridge"])
+            report("bridge", jid, "muted", -1 if until == -1 else (until or 0) * 1000, seen["bridge"])
 
     archive.resolve()
     for sid in src.values():

@@ -45,7 +45,7 @@ def main():
     for col, kind in (("phash", "INTEGER"), ("same_shot", "INTEGER")):
         if col not in cols:
             db.execute(f"ALTER TABLE match ADD COLUMN {col} {kind}")
-    index = sqlite3.connect(f"file:{INDEX}?mode=ro", uri=True)
+    index = config.read_only(INDEX)
     asset = {r[0]: r[1:] for r in index.execute("SELECT id, preview, taken, width, height FROM asset")}
     rows = db.execute("SELECT path, coalesce(exact, best), taken FROM match WHERE origin = ?", (args.origin,)).fetchall()
     done = 0

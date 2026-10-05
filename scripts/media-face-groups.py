@@ -83,7 +83,7 @@ def main():
     from insightface.app import FaceAnalysis
     app = FaceAnalysis(name="buffalo_l", allowed_modules=["detection", "recognition"], providers=["CPUExecutionProvider"])
     app.prepare(ctx_id=-1, det_thresh=mf.MIN_SCORE, det_size=(640, 640))
-    paths = [l.strip() for l in open(args.paths) if l.strip() and os.path.exists(l.strip())]
+    paths = [l.strip() for l in open(args.paths, encoding="utf-8") if l.strip() and os.path.exists(l.strip())]
     emb, where, crops = [], [], []
     for k, p in enumerate(paths, 1):
         img = mf.picture(p)

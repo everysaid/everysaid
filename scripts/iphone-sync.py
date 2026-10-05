@@ -49,9 +49,8 @@ ARCHIVE_SOURCES = {"whatsapp-media": "iphone/whatsapp", "viber-media": "iphone/v
 def message_files(out):
     """media folder -> the file paths that belong to a message (what the archive links), read from the
     databases just extracted: thumbnails, favicons and link previews beside them are not copied."""
-    import sqlite3
-    wa = sqlite3.connect(f"file:{os.path.join(out, 'whatsapp.sqlite')}?mode=ro", uri=True)
-    vb = sqlite3.connect(f"file:{os.path.join(out, 'viber.sqlite')}?mode=ro", uri=True)
+    wa = config.read_only(os.path.join(out, 'whatsapp.sqlite'))
+    vb = config.read_only(os.path.join(out, 'viber.sqlite'))
     names = [n for (n,) in vb.execute("SELECT ZNAME FROM ZATTACHMENT WHERE ZNAME IS NOT NULL")]
     return {"whatsapp-media": {p.removeprefix("Media/") for (p,) in wa.execute(
                 "SELECT ZMEDIALOCALPATH FROM ZWAMEDIAITEM WHERE ZMEDIALOCALPATH IS NOT NULL")},
@@ -63,8 +62,7 @@ def archived_media():
     """media folder -> set of the file paths the archive has already taken (read only)."""
     if not os.path.exists(ARCHIVE_DB):
         return {}
-    import sqlite3
-    db = sqlite3.connect(f"file:{ARCHIVE_DB}?mode=ro", uri=True)
+    db = config.read_only(ARCHIVE_DB)
     known = {}
     for folder, source in ARCHIVE_SOURCES.items():
         known[folder] = {p for (p,) in db.execute(

@@ -2,8 +2,10 @@
 
 The folders follow the platform's conventions (platformdirs): on Linux the XDG ones,
 `~/.local/share/chronika` for what cannot be made again (the archive, the review decisions),
-`~/.cache/chronika` for what can, `~/.config/chronika` for the settings and the secrets. Every
-setting has a general default, so the file is needed only to change one:
+`~/.cache/chronika` for what can, `~/.config/chronika` for the settings and the secrets. The
+environment variables CHRONIKA_DATA, CHRONIKA_CACHE and CHRONIKA_CONFIG move them (a demo or a test
+archive is kept wholly apart this way). Every setting has a general default, so the file is needed
+only to change one:
 
     [owner]
     numbers = ["+15551234567"]      # the owner's own numbers, in international form
@@ -38,7 +40,13 @@ setting has a general default, so the file is needed only to change one:
     model = "qwen2.5vl:7b"          # that model (also the one the review pages show first)
 
     [media]
+    store = "..."                   # the archive's own media files; default: <data> (media/<ab>/...)
     aside = "..."                   # media-aside.py's folder; default: <data>/aside
+
+    [server]
+    origin = "https://chronika.example.org"   # the address the app is reached at; default: http://localhost:8520
+    host = "127.0.0.1"              # where `chronika serve` listens; behind a reverse proxy keep it local
+    port = 8520
 
     [review]
     person = "..."                  # the one person most pictures come from: a filter of their own
@@ -48,21 +56,33 @@ setting has a general default, so the file is needed only to change one:
     reference_model = "claude-sonnet"   # vlm.db's reference answers, for vlm-review.py's comparison
 """
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 import os
+import sqlite3
 import subprocess
 import sys
 import tomllib
 
 import platformdirs
+import tzlocal
 
 APP = "chronika"
+# The keyring's service name for secrets; a demo or a test sets its own, so that it never sees the
+# user's real secrets (and never connects to their accounts).
+KEYRING = os.environ.get("CHRONIKA_KEYRING") or APP
 
-DATA = platformdirs.user_data_dir(APP, appauthor=False)
-CACHE = platformdirs.user_cache_dir(APP, appauthor=False)
-CONFIG = platformdirs.user_config_dir(APP, appauthor=False)
+DATA = os.environ.get("CHRONIKA_DATA") or platformdirs.user_data_dir(APP, appauthor=False)
+CACHE = os.environ.get("CHRONIKA_CACHE") or platformdirs.user_cache_dir(APP, appauthor=False)
+CONFIG = os.environ.get("CHRONIKA_CONFIG") or platformdirs.user_config_dir(APP, appauthor=False)
 
 CONFIG_FILE = os.path.join(CONFIG, "config.toml")
+
+
+def read_only(path):
+    """A SQLite database opened read only. The URI is built from the path (any characters, `#`, `?`
+    and `%` included, and Windows drive letters), so it always names that file."""
+    return sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
 
 
 def _load():
@@ -86,16 +106,21 @@ def _path(section, key, default=None):
 
 def _system_zone():
     """The system's zone names, most specific first: TZ (also as a path, TZ=:/etc/localtime), the
-    zone /etc/localtime links to, /etc/timezone (Debian)."""
+    zone /etc/localtime links to, /etc/timezone (Debian), then tzlocal's answer (Windows, where
+    none of those exist, and any system they miss)."""
     names = []
     for n in (os.environ.get("TZ", "").lstrip(":"), "/etc/localtime"):
         if os.path.isabs(n):            # a zoneinfo file: its name is the part after .../zoneinfo/
             n = os.path.realpath(n).partition("/zoneinfo/")[2]
         names.append(n)
     try:
-        with open("/etc/timezone") as f:
+        with open("/etc/timezone", encoding="utf-8") as f:
             names.append(f.read().strip())
     except OSError:
+        pass
+    try:
+        names.append(tzlocal.get_localzone_name())
+    except Exception:                   # tzlocal raises its own errors on odd systems
         pass
     return [n for n in names if n]
 
@@ -130,7 +155,12 @@ IMMICH_MAKE = get("immich", "make", "Chronika")
 OLLAMA_URL = (get("ollama", "url") or "http://localhost:11434").rstrip("/")
 OLLAMA_MODEL = get("ollama", "model", "qwen2.5vl:7b")
 
+MEDIA_STORE = _path("media", "store", DATA)
 ASIDE = _path("media", "aside", os.path.join(DATA, "aside"))
+
+SERVER_ORIGIN = (get("server", "origin") or f"http://localhost:{get('server', 'port', 8520)}").rstrip("/")
+SERVER_HOST = get("server", "host", "127.0.0.1")
+SERVER_PORT = int(get("server", "port", 8520))
 
 REVIEW_PERSON = get("review", "person")
 REVIEW_ME = get("review", "me", "εγώ")
@@ -149,7 +179,7 @@ def iphone_udid():
              if os.path.exists(os.path.join(root, d, "Manifest.plist"))] if os.path.isdir(root) else []
     if not found:
         try:
-            found = subprocess.run(["idevice_id", "-l"], capture_output=True, text=True).stdout.split()
+            found = subprocess.run(["idevice_id", "-l"], capture_output=True, text=True, encoding="utf-8").stdout.split()
         except FileNotFoundError:
             pass
     if len(found) == 1:
@@ -181,9 +211,9 @@ def _keyring(action, name, value=None):
         return None
     try:
         if action == "get":
-            return keyring.get_password(APP, name)
-        keyring.set_password(APP, name, value)
-        return keyring.get_password(APP, name) == value
+            return keyring.get_password(KEYRING, name)
+        keyring.set_password(KEYRING, name, value)
+        return keyring.get_password(KEYRING, name) == value
     except KeyringError:
         return None
 
@@ -202,7 +232,7 @@ def secret(name):
         return None
     if exposed(path):
         sys.exit(f"Το {path} διαβάζεται και από άλλους· chmod 600 και ξανά.")
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return f.read().rstrip("\r\n")
 
 
@@ -217,7 +247,7 @@ def save_secret(name, value):
     except FileNotFoundError:
         pass
     fd = os.open(path + ".part", os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
-    with os.fdopen(fd, "w") as f:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(value)
     os.replace(path + ".part", path)
     return path
@@ -231,7 +261,7 @@ def move_to_keyring(name):
         sys.exit(f"Δεν υπάρχει το {path}.")
     if exposed(path):
         sys.exit(f"Το {path} διαβάζεται και από άλλους· chmod 600 και ξανά.")
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         value = f.read().rstrip("\r\n")
     if not _keyring("set", name, value):
         sys.exit("Δεν υπάρχει keyring σε αυτό το σύστημα (ή αρνήθηκε): το αρχείο μένει όπως είναι.")

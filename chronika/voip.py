@@ -38,7 +38,7 @@ CARRIER_NOTICES = getattr(config, "CARRIER_NOTICES", None) or config.get("import
 
 
 def ro(path):
-    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    db = config.read_only(path)
     db.row_factory = sqlite3.Row
     return db
 

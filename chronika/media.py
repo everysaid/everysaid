@@ -1,7 +1,7 @@
 """Link media files to their messages and store each file once, by content, in the archive.
 
 Files are hard-linked (no extra space; copied where the source is on another file system) to
-`<cache>/media/<ab>/<sha256><ext>`. Each source records the folder its files are in
+`<media store>/media/<ab>/<sha256><ext>` (config `[media] store`, the data folder by default). Each source records the folder its files are in
 (`source.media_root`); `attachment.source_path` is relative to it. The links to messages, each
 step skipped when its source is not there:
 
@@ -18,14 +18,12 @@ The Android phone's Viber media were linked once, through a `links.tsv` made by 
 A file already linked from the same source path is not hashed again, unless its size has changed.
 """
 from collections import defaultdict
-import errno
 import hashlib
 import mimetypes
 import os
 import shutil
-import sqlite3
 
-from . import telegram
+from . import config, telegram
 from .archive import IPHONE, IPHONE_DATA, MEDIA_ROOT, android_exports
 
 
@@ -33,17 +31,18 @@ PAIR_MS = 2000
 
 
 def ro(path):
-    return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    return config.read_only(path)
 
 
 def link_or_copy(src, dest):
-    """A hard link to src at dest, or a copy where the two are on different file systems or the file
-    system has no hard links."""
+    """A hard link to src at dest, or a copy wherever a link cannot be made: another file system,
+    or one without hard links (each system says so with its own error: EXDEV, EPERM, ENOTSUP,
+    EINVAL on FAT and exFAT, ...). A missing source or an existing destination is still an error."""
     try:
         os.link(src, dest)
-    except OSError as e:
-        if e.errno not in (errno.EXDEV, errno.EPERM, errno.EOPNOTSUPP, errno.EMLINK):
-            raise
+    except (FileNotFoundError, FileExistsError):
+        raise
+    except OSError:
         shutil.copy2(src, dest)
 
 

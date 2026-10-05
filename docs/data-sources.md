@@ -862,12 +862,10 @@ Phones carry the same history, copied from phone to phone at each change.
 
 ## 9. The unified archive
 
-### 9.1 Schema (`chronika/archive.py`, version 2)
+### 9.1 Schema (`chronika/archive.py`)
 
-The version is `PRAGMA user_version` (2). An archive from before versioning (v1) is not opened by
-the importers: `scripts/archive-v2.py SRC OUT` makes a migrated copy (`chronika/migrate.py`, one
-transaction, counts compared, integrity, foreign keys and the full-text index checked, vacuumed),
-which the user then puts in place.
+`PRAGMA user_version` is 1 until the first release; until then the schema changes in place, without
+migrations.
 
 **Lookup tables and vocabularies:**
 
@@ -876,7 +874,7 @@ which the user then puts in place.
   message id is unique across the service, `conversation` where only within a chat (Telegram);
 - `address_kind`: `phone`, `email`, `sender` (an SMS sender name), `uri` (sip:...), shared by every
   service; `id`, `username`, `name`, within one service (`address.service_id`): a Viber member id,
-  a WhatsApp LID, a Telegram user id or username, a Messenger name;
+  a WhatsApp LID, a Telegram user id or username, a name where a service gives nothing else;
 - `message_kind` (text, image, video, voice, file, sticker, location, contact, call, system,
   reaction);
 - `vocabulary` (field, name): what `message.subtype` (link, gif, video note, deleted, notice, call,
@@ -890,11 +888,18 @@ which the user then puts in place.
 | Table | Contents |
 |---|---|
 | `address` | `kind_id`, `value`, `service_id` (NULL for the shared kinds); unique on (kind, value, service) |
-| `person` | `name` (set by the user), `contact_uid` (vCard UID), `contact_url` (CardDAV href or any other), `note` |
+| `person` | `name` (set by the user), `name_source` (where the user pinned their name to come from: a source of names, or `address:<id>`), `contact_uid` (vCard UID), `contact_url` (CardDAV href or any other), `note` |
+| `handle_name` | every name a service has shown for a handle: `address_id`, `service_id`, `kind` (`book`: the service's copy of the user's address book; `chat`: a chat's name; `profile`: chosen by them), `name`, `first_seen`, `last_seen`, `current` (the latest of that handle, service and kind); many handles may share a name. WhatsApp gives all three kinds, Telegram profile names; `core/names.py` picks a person's name from them |
+| `merge_dismissed` | pairs of people the user said are not one (`a` < `b`, `at`): that suggestion is not shown again |
 | `person_address` | `address_id` PK, `person_id`, `how` (`auto`: one person per new address; `number`: a service id whose number is known; `manual`: merged by the user) |
 | `account` | the user's own handles: `address_id`, `service_id` (NULL: every service), `label`; seeded from `[owner] numbers` |
 | `device` | `name` (iphone, an Android device's name, whatsapp-bridge...), `kind`, `used_from`, `used_until` (Unix ms) |
-| `source` | `name` (`<device>/sms`...), `path`, `imported_at`, `device_id`, `media_root` (the folder `attachment.source_path` is relative to; `{cache}` and `{data}` stand for those folders) |
+| `source` | `name` (`<device>/sms`...), `path`, `imported_at`, `device_id`, `media_root` (the folder `attachment.source_path` is relative to; `{cache}` and `{data}` stand for those folders), `instance_id` (the plugin instance that reads it) |
+| `plugin_instance` | `plugin` (its id), `kind` (source, library, contacts), `label`, `settings` and `state` (JSON), `enabled`, `device_id`, `is_default` (the library kept files go to), `created_at`, `last_run`, `last_status` |
+| `contact`, `contact_address` | an address book's contacts (`instance_id`, `uid`, `url`, `name`, `organization`, `photo` in `<cache>/avatars/`) and the addresses they list, joined only to addresses the archive has |
+| `state_report` | what a source says about a conversation: `conversation_id`, `instance_id`, `field` (`hidden`, `muted`, `pinned`, `read_until`), `value` (muted: until, Unix ms, -1 for ever), `observed_at` (when the source's data was so), `changed_at` (when it became so) |
+| `chat_state` | what the user chose in the app per chat (`p<person>`, `c<conversation>`): `field`, `value`, `set_at`, `always`; `core/queries.py` combines it with the reports (see `docs/design.md`) |
+| `setting` | the user's settings shared by every device (JSON values), e.g. `unread_since`, `push_preview` |
 
 A number is one `address` whatever the service, so its SMS, calls, Viber and WhatsApp meet in one
 person; the migration made one person per address, which is how the archive behaved before.
@@ -905,7 +910,7 @@ person; the migration made one person per address, which is how the archive beha
 |---|---|
 | `conversation` | `service_id`, `key`, `title`, `is_group`; (service, key) unique |
 | `conversation_member` | conversation × address |
-| `message` | `id`, `service_id`, `conversation_id`, `ts` (Unix ms UTC), `outgoing`, `sender_id` (NULL when outgoing), `kind_id`, `text`, `key`, `key_scope` (the conversation, for services whose keys are per chat), `fingerprint` (messages without a key: time, direction, kind and text); unique on (service, key, key_scope); and the extras: `subtype`, `subtype_code`, `reply_to`, `reply_key`, `reply_text`, `edited`, `deleted`, `forwarded`, `starred`, `lat`, `lon`, `place` (a location shared), `sender_lat`, `sender_lon` (where the sender was, older Viber) |
+| `message` | `status` (a message sent from the app: sending, sent, failed), `id`, `service_id`, `conversation_id`, `ts` (Unix ms UTC), `outgoing`, `sender_id` (NULL when outgoing), `kind_id`, `text`, `key`, `key_scope` (the conversation, for services whose keys are per chat), `fingerprint` (messages without a key: time, direction, kind and text); unique on (service, key, key_scope); and the extras: `subtype`, `subtype_code`, `reply_to`, `reply_key`, `reply_text`, `edited`, `deleted`, `forwarded`, `starred`, `lat`, `lon`, `place` (a location shared), `sender_lat`, `sender_lon` (where the sender was, older Viber) |
 | `reaction` | `message_id`, `emoji` (NULL where only a code is known), `code`, `count`, `address_id`, `outgoing` |
 | `message_origin` | (`source_id`, `row_key`) PK, `message_id` (WITHOUT ROWID) |
 | `call` | `id`, `service_id`, `address_id` (NULL for hidden numbers), `ts`, `outgoing`, `answered`, `duration`, `key`, `detail`, `detail_code`, `video`, `attempts`, `conversation_id` |
@@ -913,7 +918,7 @@ person; the migration made one person per address, which is how the archive beha
 | `call_origin` | as `message_origin` |
 | `viber_member` | Viber member id → number, as the sources said |
 | `blocked` | `address_id`, `phone` (the device), `original`: numbers blocked on a phone |
-| `message_fts` | FTS5 over `message.text` (`unicode61 remove_diacritics 2`), kept in step by insert, delete and update triggers |
+| `message_fts` | contentless FTS5 (`contentless_delete=1`) over the text folded by `chronika/text.py` (lower case, combining marks removed in every script, final sigma as sigma, NFKC), rowid = `message.id`; written by `Archive.add_message()` (a trigger cannot fold); a query is folded the same way (`text.query()`) |
 
 **Media:**
 
@@ -921,9 +926,9 @@ person; the migration made one person per address, which is how the archive beha
 |---|---|
 | `media` | `sha256` PK, `size`, `mime`, `path` (`media/<ab>/<sha256><ext>`, relative to the media root) |
 | `attachment` | `message_id`, `sha256`, `source_id`, `source_path`; (source, path, message) unique |
-| `library_link` | (`sha256`, `library`) PK, `asset_id`, `method` (checksum, phash, clip, upload), `score`, `linked_at`: a file in a photo library; more than one library may hold it |
-| `media_same` | `sha256` PK, `same_as`, `method`, `score`, `linked_at`: a file removed as the same picture as one the archive keeps (until v2, `library_link` with library `archive`) |
-| `review`, `media_date`, `media_judgement` | the review state by sha256 (decisions per scope, dates and where they came from, the models' answers and the user's verdicts). Empty: `review.db` and `vlm.db` move in later; the cache's indexes (match, faces, tags) stay in the cache |
+| `library_link` | (`sha256`, `library`) PK, `asset_id` (for a folder: the path in it), `method` (checksum, phash, clip, upload), `score`, `linked_at`, `instance_id` (the library plugin instance): a file in a photo library; more than one library may hold it |
+| `media_same` | `sha256` PK, `same_as`, `method`, `score`, `linked_at`: a file removed as the same picture as one the archive keeps |
+| `media_decision` | `sha256` PK, `decision` (keep, remove, library), `date_ms` (a date the user gave), `at`: the user's sorting in the app; the newest decision is the one that counts. |
 
 **Connection settings:** WAL journal, `foreign_keys = ON`, `umask 077`.
 
@@ -946,7 +951,7 @@ an Android export once it is imported.
 Which copy is kept: `Archive.keeper()`, the device in use at the time by its period in `device`,
 else the one in use most recently, else the first named (the iPhone).
 
-**Location.** `DB` = `<data>/archive.db`; `MEDIA_ROOT` = `<cache>` (the media, under `media/`);
+**Location.** `DB` = `<data>/archive.db`; `MEDIA_ROOT` = `[media] store`, `<data>` by default (the media, under `media/`);
 `IPHONE_DATA` = `<cache>/iphone`. Scripts that read the archive use the same path (`ARCHIVE_DB`).
 
 ### 9.2 Address normalisation (`address()`)

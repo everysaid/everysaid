@@ -1,10 +1,8 @@
 """What a message carries beyond its text: the message it answers, reactions, edits and deletions,
 forwarding, a star, a place, a shared contact or poll, and its kind as the service names it.
 
-Each function reads one source's row (as the importers see it; `archive-migrate.py` once fed it the
-rows `message_origin.raw` kept)
-and returns a dict for `Archive.add_message(..., extras=...)`; keys are left out when there is
-nothing to say:
+Each function reads one source's row (as the importers see it) and returns a dict for
+`Archive.add_message(..., extras=...)`; keys are left out when there is nothing to say:
 
 - reply_key, reply_text: the service key of the message answered, or reacted to by a tapback
   (resolved to `message.reply_to` by `Archive.resolve()`), and the quoted text, kept only where

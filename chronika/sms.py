@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 import os
 import sqlite3
 
-from . import extras
+from . import config, extras
 from .archive import IPHONE, IPHONE_DATA, APPLE_EPOCH, address, android_exports
 
 IPHONE_DB = f"{IPHONE_DATA}/sms.db"
@@ -73,7 +73,7 @@ def kind_of_mime(mime):
 
 
 def read_iphone(path):
-    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    db = config.read_only(path)
     db.row_factory = sqlite3.Row
     handles = {r["ROWID"]: r["id"] for r in db.execute("SELECT ROWID, id FROM handle")}
     chats = {r["ROWID"]: r for r in db.execute("SELECT ROWID, guid, style, display_name FROM chat")}
@@ -107,7 +107,7 @@ def read_iphone(path):
 
 def read_android(path, own, device):
     """One Android export's SMS and MMS; own: the owner's addresses, left out of MMS members."""
-    db = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    db = config.read_only(path)
     db.row_factory = sqlite3.Row
     recs = []
     for r in db.execute("SELECT * FROM sms ORDER BY CAST(_id AS INTEGER)"):

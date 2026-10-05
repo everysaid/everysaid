@@ -2,12 +2,15 @@
 
 A personal archive of messages and calls: SMS and iMessage, phone and FaceTime calls, Viber,
 WhatsApp, Telegram, with their media, in one SQLite database. It is built from local phone backups
-(iPhone), Android phones over adb, and the services' own APIs and exports. A core, with a UI for a
-person and an MCP server for an assistant, is to be written over it (see "Plans").
+(iPhone), Android phones over adb, and the services' own APIs and exports. Over it: a core, an app
+for a person (a messenger for the whole history, on desktop and phone, `chronika serve`) and an MCP
+server for an assistant (`chronika mcp`). `docs/app.md` tells how to run them, `docs/design.md`
+how they are built.
 
 The goal is a complete, permanent history that does not depend on what the phones keep: a message
 stays in the archive after the phone that held it is gone, deleted or replaced. Nothing goes
-through iCloud; so far nothing is live.
+through iCloud. Telegram, and WhatsApp through a bridge, can also be live: new messages arrive in
+the app as they come, and can be answered from it.
 
 Backups are not the project's job. Keeping the archive itself safe (and the phone backups it reads,
 and the photo library) is the user's concern, with whatever backup they use. What Chronika owes is
@@ -35,8 +38,12 @@ history); nothing in the tracked documentation depends on it.
 | Replies, reactions, edits, locations, call outcomes | working (`chronika/extras.py`) |
 | WhatsApp and Viber calls, carrier missed-call notices | working (`chronika/voip.py`) |
 | Chat media matched against a photo library (immich) and uploaded with the right date | working (scripts, see "Media") |
-| Merging into the archive as part of the sync | to do |
-| The core, the UI and the MCP server | to do |
+| The core: chats, a person's stream across services, search ignoring accents, people, calls, media, statistics | working (`chronika/core/`) |
+| Plugins: sources, photo libraries (folder, immich), contacts (CardDAV, .vcf), as instances | working (`chronika/plugins/`) |
+| The app: passkeys, the messenger, search, media, people, sources, settings, push, PWA | working (`chronika serve`, `web/`) |
+| Live Telegram and WhatsApp (bridge), sending where the plugin can | working |
+| The MCP server | working (`chronika mcp`) |
+| A demo archive of invented people | working (`chronika demo`) |
 
 ## Folders and configuration
 
@@ -49,6 +56,10 @@ platform (platformdirs; on Linux the XDG folders, so `XDG_DATA_HOME` and the lik
 | cache | `~/.cache/chronika` | what can: the iPhone's extracts, the indexes, `telegram/` |
 | config | `~/.config/chronika` | `config.toml`, and the secrets' files where there is no keyring |
 
+The environment variables CHRONIKA_DATA, CHRONIKA_CACHE and CHRONIKA_CONFIG move each of them (the
+demo and the tests use them to stay apart). The app adds `<data>/server.db` (users, passkeys,
+sessions, push subscriptions, audit; mode 600), and `<cache>/thumbs/` and `<cache>/avatars/`.
+
 ```
 <cache>/iphone/sms.db                     decrypted messages database
 <cache>/iphone/CallHistory.storedata      decrypted call history database
@@ -57,12 +68,12 @@ platform (platformdirs; on Linux the XDG folders, so `XDG_DATA_HOME` and the lik
 <cache>/iphone/whatsapp-contacts.sqlite   WhatsApp's contacts (`ContactsV2.sqlite`)
 <cache>/iphone/whatsapp-calls.sqlite      WhatsApp's call log (`CallHistory.sqlite`)
 <cache>/iphone/viber-media/, whatsapp-media/   new media of messages, copied by each sync
-<cache>/media/<ab>/<sha256><ext>          the archive's media, hard links to those, until they go to the library
+<data>/media/<ab>/<sha256><ext>           the archive's media (config [media] store), until they go to the library
 <cache>/telegram/telegram.db              Telegram's messages, as read by telegram-sync.py
 ```
 
-(The archive's media are in the cache for now, though some cannot be made again once their source
-is gone; moving them to the data folder is open, see "Plans".)
+(The archive's media are in the data folder, not the cache: some exist nowhere else once their source
+is gone.)
 
 ### Running the scripts
 
@@ -71,7 +82,7 @@ optional group (`pyproject.toml`), named with `--extra`:
 
 | Extra | Brings | For |
 |---|---|---|
-| (none) | platformdirs, keyring, phonenumbers | the importers, `immich-index.py`, `media-aside.py`, `media-prune.py`, `android-export.py` |
+| (none) | platformdirs, keyring, phonenumbers, tzlocal (and tzdata on Windows) | the importers, `immich-index.py`, `media-aside.py`, `media-prune.py`, `android-export.py` |
 | `iphone` | iphone-backup-decrypt | `iphone-sync.py`, `iphone-ls.py`, `iphone-verify.py`, `media-restore.py` |
 | `media` | Pillow, pillow-heif, imagehash, numpy | the review pages, `media-vlm.py`, `media-triage.py`, `immich-dupes.py`, `immich-phash.py`, `immich-upload.py` |
 | `ml` | `media`, transformers, scipy, insightface, onnxruntime | `media-faces.py`, `media-face-groups.py`; with a torch extra, the embedding scripts |
@@ -112,7 +123,7 @@ TOML, optional: every key has a general default.
 |---|---|---|
 | `[owner] numbers` | none | the user's own numbers, left out of conversation members |
 | `[owner] region` | none | the country of numbers written without a country code (ISO code, e.g. `GR`) |
-| `[owner] timezone` | the system's (TZ, also as `:/path`; the `/etc/localtime` link; `/etc/timezone`; else today's offset) | dates in file names, typed dates, carrier notices, calls, the pages; a name that is not a zone is reported and the next is tried |
+| `[owner] timezone` | the system's (TZ, also as `:/path`; the `/etc/localtime` link; `/etc/timezone`; tzlocal, which also reads Windows' setting; else today's offset) | dates in file names, typed dates, carrier notices, calls, the pages; a name that is not a zone is reported and the next is tried |
 | `[iphone] udid` | the only backup, else the only phone on the cable | `iphone-sync.py`, `iphone-ls.py`, `iphone-verify.py`, `media-restore.py` |
 | `[iphone] device` | `iphone` | the device name in the iPhone's source names (`iphone/sms`) |
 | `[iphone] backup_root` | `<data>/iphone-backup` | where `idevicebackup2` writes |
@@ -128,6 +139,8 @@ TOML, optional: every key has a general default.
 | `[immich] container_prefix` | `/usr/src/app/upload/` | the same folder as immich's own paths name it |
 | `[immich] make` | `chronika` | the camera make written into uploaded files that have none |
 | `[ollama] url`, `model` | `http://localhost:11434`, `qwen2.5vl:7b` | `media-vlm.py`'s local vision model, also the one the pages show first |
+| `[media] store` | `<data>` | where the archive's media files are (`media/<ab>/...`) |
+| `[server] origin`, `host`, `port` | `http://localhost:8520`, `127.0.0.1`, 8520 | the app's address (passkeys are tied to it) and where it listens |
 | `[media] aside` | `<data>/aside` | `media-aside.py` and `media-triage.py` (hard links, or copies on another file system) |
 | `[review] person`, `me` | none, `εγώ` | the one person with a filter of their own on `immich-review.py`, and the user's own face label |
 | `[review] dog_tag`, `dog_threshold` | none, 0.0005 | `media-tags.py`'s label for a dog on `vlm-review.py` |
@@ -331,7 +344,16 @@ Schema (`chronika/archive.py`):
 - `service`, `address_kind`, `message_kind`, `source`: lookup tables; `address` (normalised: E.164
   numbers, lower-case email, a service's id, username or profile name); `person` joins addresses
   (`Archive.alias` adds a handle to an existing person); `conversation` and `conversation_member`.
-- `message_fts`: FTS5 over the text, ignoring case and Latin accents.
+- `message_fts`: FTS5 over the text folded (`chronika/text.py`: lower case, no accents of any script,
+  final sigma as sigma), so `καλημερα` finds `Καλημέρα`; written by the archive as it adds a message.
+- The app's tables: `plugin_instance` (every source, library and address book in use, with its
+  settings and state; `source.instance_id`, `library_link.instance_id` point to it), `contact` and
+  `contact_address` (an address book's people, joined to the addresses they list), `handle_name`
+  (every name a service has shown for a handle, of a kind, with when it was seen), `state_report`
+  (what each source says about a chat: hidden, muted, pinned, read up to) and `chat_state` (what the
+  user chose), `setting` (the user's, shared by every device), `media_decision` (keep, remove, to the
+  library; the newest counts), `message.status` (messages sent from the app). Until the first
+  release the schema changes in place, without migrations.
 
 Deduplication. Rows found in more than one source are paired one to one and kept once, with every
 origin recorded; where the sources differ, the copy of the device in use at the time wins
@@ -482,59 +504,21 @@ Content-Security-Policy that runs only their own scripts.
 
 ## Plans
 
-1. **Before the core: an audit for generality.** Structures and code must not depend on one user's
-   data or setup (paths, hosts, devices, country code, language), must run on any Linux, and on
-   macOS and Windows where the tools and libraries exist; where they do not, it is discussed.
-   What carries over is made general first; only then the core. Among the points found: time zones
-   on Windows (`tzdata`), read-only SQLite URIs and file encodings, the media store in the cache,
-   more than one iPhone, device periods, phone numbers without a region, i18n of messages, and
-   full-text search that folds Greek accents and final sigma.
-2. **The core and its two faces.** The main use: one unified messenger, like WhatsApp, Viber or
-   Telegram, or Pidgin made modern, where each person shows the whole conversation across every
-   service. Online, for desktop and mobile alike, with the strongest security that does not get in
-   the user's way; light and dark themes; i18n; an avatar per person; accounts that join into one
-   person; management where sources and accounts are added; live conversations where a service can
-   be reached through a library (WhatsApp, Telegram), and offline sources (SMS, calls, backups)
-   beside them. To be designed before it is written.
-   - **Sources are plugins**, one per way of reaching a service, not one per service. Each plugin
-     knows what it brings and how, and says so: live or import, which platforms it runs on, what it
-     needs from the user (a login, a backup password, a cable). The core knows none of this; it
-     takes messages, calls, people and media in one shape. So far: SMS/iMessage and calls from an
-     iPhone backup, SMS and calls from an Android phone over adb, Telegram live (its API), WhatsApp
-     live (a bridge) and from a backup (an iPhone backup's `ChatStorage.sqlite`; an Android backup
-     is a different, encrypted plugin), Viber from an iPhone backup and from Viber Desktop (Linux
-     only, there being no official way), Messenger from Meta's export, and the carriers' notices per
-     country.
-   - **Many devices, one archive.** A plugin can be added many times (two iPhones and four Android
-     phones), and the user decides which of them fall into the same archive; deduplication across
-     them is the core's job: the same message, call or file brought by several devices or plugins
-     is one record with all its origins, by rules general enough for any mix (which copy wins
-     where they differ).
-   - **One core (Python) does everything**: the questions and the changes. The UI is for a person:
-     it shows everything (one stream per person across services, calls included, replies,
-     reactions, pictures) and edits it (names, merging people, links to contacts, notes; deleting
-     only with explicit confirmation). The MCP server is for an assistant: what it needs to ask
-     and do (search, a message with its context, a person, calls, a day's timeline, statistics, a
-     few harmless actions), each tool a call into the core.
-   - **People.** In the end every person is one person across all services: the importers keep
-     every handle a service gives (number, id, username, the name a profile shows) on the same
-     person, so that people can be joined to each other and to their contacts.
-   - **Choosing chats.** The user chooses which chats are imported and which have their media
-     downloaded: a list of the chats with select all, deselect all and filters (service, kind,
-     size, dates, title); until then it is configuration (`[telegram] media`, `no_media`).
-   - **Decisions.** A newer decision on a file overrides every older one.
-   - **Media.** There must be some mechanism for sorting the media (choosing what is kept) and for
-     storing what is kept; how is left to the design. The core cannot require immich: the place
-     kept media go is a choice (immich, or simply a folder on disk), and everything about "the
-     library" (what is already there, dates, uploads) applies to whichever is chosen.
-   - **Media on demand**, beside the library's own flows: a call of the core, so in the UI and the
-     MCP server too, that fetches from one contact the files of some kind and dates ("the last two
-     pictures X sent on WhatsApp"). Each file's date is its own EXIF date if it has one, else the
-     date the message was received, unless the user gives another (often found only in the chat).
-     Before anything is stored, each file is marked as wanted and checked against the library
-     (exact copy by checksum, the same picture by perceptual hash, pictures of that day), and the
-     user is told what is already there; only those the user then approves are stored, and the
-     request closes with the stored item.
-3. **Sources still missing**: the iPhone's SMS/iMessage attachments (`MediaDomain`
-   `Library/SMS/Attachments`), the WhatsApp bridge's media, Android WhatsApp, Messenger.
-4. **Merging into the archive as the last step of `iphone-sync.py`.**
+Built (October 2026), as `docs/design.md` describes: the core, plugins as instances (sources,
+libraries, contacts), the app (passkeys, the messenger across services, search, media,
+people and their merging, sources with per-chat choice, devices, settings, push, PWA for desktop
+and phone, light and dark, Greek and English), live Telegram and WhatsApp with sending, the MCP
+server with media on demand, the demo archive, tests (core, server, MCP; end to end on desktop and
+mobile). Next:
+
+1. **Sources still missing**: the iPhone's SMS/iMessage attachments (`MediaDomain`
+   `Library/SMS/Attachments`), the WhatsApp bridge's media (`/api/download`), Android WhatsApp (its
+   encrypted backup), Messenger (Meta's export), a native Android companion for live SMS and calls.
+2. **Writes through the core**: today's importers become sources that yield records, the core's
+   pipeline storing and deduplicating them (now they write through `Archive`, wrapped as plugins).
+3. **The importers' and the command line's words** in both languages (they are Greek; the app, the server's
+   messages and the plugins are bilingual, and `tests/test_i18n.py` lists what is left).
+4. **Native wrappers** (Capacitor, Tauri) if notification replies or sharing into the app on an
+   iPhone are wanted.
+5. **Several users** on one server: the auth database and the core already take the archive per
+   user; what is left is the UI to add a user and the per-user plugin host.

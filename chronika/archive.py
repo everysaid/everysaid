@@ -20,8 +20,26 @@ devices is kept; each source names the folder its media paths are relative to.
 Pictures are not kept here for good: each `media` row stays as the record of what a message carried,
 while the file itself either moves to a photo library (`library_link` says where) or is removed.
 
-The schema is versioned (`PRAGMA user_version`); an older archive is brought up to date by
-`migrate.py` (`scripts/archive-v2.py`), never silently on opening.
+Plugins: every way the archive is fed or gives files away is a `plugin_instance`, of a kind:
+`source` (messages, calls, people), `library` (where kept pictures go: a folder, immich) or
+`contacts` (an address book). Sources hang from the instance that reads them; a library link names
+the instance that holds the file. Contacts from an address book are in `contact`, joined to the
+addresses they list.
+
+Names: `handle_name` keeps every name a service has shown for a handle, of a kind (the
+service's copy of the user's address book, a chat's name, a name people chose for themselves), with
+when it was seen; `core/names.py` picks a person's name from them.
+
+State: what the sources say about a conversation (hidden, muted, pinned, read up to) is in
+`state_report`, one row per source; what the user chose in the app, per chat, in `chat_state`;
+settings in `setting`, so every device sees them. `core/queries.py` combines them.
+
+Search: `message_fts` (by words) and `message_tri` (by trigrams, for parts of words) hold each
+message's text folded (`text.fold()`: lower case, no accents, final sigma as sigma), written by
+`add_message()`, not by a trigger (the fold is Python's).
+
+The schema has a version (`PRAGMA user_version`), 1 until the first release: until then it changes
+in place, without migrations.
 """
 import hashlib
 import os
@@ -32,15 +50,16 @@ import time
 
 import phonenumbers
 
-from . import config
+from . import config, text as text_mod
 
 DB = os.path.join(config.DATA, "archive.db")   # in the home snapshots
-# What can be made again lives in the cache, outside the home snapshots: the iPhone's decrypted
-# databases and new media (iphone-sync.py, from the encrypted backup), and the archive's media
-# (media/<ab>/<sha256><ext>, hard links to those) until they go to the photo library.
+# What can be made again lives in the cache: the iPhone's decrypted databases and new media
+# (iphone-sync.py, from the encrypted backup). The archive's own media (media/<ab>/<sha256><ext>,
+# hard links or copies of those) are in the media store, the data folder by default, since some
+# exist nowhere else once their source is gone; they stay until they go to the photo library.
 CACHE = config.CACHE
 IPHONE_DATA = os.path.join(CACHE, "iphone")
-MEDIA_ROOT = CACHE
+MEDIA_ROOT = config.MEDIA_STORE     # media/<ab>/<sha256><ext>: in the data folder (some exist nowhere else)
 APPLE_EPOCH = 978307200
 # The devices' names, which source names start with ('iphone/sms'). Android exports
 # (android-export.py) are one folder per phone, `<export>/<device>/android.db`; an export of the
@@ -49,7 +68,7 @@ APPLE_EPOCH = 978307200
 IPHONE = config.get("iphone", "device", "iphone")
 ANDROID = config.get("android", "device", "android")
 TZ = config.TIMEZONE
-VERSION = 2
+VERSION = 1                     # until the first release: the schema changes in place (no migrations yet)
 
 SERVICES = ("sms", "mms", "imessage", "rcs", "viber", "whatsapp", "phone", "facetime", "telegram",
             "messenger", "signal")
@@ -59,6 +78,7 @@ KEY_PER_CONVERSATION = ("telegram",)    # message ids unique only within a chat
 # where a service gives nothing else).
 ADDRESS_KINDS = ("phone", "email", "sender", "id", "username", "name", "uri")
 SHARED_KINDS = ("phone", "email", "sender", "uri")
+NAMELIKE = re.compile(r"[^\W\d_]")      # a name has a letter in it (else it is a number or a symbol)
 MESSAGE_KINDS = ("text", "image", "video", "voice", "file", "sticker", "location", "contact",
                  "call", "system", "reaction")
 # What `message.subtype`, `call.detail` and `call_member.outcome` may say; the service's own code
@@ -90,13 +110,29 @@ CREATE TABLE IF NOT EXISTS device (
     used_from INTEGER,                  -- Unix ms: when it was the device in use (NULL: not known)
     used_until INTEGER
 );
+CREATE TABLE IF NOT EXISTS plugin_instance (
+    id INTEGER PRIMARY KEY,
+    plugin TEXT NOT NULL,               -- the plugin's id, e.g. 'iphone-backup', 'telegram', 'immich'
+    kind TEXT NOT NULL CHECK (kind IN ('source', 'library', 'contacts')),
+    label TEXT NOT NULL,                -- the user's name for it, e.g. 'iPhone', 'Old phone'
+    settings TEXT NOT NULL DEFAULT '{}',    -- JSON, as the plugin's settings schema says
+    state TEXT NOT NULL DEFAULT '{}',   -- JSON: the plugin's own cursors
+    enabled INTEGER NOT NULL DEFAULT 1,
+    device_id INTEGER REFERENCES device,
+    is_default INTEGER NOT NULL DEFAULT 0,  -- the library kept files go to unless the user says
+    created_at INTEGER NOT NULL,        -- Unix seconds
+    last_run INTEGER,                   -- Unix seconds of the last import or connection
+    last_status TEXT,                   -- what the last run said (ok, or the error)
+    UNIQUE (plugin, label)
+);
 CREATE TABLE IF NOT EXISTS source (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,          -- e.g. 'iphone/sms', 'acme/sms'
     path TEXT NOT NULL,
     imported_at INTEGER,                -- Unix seconds of the last import
     device_id INTEGER REFERENCES device,
-    media_root TEXT                     -- the folder attachment.source_path is relative to; {cache}, {data}
+    media_root TEXT,                    -- the folder attachment.source_path is relative to; {cache}, {data}
+    instance_id INTEGER REFERENCES plugin_instance  -- the plugin instance that reads it
 );
 CREATE TABLE IF NOT EXISTS address (
     id INTEGER PRIMARY KEY,
@@ -110,7 +146,9 @@ CREATE TABLE IF NOT EXISTS person (
     name TEXT,                          -- set by the owner; else names come from the contact
     contact_uid TEXT,                   -- the vCard UID of their contact
     contact_url TEXT,                   -- where that contact lives (a CardDAV href, any provider)
-    note TEXT
+    note TEXT,
+    name_source TEXT                    -- where the name comes from when the user pinned one: a source of
+                                        -- names ('contacts', 'whatsapp/book'), or 'address:<id>'; NULL: by order
 );
 CREATE TABLE IF NOT EXISTS person_address (
     address_id INTEGER PRIMARY KEY REFERENCES address,
@@ -118,6 +156,23 @@ CREATE TABLE IF NOT EXISTS person_address (
     how TEXT NOT NULL DEFAULT 'auto'    -- auto: one person per new address; manual: merged by the owner
 );
 CREATE INDEX IF NOT EXISTS person_address_person ON person_address (person_id);
+CREATE TABLE IF NOT EXISTS handle_name (    -- every name a service has shown for a handle; many may share one
+    address_id INTEGER NOT NULL REFERENCES address,
+    service_id INTEGER NOT NULL REFERENCES service,
+    kind TEXT NOT NULL CHECK (kind IN ('book', 'chat', 'profile')),  -- book: the service's copy of the
+                                        -- user's address book; chat: a chat's name; profile: chosen by them
+    name TEXT NOT NULL,
+    first_seen INTEGER NOT NULL,        -- Unix seconds
+    last_seen INTEGER NOT NULL,
+    current INTEGER NOT NULL DEFAULT 1, -- the latest of this handle, service and kind
+    PRIMARY KEY (address_id, service_id, kind, name)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS merge_dismissed (    -- suggested merges the user turned down
+    a INTEGER NOT NULL REFERENCES person,       -- a < b
+    b INTEGER NOT NULL REFERENCES person,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (a, b)
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS account (    -- the owner's own handles
     id INTEGER PRIMARY KEY,
     address_id INTEGER NOT NULL REFERENCES address,
@@ -160,7 +215,8 @@ CREATE TABLE IF NOT EXISTS message (
     forwarded INTEGER NOT NULL DEFAULT 0,
     starred INTEGER NOT NULL DEFAULT 0,
     lat REAL, lon REAL, place TEXT,     -- a location shared
-    sender_lat REAL, sender_lon REAL    -- where the sender was when sending (older Viber)
+    sender_lat REAL, sender_lon REAL,   -- where the sender was when sending (older Viber)
+    status TEXT                         -- a message sent from the app: sending, sent, failed (NULL: as imported)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS message_key ON message (service_id, key, ifnull(key_scope, 0));
 CREATE INDEX IF NOT EXISTS message_conversation_ts ON message (conversation_id, ts);
@@ -242,11 +298,12 @@ CREATE TABLE IF NOT EXISTS attachment (
 CREATE INDEX IF NOT EXISTS attachment_message ON attachment (message_id);
 CREATE TABLE IF NOT EXISTS library_link (
     sha256 TEXT NOT NULL REFERENCES media,
-    library TEXT NOT NULL,              -- the photo library that holds the picture now, e.g. 'immich'
-    asset_id TEXT NOT NULL,             -- its id there
+    library TEXT NOT NULL,              -- the library's name, e.g. 'immich' (the instance's label)
+    asset_id TEXT NOT NULL,             -- its id there (for a folder: the path within it)
     method TEXT NOT NULL,               -- how it was matched: checksum, phash, clip, upload
     score REAL,                         -- phash distance or CLIP similarity
     linked_at INTEGER NOT NULL,         -- Unix seconds; the local copies were removed then
+    instance_id INTEGER REFERENCES plugin_instance,     -- the library plugin instance that holds it
     PRIMARY KEY (sha256, library)
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS media_same (     -- a file removed as the same picture as one the archive keeps
@@ -256,44 +313,56 @@ CREATE TABLE IF NOT EXISTS media_same (     -- a file removed as the same pictur
     score REAL,
     linked_at INTEGER NOT NULL
 ) WITHOUT ROWID;
--- The review state, by file content (sha256; media.path gives the file). Filled when the review
--- pages move here from review.db and vlm.db; the indexes in the cache (match, faces, tags) stay there.
-CREATE TABLE IF NOT EXISTS review (
-    sha256 TEXT NOT NULL REFERENCES media,
-    scope TEXT NOT NULL DEFAULT 'main', -- 'main', or 'aside' for a chat reviewed apart
-    decision TEXT NOT NULL,             -- keep, aside, delete, approved, rejected
-    label TEXT,
-    asset_id TEXT,                      -- the library picture it was judged against
-    score REAL,
-    at INTEGER NOT NULL,                -- Unix seconds
-    PRIMARY KEY (sha256, scope)
-) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS media_date (
+CREATE TABLE IF NOT EXISTS media_decision (  -- the user's choice about a file (sorting)
     sha256 TEXT PRIMARY KEY REFERENCES media,
-    source TEXT NOT NULL,               -- exif, asset, message, set (typed by the owner), unknown
-    ms INTEGER,                         -- Unix ms
-    asset_id TEXT,
-    at INTEGER NOT NULL
+    decision TEXT NOT NULL CHECK (decision IN ('keep', 'remove', 'library')),
+    date_ms INTEGER,                    -- the date the user gave it (else EXIF, else the message's)
+    at INTEGER NOT NULL                 -- Unix seconds: the newest decision is the one that counts
 ) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS media_judgement (     -- a model's view of a picture
-    sha256 TEXT NOT NULL REFERENCES media,
-    model TEXT NOT NULL,
-    kind TEXT, value INTEGER, description TEXT, seconds REAL,
-    wrong INTEGER,                      -- the owner's verdict on the answer
-    PRIMARY KEY (sha256, model)
+CREATE TABLE IF NOT EXISTS contact (    -- a contact from an address book (a `contacts` plugin instance)
+    id INTEGER PRIMARY KEY,
+    instance_id INTEGER NOT NULL REFERENCES plugin_instance,
+    uid TEXT NOT NULL,                  -- the vCard UID
+    url TEXT,                           -- where it lives (a CardDAV href)
+    name TEXT,
+    organization TEXT,
+    photo TEXT,                         -- the photo's file in the cache (avatars/<sha256>.<ext>), if any
+    updated_at INTEGER NOT NULL,
+    UNIQUE (instance_id, uid)
+);
+CREATE TABLE IF NOT EXISTS contact_address (    -- the numbers and emails a contact lists
+    contact_id INTEGER NOT NULL REFERENCES contact ON DELETE CASCADE,
+    address_id INTEGER NOT NULL REFERENCES address,
+    label TEXT,
+    PRIMARY KEY (contact_id, address_id)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS contact_address_address ON contact_address (address_id);
+CREATE TABLE IF NOT EXISTS state_report (   -- what a source says about a conversation's state
+    conversation_id INTEGER NOT NULL REFERENCES conversation,
+    instance_id INTEGER NOT NULL REFERENCES plugin_instance,
+    field TEXT NOT NULL CHECK (field IN ('hidden', 'muted', 'pinned', 'read_until')),
+    value INTEGER NOT NULL,             -- hidden, pinned: 0/1; muted: until (Unix ms, -1 for ever, 0 not);
+                                        -- read_until: Unix ms
+    observed_at INTEGER NOT NULL,       -- Unix ms: when the source's data was so (a backup's time)
+    changed_at INTEGER NOT NULL,        -- Unix ms: when it became so (the service's, else first seen)
+    PRIMARY KEY (conversation_id, instance_id, field)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS chat_state (     -- what the user chose in the app, per chat (p<person>, c<conversation>)
+    chat TEXT NOT NULL,
+    field TEXT NOT NULL CHECK (field IN ('hidden', 'muted', 'pinned', 'read_until')),
+    value INTEGER NOT NULL,             -- as in state_report (muted: 0/1)
+    set_at INTEGER NOT NULL,            -- Unix ms; a later change by a service wins, unless `always`
+    always INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (chat, field)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS setting (    -- the user's settings that every device shares (JSON values)
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 ) WITHOUT ROWID;
 CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
-    text, content='message', content_rowid='id', tokenize='unicode61 remove_diacritics 2');
-CREATE TRIGGER IF NOT EXISTS message_fts_insert AFTER INSERT ON message BEGIN
-    INSERT INTO message_fts (rowid, text) VALUES (new.id, new.text);
-END;
-CREATE TRIGGER IF NOT EXISTS message_fts_delete AFTER DELETE ON message BEGIN
-    INSERT INTO message_fts (message_fts, rowid, text) VALUES ('delete', old.id, old.text);
-END;
-CREATE TRIGGER IF NOT EXISTS message_fts_update AFTER UPDATE OF text ON message BEGIN
-    INSERT INTO message_fts (message_fts, rowid, text) VALUES ('delete', old.id, old.text);
-    INSERT INTO message_fts (rowid, text) VALUES (new.id, new.text);
-END;
+    text, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
+CREATE VIRTUAL TABLE IF NOT EXISTS message_tri USING fts5(     -- the same text in trigrams: parts of words
+    text, content='', contentless_delete=1, tokenize='trigram');
 """
 
 
@@ -351,11 +420,8 @@ class Names(dict):
 
 
 def version(db):
-    """The schema version: 0 for an empty database, 1 for one from before versioning."""
-    v = db.execute("PRAGMA user_version").fetchone()[0]
-    if v == 0 and db.execute("SELECT 1 FROM sqlite_master WHERE name = 'message'").fetchone():
-        return 1
-    return v
+    """The schema version (`PRAGMA user_version`): 0 for an empty database."""
+    return db.execute("PRAGMA user_version").fetchone()[0]
 
 
 class Archive:
@@ -367,7 +433,7 @@ class Archive:
         self.db.execute("PRAGMA journal_mode = WAL")
         v = version(self.db)
         if v not in (0, VERSION):
-            sys.exit(f"Το {path} έχει σχήμα v{v}: χρειάζεται πρώτα `scripts/archive-v2.py {path} ΝΕΟ` (ένα αντίγραφο σε v2).")
+            sys.exit(f"Το {path} έχει άγνωστο σχήμα (v{v}, γνωστό: v{VERSION}).")
         self.db.executescript(SCHEMA)
         seed(self.db)
         self.db.execute(f"PRAGMA user_version = {VERSION}")
@@ -449,6 +515,17 @@ class Archive:
             self._addresses[k] = aid
         return self._addresses[k]
 
+    def known(self, handle):
+        """Whether the archive has this handle ((kind, value[, service]))."""
+        kind, value, service = (*handle, None)[:3]
+        if kind in SHARED_KINDS:
+            service = None
+        if (kind, value, service) in self._addresses:
+            return True
+        return self.db.execute("SELECT 1 FROM address WHERE kind_id = ? AND value = ? AND service_id IS ?",
+                               (self.address_kind[kind], value, self.service[service] if service else None)
+                               ).fetchone() is not None
+
     def alias(self, handle, of):
         """Another handle of the person who has `of` (both (kind, value[, service])), such as a
         username or the name a service shows: new, it joins that person; already someone's, it is
@@ -469,6 +546,52 @@ class Archive:
         if cur.rowcount:
             self.db.execute("INSERT INTO person_address (address_id, person_id) VALUES (?, ?)", (aid, person))
         self._addresses[k] = aid
+
+    def handle_name(self, handle, service, name, kind, seen_at=None):
+        """Record a name `service` shows for a handle the archive has ((kind, value[, service])):
+        kind 'book' (its copy of the user's address book), 'chat' (a chat's name) or 'profile'
+        (chosen by them). Not for the user's own handles, nor a "name" without a letter (a number)."""
+        name = (name or "").strip()
+        if not NAMELIKE.search(name) or not self.known(handle):
+            return
+        aid = self.address(*handle)
+        if self.db.execute("SELECT 1 FROM account WHERE address_id = ?", (aid,)).fetchone():
+            return
+        sid, t = self.service[service], int(seen_at or time.time())
+        self.db.execute("INSERT INTO handle_name (address_id, service_id, kind, name, first_seen, last_seen) "
+                        "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO UPDATE SET "
+                        "first_seen = min(first_seen, excluded.first_seen), last_seen = max(last_seen, excluded.last_seen)",
+                        (aid, sid, kind, name, t, t))
+        # the current one: the latest seen of this handle, service and kind
+        self.db.execute("UPDATE handle_name SET current = (name = (SELECT name FROM handle_name WHERE address_id = ? "
+                        "AND service_id = ? AND kind = ? ORDER BY last_seen DESC LIMIT 1)) "
+                        "WHERE address_id = ? AND service_id = ? AND kind = ?", (aid, sid, kind, aid, sid, kind))
+
+    def find_conversation(self, service, key):
+        """The id of a conversation of a service by its key, if the archive has it."""
+        row = self.db.execute("SELECT id FROM conversation WHERE service_id = ? AND key = ?",
+                              (self.service[service], key)).fetchone()
+        return row[0] if row else None
+
+    def report_state(self, source_id, conversation_id, field, value, observed_at, changed_at=None):
+        """What a source says about a conversation: hidden, muted (until, Unix ms; -1 for ever),
+        pinned, read_until. observed_at: when its data was so (ms); changed_at: when it became so,
+        if the service says; else the first time it was seen so."""
+        if conversation_id is None:
+            return
+        iid = self.db.execute("SELECT instance_id FROM source WHERE id = ?", (source_id,)).fetchone()[0]
+        if iid is None:
+            return
+        old = self.db.execute("SELECT value, observed_at FROM state_report WHERE conversation_id = ? AND "
+                              "instance_id = ? AND field = ?", (conversation_id, iid, field)).fetchone()
+        if old and old[1] > observed_at:
+            return                      # older news than what is there
+        if old and old[0] == value:
+            self.db.execute("UPDATE state_report SET observed_at = ? WHERE conversation_id = ? AND instance_id = ? "
+                            "AND field = ?", (observed_at, conversation_id, iid, field))
+            return
+        self.db.execute("INSERT OR REPLACE INTO state_report VALUES (?, ?, ?, ?, ?, ?)",
+                        (conversation_id, iid, field, int(value), observed_at, changed_at or observed_at))
 
     def account(self, handle, service=None, label=None):
         """Record one of the owner's own handles ((kind, value[, service]) as address() gives)."""
@@ -529,6 +652,10 @@ class Archive:
              x.get("edited", 0), x.get("deleted", 0), x.get("forwarded", 0), x.get("starred", 0),
              lat, lon, place, *position))
         mid = cur.lastrowid
+        if text:
+            folded = text_mod.fold(text)
+            self.db.execute("INSERT INTO message_fts (rowid, text) VALUES (?, ?)", (mid, folded))
+            self.db.execute("INSERT INTO message_tri (rowid, text) VALUES (?, ?)", (mid, folded))
         self.db.execute("INSERT INTO message_origin VALUES (?, ?, ?)", (source_id, row_key, mid))
         self.add_reactions(mid, x.get("reactions"))
         if x.get("edits_key"):

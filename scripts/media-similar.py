@@ -72,7 +72,7 @@ def main():
     for i in range(len(ok)):
         groups.setdefault(root(i), []).append(ok[i])
     groups = sorted((g for g in groups.values() if len(g) > 1), key=len, reverse=True)
-    with open(OUT + ".part", "w") as f:
+    with open(OUT + ".part", "w", encoding="utf-8") as f:
         for n, g in enumerate(groups, 1):
             f.writelines(f"{n}\t{p}\n" for p in sorted(g))
     os.replace(OUT + ".part", OUT)

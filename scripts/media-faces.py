@@ -159,9 +159,9 @@ def main():
     os.makedirs(config.CACHE, exist_ok=True)
 
     if args.paths:
-        paths = [l.strip() for l in open(args.paths) if l.strip()]
+        paths = [l.strip() for l in open(args.paths, encoding="utf-8") if l.strip()]
     else:
-        db = sqlite3.connect(f"file:{ARCHIVE_DB}?mode=ro", uri=True)
+        db = config.read_only(ARCHIVE_DB)
         paths = [common.media_file(p) for (p,) in db.execute(
             "SELECT path FROM media WHERE mime LIKE 'image/%' OR mime LIKE 'video/%'")]
     paths = [p for p in paths if os.path.exists(p)]

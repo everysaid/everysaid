@@ -47,7 +47,7 @@ from common import config
 OLLAMA = config.OLLAMA_URL
 MATCH = os.path.join(config.CACHE, "match.db")
 OUT = os.path.join(config.DATA, "vlm.db")
-ARCHIVE = config.CACHE                                            # media/<ab>/<sha256><ext>
+ARCHIVE = config.MEDIA_STORE                                      # media/<ab>/<sha256><ext>
 ARCHIVE_DB = os.path.join(config.DATA, "archive.db")
 MODEL = config.OLLAMA_MODEL                                       # [ollama] model
 REFERENCE = config.REVIEW_REFERENCE                               # [review] reference_model
@@ -91,13 +91,13 @@ SCHEMA = {"type": "object", "properties": {
 
 def candidates():
     """(path, reason it is filtered out, or None)"""
-    db = sqlite3.connect(f"file:{MATCH}?mode=ro", uri=True)
+    db = config.read_only(MATCH)
     rows = db.execute("""SELECT path,
         exact IS NOT NULL
         OR (similarity >= 0.90 AND taken IS NOT NULL AND abs(taken / 1000 - strftime('%s', substr(immich_date, 1, 19))) <= 120)
         OR (similarity >= 0.90 AND taken IS NULL AND message / 1000 - strftime('%s', substr(immich_date, 1, 19)) BETWEEN -3600 AND 30 * 86400)
         FROM match ORDER BY path""").fetchall()
-    archive = sqlite3.connect(f"file:{ARCHIVE_DB}?mode=ro", uri=True)
+    archive = config.read_only(ARCHIVE_DB)
     skip = {}
     for path, kind in archive.execute(
             "SELECT DISTINCT 'media/' || substr(a.sha256, 1, 2) || '/' || a.sha256, m.subtype "

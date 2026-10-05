@@ -177,7 +177,7 @@ def thumbnail(asset_id):
 def from_api():
     kept = {}                               # what earlier runs made: embeddings, hashes
     if os.path.exists(OUT):
-        old = sqlite3.connect(f"file:{OUT}?mode=ro", uri=True)
+        old = config.read_only(OUT)
         cols = {r[1] for r in old.execute("PRAGMA table_info(asset)")}
         if {"embedding", "phash"} <= cols:
             kept = {r[0]: r[1:] for r in old.execute("SELECT id, sha1, embedding, phash FROM asset")}

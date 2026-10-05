@@ -152,7 +152,7 @@ def senders(paths):
     review = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(review)
     src = review.provenance(sorted(paths))
-    db = sqlite3.connect(f"file:{review.ARCHIVE_DB}?mode=ro", uri=True)
+    db = config.read_only(review.ARCHIVE_DB)
     out = {}
     for p in paths:
         sent = {o for (o,) in db.execute("SELECT DISTINCT m.outgoing FROM attachment a JOIN message m ON m.id = a.message_id "
@@ -166,7 +166,7 @@ def context(items, preview):
     pictures most like it (immich-neighbours.py) and those around the date it would otherwise get."""
     near = {}
     if os.path.exists(NEIGHBOURS):
-        for path, asset, sim in sqlite3.connect(f"file:{NEIGHBOURS}?mode=ro", uri=True).execute(
+        for path, asset, sim in config.read_only(NEIGHBOURS).execute(
                 "SELECT path, asset, similarity FROM neighbour ORDER BY path, rank"):
             near.setdefault(path, []).append((asset, sim))
     global TIMELINE
@@ -177,7 +177,7 @@ def context(items, preview):
     who = senders([x["path"] for x in items])
     faces = {}                          # who is in it (media-faces.py): PERSON, ME
     if os.path.exists(FACES):
-        faces = {p: (w or "").split(",") for p, w in sqlite3.connect(f"file:{FACES}?mode=ro", uri=True).execute(
+        faces = {p: (w or "").split(",") for p, w in config.read_only(FACES).execute(
             "SELECT path, who FROM face")}
     for x in items:
         x["sender"] = who[x["path"]]
@@ -221,10 +221,10 @@ def who_sent(items):
     review = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(review)
     src = review.provenance(sorted(x["path"] for x in items))
-    db = sqlite3.connect(f"file:{review.ARCHIVE_DB}?mode=ro", uri=True)
+    db = config.read_only(review.ARCHIVE_DB)
     faces = {}
     if os.path.exists(FACES):
-        faces = {p: (w or "").split(",") for p, w in sqlite3.connect(f"file:{FACES}?mode=ro", uri=True).execute(
+        faces = {p: (w or "").split(",") for p, w in config.read_only(FACES).execute(
             "SELECT path, who FROM face")}
     for x in items:
         sent = {o for (o,) in db.execute("SELECT DISTINCT m.outgoing FROM attachment a JOIN message m ON m.id = a.message_id "
@@ -242,8 +242,8 @@ def ms(date):
 
 
 def data(origin, only=None):
-    match = sqlite3.connect(f"file:{MATCH}?mode=ro", uri=True)
-    index = sqlite3.connect(f"file:{INDEX}?mode=ro", uri=True)
+    match = config.read_only(MATCH)
+    index = config.read_only(INDEX)
     preview = {r[0]: (r[1], r[2], r[3], [r[4], r[5]] if r[4] and r[5] else None)
                for r in index.execute("SELECT id, preview, taken, name, width, height FROM asset")}
     with lock:
@@ -764,7 +764,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, b"{}", "application/json")
         if self.path == "/date":
             req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            match = sqlite3.connect(f"file:{MATCH}?mode=ro", uri=True)
+            match = config.read_only(MATCH)
             row = match.execute("SELECT path, message FROM match WHERE sha1 = ?", (req["key"],)).fetchone()
             when = typed(req.get("text")) if req["source"] == "set" else None
             if not row or req["source"] not in ("asset", "message", "unknown", "set") or (req["source"] == "asset") != bool(req.get("asset")) \
@@ -781,7 +781,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(404, b"not found", "text/plain")
         req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         keys, approved = req["keys"], req["approved"]
-        match = sqlite3.connect(f"file:{MATCH}?mode=ro", uri=True)
+        match = config.read_only(MATCH)
         with lock:
             db = decisions_db()
             for key in keys:
@@ -812,7 +812,7 @@ def main():
     args = ap.parse_args()
     os.umask(0o077)
     Handler.origin = args.origin
-    Handler.paths = {l.strip() for l in open(args.paths) if l.strip()} if args.paths else set()
+    Handler.paths = {l.strip() for l in open(args.paths, encoding="utf-8") if l.strip()} if args.paths else set()
     Handler.only = args.only
     Handler.cache = tempfile.mkdtemp(prefix="immich-review-")
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))     # so that kill also removes the cache

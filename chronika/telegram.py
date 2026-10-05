@@ -12,8 +12,8 @@ Calls, which Telegram keeps as service messages, go to `call` too, keyed by the 
 from collections import defaultdict
 import json
 import os
-import sqlite3
 
+from . import config
 from .archive import CACHE, address
 
 DB = os.path.join(CACHE, "telegram", "telegram.db")
@@ -112,15 +112,20 @@ class People:
         return "id", str(pid), "telegram"
 
     def others(self, pid):
-        """A user's handles besides the one __call__ gives: id, username, profile name."""
+        """A user's handles besides the one __call__ gives: id, username."""
         e = self.entity.get(pid, {})
         if e.get("_") != "User":
             return []
-        name = " ".join(p for p in (e.get("first_name"), e.get("last_name")) if p)
         out = [("id", str(pid), "telegram")] if e.get("phone") else []
         out += [("username", u.lower(), "telegram") for u in [e.get("username")] if u]
-        out += [("name", name, "telegram")] if name else []
         return out
+
+    def name(self, pid):
+        """The user's profile name, if they have one."""
+        e = self.entity.get(pid, {})
+        if e.get("_") != "User":
+            return None
+        return " ".join(p for p in (e.get("first_name"), e.get("last_name")) if p) or None
 
 
 def reactions(m, person, own):
@@ -167,11 +172,14 @@ def call(archive, src, row_key, m, peer, ts):
     return 1
 
 
-def run(archive, db_path=DB):
+def run(archive, db_path=DB, only=None, skip=()):
+    """only: {(chat id, message id)}: just these (the live connection's new messages), else all.
+    skip: chats not to import (the user's choice); what is already in the archive stays."""
     if not os.path.exists(db_path):
         print("καμία πηγή:", db_path, "(scripts/telegram-sync.py)")
         return
-    db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    db = config.read_only(db_path)
+    chats_wanted = {c for c, _ in only} if only is not None else None
     person = People(db)
     if person.me is not None:
         archive.account(("id", str(person.me), "telegram"), "telegram")
@@ -182,12 +190,18 @@ def run(archive, db_path=DB):
             archive.alias(handle, person(pid))
     added, calls = defaultdict(int), 0
     for chat_id, kind, title in db.execute("SELECT id, kind, title FROM chat ORDER BY id").fetchall():
+        if (chats_wanted is not None and chat_id not in chats_wanted) or chat_id in skip:
+            continue
         if kind in ("user", "saved"):
             conv = archive.conversation("telegram", [person(chat_id)], key=str(chat_id), title=title)
         else:
             conv = archive.conversation("telegram", [], key=str(chat_id), title=title)
             archive.db.execute("UPDATE conversation SET is_group = 1 WHERE id = ?", (conv,))
-        for mid, date, js in db.execute("SELECT id, date, json FROM message WHERE chat_id = ? ORDER BY id", (chat_id,)):
+        ids = sorted(m for c, m in only if c == chat_id) if only is not None else None
+        rows = (db.execute(f"SELECT id, date, json FROM message WHERE chat_id = ? AND id IN ({','.join('?' * len(ids))}) "
+                           f"ORDER BY id", (chat_id, *ids)) if ids is not None else
+                db.execute("SELECT id, date, json FROM message WHERE chat_id = ? ORDER BY id", (chat_id,)))
+        for mid, date, js in rows:
             row_key = f"{chat_id}/{mid}"
             m = json.loads(js)
             ts = date * 1000
@@ -219,6 +233,13 @@ def run(archive, db_path=DB):
                                 kind=k, text=m.get("message") or None, key=str(mid), extras=x)
             added[kind] += 1
         archive.db.commit()
+    for pid in person.entity:            # profile names, for the people the archive has
+        if pid != person.me and person.name(pid):
+            archive.handle_name(person(pid), "telegram", person.name(pid), "profile")
+    # archived chats, as the last sync saw them
+    for chat_id, archived, synced in db.execute("SELECT id, archived, synced_at FROM chat WHERE synced_at IS NOT NULL").fetchall():
+        archive.report_state(src, archive.find_conversation("telegram", str(chat_id)), "hidden", int(bool(archived)),
+                             synced * 1000)
     archive.resolve()
     archive.imported(src)
     archive.db.commit()
@@ -233,6 +254,6 @@ def media(archive, store):
         return
     src = archive.source(SOURCE, DB, "telegram", MEDIA)
     origins = dict(archive.db.execute("SELECT row_key, message_id FROM message_origin WHERE source_id = ?", (src,)))
-    db = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+    db = config.read_only(DB)
     for chat_id, mid, rel in db.execute("SELECT chat_id, id, file FROM message WHERE file IS NOT NULL ORDER BY chat_id, id"):
         store.link(SOURCE, src, os.path.join(MEDIA, rel), rel, origins.get(f"{chat_id}/{mid}"))
