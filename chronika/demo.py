@@ -230,12 +230,13 @@ def build(seed=7):
             row += 1
             ts = int((now - timedelta(hours=rnd.randrange(1, 30), minutes=k)).timestamp() * 1000)
             add(service, conv, ts, False, a.address("phone", p["number"]), p["lang"], row)
-    # chats' state as services report it: two archived in WhatsApp, one muted for ever
-    told = [p for p in people_ if "whatsapp" in p["services"]][:3]
+    # chats' state as services report it: one muted for ever, one pinned, one archived (which starts
+    # the app's own archived: Archive.init_archived, at resolve())
+    told = [p for p in people_ if "whatsapp" in p["services"] and len(p["services"]) == 1][:3]
     stamp = int(now.timestamp() * 1000)
-    for i, p in enumerate(told):
+    for (field, value), p in zip((("muted", -1), ("pinned", 1), ("archived", 1)), told):
         conv = a.conversation("whatsapp", [("phone", p["number"])])
-        a.report_state(source("whatsapp"), conv, "muted" if i == 2 else "hidden", -1 if i == 2 else 1, stamp - 86400000)
+        a.report_state(source("whatsapp"), conv, field, value, stamp - 86400000)
     # notes to self
     conv = a.conversation("viber", [("phone", "+15550000000")], key="demo-notes", title=None)
     for i, txt in enumerate(["Λίστα: γάλα, αυγά, καφές", "Κωδικός Wi-Fi γραφείου στο συρτάρι", "Ιδέα για δώρο: βιβλίο μαγειρικής"]):

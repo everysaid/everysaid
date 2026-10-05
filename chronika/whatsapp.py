@@ -289,13 +289,14 @@ def run(archive, iphone_db=IPHONE_DB, contacts_db=CONTACTS_DB, bridge_db=BRIDGE_
         if handle not in own:
             archive.handle_name(handle, "whatsapp", name, kind, max(seen.values()))
 
-    # The state of chats: hidden (archived), muted, pinned, as each source last saw it.
+    # The state of chats: archived (only the start of ours: see Archive.init_archived), muted, pinned,
+    # as each source last saw it.
     def report(where, jid, field, value, at):
         conv = archive.find_conversation("whatsapp", person.conversation_key(jid))
         archive.report_state(src[where], conv, field, value, at * 1000)
     if iphone:
         for jid, archived in iphone.execute("SELECT ZCONTACTJID, ZARCHIVED FROM ZWACHATSESSION WHERE ZCONTACTJID IS NOT NULL"):
-            report("iphone", jid, "hidden", int(bool(archived)), seen["iphone"])
+            report("iphone", jid, "archived", int(bool(archived)), seen["iphone"])
         muted = dict(iphone.execute("SELECT ZJID, ZMUTEDUNTIL FROM ZWACHATPUSHCONFIG WHERE ZJID IS NOT NULL"))
         for (jid,) in iphone.execute("SELECT ZCONTACTJID FROM ZWACHATSESSION WHERE ZCONTACTJID IS NOT NULL"):
             until = muted.get(jid) or 0
@@ -305,7 +306,7 @@ def run(archive, iphone_db=IPHONE_DB, contacts_db=CONTACTS_DB, bridge_db=BRIDGE_
     if store:
         for jid, until, pinned, archived in store.execute(
                 "SELECT chat_jid, muted_until, pinned, archived FROM whatsmeow_chat_settings"):
-            report("bridge", jid, "hidden", int(bool(archived)), seen["bridge"])
+            report("bridge", jid, "archived", int(bool(archived)), seen["bridge"])
             report("bridge", jid, "pinned", int(bool(pinned)), seen["bridge"])
             report("bridge", jid, "muted", -1 if until == -1 else (until or 0) * 1000, seen["bridge"])
 

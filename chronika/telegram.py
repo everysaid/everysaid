@@ -236,9 +236,9 @@ def run(archive, db_path=DB, only=None, skip=()):
     for pid in person.entity:            # profile names, for the people the archive has
         if pid != person.me and person.name(pid):
             archive.handle_name(person(pid), "telegram", person.name(pid), "profile")
-    # archived chats, as the last sync saw them
+    # archived chats, as the last sync saw them (only the start of ours: see Archive.init_archived)
     for chat_id, archived, synced in db.execute("SELECT id, archived, synced_at FROM chat WHERE synced_at IS NOT NULL").fetchall():
-        archive.report_state(src, archive.find_conversation("telegram", str(chat_id)), "hidden", int(bool(archived)),
+        archive.report_state(src, archive.find_conversation("telegram", str(chat_id)), "archived", int(bool(archived)),
                              synced * 1000)
     archive.resolve()
     archive.imported(src)

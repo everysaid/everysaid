@@ -8,9 +8,11 @@ import { toast } from "sonner";
 import { api, qs, type MediaItem } from "@/lib/api";
 import { bytes, dateOnly } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { Button, Empty, Segmented, Spinner, Switch } from "@/components/ui";
+import { Button, Empty, LoadingBar, MoreOnScroll, Segmented, Spinner, Switch } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { Lightbox } from "@/components/Lightbox";
+import { ChatFilter } from "@/components/ChatFilter";
+import { mediaRoute } from "@/router";
 
 type Kind = "image" | "video" | "voice" | "file";
 
@@ -19,15 +21,16 @@ export function MediaPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [kind, setKind] = useState<Kind>("image");
+  const { chat } = mediaRoute.useSearch();
   const [available, setAvailable] = useState(true);
   const [selecting, setSelecting] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const res = useInfiniteQuery({
-    queryKey: ["media", kind, available],
+    queryKey: ["media", kind, available, chat],
     initialPageParam: undefined as number | undefined,
-    queryFn: ({ pageParam }) => api.get<{ items: MediaItem[]; has_more: boolean }>(`/api/media${qs({ kind, before: pageParam, limit: 90, available: available || undefined })}`),
+    queryFn: ({ pageParam }) => api.get<{ items: MediaItem[]; has_more: boolean }>(`/api/media${qs({ chat, kind, before: pageParam, limit: 90, available: available || undefined })}`),
     getNextPageParam: (last) => (last.has_more ? last.items[last.items.length - 1]?.ts : undefined),
   });
   const items = useMemo(() => {
@@ -73,6 +76,7 @@ export function MediaPage() {
         }
       />
       <div className="flex flex-wrap items-center gap-3 bg-panel px-4 pb-3 md:px-6">
+        <ChatFilter chat={chat} onClear={() => navigate({ to: "/media", search: {} })} />
         <Segmented value={kind} onChange={(k) => { setKind(k); setSelected(new Set()); }} options={[
           { value: "image", label: t("media.images") }, { value: "video", label: t("media.videos") },
           { value: "voice", label: t("media.voice") }, { value: "file", label: t("media.files") },
@@ -82,6 +86,7 @@ export function MediaPage() {
         </label>
       </div>
       <div className="relative min-h-0 flex-1">
+        <LoadingBar active={res.isFetching} />
         {res.isLoading ? <div className="grid h-40 place-items-center"><Spinner /></div> : items.length === 0 ? (
           <Empty icon={<Images />} title={t("common.none")} />
         ) : visual ? (
@@ -122,7 +127,7 @@ export function MediaPage() {
                   {m.chat_id && <Button size="sm" variant="ghost" onClick={() => navigate({ to: "/chat/$chatId", params: { chatId: m.chat_id! }, search: { m: m.message_id } })}>{t("common.open")}</Button>}
                 </div>
               ))}
-              {res.hasNextPage && <div className="flex justify-center p-4"><Button onClick={() => res.fetchNextPage()}>{t("common.more")}</Button></div>}
+              <MoreOnScroll hasMore={!!res.hasNextPage} loading={res.isFetchingNextPage} onMore={res.fetchNextPage} />
             </div>
           </div>
         )}

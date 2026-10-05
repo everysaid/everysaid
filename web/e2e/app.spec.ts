@@ -72,7 +72,7 @@ test("setup, chats, a chat, search, media, sources, settings", async ({ page }, 
   await page.screenshot({ path: `${SHOTS}/${tag}-06-info.png` });
   const states = page.getByText(/^(Κατάσταση|State)$/).last();
   await states.scrollIntoViewIfNeeded();
-  await expect(page.getByText(/^(Κρυμμένη \(αρχείο\)|Hidden \(archived\))$/).last()).toBeVisible();
+  await expect(page.getByText(/^(Αρχειοθετημένη|Archived)$/).last()).toBeVisible();
   await page.screenshot({ path: `${SHOTS}/${tag}-06b-states.png` });
   await page.keyboard.press("Escape");
 

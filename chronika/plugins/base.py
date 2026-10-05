@@ -54,7 +54,8 @@ class Plugin:
     # weight} (kind: book, its copy of the user's address book; chat, a chat's name; profile, chosen
     # by them), or {"contacts": weight} for an address book. The user's order (Settings) overrides.
     name_weights = {}
-    # The state of chats it reports (hidden, muted, pinned, read_until), and how much it counts
+    # The state of chats it reports (muted, pinned, read_until; and archived, which only starts the
+    # app's own: see Archive.init_archived), and how much it counts
     # against other services by default ({field: weight}; 0: shown, not applied).
     state_weights = {}
 

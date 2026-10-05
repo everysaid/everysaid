@@ -73,6 +73,7 @@ def archived_media():
 ap = argparse.ArgumentParser(description="Back up the iPhone and decrypt its databases.")
 ap.add_argument("-o", "--out", default=OUT, help=f"folder for the decrypted files (default {OUT})")
 ap.add_argument("--no-backup", action="store_true", help="only decrypt the existing backup")
+ap.add_argument("--backup-only", action="store_true", help="only the backup, nothing decrypted")
 ap.add_argument("--full", action="store_true", help="force a full backup instead of an incremental one")
 ap.add_argument("--only", nargs="+", metavar="NAME", help="decrypt only these databases (e.g. whatsapp-calls.sqlite), no media")
 ap.add_argument("--save-password", action="store_true",
@@ -131,6 +132,8 @@ if not args.no_backup:
     os.makedirs(BACKUP_ROOT, exist_ok=True)
     if common.run(cmd).returncode != 0:
         sys.exit("Το backup απέτυχε· τα αρχεία στο " + args.out + " δεν άλλαξαν.")
+    if args.backup_only:
+        sys.exit(0)
 
 backup = open_backup(pw)
 os.makedirs(args.out, mode=0o700, exist_ok=True)

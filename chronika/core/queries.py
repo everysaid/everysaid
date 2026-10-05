@@ -82,29 +82,27 @@ def _chat_index(store):
     return store.cached("chat_index", build)
 
 
-FIELDS = ("pinned", "muted", "hidden", "read_until")
+FIELDS = ("pinned", "muted", "archived", "read_until")
 
 
 def _states(store):
-    """chat -> (pinned, muted, hidden, read_until, origin): what applies to each chat, from what its
+    """chat -> (pinned, muted, archived, read_until, origin): what applies to each chat, from what its
     sources report (`state_report`) and what the user chose (`chat_state`).
 
     Between sources: of one service, the newest report; between services, the highest weight its
     plugin declares for the field (0: not applied), then the latest change; read_until, the latest
     (read anywhere is read). Between the user and the sources, the later change wins, unless the
-    user chose `always`. A chat hidden by a service comes back on a newer message from a service
-    that has not hidden it, if the user wants so (setting `hidden_returns`, off by default).
-    origin: {field: "user" | service} of what applies."""
+    user chose `always`. Archived is ours alone: set at first from the services (`Archive.init_archived`),
+    then only by the user. origin: {field: "user" | service} of what applies."""
     import time
     from .. import plugins
     raw = store.cached("states", lambda: _state_parts(store))
     now = int(time.time() * 1000)
-    returns = store.setting("hidden_returns", False)
     out = {}
     for chat, parts in raw.items():
         values, origin = {}, {}
         for f in FIELDS:
-            reps, user = parts["reports"].get(f, []), parts["user"].get(f)
+            reps, user = ([] if f == "archived" else parts["reports"].get(f, [])), parts["user"].get(f)   # archived: ours alone
             svc = None
             if f == "read_until":
                 svc = max(reps, key=lambda r: r["value"], default=None)
@@ -124,14 +122,10 @@ def _states(store):
                 v, by = svc["value"], svc["service"]
             else:
                 v, by = (None if f == "read_until" else 0), None
-            if f == "hidden" and v and by not in (None, "user") and returns:
-                hidden_on = {r["conversation"] for r in parts["reports"].get("hidden", []) if r["value"]}
-                if any(ts > svc["changed"] and c not in hidden_on for c, ts in parts["last"].items()):
-                    v = 0
             values[f], origin[f] = v, by
         m = values["muted"]       # the user's: 0/1; a service's: until (ms), -1 for ever
         muted = bool(m) if origin["muted"] == "user" else m == -1 or m > now
-        out[chat] = (int(bool(values["pinned"])), int(muted), int(bool(values["hidden"])), values["read_until"], origin)
+        out[chat] = (int(bool(values["pinned"])), int(muted), int(bool(values["archived"])), values["read_until"], origin)
     return out
 
 
@@ -154,7 +148,7 @@ def _state_parts(store):
     """What _states combines, per chat, built once per archive version."""
     db = store.read()
     index, conv_chat = _chat_index(store)
-    parts = defaultdict(lambda: {"reports": defaultdict(list), "user": {}, "last": {}})
+    parts = defaultdict(lambda: {"reports": defaultdict(list), "user": {}})
     for conv, plugin, service, field, value, observed, changed in db.execute(
             "SELECT r.conversation_id, i.plugin, s.name, r.field, r.value, r.observed_at, r.changed_at FROM state_report r "
             "JOIN plugin_instance i ON i.id = r.instance_id AND i.enabled JOIN conversation c ON c.id = r.conversation_id "
@@ -166,12 +160,6 @@ def _state_parts(store):
     for chat, field, value, set_at, always in db.execute("SELECT chat, field, value, set_at, always FROM chat_state"):
         if chat in index:
             parts[chat]["user"][field] = {"value": value, "set_at": set_at, "always": always}
-    hidden = [c for c, p in parts.items() if any(r["value"] for r in p["reports"].get("hidden", []))]
-    for chat in hidden:
-        for conv in index[chat]["conversations"]:
-            ts = db.execute("SELECT max(ts) FROM message WHERE conversation_id = ?", (conv,)).fetchone()[0]
-            if ts:
-                parts[chat]["last"][conv] = ts
     return dict(parts)
 
 
@@ -224,7 +212,7 @@ def _unread(store, chat, since):
         (*chat["conversations"], since)).fetchone()[0]
 
 
-def chats(store, include_hidden=False, kind=None, q=None, limit=None, offset=0):
+def chats(store, include_archived=False, kind=None, q=None, limit=None, offset=0):
     """The chat list, newest first, pinned ones on top: [{id, type, title, services, last, unread,
     pinned, muted, avatar}]. kind: person, group or conversation; q: a part of the title."""
     index, _ = _chat_index(store)
@@ -234,20 +222,20 @@ def chats(store, include_hidden=False, kind=None, q=None, limit=None, offset=0):
     items = []
     qf = text_mod.fold(q) if q else None
     for chat in index.values():
-        pinned, muted, hidden, read, _ = states.get(chat["id"], (0, 0, 0, None, {}))
-        if hidden and not include_hidden:
+        pinned, muted, archived, read, _ = states.get(chat["id"], (0, 0, 0, None, {}))
+        if archived and not include_archived and not qf:     # looked for by name: found, archived or not
             continue
         if kind and chat["type"] != kind:
             continue
         title = chat_title(store, chat)
         if qf and qf not in text_mod.fold(title):
             continue
-        items.append((bool(pinned), chat["last_ts"], chat, title, muted, hidden, read))
+        items.append((bool(pinned), chat["last_ts"], chat, title, muted, archived, read))
     items.sort(key=lambda x: (x[0], x[1]), reverse=True)
     if limit:
         items = items[offset:offset + limit]
     out = []
-    for pinned, last_ts, chat, title, muted, hidden, read in items:
+    for pinned, last_ts, chat, title, muted, archived, read in items:
         since = max(read or 0, base)
         out.append({
             "id": chat["id"], "type": chat["type"], "title": title,
@@ -255,7 +243,7 @@ def chats(store, include_hidden=False, kind=None, q=None, limit=None, offset=0):
             "services": sorted(chat["services"]), "last_ts": last_ts,
             "last": _last_item(store, chat) if last_ts else None,
             "unread": _unread(store, chat, since) if last_ts > since else 0,
-            "pinned": pinned, "muted": bool(muted), "hidden": bool(hidden),
+            "pinned": pinned, "muted": bool(muted), "archived": bool(archived),
             "avatar": bool(ppl.avatar(chat["person_id"])) if chat["type"] == "person" else False,
         })
     return out
@@ -267,11 +255,11 @@ def chat(store, chat_id):
     if not c:
         return None
     states = _states(store)
-    pinned, muted, hidden, read, origin = states.get(chat_id, (0, 0, 0, None, {}))
+    pinned, muted, archived, read, origin = states.get(chat_id, (0, 0, 0, None, {}))
     out = {"id": c["id"], "type": c["type"], "title": chat_title(store, c), "services": sorted(c["services"]),
            "person_id": c.get("person_id"), "conversation_id": c.get("conversation_id"),
            "conversations": c["conversations"], "last_ts": c["last_ts"], "pinned": bool(pinned),
-           "muted": bool(muted), "hidden": bool(hidden), "read_until": read, "state_from": origin,
+           "muted": bool(muted), "archived": bool(archived), "read_until": read, "state_from": origin,
            "state_reports": _state_reports(store, chat_id),
            "state_user": (store.cached("states", lambda: _state_parts(store)).get(chat_id) or {"user": {}})["user"]}
     if c["type"] == "person":
@@ -496,10 +484,6 @@ def search(store, q, chat_id=None, service=None, kind=None, since=None, until=No
         return {"items": [], "total": 0}
     db = store.read()
     lk = _lookups(store)
-    if chat_id:
-        _, convs, _ = _stream_sources(store, chat_id)
-        where.append(f"m.conversation_id IN ({','.join('?' * len(convs))})")
-        args += convs
     if service:
         sid = {v: k for k, v in lk["service"].items()}.get(service)
         where.append("m.service_id = ?")
@@ -517,23 +501,43 @@ def search(store, q, chat_id=None, service=None, kind=None, since=None, until=No
     if outgoing is not None:
         where.append("m.outgoing = ?")
         args.append(int(outgoing))
+    every = " AND ".join(where)          # without the chat: for the chats it was found in
+    if chat_id:
+        _, convs, _ = _stream_sources(store, chat_id)
+        where.append(f"m.conversation_id IN ({','.join('?' * len(convs))})")
+    chat_args = list(convs) if chat_id else []
     w = " AND ".join(where)
-    if case:        # the index is folded: of what it finds, those written as typed
-        found = [(i, ts) for i, ts, txt in db.execute(f"SELECT m.id, m.ts, m.text FROM message m WHERE {w} ORDER BY m.ts DESC", args)
-                 if m.matches(txt)]
-        total, rows = len(found), found[offset:offset + limit]
-    else:
-        total = db.execute(f"SELECT count(*) FROM message m WHERE {w}", args).fetchone()[0]
-        rows = db.execute(f"SELECT m.id, m.ts FROM message m WHERE {w} ORDER BY m.ts DESC LIMIT ? OFFSET ?",
-                          (*args, limit, offset)).fetchall()
-    items = hydrate(store, [("m", r) for r in rows])
     index, conv_chat = _chat_index(store)
+    per_conv = defaultdict(int)
+    if case:        # the index is folded: of what it finds, those written as typed
+        found = [(i, ts, c) for i, ts, c, txt in db.execute(
+            f"SELECT m.id, m.ts, m.conversation_id, m.text FROM message m WHERE {every} ORDER BY m.ts DESC", args)
+            if m.matches(txt)]
+        for _, _, c in found:
+            per_conv[c] += 1
+        if chat_id:
+            found = [f for f in found if f[2] in set(convs)]
+        total, rows = len(found), [(i, ts) for i, ts, _ in found[offset:offset + limit]]
+    else:
+        total = db.execute(f"SELECT count(*) FROM message m WHERE {w}", args + chat_args).fetchone()[0]
+        rows = db.execute(f"SELECT m.id, m.ts FROM message m WHERE {w} ORDER BY m.ts DESC LIMIT ? OFFSET ?",
+                          (*args, *chat_args, limit, offset)).fetchall()
+        if not offset:
+            per_conv.update(db.execute(f"SELECT m.conversation_id, count(*) FROM message m WHERE {every} GROUP BY 1", args))
+    # where it was found: each chat (a person's conversations together) with how many
+    per_chat = defaultdict(int)
+    for c, n in per_conv.items():
+        if conv_chat.get(c) in index:
+            per_chat[conv_chat[c]] += n
+    chats = [{"chat_id": c, "title": chat_title(store, index[c]), "type": index[c]["type"], "count": n}
+             for c, n in sorted(per_chat.items(), key=lambda x: -x[1])[:30]] if not offset else None
+    items = hydrate(store, [("m", r) for r in rows])
     for it in items:
         cid = conv_chat.get(it["conversation_id"])
         it["chat_id"] = cid
         it["chat_title"] = chat_title(store, index[cid]) if cid in index else None
         it["highlight"] = _highlight(it["text"], m)
-    return {"items": items, "total": total}
+    return {"items": items, "total": total, "chats": chats}
 
 
 # --- people --------------------------------------------------------------------------------------

@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import * as Popover from "@radix-ui/react-popover";
-import { ArrowDown, ArrowLeft, BellOff, CalendarDays, CornerUpLeft, EyeOff, Info, Lock, MoreVertical, Pin, PinOff, Search, SendHorizontal, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, BellOff, CalendarDays, CornerUpLeft, Archive, ArchiveRestore, Info, Lock, MoreVertical, Pin, PinOff, Search, SendHorizontal, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, qs, type Attachment, type ChatDetail, type MessageItem, type StreamItem, type StreamPage } from "@/lib/api";
 import { dayLabel, isoDay, sameDay } from "@/lib/format";
@@ -385,7 +385,7 @@ function ChatHeader({ chat, wide, onInfo, onJumpDate }: { chat?: ChatDetail; wid
           <MenuContent>
             <MenuItem icon={chat.pinned ? <PinOff /> : <Pin />} onSelect={() => set.mutate({ pinned: !chat.pinned })}>{chat.pinned ? t("chats.unpin") : t("chats.pin")}</MenuItem>
             <MenuItem icon={<BellOff />} onSelect={() => set.mutate({ muted: !chat.muted })}>{chat.muted ? t("chats.unmute") : t("chats.mute")}</MenuItem>
-            <MenuItem icon={<EyeOff />} onSelect={() => set.mutate({ hidden: !chat.hidden })}>{chat.hidden ? t("chats.unhide") : t("chats.hide")}</MenuItem>
+            <MenuItem icon={chat.archived ? <ArchiveRestore /> : <Archive />} onSelect={() => set.mutate({ archived: !chat.archived })}>{chat.archived ? t("chats.unarchive") : t("chats.archive")}</MenuItem>
           </MenuContent>
         </Menu>
       )}

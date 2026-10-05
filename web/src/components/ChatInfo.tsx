@@ -114,7 +114,7 @@ export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => 
 
       {(media.data?.items.length ?? 0) > 0 && (
         <div className="space-y-2">
-          <Link to="/media" search={{}} className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted"><Images className="size-3.5" />{t("nav.media")}</Link>
+          <Link to="/media" search={{ chat: chat.id }} className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted"><Images className="size-3.5" />{t("nav.media")}</Link>
           <div className="grid grid-cols-3 gap-1">
             {media.data!.items.map((m) => (
               <Link key={m.sha256} to="/chat/$chatId" params={{ chatId: chat.id }} search={{ m: m.message_id }} className="aspect-square overflow-hidden rounded-lg bg-panel-2">
@@ -143,7 +143,7 @@ export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => 
       {p && (
         <div className="flex flex-col gap-2">
           <Link to="/people/$personId" params={{ personId: String(p.id) }}><Button variant="outline" className="w-full">{t("people.title")}: {t("common.edit")}</Button></Link>
-          <Link to="/calls" search={{}}><Button variant="ghost" className="w-full"><Phone className="size-4" />{t("nav.calls")}</Button></Link>
+          <Link to="/calls" search={{ chat: chat.id }}><Button variant="ghost" className="w-full"><Phone className="size-4" />{t("nav.calls")}</Button></Link>
         </div>
       )}
     </div>
@@ -204,10 +204,10 @@ function NameFrom({ chat }: { chat: ChatDetail }) {
 }
 
 const STATE_FIELDS: { field: StateField; label: string }[] = [
-  { field: "hidden", label: "chat.stateHidden" }, { field: "muted", label: "chat.stateMuted" }, { field: "pinned", label: "chat.statePinned" },
+  { field: "archived", label: "chat.stateArchived" }, { field: "muted", label: "chat.stateMuted" }, { field: "pinned", label: "chat.statePinned" },
 ];
 
-/** What the services say about the chat (hidden, muted, pinned), and the user's own choice. */
+/** The chat's state (archived: the app's own; muted, pinned: what the services say, and the user's choice). */
 function ChatStates({ chat }: { chat: ChatDetail }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
@@ -221,22 +221,27 @@ function ChatStates({ chat }: { chat: ChatDetail }) {
       <div className="text-xs font-semibold uppercase tracking-wide text-muted">{t("chat.state")}</div>
       {STATE_FIELDS.map(({ field, label }) => {
         const mine = chat.state_user[field];
-        const now = Boolean(chat[field as "hidden" | "muted" | "pinned"]);
+        const now = Boolean(chat[field as "archived" | "muted" | "pinned"]);
         const by = chat.state_from[field];
         const reports = chat.state_reports[field] ?? [];
         return (
           <div key={field} className="space-y-1.5">
             <div className="flex items-center gap-2">
               <span className="min-w-0 flex-1 text-sm">{t(label)}</span>
-              <Segmented value={mine ? (mine.value ? "yes" : "no") : "auto"}
-                onChange={(v) => set.mutate({ [field]: v === "auto" ? null : v === "yes", always: !!mine?.always })}
-                options={[{ value: "auto", label: t("chat.stateAuto") }, { value: "yes", label: t("chat.stateYes") }, { value: "no", label: t("chat.stateNo") }]} />
+              {field === "archived" ? (       // the app's own: whatever a service does later
+                <Segmented value={now ? "yes" : "no"} onChange={(v) => set.mutate({ archived: v === "yes" })}
+                  options={[{ value: "yes", label: t("chat.stateYes") }, { value: "no", label: t("chat.stateNo") }]} />
+              ) : (
+                <Segmented value={mine ? (mine.value ? "yes" : "no") : "auto"}
+                  onChange={(v) => set.mutate({ [field]: v === "auto" ? null : v === "yes", always: !!mine?.always })}
+                  options={[{ value: "auto", label: t("chat.stateAuto") }, { value: "yes", label: t("chat.stateYes") }, { value: "no", label: t("chat.stateNo") }]} />
+              )}
             </div>
-            <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted">
+            {field !== "archived" && <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted">
               <span>{t("chat.stateNow", { value: now ? t("chat.yes") : t("chat.no"), by: by === "user" ? t("chat.stateByYou") : by ? service(by).name : t("chat.stateAuto") })}</span>
               {reports.map((r) => <span key={r.service}>· {service(r.service).name}: {r.value ? t("chat.yes") : t("chat.no")}</span>)}
-            </div>
-            {mine && (
+            </div>}
+            {mine && field !== "archived" && (
               <label className="flex items-center gap-2 text-xs text-muted">
                 <input type="checkbox" checked={!!mine.always} onChange={(e) => set.mutate({ [field]: !!mine.value, always: e.target.checked })} />
                 {t("chat.stateAlways")}
