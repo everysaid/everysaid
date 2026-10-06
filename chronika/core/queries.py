@@ -30,6 +30,12 @@ def _lookups(store):
     return store.cached("lookups", build)
 
 
+def _tables(store):
+    """The archive's tables (one made before a table was added has it after its next import)."""
+    return store.cached("tables", lambda: {r[0] for r in store.read().execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table'")})
+
+
 def unread_since(store):
     return store.setting("unread_since", 0) or 0
 
@@ -283,11 +289,15 @@ def chat(store, chat_id):
         db = store.read()
         ppl = people(store)
         q = ",".join("?" * len(convs))
-        out["members"] = [{"person_id": ppl.person_of.get(a), "name": ppl.name_of_address(a)}
-                          for (a,) in db.execute(f"SELECT DISTINCT address_id FROM conversation_member "
-                                                 f"WHERE conversation_id IN ({q})", convs)]
+        lk = _lookups(store)
+        out["members"] = [{"person_id": ppl.person_of.get(a), "name": ppl.name_of_address(a), "address_id": a,
+                           "services": sorted({lk["service"][int(x)] for x in sids.split(",")})}
+                          for a, sids in db.execute(
+                              f"SELECT cm.address_id, group_concat(c.service_id) FROM conversation_member cm "
+                              f"JOIN conversation c ON c.id = cm.conversation_id WHERE cm.conversation_id IN ({q}) "
+                              f"GROUP BY cm.address_id", convs)
+                          if a not in ppl.own_addresses]
         if c["type"] == "group":    # the groups it is made of (more than one when the user merged them)
-            lk = _lookups(store)
             out["groups"] = [{"conversation_id": i, "service": lk["service"][sid], "title": title, "messages": n,
                               "last_ts": last_ts}
                              for i, sid, title, n, last_ts in db.execute(
@@ -401,7 +411,7 @@ def hydrate(store, rows, chat=None):
                 "forwarded": bool(forwarded), "starred": bool(starred), "status": status,
                 "keyed": bool(keyed),       # the service's own id is known: an answer to it can be sent
                 "location": {"lat": lat, "lon": lon, "place": place} if lat is not None or place else None,
-                "reactions": [], "attachments": [],
+                "reactions": [], "attachments": [], "mentions": [], "receipts": None,
             }
         replies = {m["reply_to"] for m in msgs.values() if m["reply_to"]}
         if replies:
@@ -417,6 +427,29 @@ def hydrate(store, rows, chat=None):
                 f"SELECT message_id, emoji, code, count, address_id, outgoing FROM reaction WHERE message_id IN ({q})", mids):
             msgs[mid]["reactions"].append({"emoji": emoji, "code": code, "count": count, "mine": bool(outgoing),
                                            "who": None if outgoing else ppl.name_of_address(who)})
+        tables = _tables(store)
+        if "mention" in tables:
+            for mid, who, token in db.execute(
+                    f"SELECT message_id, address_id, token FROM mention WHERE message_id IN ({q})", mids):
+                pid = ppl.person_of.get(who)
+                msgs[mid]["mentions"].append({"token": token, "person_id": pid, "me": who in ppl.own_addresses,
+                                              "name": ppl.name_of_address(who)})
+        mine = [mid for mid in mids if msgs[mid]["outgoing"]]
+        if mine and "receipt" in tables:
+            q3 = ",".join("?" * len(mine))
+            got = defaultdict(dict)         # message -> person -> (delivered, read, played), each person once
+            for mid, who, d, r, p in db.execute(
+                    f"SELECT message_id, address_id, delivered_at, read_at, played_at FROM receipt "
+                    f"WHERE message_id IN ({q3})", mine):
+                if who not in ppl.own_addresses:
+                    got[mid][ppl.person_of.get(who, ("a", who))] = (d is not None or r is not None, r is not None, p is not None)
+            window = {}
+            for mid, people_ in got.items():
+                m = msgs[mid]
+                to = len(_recipients(store, db, ppl, m["conversation_id"], m["ts"], window) | set(people_))
+                msgs[mid]["receipts"] = {"to": to, "delivered": sum(x[0] for x in people_.values()),
+                                         "read": sum(x[1] for x in people_.values()),
+                                         "played": sum(x[2] for x in people_.values())}
         for mid, sha, mime, size, path, linked in db.execute(
                 f"SELECT a.message_id, m.sha256, m.mime, m.size, m.path, "
                 f"(SELECT count(*) FROM library_link l WHERE l.sha256 = m.sha256) "
@@ -451,6 +484,63 @@ def message(store, message_id):
     m = items[0]
     m["chat_id"] = chat_of_conversation(store, m["conversation_id"])
     return m
+
+
+RECIPIENTS_WINDOW = 30 * 86400_000
+
+
+def _recipients(store, db, ppl, conv, ts, cache):
+    """Whom a message of the user's went to, as people: in a chat with one person, them; in a group,
+    whoever the service said got any of the user's messages there within a month of it (a member who
+    left, or came later, is not waited for); before any such word, the members it knows."""
+    key = (conv, ts // RECIPIENTS_WINDOW)
+    if key not in cache:
+        members = {ppl.person_of.get(a, ("a", a)) for (a,) in db.execute(
+            "SELECT address_id FROM conversation_member WHERE conversation_id = ?", (conv,)) if a not in ppl.own_addresses}
+        if len(members) > 1:
+            lo, hi = (key[1] - 1) * RECIPIENTS_WINDOW, (key[1] + 2) * RECIPIENTS_WINDOW
+            seen = {ppl.person_of.get(a, ("a", a)) for (a,) in db.execute(
+                "SELECT DISTINCT r.address_id FROM message m JOIN receipt r ON r.message_id = m.id "
+                "WHERE m.conversation_id = ? AND m.outgoing AND m.ts BETWEEN ? AND ?", (conv, lo, hi))
+                if a not in ppl.own_addresses}
+            members = seen or members
+        cache[key] = members
+    return cache[key]
+
+
+def receipts(store, message_id):
+    """Who got, read and played one of the user's messages, and when (Unix ms; 0: so, when not known),
+    and those it went to who have not yet: [{person_id, name, delivered_at, read_at, played_at}], each
+    person once."""
+    db = store.read()
+    row = db.execute("SELECT conversation_id, outgoing, ts FROM message WHERE id = ?", (message_id,)).fetchone()
+    if not row:
+        return None
+    ppl = people(store)
+    got, names = {}, {}
+    if row[1] and "receipt" in _tables(store):
+        for a, d, r, p in db.execute("SELECT address_id, delivered_at, read_at, played_at FROM receipt "
+                                     "WHERE message_id = ?", (message_id,)):
+            if a in ppl.own_addresses:
+                continue
+            who = ppl.person_of.get(a, ("a", a))
+            names.setdefault(who, ppl.name_of_address(a))
+            if r is not None and d is None:
+                d = r                   # read: delivered too
+            was = got.get(who, (None, None, None))
+            # the same person by two addresses (a number and a LID): what either says, the earliest known
+            got[who] = tuple(y if x is None else x if y is None else min(x, y) if x and y else max(x, y)
+                             for x, y in zip(was, (d, r, p)))
+    if row[1]:
+        for a in [a for (a,) in db.execute("SELECT address_id FROM conversation_member WHERE conversation_id = ?",
+                                           (row[0],))]:
+            names.setdefault(ppl.person_of.get(a, ("a", a)), ppl.name_of_address(a))
+    waiting = (_recipients(store, db, ppl, row[0], row[2], {}) - set(got)) if row[1] else set()
+    out = [{"person_id": who if isinstance(who, int) else None, "name": names.get(who),
+            "delivered_at": d, "read_at": r, "played_at": p}
+           for who, (d, r, p) in [*got.items(), *((w, (None, None, None)) for w in waiting)]]
+    out.sort(key=lambda x: (x["read_at"] is None, x["delivered_at"] is None, x["name"] or ""))
+    return out
 
 
 def context(store, message_id, n=10):

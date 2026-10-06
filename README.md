@@ -301,8 +301,8 @@ be had.
 
 ### WhatsApp: through a live bridge
 
-A whatsmeow bridge (`whatsapp-mcp`'s `whatsapp-bridge`) keeps what arrives after it is linked in
-`store/messages.db`. The importer takes from it what came after the last iPhone backup, matched by
+Chronika's whatsmeow bridge (`bridges/whatsapp/`, begun from whatsapp-mcp's) keeps what arrives
+after it is linked, files included, in its store folder (`messages.db`, `media/`). The importer takes from it what came after the last iPhone backup, matched by
 stanza id; LIDs (`...@lid`) are mapped to numbers through the iPhone's WhatsApp contacts and the
 bridge's `whatsmeow_lid_map`.
 

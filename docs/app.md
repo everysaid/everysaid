@@ -108,7 +108,15 @@ WhatsApp bridge, a Viber Desktop export, the carriers' notices; a folder or immi
 library; a CardDAV address book or a .vcf file for names and photos), set it up, import, and for
 Telegram and WhatsApp turn on the live connection. Each instance shows whether it is ready, what it
 needs, and its log as it runs. Sending is possible where the plugin can (Telegram; WhatsApp through
-a bridge started with `-send`, off by default: an unofficial client risks the account). The bridge
+Chronika's bridge, `bridges/whatsapp/`, started with `-send`, off by default: an unofficial client
+risks the account), answers to a message, mentions and files too: in a group "@" lists its members,
+and the clip sends a file with the text as its caption. Read receipts go out only where turned on
+(the "Send read receipts" of the WhatsApp bridge and of Telegram, off by default), when a chat with
+something new from the others is read in the app while it is in view (a page in the background reads
+nothing). The user's messages show ✓ sent, ✓✓ delivered to all, coloured when read by all ("all" in
+a group: whoever the service said got the user's messages there about then), where the service tells (WhatsApp; Telegram in a person's chat, read
+but not when; Viber from the iPhone, where the other lets it be seen); a tap on them says who got and
+read the message, and when. The bridge
 sends only into chats where the other side has written, within limits a minute, an hour and a day,
 and never the same longer text into many chats; when WhatsApp warns the account (a temporary ban, a
 logout) it blocks sending until it is cleared at the bridge, and the app turns its own sending off

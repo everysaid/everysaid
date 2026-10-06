@@ -220,8 +220,13 @@ def build(seed=7):
             out = rnd.random() < .2
             m = rnd.choice(members)
             row += 1
-            add(service, conv, int(t.timestamp() * 1000), out, None if out else a.address("phone", m["number"]),
-                lang, row, "image" if rnd.random() < .03 else "text")
+            kind = "image" if rnd.random() < .03 else "text"
+            named = rnd.choice([x for x in members if x is not m]) if kind == "text" and rnd.random() < .05 else None
+            token = f"@{named['name'].split()[0]}" if named else None
+            mid = add(service, conv, int(t.timestamp() * 1000), out, None if out else a.address("phone", m["number"]),
+                      lang, row, kind, text=f"{token} {rnd.choice(LINES[lang])}" if named else None)
+            if named:
+                a.db.execute("INSERT INTO mention VALUES (?, ?, ?)", (mid, a.address("phone", named["number"]), token))
     # a few new messages of the last hours, unread
     for p in rnd.sample(people_, 6):
         service = p["services"][0]
@@ -237,6 +242,24 @@ def build(seed=7):
     for (field, value), p in zip((("muted", -1), ("pinned", 1), ("archived", 1)), told):
         conv = a.conversation("whatsapp", [("phone", p["number"])])
         a.report_state(source("whatsapp"), conv, field, value, stamp - 86400000)
+    # who got and read what the owner sent, where the service tells: WhatsApp (when), Telegram (in a
+    # chat with one person, read but not when); the latest of each chat delivered, not read yet
+    whatsapp, telegram = a.service["whatsapp"], a.service["telegram"]
+    last = {c: m for c, m in a.db.execute("SELECT conversation_id, max(id) FROM message WHERE outgoing GROUP BY 1")}
+    for mid, conv, ts, sid, group in a.db.execute(
+            "SELECT m.id, m.conversation_id, m.ts, m.service_id, c.is_group FROM message m "
+            "JOIN conversation c ON c.id = m.conversation_id WHERE m.outgoing AND m.service_id IN (?, ?)",
+            (whatsapp, telegram)).fetchall():
+        if sid == telegram and group:
+            continue
+        for (aid,) in a.db.execute("SELECT address_id FROM conversation_member WHERE conversation_id = ? AND "
+                                   "address_id NOT IN (SELECT address_id FROM account)", (conv,)).fetchall():
+            read = None if last.get(conv) == mid or (group and rnd.random() < .25) else ts + rnd.randrange(5, 3600) * 1000
+            if sid == telegram:
+                a.db.execute("INSERT INTO receipt (message_id, address_id, read_at) VALUES (?, ?, ?)",
+                             (mid, aid, None if read is None else 0))
+            else:
+                a.db.execute("INSERT INTO receipt VALUES (?, ?, ?, ?, NULL)", (mid, aid, ts + 2000, read))
     # notes to self
     conv = a.conversation("viber", [("phone", "+15550000000")], key="demo-notes", title=None)
     for i, txt in enumerate(["Λίστα: γάλα, αυγά, καφές", "Κωδικός Wi-Fi γραφείου στο συρτάρι", "Ιδέα για δώρο: βιβλίο μαγειρικής"]):
@@ -258,10 +281,12 @@ def build(seed=7):
     return path
 
 
-def demo_message(host, conversation_id, text, outgoing, reply_key=None):
+def demo_message(host, conversation_id, text, outgoing, reply_key=None, mentions=None, file=None):
     """Write a message into the demo archive as if a service had brought it (sent by the user, or
-    from the other side of the conversation), and tell the apps; returns its id."""
+    from the other side of the conversation), and tell the apps; returns its id. mentions: [{start,
+    length, address_id}] in the text; file: {data, filename, mime_type}, attached."""
     import time
+    from . import config, media as media_mod
     from .archive import Archive
     with host.import_lock:
         a = Archive(host.store.path)
@@ -274,10 +299,24 @@ def demo_message(host, conversation_id, text, outgoing, reply_key=None):
                 "address_id NOT IN (SELECT address_id FROM account) LIMIT 1", (conversation_id,)).fetchone()
             m0 = a.db.execute("SELECT max(id) FROM message").fetchone()[0]
             n = time.time_ns()
-            a.add_message(src, f"live-{n}", service=service, conversation_id=conversation_id, ts=n // 1_000_000,
-                          outgoing=outgoing, sender_id=who[0] if who else None, kind="text", text=text,
-                          key=None if service == "sms" else f"demo-live-{n}",
-                          extras={"reply_key": reply_key} if reply_key else None)
+            kind = "text"
+            if file:
+                mime = file.get("mime_type") or ""
+                kind = "image" if mime.startswith("image/") else "video" if mime.startswith("video/") else "file"
+            mid = a.add_message(src, f"live-{n}", service=service, conversation_id=conversation_id, ts=n // 1_000_000,
+                                outgoing=outgoing, sender_id=who[0] if who else None, kind=kind, text=text or None,
+                                key=None if service == "sms" else f"demo-live-{n}",
+                                extras={"reply_key": reply_key} if reply_key else None)
+            for m in mentions or ():
+                a.db.execute("INSERT OR IGNORE INTO mention VALUES (?, ?, ?)",
+                             (mid, m["address_id"], text[m["start"]:m["start"] + m["length"]]))
+            if file:
+                folder = os.path.join(config.CACHE, "demo-src")
+                os.makedirs(folder, exist_ok=True)
+                rel = f"live-{n}{os.path.splitext(file.get('filename') or '')[1].lower()}"
+                with open(os.path.join(folder, rel), "wb") as f:
+                    f.write(file["data"])
+                media_mod.Store(a).link("demo/live", src, os.path.join(folder, rel), rel, mid)
             a.resolve()
             a.db.commit()
             m1 = a.db.execute("SELECT max(id) FROM message").fetchone()[0]
@@ -285,6 +324,25 @@ def demo_message(host, conversation_id, text, outgoing, reply_key=None):
             a.db.close()
     host.emit({"type": "new", "messages": [m0, m1], "calls": [0, 0]})
     return m1
+
+
+def demo_receipt(host, message_id, field):
+    """The members of the message's conversation got (field "delivered") or read ("read") it now."""
+    import time
+    from .archive import Archive
+    with host.import_lock:
+        a = Archive(host.store.path)
+        try:
+            for (aid,) in a.db.execute("SELECT address_id FROM conversation_member WHERE conversation_id = "
+                                       "(SELECT conversation_id FROM message WHERE id = ?) AND address_id NOT IN "
+                                       "(SELECT address_id FROM account)", (message_id,)).fetchall():
+                a.db.execute("INSERT OR IGNORE INTO receipt (message_id, address_id) VALUES (?, ?)", (message_id, aid))
+                a.db.execute(f"UPDATE receipt SET {field}_at = ? WHERE message_id = ? AND address_id = ?",
+                             (int(time.time() * 1000), message_id, aid))
+            a.db.commit()
+        finally:
+            a.db.close()
+    host.emit({"type": "changed"})
 
 
 class DemoSender:
@@ -303,19 +361,28 @@ class DemoSender:
             description = "Invented: what is sent is only written into the demo archive."
             can_send = True
             can_reply = True
+            can_mention = True
+            can_mark_read = True
+            can_send_files = True
 
             def check(self, ctx):
                 return True, "ready"
 
-            async def send(self, ctx, conversation, text, reply_to=None):
+            async def send(self, ctx, conversation, text, reply_to=None, mentions=None, file=None):
                 import asyncio
                 import threading
                 await asyncio.sleep(0.8)        # as a real service takes a moment
                 mid = await asyncio.to_thread(demo_message, ctx.host, conversation["id"], text, True,
-                                              reply_to["key"] if reply_to else None)
+                                              reply_to["key"] if reply_to else None, mentions, file)
+                if conversation["service"] in ("whatsapp", "telegram"):     # they tell who got and read it
+                    threading.Timer(1.0, demo_receipt, (ctx.host, mid, "delivered")).start()
+                    threading.Timer(2.5, demo_receipt, (ctx.host, mid, "read")).start()
                 if not text.startswith("quiet:"):   # the other side answers (a test may want silence)
                     threading.Timer(1.5, demo_message, (ctx.host, conversation["id"], f"↩ {text}", False)).start()
                 return {"id": mid}
+
+            async def mark_read(self, ctx, conversation, until):
+                return 1
 
         return Sender()
 

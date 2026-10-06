@@ -148,7 +148,7 @@ TIMEZONE_NAME, TIMEZONE = _zone(get("owner", "timezone"))
 IPHONE_BACKUP_ROOT = _path("iphone", "backup_root", os.path.join(DATA, "iphone-backup"))
 ANDROID_EXPORT = _path("android", "export", os.path.join(DATA, "android"))
 VIBER_DESKTOP = _path("viber", "desktop_export")
-WHATSAPP_BRIDGE = _path("whatsapp", "bridge")
+WHATSAPP_BRIDGE = _path("whatsapp", "bridge")       # for the command line; the app's bridge source has its own setting
 
 IMMICH_URL = (get("immich", "url") or "").rstrip("/") or None
 IMMICH_DATA = _path("immich", "data_folder")

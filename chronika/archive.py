@@ -242,6 +242,21 @@ CREATE TABLE IF NOT EXISTS reaction (
     outgoing INTEGER                    -- 1: the owner's own reaction
 );
 CREATE INDEX IF NOT EXISTS reaction_message ON reaction (message_id);
+CREATE TABLE IF NOT EXISTS mention (
+    message_id INTEGER NOT NULL REFERENCES message,
+    address_id INTEGER NOT NULL REFERENCES address,  -- whom the text names with @
+    token TEXT,                         -- how the text names them: "@<number or LID>" (WhatsApp), "@username"
+                                        -- or the name itself (Telegram), "@Name" (Viber); NULL: not known
+    PRIMARY KEY (message_id, address_id)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS receipt (           -- who got and read the owner's messages, where the service says
+    message_id INTEGER NOT NULL REFERENCES message,
+    address_id INTEGER NOT NULL REFERENCES address,
+    delivered_at INTEGER,               -- Unix ms; 0: so, but when is not known; NULL: not (yet)
+    read_at INTEGER,
+    played_at INTEGER,                  -- a voice message or video played
+    PRIMARY KEY (message_id, address_id)
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS message_origin (
     source_id INTEGER NOT NULL REFERENCES source,
     row_key TEXT NOT NULL,              -- the row's id within that source

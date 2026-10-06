@@ -47,7 +47,7 @@ Contents:
  Android phone ──adb── content query/read ─────► <export>/<device>/android.db (+ *.txt.gz, mms-parts/)
                ──adb pull Android/data/com.viber.voip/files ──► a folder of Viber media
  Viber Desktop (linked to the Android phone) ── LD_PRELOAD export ──► viber-desktop-<date>.sqlite
- whatsapp-mcp bridge (whatsmeow, live) ─────────► whatsapp-bridge/store/messages.db, whatsapp.db
+ WhatsApp bridge (bridges/whatsapp, live) ──────► <data>/whatsapp-bridge/messages.db, whatsapp.db, media/
 
                      uv run python -m chronika sms calls viber whatsapp telegram voip media
                                                           ▼
@@ -521,9 +521,9 @@ the record of the method, for whoever writes the step again.
 
 | Table | Columns used |
 |---|---|
-| `ZVIBERMESSAGE` | `Z_PK`, `ZDATE` (s since 2001), `ZTOKEN`, `ZTEXT`, `ZSTATE` (`received` / `delivered` / `send`; outgoing = not `received`), `ZSYSTEMTYPE` (`''`/`url`/`formatted` = text, `customLocation`, `systemCallLog`, other = system), `ZATTACHMENT`, `ZCONVERSATION`, `ZPHONENUMINDEX` (sender) |
+| `ZVIBERMESSAGE` | `Z_PK`, `ZDATE` (s since 2001), `ZTOKEN`, `ZTEXT`, `ZSTATE` (`received` / `delivered` / `send`; outgoing = not `received`; "delivered" is on every message sent, its `ZSTATEDATE` the sending time: it says nothing of delivery), `ZMETADATA` (JSON; `textMetaInfo` type 0: a mention, `memberId` and where the text names them, `start`/`end` in UTF-16 units, the text holding `\u202a@Name\u202c`), `ZSYSTEMTYPE` (`''`/`url`/`formatted` = text, `customLocation`, `systemCallLog`, other = system), `ZATTACHMENT`, `ZCONVERSATION`, `ZPHONENUMINDEX` (sender) |
 | `ZATTACHMENT` | `Z_PK`, `ZTYPE` (`picture`, `gif`, `video`, `audio`, `file`, `sticker`, `customLocation`), `ZNAME` (the file name in `Documents/...`), `ZID` (DownloadID) |
-| `ZCONVERSATION` | `Z_PK`, `ZGROUPID` (groups), `ZNAME` |
+| `ZCONVERSATION` | `Z_PK`, `ZGROUPID` (groups), `ZNAME`, `ZLASTREADTOKEN` (the owner read up to this message), `ZSEENSTATUSLASTTOKEN` (in a person's chat, they saw the owner's messages up to this one; where they let it be seen) |
 | `ZMEMBER` | `Z_PK`, `ZMEMBERID`, `ZDISPLAYFULLNAME` |
 | `ZPHONENUMBER` | `ZMEMBER`, `ZCANONIZEDPHONENUM`, `ZPHONE` |
 | `Z_5PHONENUMINDEXES` | `Z_5CONVERSATIONS`, `Z_10PHONENUMINDEXES` (conversation members) |
@@ -565,6 +565,10 @@ every code also in `reaction.code` as `viber:N`, the emoji NULL for 6 and later;
 reactions without a type `viber:?`, and the counterpart resolved as `"peer"`), replies, edits,
 forwards, links and pins (`subtype_code` `viber:9`/`viber:url`, `viber:15`/`viber:systemPinnedMessageCreated`),
 and the sender's position (`sender_lat`, `sender_lon`).
+
+**Marks** (`iphone_marks`, iPhone only): mentions into `mention` (the token as the text has it);
+`ZLASTREADTOKEN` as the chat's `read_until`; `ZSEENSTATUSLASTTOKEN`, in a person's chat, as
+receipts of the owner's messages up to it (`read_at` 0: read, when not known).
 
 **Order and choice of origin.**
 
@@ -613,18 +617,28 @@ and the sender's position (`sender_lat`, `sender_lon`).
   to phone.
   - Media are there only as far as the phone still has them: older years are often mostly missing,
     since a move between phones does not carry old files.
-- **The whatsapp-mcp bridge** (its `whatsapp-bridge/store/` folder, `[whatsapp] bridge` in
-  `config.toml`; optional: without it only the iPhone is read).
-  - It is a whatsmeow client linked as a companion device, running live.
+- **The WhatsApp bridge** (`bridges/whatsapp/`, its own README; its store folder is
+  `<data>/whatsapp-bridge/` unless `[whatsapp] bridge` in `config.toml` names another; optional:
+  without it only the iPhone is read).
+  - It is a whatsmeow client linked as a companion device, running live; it began as
+    whatsapp-mcp's bridge.
   - `messages.db` has the tables `messages` (`id`, `chat_jid`, `sender`, `content`, `timestamp`
-    ISO, `is_from_me`, `media_type`) and `chats` (`jid`, `name`). A bridge with Chronika's
-    additions (a branch of whatsapp-mcp; where it is, in `LOCAL.md`) adds, with nothing removed
-    (an older bridge still imports as before):
+    ISO, `is_from_me`, `media_type`) and `chats` (`jid`, `name`). Chronika's bridge adds, with
+    nothing removed (an older bridge, whatsapp-mcp's, still imports as before):
     - in `messages`: `kind` (text, image, video, audio, voice, document, sticker, location, contact,
       poll), `subtype` (gif, video_note, link, live_location, view_once), `reply_to` and
       `reply_text` (the stanza id and text quoted), `forwarded`, `edited`, `deleted` (marked when the
       sender edits or deletes it later; `content` is the last version), `lat`, `lon`, `place`. A
       shared contact's `content` is "name, number"; a poll's is the question and its options.
+    - `mentions`: the jids the text names with `@<user part>`, comma-separated; `read_at`: when the
+      owner read a message from others, on any device.
+    - `receipts` (`chat_jid`, `message_id`, `jid`, `type` delivered/read/played, `timestamp`): who
+      got and read the owner's messages, and when, the first time each.
+    - `group_info` (`jid`, `name`, `addressing` 'pn' or 'lid', `member`) and `group_members`
+      (`group_jid`, `jid` as the group names them, `phone`, `lid`, admin flags): the groups' members,
+      read at each start and when they change. A member's `phone` and `lid` also map LIDs to numbers.
+    - `media_path`: the file it downloaded, relative to its store (`media/<chat>/<id><ext>`), or
+      `media_error`; files are downloaded as messages arrive (not view-once ones).
     - `reactions` (`chat_jid`, `message_id`, `sender`, `is_from_me`, `emoji`, `timestamp`): each
       person's latest reaction, `''` once taken back.
     - `calls` and `call_participants`: the call-log message every device gets after a call
@@ -682,6 +696,10 @@ note, 6 group event, 10 notice, 59 call, 66 poll.
 **Extras** (`extras.whatsapp`): from `ZWAMEDIAITEM.ZMETADATA` field 5 the quoted stanza id, 6 its
 sender, 19 its text, 46 the forward score; from `ZWAMESSAGEINFO.ZRECEIPTINFO` field 7 the reactions
 (1/2 the jid, 3 the emoji; no jid means the user). Edits and polls were looked for and not found.
+`ZRECEIPTINFO` field 2 also holds one entry per recipient of the owner's messages (1 to 2 in a
+person's chat, a few in groups), with second counts after the sending (4, 5, sub-messages 9 and 10)
+and field 3 the sending time (Unix s); the recipient (2.1, 8 or 9 bytes starting 0x8C) is not
+decoded yet, so these receipts are not read (looked at on 6 October 2026).
 
 **Business messages** (templates, buttons) have `ZTEXT` NULL. Their text is only in
 `ZWAMEDIAITEM.ZMETADATA`, a protobuf blob.
@@ -708,6 +726,10 @@ Channels (`...@newsletter`) and status (`status@broadcast`) are skipped (`CHANNE
 3. What the bridge saw happen to messages already in the archive (`bridge_changes`): edits and
    deletions are marked, the text staying as the archive first had it; reactions follow the
    bridge, one per person (changed, added, removed once taken back).
+   Then the groups' members (`bridge_members`: added to their conversations, never removed) and
+   whom each message names with @ (`bridge_mentions`, into `mention`, also on the iPhone's copy of
+   a message), who got and read the owner's messages (`bridge_receipts`, into `receipt`), and how
+   far the owner read each chat (`read_at` → `state_report` read_until).
 4. Its calls (`voip.bridge_calls`, also from the plugin's import): the log's, then the signalling's
    for calls no log message came for; one call in both, or already in from the iPhone, is kept
    once (same person and direction within a minute).
@@ -720,8 +742,8 @@ The bridge contributes only the tail.
 - iPhone: `iphone-sync.py`, then `python -m chronika whatsapp calls voip media` (`voip` for the calls, after `calls`).
 - Bridge: nothing to do. It fills `messages.db` while running, and the next `whatsapp` import picks
   up the new rows.
-- Bridge media are not in the archive yet. They can be downloaded through the `whatsapp` MCP
-  server, `download_media`.
+- Bridge media: the bridge downloads them as messages arrive, and the plugin's import links them
+  (`media.whatsapp_bridge`, 10.1).
 
 ---
 
@@ -936,6 +958,8 @@ person; the migration made one person per address, which is how the archive beha
 | `conversation_member` | conversation × address |
 | `message` | `status` (a message sent from the app: sending, sent, failed), `id`, `service_id`, `conversation_id`, `ts` (Unix ms UTC), `outgoing`, `sender_id` (NULL when outgoing), `kind_id`, `text`, `key`, `key_scope` (the conversation, for services whose keys are per chat), `fingerprint` (messages without a key: time, direction, kind and text); unique on (service, key, key_scope); and the extras: `subtype`, `subtype_code`, `reply_to`, `reply_key`, `reply_text`, `edited`, `deleted`, `forwarded`, `starred`, `lat`, `lon`, `place` (a location shared), `sender_lat`, `sender_lon` (where the sender was, older Viber) |
 | `reaction` | `message_id`, `emoji` (NULL where only a code is known), `code`, `count`, `address_id`, `outgoing` |
+| `receipt` | message × address: `delivered_at`, `read_at`, `played_at` (Unix ms; 0 so but when not known; NULL not yet), for the owner's messages |
+| `mention` | message × address: whom its text names with @, and `token`, how the text names them (WhatsApp `@<number or LID's user part>`, Telegram `@username` or the name itself, Viber `@Name`) |
 | `message_origin` | (`source_id`, `row_key`) PK, `message_id` (WITHOUT ROWID) |
 | `call` | `id`, `service_id`, `address_id` (NULL for hidden numbers), `ts`, `outgoing`, `answered`, `duration`, `key`, `detail`, `detail_code`, `video`, `attempts`, `conversation_id` |
 | `call_member` | `call_id`, `address_id`, `outcome`, `outcome_code` (group calls) |
@@ -1058,6 +1082,8 @@ uv run python -m chronika [--db PATH] [sms calls viber whatsapp telegram voip me
 | `whatsapp` | `whatsapp-media/<ZMEDIALOCALPATH minus "Media/">` | stanza id → `message.key` |
 | `viber_iphone` | `viber-media/{Attachments,FileMessages,VoiceMessages}/<ZATTACHMENT.ZNAME>` | token → `message.key`, else `Z_PK` → `message_origin` |
 | `mms_android` | `<export folder>/mms-parts/<part _id>` (empty ones skipped) | MMS `_id` → `message_origin`; if the iPhone's copy was kept instead, the single SMS/MMS message with the same direction within ±2 s |
+| `telegram.media` | `<telegram media>/<chat>/<message><ext>` | `<chat>/<id>` → `message_origin` |
+| `whatsapp_bridge` | `<bridge store>/<messages.media_path>` | `<chat_jid>/<id>` → `message_origin`, else the id → `message.key` (the iPhone's copy) |
 
 Viber media pulled from an Android phone have no step at present: one existed for a `links.tsv`
 of 5.5 (`certain` rows only: desktop `EventID` → `message_origin`, else its token → `message.key`)

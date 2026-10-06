@@ -69,6 +69,44 @@ class People:
         return ("id", mid, "viber") if mid else None
 
 
+def iphone_marks(archive, iphone, src, convs, conv_members, person, observed):
+    """From the iPhone: whom texts name (`textMetaInfo` type 0: the member and where the text names
+    them, "@Name", in UTF-16 units); how far the owner read each chat (`ZLASTREADTOKEN`, its
+    read_until); and, in a chat with one person, how far they saw the owner's messages
+    (`ZSEENSTATUSLASTTOKEN`: receipts, known but not when). Its ZSTATE "delivered" is on every message
+    sent, at the time it was sent: it says nothing of delivery."""
+    for token, text, md in iphone.execute("SELECT ZTOKEN, ZTEXT, ZMETADATA FROM ZVIBERMESSAGE "
+                                          "WHERE ZTOKEN AND ZMETADATA LIKE '%textMetaInfo%'"):
+        info = extras._json(md).get("textMetaInfo")
+        info = extras._json(info) if isinstance(info, str) else info
+        mid = archive.message_by_key("viber", str(token)) if info else None
+        units = (text or "").encode("utf-16-le")
+        for e in info if mid and isinstance(info, list) else ():
+            who = person(e.get("memberId")) if isinstance(e, dict) and e.get("type") == 0 else None
+            if who:
+                start, end = e.get("start"), e.get("end")
+                said = (units[start * 2:end * 2].decode("utf-16-le", "replace") or None
+                        if isinstance(start, int) and isinstance(end, int) else None)
+                archive.db.execute("INSERT OR IGNORE INTO mention VALUES (?, ?, ?)", (mid, archive.address(*who), said))
+    for pk, group, read, seen in iphone.execute("SELECT Z_PK, ZGROUPID, ZLASTREADTOKEN, ZSEENSTATUSLASTTOKEN "
+                                                "FROM ZCONVERSATION"):
+        conv = convs.get(pk)
+        if conv is None:
+            continue
+        if read:
+            mid = archive.message_by_key("viber", str(read))
+            ts = archive.db.execute("SELECT ts FROM message WHERE id = ?", (mid,)).fetchone()[0] if mid else token_time(None, read)
+            archive.report_state(src, conv, "read_until", ts, observed)
+        if seen and not group and len(conv_members[pk]) == 1:
+            peer = archive.address(*conv_members[pk][0])
+            mine = ("SELECT id FROM message WHERE conversation_id = ? AND outgoing AND key IS NOT NULL "
+                    "AND CAST(key AS INTEGER) <= ?")
+            archive.db.execute(f"INSERT OR IGNORE INTO receipt (message_id, address_id, read_at) SELECT id, ?, 0 FROM ({mine})",
+                               (peer, conv, seen))
+            archive.db.execute(f"UPDATE receipt SET read_at = 0 WHERE address_id = ? AND read_at IS NULL "
+                               f"AND message_id IN ({mine})", (peer, conv, seen))
+
+
 class Empty:
     """A source that is not there: every query gives nothing."""
 
@@ -184,6 +222,9 @@ def run(archive, iphone_db=IPHONE_DB, desktop_db=DESKTOP_DB):
         mid = archive.message_by_key("viber", iphone_recs[pk]["key"])
         if mid:
             archive.db.execute("INSERT OR IGNORE INTO message_origin VALUES (?, ?, ?)", (src["iphone"], str(pk), mid))
+    if not isinstance(iphone, Empty):   # observed: when the backup's copy was made
+        iphone_marks(archive, iphone, src["iphone"], convs, conv_members, person,
+                     int(os.path.getmtime(iphone_db) * 1000))
     archive.resolve()
     for sid in src.values():
         archive.imported(sid)

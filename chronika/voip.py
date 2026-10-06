@@ -282,10 +282,11 @@ def carrier_alerts(archive, calls, carrier):
                       attempts=attempts)
 
 
-def run(archive):
+def run(archive, bridge=True):
+    """bridge: also the WhatsApp bridge's calls, where config names it (the command line)."""
     calls = Calls(archive)
     whatsapp_calls(archive, calls)
-    if whatsapp.BRIDGE_DB:
+    if bridge and whatsapp.BRIDGE_DB:
         bridge_calls(archive, calls)
     viber_calls(archive, calls)
     for carrier in carriers.enabled(CARRIER_NOTICES):

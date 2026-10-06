@@ -24,6 +24,8 @@ message keeps their name and size), except in the chats config `[telegram] no_me
 ids, as the survey gives them), and not at all with `[telegram] media = false`; --dry-run says only
 how many and how big.
 
+How far each chat was read, by the owner and by the others, is kept too (`chat_read`).
+
 Read only: nothing is sent, nothing is marked read. Nothing secret is ever printed.
 Secret chats live only on the devices and are not reachable through the API.
 """
@@ -143,6 +145,8 @@ async def sync(c):
                    "ON CONFLICT (id) DO UPDATE SET kind = excluded.kind, title = excluded.title, "
                    "archived = excluded.archived, json = excluded.json",
                    (d.id, k, d.name, int(d.archived), dump(d.entity)))
+        telegram_store.note_read(db, d.id, getattr(d.dialog, "read_inbox_max_id", None),
+                                 getattr(d.dialog, "read_outbox_max_id", None))
         last = db.execute("SELECT max(id) FROM message WHERE chat_id = ?", (d.id,)).fetchone()[0] or 0
         n = 0
         async for m in c.iter_messages(d.entity, min_id=last, reverse=True):

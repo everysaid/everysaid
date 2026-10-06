@@ -24,9 +24,9 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     headers: {
       "X-Lang": i18n.language,
       ...(method !== "GET" ? { "X-Chronika": "1" } : {}),
-      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...(body !== undefined && !(body instanceof FormData) ? { "Content-Type": "application/json" } : {}),
     },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: body instanceof FormData ? body : body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!r.ok) {
     let msg = r.statusText;
@@ -45,6 +45,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 export const api = {
   get: <T>(p: string) => call<T>("GET", p),
   post: <T>(p: string, b?: unknown) => call<T>("POST", p, b ?? {}),
+  form: <T>(p: string, f: FormData) => call<T>("POST", p, f),       // with a file
   patch: <T>(p: string, b: unknown) => call<T>("PATCH", p, b),
   put: <T>(p: string, b: unknown) => call<T>("PUT", p, b),
   del: <T>(p: string) => call<T>("DELETE", p),
@@ -127,6 +128,8 @@ export interface ChatDetail {
   services: string[];
   sendable: string[];       // the services something can send to now
   replyable: string[];      // those where an answer to a given message can be sent
+  mentionable: string[];    // those where people of a group can be named with @
+  fileable: string[];       // those where a file can be sent
   unsendable: Record<string, string>;   // those a source reaches but may not send to now: what it says is missing
   last_service: string | null;   // where the chat was last active: the way to answer by default
   person_id?: number | null;
@@ -140,8 +143,38 @@ export interface ChatDetail {
   state_reports: Partial<Record<StateField, { service: string; value: number | boolean }[]>>;
   state_user: Partial<Record<StateField, { value: number; set_at: number; always: number }>>;
   person?: Person;
-  members?: { person_id: number | null; name: string | null }[];
+  members?: Member[];
   groups?: { conversation_id: number; service: string; title: string | null; messages: number; last_ts: number | null }[];   // a group: those it is made of
+}
+
+export interface Member {
+  person_id: number | null;
+  name: string | null;
+  address_id: number;
+  services: string[];       // the services of the group's conversations they are in
+}
+
+export interface Mention {
+  token: string | null;     // how the text names them ("@306912345678", "@username", "@Name", a name)
+  person_id: number | null;
+  name: string | null;
+  me: boolean;
+}
+
+/** Of one of the user's messages: how many it went to, and how many got, read and played it. */
+export interface Receipts {
+  to: number;
+  delivered: number;
+  read: number;
+  played: number;
+}
+
+export interface Receipt {
+  person_id: number | null;
+  name: string | null;
+  delivered_at: number | null;   // Unix ms; 0: so, but when is not known; null: not (yet)
+  read_at: number | null;
+  played_at: number | null;
 }
 
 export interface Attachment {
@@ -185,9 +218,12 @@ export interface MessageItem {
   location: { lat: number | null; lon: number | null; place: string | null } | null;
   reactions: Reaction[];
   attachments: Attachment[];
+  mentions?: Mention[];
+  receipts?: Receipts | null;
   chat_id?: string;
   chat_title?: string;
   highlight?: [string, boolean][];
+  loose?: boolean;          // a message being sent whose text the service may write otherwise (mentions, a file)
 }
 
 export interface CallItem {

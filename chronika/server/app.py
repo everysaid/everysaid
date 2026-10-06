@@ -37,6 +37,7 @@ from .push import Push
 WEB = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "web", "dist")
 THUMBS = os.path.join(config.CACHE, "thumbs")
 AVATARS = os.path.join(config.CACHE, "avatars")
+MAX_UPLOAD = 100_000_000        # a file sent in a chat: what the services take (WhatsApp about 96 MB, Telegram 2 GB)
 OPEN = {"/api/auth/status", "/api/auth/login/options", "/api/auth/login/verify", "/api/auth/register/options",
         "/api/auth/register/verify", "/api/auth/recover", "/api/health", "/api/auth/password/options",
         "/api/auth/password/set", "/api/auth/password/login"}
@@ -383,6 +384,8 @@ def create_app(archive_path=None, auth_path=None):
         lang = request.headers.get("x-lang", "en")
         return {**c, "sendable": [s for s in c["services"] if s in can],
                 "replyable": [s for s in c["services"] if s in answer],
+                "mentionable": [s for s in c["services"] if s in host.able("can_mention")],
+                "fileable": [s for s in c["services"] if s in host.able("can_send_files")],
                 "unsendable": {s: tr(why, lang) for s, why in host.unsendable().items()
                                if s in c["services"] and s not in can}}
 
@@ -433,19 +436,69 @@ def create_app(archive_path=None, auth_path=None):
     @app.post("/api/chats/{chat_id}/read")
     def read(chat_id: str):
         changes.set_chat_state(store, chat_id, read_until="now")
+        # the services' read receipts, where the user allows them: on their own, not waited for
+        host.mark_read_soon(chat_id, int(time.time() * 1000))
         return {"ok": True}
 
     @app.post("/api/chats/{chat_id}/send")
-    async def send(chat_id: str, body: dict = Body(...)):
+    async def send(chat_id: str, request: Request):
+        """A JSON body {text, conversation_id, service, reply_to, mentions}, or a form with the same
+        fields (mentions as JSON) and a `file`, sent with the text as its caption."""
+        file = None
+        if request.headers.get("content-type", "").startswith("multipart/form-data"):
+            if int(request.headers.get("content-length") or 0) > MAX_UPLOAD + 1_000_000:
+                raise UserError("file_too_large", 413, mb=MAX_UPLOAD // 1_000_000)
+            async with request.form(max_files=1, max_fields=10) as form:
+                body = {k: v for k, v in form.items() if isinstance(v, str)}
+                # a form's text may come with its line breaks as CRLF: the mentions count them as one
+                body["text"] = (body.get("text") or "").replace("\r\n", "\n")
+                try:
+                    body["mentions"] = json.loads(body.get("mentions") or "null")
+                except ValueError:
+                    raise UserError("failed", 400, reason="mentions")
+                upload = form.get("file")
+                if upload is not None and not isinstance(upload, str):
+                    if (upload.size or 0) > MAX_UPLOAD:
+                        raise UserError("file_too_large", 413, mb=MAX_UPLOAD // 1_000_000)
+                    file = {"data": await upload.read(), "filename": os.path.basename(upload.filename or "") or "file",
+                            "mime_type": upload.content_type or mimetypes.guess_type(upload.filename or "")[0] or ""}
+        else:
+            try:
+                body = await request.json()
+            except ValueError:
+                body = None
+        if not isinstance(body, dict):
+            raise UserError("failed", 400, reason="body")
         text = (body.get("text") or "").strip()
-        if not text:
+        if not text and not file:
             raise UserError("empty_message", 400)
+        mentions = _mentions(text, body.get("mentions"))
         try:
-            return await host.send(chat_id, text, body.get("conversation_id"), body.get("service"), body.get("reply_to"))
+            return await host.send(chat_id, text, int(body["conversation_id"]) if body.get("conversation_id") else None,
+                                   body.get("service") or None, body.get("reply_to") or None, mentions or None, file)
         except KeyError:
             raise UserError("not_found", 404)
         except (PermissionError, ValueError, RuntimeError) as e:
             raise UserError("failed", 409, reason=str(e))
+
+    def _mentions(text, given):
+        """[{start, length, address_id}] as given, each a "@..." within the text (in characters), none
+        over another; else the request is refused."""
+        out, end = [], 0
+        try:
+            for m in sorted(({"start": int(m["start"]), "length": int(m["length"]), "address_id": int(m["address_id"])}
+                             for m in given or ()), key=lambda m: m["start"]):
+                if m["start"] < end or m["length"] < 2 or m["start"] + m["length"] > len(text) or text[m["start"]] != "@":
+                    raise ValueError(m)
+                end = m["start"] + m["length"]
+                out.append(m)
+        except (KeyError, TypeError, ValueError):
+            raise UserError("failed", 400, reason="mentions")
+        return out
+
+    @app.get("/api/messages/{mid}/receipts")
+    def receipts(mid: int):
+        return {"items": nf(queries.receipts(store, mid))}
 
     @app.get("/api/messages/{mid}")
     def message(mid: int):

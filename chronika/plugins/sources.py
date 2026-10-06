@@ -6,6 +6,7 @@ service's API), then runs the importers for what it brings. Records found by two
 once, with both origins (the importers' own deduplication).
 """
 import asyncio
+import base64
 import contextlib
 import io
 import json
@@ -194,9 +195,12 @@ class IphoneBackup(Plugin):
 
     def _import(self, ctx):
         from .. import calls, media, sms, viber, voip, whatsapp
+        # not the WhatsApp bridge's databases, even where the command line's config names them: those
+        # are the bridge source's, another instance
         return run_importers(ctx, [("SMS, iMessage", sms.run), ("calls", calls.run), ("Viber", viber.run),
-                                   ("WhatsApp", whatsapp.run), ("WhatsApp and Viber calls", voip.run),
-                                   ("files", media.run)])
+                                   ("WhatsApp", lambda a: whatsapp.run(a, bridge_db=None, store_db=None)),
+                                   ("WhatsApp and Viber calls", lambda a: voip.run(a, bridge=False)),
+                                   ("files", lambda a: media.run(a, media.PHONES))])
 
     def run_import(self, ctx):
         # first a new backup over the cable (unless turned off), then the databases out of it, then the import
@@ -245,7 +249,7 @@ class AndroidAdb(Plugin):
         from .. import calls, media, sms
         serial = ctx.settings.get("serial")
         run_script(ctx, "android-export.py", *(["-s", serial] if serial else []))
-        return run_importers(ctx, [("SMS, MMS", sms.run), ("calls", calls.run), ("files", media.run)])
+        return run_importers(ctx, [("SMS, MMS", sms.run), ("calls", calls.run), ("files", lambda a: media.run(a, media.PHONES))])
 
 
 class ViberDesktop(Plugin):
@@ -273,20 +277,26 @@ class WhatsappBridge(Plugin):
     name_weights = {"whatsapp/book": 80, "whatsapp/chat": 50, "whatsapp/profile": 30}
     state_weights = {"muted": 60, "pinned": 0}
     description = ("WhatsApp as it arrives, through a whatsmeow bridge linked as a device "
-                   "(whatsapp-mcp's whatsapp-bridge). Unofficial: WhatsApp may block accounts that use one; "
+                   "(Chronika's bridges/whatsapp). Unofficial: WhatsApp may block accounts that use one; "
                    "sending raises that risk.")
     modes = ("import", "live")
     live_default = True
     needs = ("a running whatsmeow bridge", "the bridge's store folder")
     settings = (
-        Setting("store", "The bridge's store folder", "path", required=True, default=config.WHATSAPP_BRIDGE),
+        Setting("store", "The bridge's store folder", "path", required=True, default=config.WHATSAPP_BRIDGE or os.path.join(config.DATA, "whatsapp-bridge")),
         Setting("api", "The bridge's REST API", "url", default="http://127.0.0.1:8080"),
         Setting("send", "Sending messages", "bool", default=False,
                 help="A risk for the account; needs the bridge started with -send. Turned off by itself "
                      "when WhatsApp warns the account"),
+        Setting("read_receipts", "Send read receipts", "bool", default=False,
+                help="When a chat is opened here, the others see it read, and it is read on the phone too"),
         Setting("interval", "Check every (seconds)", "number", default=10),
     )
     can_send = True
+    can_reply = True
+    can_mention = True
+    can_mark_read = True
+    can_send_files = True
 
     def not_sending(self, ctx):
         state = self.bridge_state(ctx)
@@ -379,14 +389,15 @@ class WhatsappBridge(Plugin):
         ctx.emit({"type": "changed"})
 
     def run_import(self, ctx):
-        from .. import voip, whatsapp
+        from .. import media, voip, whatsapp
         bridge, store = self._paths(ctx)
         changed = {}
         # only the bridge's databases: an iPhone's are another instance's
         out = run_importers(ctx, [
             ("WhatsApp (bridge)", lambda a: changed.update(whatsapp.run(a, iphone_db=None, contacts_db=None,
                                                                         bridge_db=bridge, store_db=store) or {})),
-            ("WhatsApp calls (bridge)", lambda a: voip.bridge_calls(a, voip.Calls(a), bridge, store))])
+            ("WhatsApp calls (bridge)", lambda a: voip.bridge_calls(a, voip.Calls(a), bridge, store)),
+            ("files", lambda a: media.run(a, [lambda a, s: media.whatsapp_bridge(a, s, bridge)]))])
         if changed:     # edits, deletions, reactions on messages already shown
             ctx.emit({"type": "changed"})
         return out
@@ -405,12 +416,63 @@ class WhatsappBridge(Plugin):
                 last = m
             await asyncio.sleep(max(2, int(ctx.settings.get("interval") or 10)))
 
-    async def send(self, ctx, conversation, text, reply_to=None):
+    def _mentions(self, ctx, text, mentions):
+        """The text with each mention ({start, length, address_id}: where it is in the text, in
+        characters, as the user saw it, e.g. "@name") written as WhatsApp has it, @<number or LID>,
+        and whom it names, as the bridge takes them."""
+        db, who = ctx.store.read(), []
+        for m in sorted(mentions, key=lambda m: m["start"], reverse=True):
+            row = db.execute("SELECT value FROM address WHERE id = ?", (int(m["address_id"]),)).fetchone()
+            if not row:
+                raise plugin_error("Unknown person to mention")
+            value = row[0].removeprefix("+")            # +E.164, or a LID's jid
+            text = text[:m["start"]] + "@" + value.split("@")[0] + text[m["start"] + m["length"]:]
+            who.append(value)
+        return text, list(dict.fromkeys(who[::-1]))     # each once: the bridge rewrites all of its places
+
+    def _post(self, ctx, path, body):
+        req = urllib.request.Request((ctx.settings.get("api") or "http://127.0.0.1:8080").rstrip("/") + path,
+                                     data=json.dumps(body).encode(), headers={"Content-Type": "application/json"},
+                                     method="POST")
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read() or b"{}")
+
+    async def mark_read(self, ctx, conversation, until):
+        """Read receipts for the chat's messages up to `until` (Unix ms), where the user turned them on;
+        nothing otherwise. Returns how many messages were marked."""
+        if not ctx.settings.get("read_receipts"):
+            return 0
+        key = conversation["key"]
+        try:
+            answer = await asyncio.to_thread(self._post, ctx, "/api/read",
+                                             {"recipient": key.removeprefix("+"), "until": int(until // 1000)})
+        except urllib.error.HTTPError as e:
+            if e.code == 404 and not (e.read() or b"").startswith(b"{"):
+                raise plugin_error("The bridge does not offer read receipts (/api/read)") from e
+            return 0                    # a chat the bridge does not know (nothing of it to mark)
+        return answer.get("marked", 0)
+
+    async def send(self, ctx, conversation, text, reply_to=None, mentions=None, file=None):
         if not ctx.settings.get("send"):
             raise plugin_error("Sending is off in this source's settings")
         # a person's chat is keyed by their number (+E.164) or LID; the bridge takes a number's digits or a jid
         key = conversation["key"]
-        body = json.dumps({"recipient": key.lstrip("+") if key.startswith("+") else key, "message": text}).encode()
+        request = {"recipient": key.lstrip("+") if key.startswith("+") else key, "message": text}
+        if mentions:
+            request["message"], request["mentions"] = self._mentions(ctx, text, mentions)
+        if file:
+            request.update(media=base64.b64encode(file["data"]).decode(), filename=file.get("filename") or "",
+                           mime_type=file.get("mime_type") or "")
+        if reply_to:
+            # the bridge quotes from its own copy; one from before it was linked, from the archive's
+            row = ctx.store.read().execute("SELECT m.outgoing, a.value, m.text FROM message m "
+                                           "LEFT JOIN address a ON a.id = m.sender_id WHERE m.id = ?",
+                                           (reply_to["id"],)).fetchone()
+            request["reply_to"] = reply_to["key"]
+            if row:
+                request["reply_sender"] = "me" if row[0] else (row[1] or "")
+                request["reply_text"] = row[2] or ""
+        body = json.dumps(request).encode()
         req = urllib.request.Request((ctx.settings.get("api") or "http://127.0.0.1:8080").rstrip("/") + "/api/send",
                                      data=body, headers={"Content-Type": "application/json"}, method="POST")
         try:
@@ -443,9 +505,14 @@ class Telegram(Plugin):
     modes = ("import", "live")
     live_default = True
     needs = ("api_id and api_hash from my.telegram.org", "a login (a code that arrives in Telegram)")
-    settings = (Setting("media", "Download pictures and videos", "bool", default=False),)
+    settings = (Setting("media", "Download pictures and videos", "bool", default=False),
+                Setting("read_receipts", "Send read receipts", "bool", default=False,
+                        help="When a chat is opened here, the others see it read, and it is read on the phone too"))
     can_send = True
     can_reply = True
+    can_mention = True
+    can_mark_read = True
+    can_send_files = True
 
     def check(self, ctx):
         if not (config.secret("telegram-api-id") and config.secret("telegram-api-hash")):
@@ -462,7 +529,7 @@ class Telegram(Plugin):
         media_chats = [str(c) for c in ctx.settings.get("media_chats") or []]
         if ctx.settings.get("media") or media_chats:
             run_script(ctx, "telegram-sync.py", "--media", *(["--chats", *media_chats] if media_chats else []))
-            steps.append(("files", media.run))
+            steps.append(("files", lambda a: media.run(a, [media.telegram.media])))
         return run_importers(ctx, steps)
 
     def chats(self, ctx):
@@ -487,9 +554,16 @@ class Telegram(Plugin):
         from . import telegram_live
         await telegram_live.run(ctx, self)
 
-    async def send(self, ctx, conversation, text, reply_to=None):
+    async def send(self, ctx, conversation, text, reply_to=None, mentions=None, file=None):
         from . import telegram_live
-        return await telegram_live.send(ctx, conversation, text, reply_to)
+        return await telegram_live.send(ctx, conversation, text, reply_to, mentions, file)
+
+    async def mark_read(self, ctx, conversation, until):
+        """Read receipts for the chat, where the user turned them on; nothing otherwise."""
+        if not ctx.settings.get("read_receipts"):
+            return 0
+        from . import telegram_live
+        return await telegram_live.mark_read(ctx, conversation, until)
 
 
 class CarrierNotices(Plugin):
