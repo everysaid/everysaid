@@ -173,6 +173,16 @@ CREATE TABLE IF NOT EXISTS merge_dismissed (    -- suggested merges the user tur
     at INTEGER NOT NULL,
     PRIMARY KEY (a, b)
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS group_link (    -- groups the user merged: one chat, c<into_id>
+    conversation_id INTEGER PRIMARY KEY REFERENCES conversation,
+    into_id INTEGER NOT NULL REFERENCES conversation    -- never itself linked
+);
+CREATE TABLE IF NOT EXISTS group_dismissed (    -- suggested group merges the user turned down
+    a INTEGER NOT NULL REFERENCES conversation, -- a < b
+    b INTEGER NOT NULL REFERENCES conversation,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (a, b)
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS account (    -- the owner's own handles
     id INTEGER PRIMARY KEY,
     address_id INTEGER NOT NULL REFERENCES address,
@@ -680,38 +690,38 @@ class Archive:
                             "VALUES (?, ?, ?, ?, ?, ?)", (message_id, emoji, code, count or 1, who, outgoing))
 
     def init_archived(self):
-        """The app's own "archived", for chats it has not set yet that a source has reported on: a
-        person's chat archived if every one of their conversations a source reports on is archived
-        there (one in view keeps them in view), a group if it is. From then on it is the app's alone:
-        what the services do later does not change it. Nothing is overwritten."""
+        """The app's own "archived", decided once, for the chats it sees for the first time: a person's
+        chat archived if every one of their conversations a source reports on is archived there (one
+        in view keeps them in view), a group if it is; a chat no source reports on, not archived.
+        From then on it is the app's alone: what the services do later does not change it. Nothing
+        is overwritten."""
         db = self.db
         own = {r[0] for r in db.execute("SELECT address_id FROM account")}
         person = dict(db.execute("SELECT address_id, person_id FROM person_address"))
         me = {person[a] for a in own if a in person}
+        links = dict(db.execute("SELECT conversation_id, into_id FROM group_link"))
         newest = {}         # conversation -> archived, as its newest report says
         for conv, value in db.execute("SELECT conversation_id, value FROM state_report WHERE field = 'archived' "
                                       "ORDER BY observed_at"):
             newest[conv] = value
-        if not newest:
-            return
         members = {}
         for conv, aid in db.execute("SELECT conversation_id, address_id FROM conversation_member"):
             members.setdefault(conv, []).append(aid)
         chats = {}          # chat id -> [archived per reported conversation]
         for conv, is_group in db.execute("SELECT id, is_group FROM conversation"):
-            if conv not in newest:
-                continue
             others = {person.get(a) for a in members.get(conv, []) if a not in own} - {None} - me
-            chat = f"p{others.pop()}" if not is_group and len(others) == 1 else f"c{conv}"
-            chats.setdefault(chat, []).append(newest[conv])
+            chat = f"p{others.pop()}" if not is_group and len(others) == 1 else f"c{links.get(conv, conv)}"
+            reported = chats.setdefault(chat, [])
+            if conv in newest:
+                reported.append(newest[conv])
         now = int(time.time() * 1000)
         db.executemany("INSERT OR IGNORE INTO chat_state (chat, field, value, set_at) VALUES (?, 'archived', ?, ?)",
-                       [(chat, int(all(vs)), now) for chat, vs in chats.items()])
+                       [(chat, int(bool(vs) and all(vs)), now) for chat, vs in chats.items()])
 
     def resolve(self):
         """After an import: link replies to the messages they answer (keeping the quoted text only
         where that is not in the archive), mark the messages that edit events edited, and turn
-        reactions sent as messages (tapbacks) into reactions on their message; and start the app's own
+        reactions sent as messages (tapbacks) into reactions on their message; and decide the app's own
         "archived" for chats new to it (init_archived)."""
         self.init_archived()
         db = self.db

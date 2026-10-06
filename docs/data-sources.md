@@ -913,6 +913,8 @@ migrations.
 | `person` | `name` (set by the user), `name_source` (where the user pinned their name to come from: a source of names, or `address:<id>`), `contact_uid` (vCard UID), `contact_url` (CardDAV href or any other), `note` |
 | `handle_name` | every name a service has shown for a handle: `address_id`, `service_id`, `kind` (`book`: the service's copy of the user's address book; `chat`: a chat's name; `profile`: chosen by them), `name`, `first_seen`, `last_seen`, `current` (the latest of that handle, service and kind); many handles may share a name. WhatsApp gives all three kinds, Telegram profile names; `core/names.py` picks a person's name from them |
 | `merge_dismissed` | pairs of people the user said are not one (`a` < `b`, `at`): that suggestion is not shown again |
+| `group_link` | groups the user merged: each conversation shown as part of the chat of `into_id` (`c<into_id>`, itself never linked) |
+| `group_dismissed` | pairs of groups (their chats' conversations, `a` < `b`, `at`) the user said are not one |
 | `person_address` | `address_id` PK, `person_id`, `how` (`auto`: one person per new address; `number`: a service id whose number is known; `manual`: merged by the user) |
 | `account` | the user's own handles: `address_id`, `service_id` (NULL: every service), `label`; seeded from `[owner] numbers` |
 | `device` | `name` (iphone, an Android device's name, whatsapp-bridge...), `kind`, `used_from`, `used_until` (Unix ms) |

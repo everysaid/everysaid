@@ -135,7 +135,7 @@ def build(archive_path=None):
     @mcp.tool()
     def statistics() -> dict:
         """Counts: messages and calls by service and year, people, groups, the most written-to people."""
-        s = dict(queries.stats(store))
+        s = dict(queries.stats(store, include_archived=True))
         s["first"], s["last"] = when(s["first"]), when(s["last"])
         return s
 

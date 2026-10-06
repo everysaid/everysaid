@@ -1,18 +1,32 @@
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { CalendarDays, MessageSquare, Phone, Users, UsersRound } from "lucide-react";
-import { api, type Stats } from "@/lib/api";
-import { dateOnly, isoDay, number } from "@/lib/format";
+import { useState } from "react";
+import { Archive, MessageSquare, Phone, Users, UsersRound } from "lucide-react";
+import { api, qs, type Stats } from "@/lib/api";
+import { number } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { service } from "@/lib/services";
-import { Avatar, Card, Center, Spinner } from "@/components/ui";
-import { Logo } from "@/components/Logo";
+import { Avatar, Card, Center, Segmented, Spinner } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 
-export function OverviewPage({ compact }: { compact?: boolean }) {
+export function OverviewPage() {
   const { t } = useTranslation();
-  const stats = useQuery({ queryKey: ["stats"], queryFn: () => api.get<Stats>("/api/stats"), staleTime: 300_000 });
-  if (stats.isLoading) return <Center><Spinner /></Center>;
+  const [archived, setArchived] = useState(false);       // the archived chats counted too: only when asked
+  const [top, setTop] = useState<"people" | "groups">("people");
+  const stats = useQuery({ queryKey: ["stats", archived], queryFn: () => api.get<Stats>(`/api/stats${qs({ archived: archived || undefined })}`),
+    staleTime: 300_000, placeholderData: (prev) => prev });
+  const header = (
+    <PageHeader title={t("overview.title")} actions={
+      <button data-archived aria-pressed={archived} onClick={() => setArchived((a) => !a)}
+        aria-label={t("overview.archived")} title={t("overview.archived")}
+        className={cn("grid size-9 place-items-center rounded-full text-muted transition hover:bg-panel-2",
+          archived && "bg-accent/12 text-accent")}>
+        <Archive className="size-4" />
+      </button>
+    } />
+  );
+  if (stats.isLoading) return <div className="flex h-full flex-col">{header}<Center><Spinner /></Center></div>;
   const s = stats.data;
   if (!s) return null;
   const years = Object.entries(s.by_year);
@@ -20,18 +34,9 @@ export function OverviewPage({ compact }: { compact?: boolean }) {
   const services = Object.entries(s.by_service).sort((a, b) => b[1] - a[1]);
   return (
     <div className="flex h-full flex-col">
-      {!compact && <PageHeader title={t("overview.title")} />}
+      {header}
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-4xl space-y-6 p-4 md:p-8">
-          {compact && (
-            <div className="flex items-center gap-4 pb-2">
-              <Logo className="size-14" />
-              <div>
-                <h1 className="text-2xl font-semibold tracking-tight">{t("app.name")}</h1>
-                <p className="text-sm text-muted">{s.first ? t("overview.since", { date: dateOnly(s.first) }) : t("app.tagline")}</p>
-              </div>
-            </div>
-          )}
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <Tile icon={<MessageSquare />} label={t("overview.messages")} value={number(s.messages)} />
             <Tile icon={<Phone />} label={t("overview.calls")} value={number(s.calls)} />
@@ -66,15 +71,16 @@ export function OverviewPage({ compact }: { compact?: boolean }) {
             </Card>
           </div>
           <Card className="p-5">
-            <div className="mb-3 flex items-center justify-between">
+            <div className="mb-3 flex items-center justify-between gap-3">
               <span className="text-sm font-semibold">{t("overview.top")}</span>
-              <Link to="/day/$day" params={{ day: isoDay(Date.now()) }} className="flex items-center gap-1 text-sm text-accent"><CalendarDays className="size-4" />{t("day.title")}</Link>
+              <Segmented value={top} onChange={setTop}
+                options={[{ value: "people", label: t("chats.people") }, { value: "groups", label: t("chats.groups") }]} />
             </div>
             <div className="grid gap-1 sm:grid-cols-2">
-              {s.top_people.slice(0, 12).map((p, i) => (
+              {(top === "people" ? s.top_people : s.top_groups).slice(0, 12).map((p, i) => (
                 <Link key={p.chat_id} to="/chat/$chatId" params={{ chatId: p.chat_id }} className="flex items-center gap-3 rounded-xl px-2 py-1.5 hover:bg-panel-2">
                   <span className="w-5 text-right text-xs text-muted">{i + 1}</span>
-                  <Avatar name={p.title} size={32} />
+                  <Avatar name={p.title} size={32} group={top === "groups"} />
                   <span className="min-w-0 flex-1 truncate text-sm">{p.title}</span>
                   <span className="text-xs tabular-nums text-muted">{number(p.messages)}</span>
                 </Link>

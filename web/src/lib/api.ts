@@ -127,6 +127,7 @@ export interface ChatDetail {
   services: string[];
   sendable: string[];       // the services something can send to now
   replyable: string[];      // those where an answer to a given message can be sent
+  unsendable: Record<string, string>;   // those a source reaches but may not send to now: what it says is missing
   last_service: string | null;   // where the chat was last active: the way to answer by default
   person_id?: number | null;
   conversation_id?: number | null;
@@ -140,6 +141,7 @@ export interface ChatDetail {
   state_user: Partial<Record<StateField, { value: number; set_at: number; always: number }>>;
   person?: Person;
   members?: { person_id: number | null; name: string | null }[];
+  groups?: { conversation_id: number; service: string; title: string | null; messages: number; last_ts: number | null }[];   // a group: those it is made of
 }
 
 export interface Attachment {
@@ -202,6 +204,7 @@ export interface CallItem {
   attempts: number;
   with: string | null;
   chat_id?: string | null;
+  chat_title?: string | null;
 }
 
 export type StreamItem = MessageItem | CallItem;
@@ -297,6 +300,7 @@ export interface Stats {
   first: number | null;
   last: number | null;
   top_people: { chat_id: string; title: string; messages: number }[];
+  top_groups: { chat_id: string; title: string; messages: number }[];
 }
 
 export interface Account {

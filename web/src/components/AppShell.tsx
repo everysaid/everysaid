@@ -4,6 +4,7 @@ import { BarChart3, Images, MessagesSquare, MoreHorizontal, Phone, Plug, Search,
 import { cn } from "@/lib/utils";
 import { useChats, useWide } from "@/lib/hooks";
 import { useConnected } from "@/lib/events";
+import { lastChat } from "@/lib/memory";
 import { Logo } from "./Logo";
 import { Menu, MenuContent, MenuItem, MenuTrigger, Tip } from "./ui";
 import { ChatList } from "./ChatList";
@@ -36,6 +37,7 @@ function Rail() {
   const section = useSection();
   const unread = useUnread();
   const connected = useConnected();
+  const last = lastChat();
   return (
     <nav className="flex w-[72px] shrink-0 flex-col items-center gap-1 border-r border-line bg-panel py-3">
       <Link to="/" className="mb-3" aria-label="Chronika">
@@ -44,7 +46,8 @@ function Rail() {
       {NAV.map(({ to, icon: Icon, key }) => (
         <Tip key={to} label={t(`nav.${key}`)}>
           <Link
-            to={to}
+            // Chats: back to the chat open last (archived or not), as it was left
+            {...(key === "chats" && last ? { to: "/chat/$chatId", params: { chatId: last.chatId }, search: { hide: last.hide } } : { to })}
             className={cn(
               "relative grid size-12 place-items-center rounded-2xl text-muted transition-colors hover:bg-panel-2 hover:text-fg",
               section === to && "bg-accent/12 text-accent hover:bg-accent/15 hover:text-accent",

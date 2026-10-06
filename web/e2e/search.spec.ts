@@ -81,3 +81,47 @@ test("a person's calls and media, from their info: only theirs", async ({ page }
   await expect(page.locator("[data-chat-filter]")).toHaveCount(0);
   await expect(page).toHaveURL(/\/calls$/);
 });
+
+test("search in one chat: the chat stays shown while typing, as a choice among those it is found in", async ({ page }, info) => {
+  await signedIn(page, info.project.name);
+  const chat = await page.evaluate(async () => {
+    const h = { "X-Chronika": "1" };
+    return (await (await fetch("/api/chats", { headers: h })).json()).items.find((c: any) => c.type === "person");
+  });
+  await page.goto(`/search?chat=${chat.id}`);
+  await expect(page.locator("[data-chat-filter]")).toContainText(chat.title);
+  await page.getByPlaceholder(/Αναζήτηση σε όλα τα μηνύματα|Search all messages/).fill("καλημερα");
+  await page.waitForTimeout(800);
+  await expect(page.locator("[data-found], [data-chat-filter]").first()).toContainText(chat.title);
+  await expect(page).toHaveURL(new RegExp(`chat=${chat.id}`));
+});
+
+test("search: dates alone show everything of those days, calls too", async ({ page }, info) => {
+  await signedIn(page, info.project.name);
+  const call = await page.evaluate(async () =>                                  // the day of a call
+    (await (await fetch("/api/calls?limit=1", { headers: { "X-Chronika": "1" } })).json()).items[0].ts as number);
+  const d = new Date(call);
+  const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  await page.goto("/search");
+  await page.locator('input[type="date"]').first().fill(day);                    // from and to: that one day
+  await page.locator('input[type="date"]').nth(1).fill(day);
+  await expect(page.getByText(/\d+ αποτέλεσμα|\d+ results?/).first()).toBeVisible();       // one or more
+  await expect(page.locator("[data-results] [data-call]").first()).toBeAttached();
+});
+
+test("a date is typed in the app's order, counts only once whole, and goes to the nearest day", async ({ page }, info) => {
+  await signedIn(page, info.project.name);
+  const id = await page.evaluate(async () =>
+    (await (await fetch("/api/chats", { headers: { "X-Chronika": "1" } })).json()).items.find((c: any) => c.type === "person").id as string);
+  await page.goto(`/chat/${id}`);
+  await page.getByRole("button", { name: /^(Μετάβαση σε ημερομηνία|Jump to date)$/ }).click();
+  const field = page.locator("[data-date-field]");
+  await expect(field).toHaveAttribute("placeholder", /^(ηη\/μμ\/εεεε|mm\/dd\/yyyy|dd\/mm\/yyyy)$/);
+  await field.pressSequentially("0101");
+  await expect(field).toHaveValue("01/01");
+  await field.pressSequentially("2");                                   // a year begun: still open
+  await expect(field).toBeVisible();
+  await field.pressSequentially("001");                                 // 01/01/2001: before the demo's chats
+  await expect(field).toBeHidden();
+  await expect(page.getByText(/πλησιέστερη μέρα|nearest day/)).toBeVisible();
+});

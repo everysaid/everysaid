@@ -11,9 +11,11 @@ const index = createRoute({ getParentRoute: () => rootRoute, path: "/", componen
 export const chatRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/chat/$chatId",
-  validateSearch: (s: Record<string, unknown>): { m?: number; ts?: number } => ({
+  // hide: the services whose messages and calls the user turned off (comma separated)
+  validateSearch: (s: Record<string, unknown>): { m?: number; ts?: number; hide?: string } => ({
     m: s.m ? Number(s.m) : undefined,
     ts: s.ts ? Number(s.ts) : undefined,
+    hide: typeof s.hide === "string" && s.hide ? s.hide : undefined,
   }),
   component: ChatPage,
 });
@@ -37,12 +39,11 @@ const people = createRoute({ getParentRoute: () => rootRoute, path: "/people", c
 export const personRoute = createRoute({ getParentRoute: () => rootRoute, path: "/people/$personId", component: lazyRouteComponent(() => import("./routes/PersonPage"), "PersonPage") });
 const sources = createRoute({ getParentRoute: () => rootRoute, path: "/sources", component: lazyRouteComponent(() => import("./routes/SourcesPage"), "SourcesPage") });
 const settings = createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: lazyRouteComponent(() => import("./routes/SettingsPage"), "SettingsPage") });
-export const dayRoute = createRoute({ getParentRoute: () => rootRoute, path: "/day/$day", component: lazyRouteComponent(() => import("./routes/DayPage"), "DayPage") });
 const overview = createRoute({ getParentRoute: () => rootRoute, path: "/overview", component: OverviewPage });
 const setup = createRoute({ getParentRoute: () => rootRoute, path: "/setup", component: () => <Outlet /> });
 
 const routeTree = rootRoute.addChildren([index, chatRoute, searchRoute, callsRoute, mediaRoute, people, personRoute, sources,
-  settings, dayRoute, overview, setup]);
+  settings, overview, setup]);
 
 export const router = createRouter({ routeTree, context: { queryClient: undefined! }, defaultPreload: "intent", scrollRestoration: true });
 

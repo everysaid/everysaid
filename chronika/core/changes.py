@@ -1,6 +1,7 @@
 """Changes the user makes in the app. Each is one transaction; nothing of the history is deleted
 here: merging people moves their addresses to one person, splitting moves one address to a new
-person, and messages, calls and media stay as they are.
+person, merging groups links their conversations into one chat, and messages, calls and media
+stay as they are.
 """
 import json
 import time
@@ -71,6 +72,9 @@ def split_address(store, address_id):
             return row[0]
         pid = db.execute("INSERT INTO person DEFAULT VALUES").lastrowid
         db.execute("UPDATE person_address SET person_id = ?, how = 'manual' WHERE address_id = ?", (pid, address_id))
+        # its chat is new, but not newly seen: archived as the chat it left
+        db.execute("INSERT INTO chat_state SELECT ?, field, value, set_at, always FROM chat_state "
+                   "WHERE chat = ? AND field = 'archived'", (f"p{pid}", f"p{row[0]}"))
         return pid
 
 
@@ -91,6 +95,78 @@ def set_chat_state(store, chat_id, always=False, **fields):
                 continue
             v = now if v == "now" else int(v) if f == "read_until" else int(bool(v))
             db.execute("INSERT OR REPLACE INTO chat_state VALUES (?, ?, ?, ?, ?)", (chat_id, f, v, now, int(bool(always))))
+
+
+def _group(index, chat_id):
+    c = index.get(chat_id)
+    if not c:
+        raise KeyError(chat_id)
+    if c["type"] != "group":
+        raise UserError("chat.not_group")
+    return c
+
+
+def merge_groups(store, into, other):
+    """The group chat `other` becomes part of `into` (chat ids): their conversations are shown as one
+    chat, `into`'s id; the user's choices for the other are kept where `into` has none or older ones,
+    and it is archived only if both were."""
+    index, _ = _chat_index(store)
+    a, b = _group(index, into), _group(index, other)
+    if a is b:
+        raise UserError("chat.same_group")
+    head, gone = a["conversation_id"], b["conversation_id"]
+    with store.write() as db:
+        db.executemany("INSERT OR REPLACE INTO group_link VALUES (?, ?)", [(c, head) for c in b["conversations"]])
+        both_archived = len({c for (c,) in db.execute(
+            "SELECT chat FROM chat_state WHERE field = 'archived' AND value = 1 AND chat IN (?, ?)", (into, other))}) == 2
+        db.execute("INSERT INTO chat_state SELECT ?, field, value, set_at, always FROM chat_state WHERE chat = ? "
+                   "ON CONFLICT (chat, field) DO UPDATE SET value = excluded.value, set_at = excluded.set_at, "
+                   "always = excluded.always WHERE excluded.set_at > chat_state.set_at", (into, other))
+        if not both_archived:
+            db.execute("UPDATE chat_state SET value = 0 WHERE chat = ? AND field = 'archived'", (into,))
+        db.execute("DELETE FROM chat_state WHERE chat = ?", (other,))
+        db.execute("DELETE FROM group_dismissed WHERE a = ? OR b = ?", (gone, gone))
+    return into
+
+
+def split_group(store, chat_id, conversation_id):
+    """One group leaves a merged group chat, a chat of its own again, archived as the chat it left. When
+    it is the one whose id the chat has, the others keep the chat (and the user's choices) under the
+    id of the latest of them."""
+    index, conv_chat = _chat_index(store)
+    c = _group(index, chat_id)
+    conversation_id = int(conversation_id)
+    if conv_chat.get(conversation_id) != chat_id:
+        raise UserError("chat.not_in_chat")
+    if len(c["conversations"]) < 2:
+        return chat_id
+    with store.write() as db:
+        head = c["conversation_id"]
+        if conversation_id == head:     # the rest move to a new head, the latest of them
+            rest = [x for x in c["conversations"] if x != head]
+            new = db.execute(f"SELECT c.id FROM conversation c LEFT JOIN message m ON m.conversation_id = c.id "
+                             f"WHERE c.id IN ({','.join('?' * len(rest))}) GROUP BY c.id "
+                             f"ORDER BY max(m.ts) DESC, c.id LIMIT 1", rest).fetchone()[0]
+            db.execute("DELETE FROM group_link WHERE conversation_id IN (?, ?)", (new, head))
+            db.execute("UPDATE group_link SET into_id = ? WHERE into_id = ?", (new, head))
+            db.execute("INSERT OR REPLACE INTO chat_state SELECT ?, field, value, set_at, always FROM chat_state "
+                       "WHERE chat = ?", (f"c{new}", chat_id))
+            db.execute("DELETE FROM chat_state WHERE chat = ? AND field != 'archived'", (chat_id,))
+            return f"c{new}"
+        db.execute("DELETE FROM group_link WHERE conversation_id = ?", (conversation_id,))
+        # its chat is new, but not newly seen: archived as the chat it left
+        db.execute("INSERT OR REPLACE INTO chat_state SELECT ?, field, value, set_at, always FROM chat_state "
+                   "WHERE chat = ? AND field = 'archived'", (f"c{conversation_id}", chat_id))
+    return chat_id
+
+
+def dismiss_group_merge(store, chat_ids):
+    """The user says these groups are not one: the suggestion is not shown again."""
+    index, _ = _chat_index(store)
+    ids = sorted({_group(index, c)["conversation_id"] for c in chat_ids})
+    with store.write() as db:
+        db.executemany("INSERT OR REPLACE INTO group_dismissed VALUES (?, ?, ?)",
+                       [(a, b, int(time.time())) for i, a in enumerate(ids) for b in ids[i + 1:]])
 
 
 def dismiss_merge(store, person_ids):

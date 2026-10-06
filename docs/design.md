@@ -175,7 +175,7 @@ notifications. Recommended stack:
 
 Screens: the people list (search, unread, pinned) and a person's unified stream (every service
 interleaved, each message marked by its service, calls inline, replies, reactions, media,
-jump to date); global search with filters; media views; people (merge, link to contact, names,
+jump to date); global search with filters (with dates alone, everything of those days, calls too; like the chat list, in the archived chats or in the others, as its archive button says); media views; people (merge, link to contact, names,
 notes); sources (add a plugin instance, its setup, its state, its chat list); settings. Keyboard
 shortcuts on desktop, gestures on mobile.
 
@@ -329,10 +329,19 @@ Everything above is built, with these differences from the draft:
   (`state_report`: the iPhone's WhatsApp, the bridge's store, Telegram live as it changes) and what
   the user chose (`chat_state`). Between services the plugins' weights decide; between the user
   and the services the later change wins, unless the user chose "always". Chat info shows what
-  each service says. **Archived is the app's own**: it starts, once, from what the services say
-  (`Archive.init_archived`: a person's chat archived only if every conversation a service reports
-  on is archived there; one in view keeps them in view), and from then on only the user changes it.
-  When two people are merged, the chat is archived only if both were.
+  each service says. **Archived is the app's own**: decided once, when the app first sees a chat,
+  from what the services say then (`Archive.init_archived`: a person's chat archived only if every
+  conversation a service reports on is archived there, one in view keeping them in view; a chat no
+  service reports on, not archived), and from then on only the user changes it. New messages do
+  not: an archived chat gets them like any other, without notifications.
+  When two people are merged, the chat is archived only if both were; an address split off keeps
+  the archived of the chat it left.
+- **Merged groups**: the user can merge group chats (the same people on two services, or a group
+  made again) into one chat, `c<id>` of the first, its name the latest one's (`group_link`); the
+  app suggests groups with mostly the same members, or the same name and someone in both. A group
+  can leave again, archived as the chat it left; if it is the one whose id the chat has, the others
+  keep the chat and the user's choices under the latest one's id. Archived after a merge as for
+  people.
 - **Changing the ways in** (a password, a passkey, recovery codes, an MCP token) needs a setup link,
   or a session that signed in within the last 15 minutes. A stolen session cannot add its own way in.
   Failed password sign-ins lock that address only, so whoever knows the name cannot lock the user

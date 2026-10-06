@@ -12,7 +12,6 @@ Guards on every request:
 """
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
 import io
 import json
 import mimetypes
@@ -377,18 +376,48 @@ def create_app(archive_path=None, auth_path=None):
         return {"items": queries.chats(store, include_archived=archived, kind=kind, q=q, limit=limit, offset=offset)}
 
     @app.get("/api/chats/{chat_id}")
-    def chat(chat_id: str):
+    def chat(chat_id: str, request: Request):
         c = nf(queries.chat(store, chat_id))
         can = host.sendable()
         answer = host.replyable()
+        lang = request.headers.get("x-lang", "en")
         return {**c, "sendable": [s for s in c["services"] if s in can],
-                "replyable": [s for s in c["services"] if s in answer]}
+                "replyable": [s for s in c["services"] if s in answer],
+                "unsendable": {s: tr(why, lang) for s, why in host.unsendable().items()
+                               if s in c["services"] and s not in can}}
+
+    @app.post("/api/chats/{chat_id}/merge")
+    def merge_groups(chat_id: str, body: dict = Body(...)):
+        try:
+            return {"id": changes.merge_groups(store, chat_id, str(body.get("other") or ""))}
+        except KeyError:
+            raise UserError("not_found", 404)
+
+    @app.post("/api/chats/{chat_id}/split")
+    def split_group(chat_id: str, body: dict = Body(...)):
+        try:
+            return {"id": changes.split_group(store, chat_id, int(body.get("conversation") or 0))}
+        except KeyError:
+            raise UserError("not_found", 404)
+
+    @app.get("/api/groups/suggestions")
+    def group_suggestions(chat: str | None = None):
+        return {"items": queries.group_suggestions(store, chat_id=chat)}
+
+    @app.post("/api/groups/suggestions/dismiss")
+    def group_dismiss(body: dict = Body(...)):
+        try:
+            changes.dismiss_group_merge(store, [str(c) for c in body.get("chats") or []])
+        except KeyError:
+            raise UserError("not_found", 404)
+        return {"ok": True}
 
     @app.get("/api/chats/{chat_id}/stream")
     def stream(chat_id: str, before: str | None = None, after: str | None = None, around: int | None = None,
-               limit: int = 60):
+               limit: int = 60, hide: str | None = None):
         try:
-            return queries.stream(store, chat_id, before=before, after=after, around=around, limit=min(limit, 200))
+            return queries.stream(store, chat_id, before=before, after=after, around=around, limit=min(limit, 200),
+                                  hidden=set(hide.split(",")) if hide else None)
         except KeyError:
             raise UserError("not_found", 404)
 
@@ -427,11 +456,12 @@ def create_app(archive_path=None, auth_path=None):
         return nf(queries.context(store, mid, min(n, 100)))
 
     @app.get("/api/search")
-    def search(q: str, chat: str | None = None, service: str | None = None, kind: str | None = None,
+    def search(q: str = "", chat: str | None = None, service: str | None = None, kind: str | None = None,
                since: int | None = None, until: int | None = None, outgoing: bool | None = None,
-               limit: int = 50, offset: int = 0, case: bool = False, whole: bool = False):
+               limit: int = 50, offset: int = 0, case: bool = False, whole: bool = False, archived: bool | None = None):
         return queries.search(store, q, chat_id=chat, service=service, kind=kind, since=since, until=until,
-                              outgoing=outgoing, limit=min(limit, 200), offset=offset, case=case, whole=whole)
+                              outgoing=outgoing, limit=min(limit, 200), offset=offset, case=case, whole=whole,
+                              archived=archived)
 
     # ---- people ----------------------------------------------------------------------------------
     @app.get("/api/people")
@@ -538,18 +568,9 @@ def create_app(archive_path=None, auth_path=None):
             return FileResponse(thumb or got[1], headers=cache)
         return Response(got[1], media_type=got[2] or "application/octet-stream", headers=cache)
 
-    @app.get("/api/timeline")
-    def timeline(day: str):
-        try:
-            d = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=config.TIMEZONE)
-        except ValueError:
-            raise UserError("bad_date", 400)
-        start = int(d.timestamp() * 1000)
-        return queries.timeline(store, start, int((d + timedelta(days=1)).timestamp() * 1000))
-
     @app.get("/api/stats")
-    def stats():
-        return queries.stats(store)
+    def stats(archived: bool = False):
+        return queries.stats(store, include_archived=archived)
 
     # ---- plugins, devices, settings ----------------------------------------------------------------
     @app.get("/api/plugins/catalog")

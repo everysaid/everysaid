@@ -10,6 +10,7 @@ import { service } from "@/lib/services";
 import { cn } from "@/lib/utils";
 import { Button, Card, Dialog, Field, Input, Section, Spinner, Switch } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
+import { DateField } from "@/components/DateField";
 
 const KINDS = [
   { kind: "source", icon: Smartphone },
@@ -139,6 +140,8 @@ function InstanceCard({ i, manifest }: { i: PluginInstance; manifest?: PluginMan
           {/* the last few lines, one after the other as they come, wrapped as in a terminal */}
           <pre data-log className="min-w-0 overflow-hidden whitespace-pre-wrap break-all border-t border-line bg-bg p-3 font-mono text-[11px] leading-relaxed text-muted">
             {log.length || drawing ? [...log.slice(drawing ? -4 : -5), ...(drawing ? [drawing] : [])].join("\n") : "—"}
+            {/* while it runs, a bubble that keeps moving: alive, even when the script says nothing for a while */}
+            {i.running && <span data-alive aria-hidden className="thinking mt-1.5 flex w-fit gap-1 rounded-full bg-bubble-in px-2 py-1.5"><i /><i /><i /></span>}
           </pre>
           <LogFiles instance={i.id} />
         </>
@@ -307,11 +310,9 @@ function Devices() {
           <div key={d.id} className="flex flex-wrap items-center gap-3 px-4 py-3 text-sm">
             <span className="min-w-28 flex-1 font-medium">{d.name} <span className="text-xs font-normal text-muted">{d.kind}</span></span>
             <label className="flex items-center gap-1.5 text-muted">{t("sources.from")}
-              <input type="date" defaultValue={d.used_from ? isoDay(d.used_from) : ""} onChange={(e) => set.mutate({ id: d.id, used_from: parse(e.target.value) })}
-                className="h-9 rounded-xl border border-line bg-panel px-2 text-fg" /></label>
+              <DateField value={d.used_from ? isoDay(d.used_from) : ""} onChange={(v) => set.mutate({ id: d.id, used_from: parse(v) })} /></label>
             <label className="flex items-center gap-1.5 text-muted">{t("sources.until")}
-              <input type="date" defaultValue={d.used_until ? isoDay(d.used_until) : ""} onChange={(e) => set.mutate({ id: d.id, used_until: parse(e.target.value) })}
-                className="h-9 rounded-xl border border-line bg-panel px-2 text-fg" /></label>
+              <DateField value={d.used_until ? isoDay(d.used_until) : ""} onChange={(v) => set.mutate({ id: d.id, used_until: parse(v) })} /></label>
           </div>
         ))}
       </Card>

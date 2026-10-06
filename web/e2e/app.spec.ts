@@ -89,7 +89,7 @@ test("setup, chats, a chat, search, media, sources, settings", async ({ page }, 
   await page.goto("/search?q=καλημερα");
   await expect(page.getByText(/αποτελέσματα|results/)).toBeVisible();
   await page.screenshot({ path: `${SHOTS}/${tag}-08-search.png` });
-  await page.locator('a[href*="/chat/"]').first().click();
+  await page.locator('[data-results] a[href*="/chat/"]').first().click();
   await expect(page.locator(".flash").first()).toBeVisible({ timeout: 10000 });
   await page.screenshot({ path: `${SHOTS}/${tag}-09-search-hit.png` });
 
@@ -148,6 +148,7 @@ test("setup, chats, a chat, search, media, sources, settings", async ({ page }, 
   // dark theme
   await page.getByRole("tab", { name: /Σκοτεινό|Dark/ }).click();
   await page.goto("/");
+  if (tag === "desktop") await page.getByRole("tab", { name: /^(Όλες|All)$/ }).click();   // the list keeps its filter (Groups, above)
   await page.locator('a[href^="/chat/p"]').nth(1).click();
   await page.waitForTimeout(800);
   await page.screenshot({ path: `${SHOTS}/${tag}-17-dark-chat.png` });

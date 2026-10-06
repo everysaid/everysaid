@@ -15,6 +15,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 
 from .. import config
@@ -287,15 +288,60 @@ class WhatsappBridge(Plugin):
     )
     can_send = True
 
-    def sending(self, ctx):
+    def not_sending(self, ctx):
         state = self.bridge_state(ctx)
-        return (bool(ctx.settings.get("send")) and state.get("send_enabled") == "1" and not state.get("send_blocked")
-                and super().sending(ctx))
+        if state.get("send_blocked"):
+            return f"blocked by the bridge: {state['send_blocked']}"
+        if state.get("send_enabled") != "1":
+            return "off at the bridge (started without -send)"
+        if not ctx.settings.get("send"):
+            return "off in this source's settings"
+        return super().not_sending(ctx)
 
     def check(self, ctx):
         ok, why = super().check(ctx)
         blocked = self.bridge_state(ctx).get("send_blocked")
         return (ok, f"sending blocked by the bridge: {blocked}") if ok and blocked else (ok, why)
+
+    # the bridge's connection states (its /api/status "connection"), as said on the card
+    CONNECTION = {"connected": "connected to WhatsApp", "disconnected": "not connected to WhatsApp",
+                  "logged_out": "logged out of WhatsApp", "temp_banned": "temporarily banned by WhatsApp",
+                  "replaced": "another client took the connection", "outdated": "WhatsApp rejected the bridge's version",
+                  "failed": "the connection to WhatsApp failed"}
+
+    def bridge_status(self, ctx):
+        """The bridge's own word, asked now (GET /api/status): None when it does not answer, {} when it
+        is from before that call."""
+        url = (ctx.settings.get("api") or "http://127.0.0.1:8080").rstrip("/") + "/api/status"
+        try:
+            with urllib.request.urlopen(url, timeout=1.5) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError:
+            return {}
+        except (OSError, ValueError):
+            return None
+
+    def info(self, ctx):
+        status = self.bridge_status(ctx)
+        if status is None:
+            return [("Connection", "the bridge does not answer")]
+        if not status:
+            return [("Sending", "needs a newer bridge (no /api/status)")]
+        if status.get("send_blocked"):
+            sending = f"blocked by the bridge: {status['send_blocked']}"
+        elif not status.get("send_enabled"):
+            sending = "off at the bridge (started without -send)"
+        elif not ctx.settings.get("send"):
+            sending = "off in this source's settings"
+        else:
+            sent, limits = status.get("sent") or {}, status.get("limits") or {}
+            sending = tr("on, {day} of {limit} today", ctx.lang).format(day=sent.get("day", 0), limit=limits.get("per_day", "?"))
+        connection = status.get("connection") or "disconnected"     # why, when it is not connected
+        if status.get("connected"):
+            connection = "connected"
+        elif connection == "connected":
+            connection = "disconnected"                             # its last record, but not so now
+        return [("Connection", self.CONNECTION.get(connection, connection)), ("Sending", sending)]
 
     def _paths(self, ctx):
         d = ctx.settings.get("store") or ""

@@ -9,6 +9,7 @@ import { dateOnly, number } from "@/lib/format";
 import { service } from "@/lib/services";
 import { Avatar, Button, Input, Segmented, ServiceBadge, Textarea } from "./ui";
 import { avatarUrl } from "./ChatList";
+import { GroupParts } from "./GroupMerge";
 
 export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => void }) {
   const { t } = useTranslation();
@@ -97,6 +98,8 @@ export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => 
       )}
 
       <ChatStates chat={chat} />
+
+      {chat.type === "group" && <GroupParts chat={chat} />}
 
       {chat.members && (
         <div className="space-y-2">

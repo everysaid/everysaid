@@ -46,6 +46,7 @@ def _chat_index(store):
         for cid, aid in db.execute("SELECT conversation_id, address_id FROM conversation_member"):
             members[cid].append(aid)
         last = dict(db.execute("SELECT conversation_id, max(ts) FROM message GROUP BY conversation_id"))
+        links = dict(db.execute("SELECT conversation_id, into_id FROM group_link"))     # merged groups
         chats = {}              # chat id -> dict
         conv_chat = {}
         for cid, sid, is_group, title in db.execute("SELECT id, service_id, is_group, title FROM conversation"):
@@ -58,10 +59,13 @@ def _chat_index(store):
                 chat = chats.setdefault(key, {"id": key, "type": "person", "person_id": pid,
                                               "conversations": [], "services": set(), "last_ts": 0})
             else:
-                key = f"c{cid}"
+                head = links.get(cid, cid)
+                key = f"c{head}"
                 chat = chats.setdefault(key, {"id": key, "type": "group" if is_group else "conversation",
-                                              "conversation_id": cid, "title": title,
+                                              "conversation_id": head, "title": None, "title_ts": -1,
                                               "conversations": [], "services": set(), "last_ts": 0})
+                if title and (last.get(cid) or 0) > chat["title_ts"]:     # merged: the latest one's name
+                    chat["title"], chat["title_ts"] = title, last.get(cid) or 0
             chat["conversations"].append(cid)
             chat["services"].add(lk["service"][sid])
             chat["last_ts"] = max(chat["last_ts"], last.get(cid) or 0)
@@ -212,23 +216,29 @@ def _unread(store, chat, since):
         (*chat["conversations"], since)).fetchone()[0]
 
 
+def _named(words, *texts):
+    """Whether every word (folded) is part of one of the texts: a name's words in another case or without accents find it."""
+    folded = [text_mod.fold(t or "") for t in texts]
+    return all(any(w in f for f in folded) for w in words)
+
+
 def chats(store, include_archived=False, kind=None, q=None, limit=None, offset=0):
     """The chat list, newest first, pinned ones on top: [{id, type, title, services, last, unread,
-    pinned, muted, avatar}]. kind: person, group or conversation; q: a part of the title."""
+    pinned, muted, avatar}]. kind: person, group or conversation; q: parts of the title (each word)."""
     index, _ = _chat_index(store)
     states = _states(store)
     base = unread_since(store)
     ppl = people(store)
     items = []
-    qf = text_mod.fold(q) if q else None
+    qf = text_mod.fold(q).split() if q else None
     for chat in index.values():
         pinned, muted, archived, read, _ = states.get(chat["id"], (0, 0, 0, None, {}))
-        if archived and not include_archived and not qf:     # looked for by name: found, archived or not
+        if archived and not include_archived:
             continue
         if kind and chat["type"] != kind:
             continue
         title = chat_title(store, chat)
-        if qf and qf not in text_mod.fold(title):
+        if qf and not _named(qf, title):
             continue
         items.append((bool(pinned), chat["last_ts"], chat, title, muted, archived, read))
     items.sort(key=lambda x: (x[0], x[1]), reverse=True)
@@ -272,9 +282,18 @@ def chat(store, chat_id):
     else:
         db = store.read()
         ppl = people(store)
+        q = ",".join("?" * len(convs))
         out["members"] = [{"person_id": ppl.person_of.get(a), "name": ppl.name_of_address(a)}
-                          for (a,) in db.execute("SELECT address_id FROM conversation_member WHERE conversation_id = ?",
-                                                 (c["conversation_id"],))]
+                          for (a,) in db.execute(f"SELECT DISTINCT address_id FROM conversation_member "
+                                                 f"WHERE conversation_id IN ({q})", convs)]
+        if c["type"] == "group":    # the groups it is made of (more than one when the user merged them)
+            lk = _lookups(store)
+            out["groups"] = [{"conversation_id": i, "service": lk["service"][sid], "title": title, "messages": n,
+                              "last_ts": last_ts}
+                             for i, sid, title, n, last_ts in db.execute(
+                                 f"SELECT c.id, c.service_id, c.title, count(m.id), max(m.ts) FROM conversation c "
+                                 f"LEFT JOIN message m ON m.conversation_id = c.id WHERE c.id IN ({q}) "
+                                 f"GROUP BY c.id ORDER BY max(m.ts) DESC", convs)]
     return out
 
 
@@ -302,10 +321,13 @@ def _stream_sources(store, chat_id):
     return c, c["conversations"], addrs
 
 
-def _fetch(store, convs, addrs, where, args, order, limit):
-    """Raw message and call rows of a stream, within `where` on (ts, id)."""
+def _fetch(store, convs, addrs, where, args, order, limit, hidden=None):
+    """Raw message and call rows of a stream, within `where` on (ts, id); hidden: not these services."""
     db = store.read()
     rows = []
+    ids = [i for i, name in _lookups(store)["service"].items() if name in (hidden or ())]
+    if ids:
+        where = f"{where} AND service_id NOT IN ({','.join(str(int(i)) for i in ids)})"
     if convs:
         q = ",".join("?" * len(convs))
         rows += [("m", r) for r in db.execute(
@@ -319,18 +341,20 @@ def _fetch(store, convs, addrs, where, args, order, limit):
     return rows
 
 
-def stream(store, chat_id, before=None, after=None, around=None, limit=PAGE):
-    """A page of a chat's stream, oldest first: {items, has_older, has_newer}."""
+def stream(store, chat_id, before=None, after=None, around=None, limit=PAGE, hidden=None):
+    """A page of a chat's stream, oldest first: {items, has_older, has_newer}. hidden: services whose
+    messages and calls are left out (the user turning some of a person's services off)."""
     c, convs, addrs = _stream_sources(store, chat_id)
     key = lambda r: (r[1][1], 0 if r[0] == "c" else 1, r[1][0])
     if around is not None:
-        older = stream(store, chat_id, before=f"{around}:m:0", limit=limit // 2)
-        newer = stream(store, chat_id, after=f"{around - 1}:m:{2 ** 62}", limit=limit - limit // 2)
+        older = stream(store, chat_id, before=f"{around}:m:0", limit=limit // 2, hidden=hidden)
+        newer = stream(store, chat_id, after=f"{around - 1}:m:{2 ** 62}", limit=limit - limit // 2, hidden=hidden)
         return {"items": older["items"] + newer["items"], "has_older": older["has_older"],
                 "has_newer": newer["has_newer"]}
     if after:
         ts, t, i = _parse_cursor(after)
-        rows = _fetch(store, convs, addrs, "(ts > ? OR (ts = ? AND id > ?))", (ts, ts, i if t == 1 else -1), "ASC", limit + 1)
+        rows = _fetch(store, convs, addrs, "(ts > ? OR (ts = ? AND id > ?))", (ts, ts, i if t == 1 else -1), "ASC", limit + 1,
+                      hidden)
         rows.sort(key=key)
         rows = [r for r in rows if key(r) > (ts, t, i)]
         page, more = rows[:limit], len(rows) > limit
@@ -338,9 +362,10 @@ def stream(store, chat_id, before=None, after=None, around=None, limit=PAGE):
         return {"items": items, "has_older": True, "has_newer": more}
     if before:
         ts, t, i = _parse_cursor(before)
-        rows = _fetch(store, convs, addrs, "(ts < ? OR (ts = ? AND id < ?))", (ts, ts, i if t == 1 else 2 ** 62), "DESC", limit + 1)
+        rows = _fetch(store, convs, addrs, "(ts < ? OR (ts = ? AND id < ?))", (ts, ts, i if t == 1 else 2 ** 62), "DESC", limit + 1,
+                      hidden)
     else:
-        rows = _fetch(store, convs, addrs, "1", (), "DESC", limit + 1)
+        rows = _fetch(store, convs, addrs, "1", (), "DESC", limit + 1, hidden)
         ts = t = i = None
     rows.sort(key=key, reverse=True)
     if before:
@@ -465,15 +490,42 @@ def _highlight(txt, matcher, width=180):
     return out
 
 
+def _archived_scope(store, archived, calls=False):
+    """A condition (SQL) for rows of archived chats (archived True) or of the others (False): on
+    messages, or on calls (calls=True: by their conversation, else the person's addresses)."""
+    index, _ = _chat_index(store)
+    states = _states(store)
+    ppl = people(store)
+    convs, addrs = set(), set()
+    for cid, c in index.items():
+        if states.get(cid, (0, 0, 0))[2]:
+            convs.update(c["conversations"])
+            if c["type"] == "person":
+                addrs.update(ppl.addresses(c["person_id"]))
+    inside = f"conversation_id IN ({','.join(str(int(i)) for i in convs)})"
+    if calls:
+        inside = (f"((conversation_id IS NOT NULL AND {inside}) OR (conversation_id IS NULL AND address_id IS NOT NULL "
+                  f"AND address_id IN ({','.join(str(int(a)) for a in addrs)})))")
+    return inside if archived else f"NOT {inside}"
+
+
 def search(store, q, chat_id=None, service=None, kind=None, since=None, until=None, outgoing=None,
-           limit=50, offset=0, case=False, whole=False):
+           limit=50, offset=0, case=False, whole=False, archived=None):
     """Messages whose text has every word of q, newest first, with the chat they are in and the
     matches marked. case: as typed (case and accents); else both ignored. whole: whole words only
     (a word ending in * a prefix); else anywhere, inside words too (a word of one or two letters:
-    at the start of words, which is what an index of trigrams cannot do)."""
+    at the start of words, which is what an index of trigrams cannot do). Without words but with
+    dates: everything of those days, calls too, oldest first (see between()). archived: only in the
+    archived chats (True), only in the others (False), in all (None); a chat asked for is searched
+    whatever it is."""
     m = text_mod.Matcher(q, case=case, whole=whole)
+    if chat_id:
+        archived = None
     if not m.words:
-        return {"items": [], "total": 0}
+        if since is None and until is None:
+            return {"items": [], "total": 0}
+        return between(store, since, until, chat_id=chat_id, service=service, kind=kind, outgoing=outgoing,
+                       limit=limit, offset=offset, archived=archived)
     where, args = [], []
     for w in m.words:
         folded = text_mod.fold(w.rstrip("*"))
@@ -506,6 +558,8 @@ def search(store, q, chat_id=None, service=None, kind=None, since=None, until=No
     if outgoing is not None:
         where.append("m.outgoing = ?")
         args.append(int(outgoing))
+    if archived is not None:
+        where.append(_archived_scope(store, archived))      # (message m alone: its columns)
     every = " AND ".join(where)          # without the chat: for the chats it was found in
     if chat_id:
         _, convs, _ = _stream_sources(store, chat_id)
@@ -545,6 +599,75 @@ def search(store, q, chat_id=None, service=None, kind=None, since=None, until=No
     return {"items": items, "total": total, "chats": chats}
 
 
+def between(store, since, until, chat_id=None, service=None, kind=None, outgoing=None, limit=50, offset=0,
+            archived=None):
+    """Everything between two instants (Unix ms, either open), oldest first: messages and calls (not
+    when a kind of message is asked for), with the chat each is in; as search() gives it, with the
+    chats it is in and how much of it in each."""
+    db = store.read()
+    lk = _lookups(store)
+    index, conv_chat = _chat_index(store)
+    ppl = people(store)
+    where, args = ["ts >= ?", "ts < ?"], [since if since is not None else -2**62, until if until is not None else 2**62]
+    if service:
+        where.append("service_id = ?")
+        args.append({v: k for k, v in lk["service"].items()}.get(service))
+    if outgoing is not None:
+        where.append("outgoing = ?")
+        args.append(int(outgoing))
+    every = " AND ".join(where)
+    m_scope = c_scope = ""
+    if archived is not None:            # (as search() says)
+        m_scope, c_scope = f" AND {_archived_scope(store, archived)}", f" AND {_archived_scope(store, archived, calls=True)}"
+    m_where, m_args, c_where, c_args = every + m_scope, list(args), every + c_scope, list(args)
+    if kind:
+        m_where += " AND kind_id = ?"
+        m_args.append({v: k for k, v in lk["kind"].items()}.get(kind))
+    if chat_id:
+        _, convs, addrs = _stream_sources(store, chat_id)
+        m_where += f" AND conversation_id IN ({','.join('?' * len(convs))})"
+        c_where += (f" AND (conversation_id IN ({','.join('?' * len(convs))}) OR (conversation_id IS NULL "
+                    f"AND address_id IN ({','.join('?' * len(addrs))})))")
+        m_args += list(convs)
+        c_args += [*convs, *addrs]
+    calls = "" if kind else f" UNION ALL SELECT 'c', id, ts FROM call WHERE {c_where}"
+    both = f"SELECT 'm' AS t, id, ts FROM message WHERE {m_where}{calls}"
+    all_args = m_args + ([] if kind else c_args)
+    total = db.execute(f"SELECT count(*) FROM ({both})", all_args).fetchone()[0]
+    rows = [(t, (i, ts)) for t, i, ts in db.execute(f"{both} ORDER BY ts, t DESC, id LIMIT ? OFFSET ?",
+                                                    (*all_args, limit, offset))]
+
+    def call_chat(conv, aid):
+        if conv is not None:
+            return conv_chat.get(conv)
+        pid = ppl.person_of.get(aid)
+        return f"p{pid}" if pid is not None else None
+
+    chats = None
+    if not offset:          # where it is: each chat with how much (whatever chat was asked for)
+        per_chat = defaultdict(int)
+        for c, n in db.execute(f"SELECT conversation_id, count(*) FROM message WHERE {every}{m_scope}"
+                               f"{' AND kind_id = ?' if kind else ''} GROUP BY 1", m_args[:len(args) + bool(kind)]):
+            per_chat[conv_chat.get(c)] += n
+        if not kind:
+            for c, a, n in db.execute(f"SELECT conversation_id, address_id, count(*) FROM call WHERE {every}{c_scope} "
+                                      f"GROUP BY 1, 2", args):
+                per_chat[call_chat(c, a)] += n
+        chats = [{"chat_id": c, "title": chat_title(store, index[c]), "type": index[c]["type"], "count": n}
+                 for c, n in sorted(per_chat.items(), key=lambda x: -x[1]) if c in index][:30]
+    items = hydrate(store, rows)
+    call_at = {}
+    if any(it["type"] == "call" for it in items):
+        ids = [it["id"] for it in items if it["type"] == "call"]
+        call_at = {i: (c, a) for i, c, a in db.execute(
+            f"SELECT id, conversation_id, address_id FROM call WHERE id IN ({','.join('?' * len(ids))})", ids)}
+    for it in items:
+        cid = conv_chat.get(it["conversation_id"]) if it["type"] == "message" else call_chat(*call_at[it["id"]])
+        it["chat_id"] = cid
+        it["chat_title"] = chat_title(store, index[cid]) if cid in index else None
+    return {"items": items, "total": total, "chats": chats}
+
+
 # --- people --------------------------------------------------------------------------------------
 
 def person(store, person_id):
@@ -576,10 +699,15 @@ def person(store, person_id):
     groups = []
     if addrs:
         q = ",".join("?" * len(addrs))
-        for cid, title in db.execute(
-                f"SELECT DISTINCT c.id, c.title FROM conversation_member cm JOIN conversation c ON c.id = cm.conversation_id "
+        index, conv_chat = _chat_index(store)
+        seen = set()
+        for (cid,) in db.execute(
+                f"SELECT DISTINCT c.id FROM conversation_member cm JOIN conversation c ON c.id = cm.conversation_id "
                 f"WHERE c.is_group AND cm.address_id IN ({q})", addrs):
-            groups.append({"chat_id": f"c{cid}", "title": title})
+            chat = conv_chat.get(cid)
+            if chat in index and chat not in seen:      # merged groups: once
+                seen.add(chat)
+                groups.append({"chat_id": chat, "title": chat_title(store, index[chat])})
     contact = ppl.contact(person_id)
     contacts = {c[0]: c[1] for c in ppl.contacts.get(person_id, ())}
     return {"id": person_id, "name": ppl.name(person_id), "given_name": ppl.given.get(person_id),
@@ -593,13 +721,13 @@ def person(store, person_id):
 
 def people_list(store, q=None, limit=100, offset=0):
     ppl = people(store)
-    qf = text_mod.fold(q) if q else None
+    qf = text_mod.fold(q).split() if q else None
     out = []
     for pid in ppl.handles:
         if pid in ppl.me:
             continue
         name = ppl.name(pid)
-        if qf and qf not in text_mod.fold(name) and not any(qf in text_mod.fold(h[1]) for h in ppl.handles[pid]):
+        if qf and not _named(qf, name, *(h[1] for h in ppl.handles[pid])):
             continue
         out.append({"id": pid, "name": name, "handles": len(ppl.handles[pid])})
     out.sort(key=lambda p: text_mod.fold(p["name"]))
@@ -652,6 +780,52 @@ def merge_suggestions(store, limit=50):
     ranked = sorted(groups.items(), key=lambda g: (min(strength[w] for w in g[1]["why"]), -len(g[1]["why"])))
     return [{"name": g["name"], "why": g["why"], "people": [person(store, p) for p in sorted(pids)[:5]]}
             for pids, g in ranked[:limit]]
+
+
+def group_suggestions(store, chat_id=None, limit=50):
+    """Pairs of group chats that are likely one group (on two services, or made again), the likeliest
+    first; shown, never applied:
+    - members: most of their members are the same people (at least two of them);
+    - name: the same name, and someone in both.
+    chat_id: only those with this chat. Pairs the user turned down are left out."""
+    index, _ = _chat_index(store)
+    ppl = people(store)
+    db = store.read()
+    dismissed = {(a, b) for a, b in db.execute("SELECT a, b FROM group_dismissed")}
+    groups = {c["id"]: c for c in index.values() if c["type"] == "group"}
+    conv_group = {cv: c["id"] for c in groups.values() for cv in c["conversations"]}
+    members = defaultdict(set)
+    for cv, aid in db.execute("SELECT conversation_id, address_id FROM conversation_member"):
+        pid = ppl.person_of.get(aid)
+        if cv in conv_group and aid not in ppl.own_addresses and pid is not None and pid not in ppl.me:
+            members[conv_group[cv]].add(pid)
+    in_groups = defaultdict(set)
+    for g, pids in members.items():
+        for pid in pids:
+            in_groups[pid].add(g)
+    shared = defaultdict(int)
+    for gs in in_groups.values():
+        gs = sorted(gs)
+        for i, a in enumerate(gs):
+            for b in gs[i + 1:]:
+                shared[(a, b)] += 1
+    names = {g: text_mod.fold(c["title"]) for g, c in groups.items() if c.get("title")}
+    out = []
+    for (a, b), n in shared.items():
+        if chat_id and chat_id not in (a, b):
+            continue
+        ha, hb = sorted((groups[a]["conversation_id"], groups[b]["conversation_id"]))
+        if (ha, hb) in dismissed:
+            continue
+        alike = n / len(members[a] | members[b])
+        why = (["members"] if n >= 2 and alike >= 0.6 else []) + (["name"] if names.get(a) and names.get(a) == names.get(b) else [])
+        if why:
+            out.append((len(why), alike, n, a, b, why))
+    out.sort(key=lambda x: (-x[0], -x[1], -x[2]))
+    return [{"why": why, "shared": n, "chats": [{"chat_id": g, "title": chat_title(store, groups[g]),
+                                                  "services": sorted(groups[g]["services"]), "last_ts": groups[g]["last_ts"],
+                                                  "members": len(members[g])} for g in (a, b)]}
+            for _, _, n, a, b, why in out[:limit]]
 
 
 # --- calls, media, timeline, statistics ----------------------------------------------------------
@@ -739,30 +913,53 @@ def timeline(store, day_start, day_end):
     return {"items": items, "truncated": len(rows) > 2000}
 
 
-def stats(store):
-    def build():
+def stats(store, include_archived=False):
+    """Counts over the archive; the archived chats left out unless asked for."""
+    def counted():
+        """Per conversation (or, for calls without one, per address): counts by service and year, and
+        the first and last instant; summed below over the chats in view."""
         db = store.read()
+        msgs = db.execute("SELECT conversation_id, service_id, strftime('%Y', ts / 1000, 'unixepoch'), count(*), "
+                          "min(ts), max(ts) FROM message GROUP BY 1, 2, 3").fetchall()
+        calls = db.execute("SELECT conversation_id, address_id, service_id, count(*) FROM call GROUP BY 1, 2, 3").fetchall()
+        return msgs, calls
+
+    def build():
+        msgs, calls = store.cached("stats-counted", counted)
         lk = _lookups(store)
-        by_service = {lk["service"][s]: n for s, n in db.execute("SELECT service_id, count(*) FROM message GROUP BY 1")}
-        calls_by_service = {lk["service"][s]: n for s, n in db.execute("SELECT service_id, count(*) FROM call GROUP BY 1")}
-        by_year = {y: n for y, n in db.execute(
-            "SELECT strftime('%Y', ts / 1000, 'unixepoch') y, count(*) FROM message GROUP BY y ORDER BY y")}
-        first, last = db.execute("SELECT min(ts), max(ts) FROM message").fetchone()
         index, _ = _chat_index(store)
-        top = []
-        for c in index.values():
-            if c["type"] != "person" or not c["conversations"]:
+        states = _states(store)
+        shown = [c for c in index.values() if include_archived or not states.get(c["id"], (0, 0, 0))[2]]
+        convs = {cv: c for c in shown for cv in c["conversations"]}
+        ppl = people(store)
+        addrs = {a for c in shown if c["type"] == "person" and c.get("has_calls") for a in ppl.addresses(c["person_id"])}
+        by_service, calls_by_service, by_year, per_chat = {}, {}, {}, {}
+        first = last = None
+        for conv, sid, year, n, lo, hi in msgs:
+            c = convs.get(conv)
+            if not c:
                 continue
-            q = ",".join("?" * len(c["conversations"]))
-            n = db.execute(f"SELECT count(*) FROM message WHERE conversation_id IN ({q})", c["conversations"]).fetchone()[0]
-            top.append((n, c))
-        top.sort(key=lambda x: x[0], reverse=True)
+            name = lk["service"][sid]
+            by_service[name] = by_service.get(name, 0) + n
+            by_year[year] = by_year.get(year, 0) + n
+            per_chat[c["id"]] = per_chat.get(c["id"], 0) + n
+            first = lo if first is None else min(first, lo)
+            last = hi if last is None else max(last, hi)
+        for conv, addr, sid, n in calls:
+            if (conv in convs) if conv is not None else (addr in addrs):
+                name = lk["service"][sid]
+                calls_by_service[name] = calls_by_service.get(name, 0) + n
+        top = sorted(((n, index[cid]) for cid, n in per_chat.items() if index[cid]["type"] == "person"),
+                     key=lambda x: x[0], reverse=True)
+        top_groups = sorted(((n, index[cid]) for cid, n in per_chat.items() if index[cid]["type"] == "group"),
+                            key=lambda x: x[0], reverse=True)
         return {
             "messages": sum(by_service.values()), "calls": sum(calls_by_service.values()),
-            "people": sum(1 for c in index.values() if c["type"] == "person"),
-            "groups": sum(1 for c in index.values() if c["type"] == "group"),
-            "by_service": by_service, "calls_by_service": calls_by_service, "by_year": by_year,
+            "people": sum(1 for c in shown if c["type"] == "person"),
+            "groups": sum(1 for c in shown if c["type"] == "group"),
+            "by_service": by_service, "calls_by_service": calls_by_service, "by_year": dict(sorted(by_year.items())),
             "first": first, "last": last,
             "top_people": [{"chat_id": c["id"], "title": chat_title(store, c), "messages": n} for n, c in top[:20]],
+            "top_groups": [{"chat_id": c["id"], "title": chat_title(store, c), "messages": n} for n, c in top_groups[:20]],
         }
-    return store.cached("stats", build)
+    return store.cached(f"stats:{bool(include_archived)}", build)
