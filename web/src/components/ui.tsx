@@ -278,6 +278,13 @@ export function ServiceBadge({ id, className }: { id: string; className?: string
   );
 }
 
+/** A service's own icon, in its colour (its first letters where it has none). */
+export function ServiceIcon({ id, className }: { id: string; className?: string }) {
+  const s = service(id);
+  if (!s.icon) return <span className={cn("grid size-4 place-items-center text-[9px] font-bold", className)} style={{ color: s.color }}>{s.short}</span>;
+  return <svg data-icon={id} viewBox="0 0 24 24" aria-hidden className={cn("size-4 shrink-0", className)} fill={s.color}><path d={s.icon} /></svg>;
+}
+
 export function Spinner({ className }: { className?: string }) {
   return <Loader2 className={cn("size-5 animate-spin text-muted", className)} />;
 }

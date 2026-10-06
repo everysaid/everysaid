@@ -108,10 +108,21 @@ WhatsApp bridge, a Viber Desktop export, the carriers' notices; a folder or immi
 library; a CardDAV address book or a .vcf file for names and photos), set it up, import, and for
 Telegram and WhatsApp turn on the live connection. Each instance shows whether it is ready, what it
 needs, and its log as it runs. Sending is possible where the plugin can (Telegram; WhatsApp through
-a bridge that offers it, off by default: an unofficial client risks the account).
+a bridge started with `-send`, off by default: an unofficial client risks the account). The bridge
+sends only into chats where the other side has written, within limits a minute, an hour and a day,
+and never the same longer text into many chats; when WhatsApp warns the account (a temporary ban, a
+logout) it blocks sending until it is cleared at the bridge, and the app turns its own sending off
+and tells the user's devices.
 
 Secrets (passwords, API keys, the Telegram session) go to the system keyring, never to the archive
-or the browser.
+or the browser. The iPhone's backup password is asked for at each import by default, used for that
+import only and kept nowhere; its settings can keep it in the keyring instead (one for each iPhone).
+The iPhone's card shows where its backup is, of when, and how big; "A new backup before importing"
+(on by default) takes one over the cable first, else the import decrypts the backup that is there.
+
+Every run of a source writes a whole log of its own (its scripts' output, errors in full), and a
+live connection one a day, in the state folder (`~/.local/state/chronika/logs/` on Linux); the
+source's card lists them, each opened whole.
 
 ## The assistant (MCP)
 

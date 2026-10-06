@@ -181,6 +181,65 @@ def whatsapp_calls(archive, calls):
                                    (call_id, addr(jid)))
 
 
+# The bridge's call-log outcomes (whatsmeow's CallLogMessage.CallOutcome) as our call.detail.
+BRIDGE_OUTCOMES = {"MISSED": "missed", "FAILED": "failed", "REJECTED": "rejected"}
+
+
+def bridge_calls(archive, calls, bridge_db=whatsapp.BRIDGE_DB, store_db=whatsapp.BRIDGE_STORE):
+    """WhatsApp calls the bridge saw: the call-log message every device gets after a call (outcome,
+    duration, video, participants), and the call signalling it receives itself (an incoming call
+    offered, accepted, ended), for calls no log message came for. One call in several of these, or
+    already in the archive from the iPhone, is kept once (Calls.add: same person and direction
+    within a minute)."""
+    bridge = whatsapp.ro_bridge(bridge_db)
+    if not bridge or not whatsapp.has_table(bridge, "calls"):
+        return
+    person = whatsapp.People(None, whatsapp.ro_bridge(store_db), None, bridge)
+    own = archive.own()
+    log_src = archive.source("whatsapp-bridge/calls", bridge_db, "whatsapp-bridge")
+    event_src = archive.source("whatsapp-bridge/call-events", bridge_db, "whatsapp-bridge")
+
+    def addr(jid):
+        p = person(jid) if jid else None
+        return archive.address(*p) if p and p not in own else None
+
+    def ms(value):
+        return int(datetime.fromisoformat(value).timestamp() * 1000) if value else None
+
+    parts = defaultdict(list)
+    for r in bridge.execute("SELECT call_id, jid, outcome FROM call_participants"):
+        parts[r["call_id"]].append((r["jid"], r["outcome"]))
+    for r in bridge.execute("SELECT * FROM calls ORDER BY timestamp"):
+        outgoing, group = bool(r["is_from_me"]), bool(r["is_group"])
+        conv = archive.find_conversation("whatsapp", r["chat_jid"]) if group else None
+        peer = None if group else addr(r["chat_jid"])
+        if r["source"] == "log":
+            outcome = r["outcome"] or ""
+            detail = "unanswered" if outcome == "MISSED" and outgoing else BRIDGE_OUTCOMES.get(outcome)
+            call_id = calls.add(log_src, [r["id"]], "whatsapp", address_id=peer, ts=ms(r["timestamp"]),
+                                outgoing=outgoing, answered=outcome == "CONNECTED", duration=r["duration"] or 0,
+                                detail=detail, detail_code=f"whatsmeow:{outcome}" if detail else None,
+                                video=r["video"] or 0, conversation_id=conv)
+            if call_id and group:
+                for jid, said in parts[r["id"]]:
+                    member = "joined" if said == "CONNECTED" else BRIDGE_OUTCOMES.get(said)
+                    archive.db.execute("INSERT OR IGNORE INTO call_member VALUES (?, ?, ?, ?)",
+                                       (call_id, addr(jid), member, f"whatsmeow:{said}" if said else None))
+        else:
+            if r["ended_at"] is None:       # still ringing, or under way: the next import has it
+                continue
+            accepted, ended = ms(r["accepted_at"]), ms(r["ended_at"])
+            detail = None if accepted else "rejected" if r["end_reason"] == "reject" else (
+                "unanswered" if outgoing else "missed")
+            calls.add(event_src, [r["id"]], "whatsapp", address_id=peer or (None if group else addr(r["creator"])),
+                      ts=ms(r["timestamp"]), outgoing=outgoing, answered=bool(accepted),
+                      duration=max(0, (ended - accepted) // 1000) if accepted else 0, key=r["id"],
+                      detail=detail, detail_code=f"whatsmeow:{r['end_reason']}" if detail and r["end_reason"] else None,
+                      video=r["video"] or 0, conversation_id=conv)
+    archive.imported(log_src)
+    archive.imported(event_src)
+
+
 def viber_calls(archive, calls):
     if not os.path.exists(VIBER):
         return
@@ -226,6 +285,8 @@ def carrier_alerts(archive, calls, carrier):
 def run(archive):
     calls = Calls(archive)
     whatsapp_calls(archive, calls)
+    if whatsapp.BRIDGE_DB:
+        bridge_calls(archive, calls)
     viber_calls(archive, calls)
     for carrier in carriers.enabled(CARRIER_NOTICES):
         carrier_alerts(archive, calls, carrier)

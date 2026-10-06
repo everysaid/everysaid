@@ -6,6 +6,7 @@ export interface ServiceLook {
   name: string;
   color: string;
   short: string;
+  icon?: string;         // an SVG path on a 24x24 view, drawn in the colour
   messages: boolean;     // false: a service of calls only
 }
 

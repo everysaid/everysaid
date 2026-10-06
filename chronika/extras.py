@@ -232,3 +232,39 @@ def whatsapp(row, meta=None, receipt=None, media=None):
             if text:
                 out["text"] = text
     return out
+
+
+# The bridge's subtypes (whatsapp-bridge's `messages.subtype`) our vocabulary names.
+BRIDGE_SUBTYPES = {"gif": "gif", "video_note": "video note", "link": "link"}
+
+
+def whatsapp_bridge(row, reactions=()):
+    """A row of the WhatsApp bridge's messages table, and the reactions to it in its reactions
+    table (sender jid, is_from_me, emoji). A bridge from before these columns has only text and media."""
+    out, cols = {}, row.keys()
+    get = lambda k: row[k] if k in cols else None
+    sub, kind = get("subtype"), get("kind")
+    if sub:
+        if sub in BRIDGE_SUBTYPES:
+            out["subtype"] = BRIDGE_SUBTYPES[sub]
+        out["subtype_code"] = f"whatsmeow:{sub}"
+    if kind == "poll":
+        out["subtype"], out["subtype_code"] = "poll", "whatsmeow:poll"
+    if get("reply_to"):
+        out["reply_key"] = get("reply_to")
+        if get("reply_text"):
+            out["reply_text"] = get("reply_text")
+    for flag in ("forwarded", "edited", "deleted"):
+        if get(flag):
+            out[flag] = 1
+    if get("lat") is not None and get("lon") is not None:
+        out["lat"], out["lon"] = get("lat"), get("lon")
+        if get("place"):
+            out["place"] = get("place")
+    if kind == "contact" and get("content"):
+        out["text"] = "\n".join("📇 " + line for line in get("content").splitlines())
+    found = [(emoji, None, 1, None if mine else jid, 1 if mine else None) for jid, mine, emoji in reactions if emoji]
+    if found:
+        out["reactions"] = found            # senders as jids: the importer maps them to people
+    return out
+

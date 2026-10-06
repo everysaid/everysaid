@@ -512,6 +512,7 @@ dependencies = [
 app = [
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "iphone-backup-decrypt" },
     { name = "mcp" },
     { name = "pillow" },
     { name = "pywebpush" },
@@ -568,7 +569,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "chronika", extras = ["media"], marker = "extra == 'ml'" },
-    { name = "chronika", extras = ["server", "mcp", "telegram"], marker = "extra == 'app'" },
+    { name = "chronika", extras = ["server", "mcp", "telegram", "iphone"], marker = "extra == 'app'" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.120" },
     { name = "httpx", marker = "extra == 'server'", specifier = ">=0.28" },
     { name = "imagehash", marker = "extra == 'media'", specifier = ">=4.3" },

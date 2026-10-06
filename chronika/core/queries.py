@@ -262,6 +262,11 @@ def chat(store, chat_id):
            "muted": bool(muted), "archived": bool(archived), "read_until": read, "state_from": origin,
            "state_reports": _state_reports(store, chat_id),
            "state_user": (store.cached("states", lambda: _state_parts(store)).get(chat_id) or {"user": {}})["user"]}
+    convs = c["conversations"]
+    last = convs and store.read().execute(        # where the chat was last active: the way to answer
+        f"SELECT service_id FROM message WHERE conversation_id IN ({','.join('?' * len(convs))}) "
+        "ORDER BY ts DESC, id DESC LIMIT 1", convs).fetchone()
+    out["last_service"] = _lookups(store)["service"].get(last[0]) if last else None
     if c["type"] == "person":
         out["person"] = person(store, c["person_id"])
     else:

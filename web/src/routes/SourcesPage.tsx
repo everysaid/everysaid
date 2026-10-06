@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { BookUser, ChevronDown, Images, ListChecks, Play, Plus, Radio, Settings2, Smartphone, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api, type PluginChat, type PluginInstance, type PluginManifest, type SettingField } from "@/lib/api";
-import { dateOnly, isoDay, number, relative } from "@/lib/format";
+import { bytes, dateOnly, isoDay, number, relative } from "@/lib/format";
 import { onEvent } from "@/lib/events";
 import { service } from "@/lib/services";
 import { cn } from "@/lib/utils";
@@ -55,15 +55,23 @@ function InstanceCard({ i, manifest }: { i: PluginInstance; manifest?: PluginMan
   const [editing, setEditing] = useState(false);
   const [choosing, setChoosing] = useState(false);
   useEffect(() => setLog(i.log), [i.log]);
+  const [drawing, setDrawing] = useState(i.bar);    // the line a progress bar draws again and again, in place
+  useEffect(() => setDrawing(i.bar), [i.bar]);
   useEffect(() => onEvent((e) => {
-    if (e.type === "plugin_log" && e.instance === i.id) setLog((l) => [...l.slice(-199), e.line]);
+    if (e.type === "plugin_log" && e.instance === i.id) {
+      setLog((l) => [...l.slice(-199), e.line]);
+    }
+    if (e.type === "plugin_progress" && e.instance === i.id) setDrawing(e.line);
   }), [i.id]);
   const refresh = () => qc.invalidateQueries({ queryKey: ["plugins"] });
   const run = useMutation({
-    mutationFn: (action?: string) => api.post(`/api/plugins/${i.id}/run`, { action }),
-    onSuccess: () => { setShowLog(true); refresh(); },
+    mutationFn: (b: { action?: string; given?: Record<string, string> }) => api.post(`/api/plugins/${i.id}/run`, b),
+    onMutate: () => { setLog([]); setDrawing(""); setShowLog(true); },     // the panel shows this run; the earlier ones are in their files
+    onSuccess: refresh,
     onError: (e: Error) => toast.error(e.message),
   });
+  const [asking, setAsking] = useState<string | undefined | null>(null);   // the action a run asks for, while it asks
+  const start = (action?: string) => (i.asks.length ? setAsking(action) : run.mutate({ action }));
   const live = useMutation({ mutationFn: (on: boolean) => api.post(`/api/plugins/${i.id}/live`, { on }), onSuccess: refresh, onError: (e: Error) => toast.error(e.message) });
   const patch = useMutation({ mutationFn: (b: Record<string, unknown>) => api.patch(`/api/plugins/${i.id}`, b), onSuccess: refresh });
   const remove = useMutation({ mutationFn: () => api.del(`/api/plugins/${i.id}`), onSuccess: refresh });
@@ -82,21 +90,30 @@ function InstanceCard({ i, manifest }: { i: PluginInstance; manifest?: PluginMan
             <span className={cn("flex items-center gap-1", i.ready ? "text-ok" : "text-danger")}>
               <span className={cn("size-1.5 rounded-full", i.ready ? "bg-ok" : "bg-danger")} />{i.ready ? t("sources.ready") : i.ready_text}
             </span>
-            <span>{t("sources.lastRun")}: {i.last_run ? relative(i.last_run) : t("sources.never")}</span>
-            {i.last_status && i.last_status !== "ok" && <span className="text-danger">{i.last_status}</span>}
+            <span data-last-run>
+              {t("sources.lastRun")}: {i.running ? t("sources.now") : i.last_run ? relative(i.last_run) : t("sources.never")}
+              {i.running ? <span className="text-accent"> · {t("sources.running")}</span> : i.last_run && i.last_status && (i.last_status === "ok"
+                ? <span className="text-ok"> · {t("sources.succeeded")}</span>
+                : <span className="text-danger"> · {t("sources.failed")}: {i.last_status}</span>)}
+            </span>
             {manifest?.services.map((s) => <span key={s} style={{ color: service(s).color }}>● {service(s).name}</span>)}
           </div>
+          {i.info.length > 0 && (
+            <dl data-info className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
+              {i.info.map((f) => <Fragment key={f.label}><dt className="text-muted">{f.label}</dt><dd className="break-all font-mono">{f.value}</dd></Fragment>)}
+            </dl>
+          )}
         </div>
         <Switch checked={i.enabled} onChange={(v) => patch.mutate({ enabled: v })} label={t("sources.enabled")} />
       </div>
       <div className="flex flex-wrap items-center gap-2 border-t border-line bg-panel-2/50 px-4 py-2.5">
         {i.kind !== "library" && (
-          <Button size="sm" variant="primary" onClick={() => run.mutate(undefined)} loading={!!i.running || run.isPending} disabled={!i.enabled}>
+          <Button size="sm" variant="primary" onClick={() => start(undefined)} loading={!!i.running || run.isPending} disabled={!i.enabled}>
             {!i.running && <Play className="size-3.5" />}{i.running ? t("sources.running") : t("sources.run")}
           </Button>
         )}
         {manifest?.actions.map((a) => (
-          <Button key={a.id} size="sm" variant="outline" onClick={() => run.mutate(a.id)} disabled={!!i.running || !i.enabled}>{a.label}</Button>
+          <Button key={a.id} size="sm" variant="outline" onClick={() => start(a.id)} disabled={!!i.running || !i.enabled}>{a.label}</Button>
         ))}
         {i.live_capable && (
           <label className="flex items-center gap-2 px-2 text-sm">
@@ -118,9 +135,17 @@ function InstanceCard({ i, manifest }: { i: PluginInstance; manifest?: PluginMan
         </div>
       </div>
       {showLog && (
-        <pre className="max-h-72 overflow-auto whitespace-pre-wrap border-t border-line bg-bg p-3 font-mono text-[11px] leading-relaxed text-muted">
-          {log.length ? log.join("\n") : "—"}
-        </pre>
+        <>
+          {/* the last few lines, one after the other as they come, wrapped as in a terminal */}
+          <pre data-log className="min-w-0 overflow-hidden whitespace-pre-wrap break-all border-t border-line bg-bg p-3 font-mono text-[11px] leading-relaxed text-muted">
+            {log.length || drawing ? [...log.slice(drawing ? -4 : -5), ...(drawing ? [drawing] : [])].join("\n") : "—"}
+          </pre>
+          <LogFiles instance={i.id} />
+        </>
+      )}
+      {asking !== null && (
+        <SecretsDialog title={t("sources.run")} hint={t("sources.askHint")} go={t("sources.run")} asks={i.asks} onCancel={() => setAsking(null)}
+          onGo={(given) => { run.mutate({ action: asking, given }); setAsking(null); }} />
       )}
       {manifest && <SettingsDialog open={editing} onOpenChange={setEditing} manifest={manifest} instance={i} />}
       {choosing && <ChatsDialog instance={i} onClose={() => setChoosing(false)} />}
@@ -133,21 +158,37 @@ function SettingsForm({ fields, values, secrets, onChange, onSecret, existing }:
   onChange: (k: string, v: unknown) => void; onSecret: (k: string, v: string) => void; existing?: boolean;
 }) {
   const { t } = useTranslation();
+  // an option that keeps a secret (a password in the keyring) asks for it as it is chosen
+  const [keeping, setKeeping] = useState<{ field: string; option: string; key: string; label: string } | null>(null);
   return (
     <div className="space-y-4">
+      {keeping && (
+        <SecretsDialog title={keeping.label} hint={t("sources.keepHint")} go={t("common.done")} asks={[{ key: keeping.key, label: keeping.label }]}
+          onCancel={() => setKeeping(null)}
+          onGo={(given) => { onChange(keeping.field, keeping.option); onSecret(keeping.key, given[keeping.key]); setKeeping(null); }} />
+      )}
       {fields.map((f) => (
         <Field key={f.key} label={f.label + (f.required ? " *" : "")} help={f.help}>
           {f.type === "bool" ? (
             <div><Switch checked={!!values[f.key]} onChange={(v) => onChange(f.key, v)} /></div>
           ) : f.type === "secret" ? (
-            <Input type="password" autoComplete="new-password" value={secrets[f.key] ?? ""} placeholder={existing ? t("sources.secretSet") : ""}
+            <Input type="password" name={`secret-${f.key}`} autoComplete="off" data-lpignore="true" data-1p-ignore="true"
+              data-bwignore="true" data-form-type="other" value={secrets[f.key] ?? ""} placeholder={existing ? t("sources.secretSet") : ""}
               onChange={(e) => onSecret(f.key, e.target.value)} />
           ) : f.type === "select" ? (
-            <select value={String(values[f.key] ?? "")} onChange={(e) => onChange(f.key, e.target.value)} className="h-10 w-full rounded-xl border border-line bg-panel px-3 text-sm">
-              {f.options.map((o) => <option key={o}>{o}</option>)}
+            <select value={String(values[f.key] ?? "")} className="h-10 w-full rounded-xl border border-line bg-panel px-3 text-sm"
+              onChange={(e) => {
+                const keep = f.keeps?.[e.target.value];
+                if (keep) setKeeping({ field: f.key, option: e.target.value, ...keep });
+                else onChange(f.key, e.target.value);
+              }} data-select={f.key}>
+              {f.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           ) : (
-            <Input type={f.type === "number" ? "number" : f.type === "url" ? "url" : "text"} value={String(values[f.key] ?? "")}
+            // a source's settings, not a person's details: browsers and password managers keep out
+            <Input type={f.type === "number" ? "number" : f.type === "url" ? "url" : "text"} name={`setting-${f.key}`}
+              autoComplete="off" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other"
+              value={String(values[f.key] ?? "")}
               onChange={(e) => onChange(f.key, f.type === "number" ? Number(e.target.value) : e.target.value)} />
           )}
         </Field>
@@ -347,6 +388,66 @@ function ChatsDialog({ instance, onClose }: { instance: PluginInstance; onClose:
           <Button variant="primary" onClick={() => save.mutate()} loading={save.isPending}>{t("common.save")}</Button>
         </div>
       </div>
+    </Dialog>
+  );
+}
+
+/** The instance's whole log files (one per run, one per day of a live connection), each opened whole. */
+function LogFiles({ instance }: { instance: number }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  useEffect(() => onEvent((e) => {             // a run started or ended: its file is there
+    if (e.type === "plugin" && e.instance === instance) qc.invalidateQueries({ queryKey: ["plugin-logs", instance] });
+  }), [instance, qc]);
+  const files = useQuery({
+    queryKey: ["plugin-logs", instance],
+    queryFn: () => api.get<{ items: { name: string; size: number; modified: number }[] }>(`/api/plugins/${instance}/logs`),
+  });
+  const [open, setOpen] = useState(false);
+  if (!files.data?.items.length) return null;
+  return (
+    <div data-log-files className="border-t border-line px-3 py-2 text-xs">
+      <button className="flex items-center gap-1 font-medium text-muted hover:text-fg" onClick={() => setOpen(!open)} aria-expanded={open}>
+        {t("sources.logFiles")}<ChevronDown className={cn("size-3.5 transition-transform", open && "rotate-180")} />
+      </button>
+      {open && <ul className="mt-1 max-h-40 space-y-0.5 overflow-auto">
+        {files.data.items.map((f) => (
+          <li key={f.name}>
+            <a className="font-mono text-accent hover:underline" href={`/api/plugins/${instance}/logs/${encodeURIComponent(f.name)}`} target="_blank" rel="noreferrer">
+              {f.name}
+            </a>
+            <span className="ml-2 text-muted">{bytes(f.size)}</span>
+          </li>
+        ))}
+      </ul>}
+    </div>
+  );
+}
+
+/** Secrets to type in: what a run needs (kept nowhere), or one an option keeps. */
+function SecretsDialog({ title, hint, go, asks, onCancel, onGo }: {
+  title: string; hint: string; go: string; asks: { key: string; label: string }[];
+  onCancel: () => void; onGo: (given: Record<string, string>) => void;
+}) {
+  const { t } = useTranslation();
+  const [given, setGiven] = useState<Record<string, string>>({});
+  const [tried, setTried] = useState(false);
+  return (
+    <Dialog open onOpenChange={(o) => !o && onCancel()} title={title} description={hint}>
+      <form data-asks autoComplete="off" className="space-y-4" onSubmit={(e) => { e.preventDefault(); setTried(true); if (asks.every((a) => given[a.key])) onGo(given); }}>
+        {asks.map((a, n) => (
+          <Field key={a.key} label={a.label} error={tried && !given[a.key] && t("sources.askEmpty")}>
+            {/* not the sign-in password: told so to browsers and password managers, which would fill it in */}
+            <Input type="password" name={`run-${a.key}`} id={`run-${a.key}`} autoComplete="off" data-lpignore="true"
+              data-1p-ignore="true" data-bwignore="true" data-form-type="other" autoFocus={n === 0} value={given[a.key] ?? ""}
+              onChange={(e) => setGiven((g) => ({ ...g, [a.key]: e.target.value }))} />
+          </Field>
+        ))}
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" onClick={onCancel}>{t("common.cancel")}</Button>
+          <Button type="submit" variant="primary">{go}</Button>
+        </div>
+      </form>
     </Dialog>
   );
 }

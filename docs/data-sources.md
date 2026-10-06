@@ -617,7 +617,21 @@ and the sender's position (`sender_lat`, `sender_lon`).
   `config.toml`; optional: without it only the iPhone is read).
   - It is a whatsmeow client linked as a companion device, running live.
   - `messages.db` has the tables `messages` (`id`, `chat_jid`, `sender`, `content`, `timestamp`
-    ISO, `is_from_me`, `media_type`) and `chats` (`jid`, `name`).
+    ISO, `is_from_me`, `media_type`) and `chats` (`jid`, `name`). A bridge with Chronika's
+    additions (a branch of whatsapp-mcp; where it is, in `LOCAL.md`) adds, with nothing removed
+    (an older bridge still imports as before):
+    - in `messages`: `kind` (text, image, video, audio, voice, document, sticker, location, contact,
+      poll), `subtype` (gif, video_note, link, live_location, view_once), `reply_to` and
+      `reply_text` (the stanza id and text quoted), `forwarded`, `edited`, `deleted` (marked when the
+      sender edits or deletes it later; `content` is the last version), `lat`, `lon`, `place`. A
+      shared contact's `content` is "name, number"; a poll's is the question and its options.
+    - `reactions` (`chat_jid`, `message_id`, `sender`, `is_from_me`, `emoji`, `timestamp`): each
+      person's latest reaction, `''` once taken back.
+    - `calls` and `call_participants`: the call-log message every device gets after a call
+      (`source` 'log': outcome, duration, video, participants), and the call signalling the bridge
+      sees itself (`source` 'event': offered, `accepted_at`, `ended_at`, `end_reason`).
+    - `bridge_state` (`connection`, `send_enabled`, `send_blocked`, `ban_until`), `bridge_events`
+      (what WhatsApp said about the connection), `sent` (what it sent, for its limits).
   - `whatsapp.db`, whatsmeow's store, has `whatsmeow_lid_map` (`lid`, `pn`).
   - The bridge fills the gap between the last iPhone backup and now.
 - **Not Android.** WhatsApp on Android keeps its database encrypted (`msgstore.db.crypt15`); it is
@@ -687,8 +701,16 @@ Channels (`...@newsletter`) and status (`status@broadcast`) are skipped (`CHANNE
    a WhatsApp `message.key`.
 2. The bridge next, in `timestamp` order. The row key is `<chat_jid>/<id>`. Only stanza ids the
    archive does not have yet are added.
-   - The kind comes from `media_type`: `''` text, `image`, `video`, `audio`, `document`.
-     Anything else is file.
+   - The kind comes from `kind` (`BRIDGE_KINDS`), or, in an older bridge, from `media_type`: `''`
+     text, `image`, `video`, `audio`, `document`. Anything else is file.
+   - `extras.whatsapp_bridge` reads the rest: subtype (`whatsmeow:<subtype>` as its code), the
+     quoted message, forwarded, edited, deleted, place, a contact's text, and its reactions.
+3. What the bridge saw happen to messages already in the archive (`bridge_changes`): edits and
+   deletions are marked, the text staying as the archive first had it; reactions follow the
+   bridge, one per person (changed, added, removed once taken back).
+4. Its calls (`voip.bridge_calls`, also from the plugin's import): the log's, then the signalling's
+   for calls no log message came for; one call in both, or already in from the iPhone, is kept
+   once (same person and direction within a minute).
 
 Because the iPhone is read first, a message present in both always gets the iPhone's richer row.
 The bridge contributes only the tail.

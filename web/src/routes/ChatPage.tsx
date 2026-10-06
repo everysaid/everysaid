@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import * as Popover from "@radix-ui/react-popover";
-import { ArrowDown, ArrowLeft, BellOff, CalendarDays, CornerUpLeft, Archive, ArchiveRestore, Info, Lock, MoreVertical, Pin, PinOff, Search, SendHorizontal, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, BellOff, CalendarDays, Check, ChevronDown, CornerUpLeft, Archive, ArchiveRestore, Info, Lock, MoreVertical, Pin, PinOff, Search, SendHorizontal, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, qs, type Attachment, type ChatDetail, type MessageItem, type StreamItem, type StreamPage } from "@/lib/api";
 import { dayLabel, isoDay, sameDay } from "@/lib/format";
@@ -13,7 +13,7 @@ import { useSettings, useWide } from "@/lib/hooks";
 import { service } from "@/lib/services";
 import { cn } from "@/lib/utils";
 import { chatRoute } from "@/router";
-import { Avatar, Button, Center, Dialog, IconButton, Menu, MenuContent, MenuItem, MenuTrigger, ServiceBadge, Spinner, Textarea } from "@/components/ui";
+import { Avatar, Button, Center, Dialog, IconButton, Menu, MenuContent, MenuItem, MenuTrigger, ServiceBadge, ServiceIcon, Spinner, Textarea } from "@/components/ui";
 import { Bubble, CallLine, SystemLine } from "@/components/Message";
 import { Lightbox, type LightboxItem } from "@/components/Lightbox";
 import { ChatInfo } from "@/components/ChatInfo";
@@ -302,8 +302,9 @@ function ChatView({ chatId, jumpTo, around }: { chatId: string; jumpTo?: number;
           )}
         </div>
         {detail.data && (
-          <Composer services={sendable} onSend={send} replyTo={replyTo} onCancelReply={() => setReplyTo(null)}
-            preferred={[...items].reverse().find((i) => sendable.includes(i.service ?? ""))?.service ?? undefined} />
+          <Composer services={detail.data.services.filter((s) => service(s).messages)} sendable={sendable} replyable={detail.data.replyable}
+            onSend={send} replyTo={replyTo} onCancelReply={() => setReplyTo(null)}
+            preferred={(!hasNewer && [...items].reverse().find((i) => i.type === "message")?.service) || detail.data.last_service} />
         )}
       </div>
       {wide && infoOpen && detail.data && (
@@ -393,21 +394,33 @@ function ChatHeader({ chat, wide, onInfo, onJumpDate }: { chat?: ChatDetail; wid
   );
 }
 
-/** preferred: where the chat was last active (the default way to send, until the user picks another). */
-function Composer({ services, preferred, onSend, replyTo, onCancelReply }: {
-  services: string[]; preferred?: string; onSend: (text: string, service: string | null, replyTo: MessageItem | null) => void;
+/** services: those of the chat with messages; sendable / replyable: those something can send to now
+ * (or answer a given message in). preferred: where the chat was last active, the way to answer until
+ * the user picks another. One it cannot send through still shows, closed, with a lock for Send. */
+function Composer({ services, sendable, replyable, preferred, onSend, replyTo, onCancelReply }: {
+  services: string[]; sendable: string[]; replyable: string[]; preferred?: string | null;
+  onSend: (text: string, service: string | null, replyTo: MessageItem | null) => void;
   replyTo: MessageItem | null; onCancelReply: () => void;
 }) {
   const { t } = useTranslation();
   const settings = useSettings();
   const wide = useWide();
+  const navigate = useNavigate();
   const [text, setText] = useState("");
   const [svc, setSvc] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   const enterSends = (settings.data?.send_enter as boolean | undefined) ?? wide;
   const picked = useRef(false);
+  // Esc lets go of the message being answered, wherever the focus is
   useEffect(() => {
-    setSvc((cur) => (picked.current && cur && services.includes(cur) ? cur : preferred ?? services[0] ?? null));
+    if (!replyTo) return;
+    const off = (e: KeyboardEvent) => { if (e.key === "Escape") onCancelReply(); };
+    window.addEventListener("keydown", off);
+    return () => window.removeEventListener("keydown", off);
+  }, [replyTo, onCancelReply]);
+  useEffect(() => {
+    setSvc((cur) => (picked.current && cur && services.includes(cur) ? cur
+      : preferred && services.includes(preferred) ? preferred : services[0] ?? null));
   }, [services.join(), preferred]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const el = ref.current;
@@ -415,18 +428,15 @@ function Composer({ services, preferred, onSend, replyTo, onCancelReply }: {
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 180)}px`;
   }, [text]);
-  if (!services.length) {
-    return (
-      <div data-composer className="flex items-center gap-2 border-t border-line bg-panel px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] text-xs text-muted">
-        <Lock className="size-4 shrink-0" />
-        <span data-composer-body className="flex-1"><span className="font-medium text-fg/80">{t("chat.readOnly")}.</span> {t("chat.readOnlyHint")}</span>
-        <Link to="/sources" className="shrink-0 font-medium text-accent hover:underline">{t("nav.sources")}</Link>
-      </div>
-    );
-  }
+  if (!services.length || !svc) return null;          // calls only: nothing to write
+  const via = replyTo?.service ?? svc;                 // an answer goes where the message came from
+  const can = (replyTo ? replyable : sendable).includes(via);
+  const why = () => toast(t("chat.cannotSend", { service: service(via).name }), {
+    description: t("chat.cannotSendHint"), action: { label: t("nav.sources"), onClick: () => navigate({ to: "/sources" }) },
+  });
   const go = () => {
     const body = text.trim();
-    if (!body) return;
+    if (!body || !can) return;
     setText("");                        // free for the next one at once
     onSend(body, svc, replyTo);
     onCancelReply();
@@ -446,29 +456,52 @@ function Composer({ services, preferred, onSend, replyTo, onCancelReply }: {
       )}
       <div className="flex items-end gap-2">
         <div data-composer-body className="flex min-w-0 flex-1 items-end rounded-3xl bg-panel-2 pr-1">
+          <Menu>
+            <MenuTrigger asChild disabled={!!replyTo}>
+              <button data-via={via} aria-label={t("chat.sendVia")} title={`${t("chat.sendVia")} ${service(via).name}`}
+                className="mb-1 ml-1 flex h-9 shrink-0 items-center gap-0.5 rounded-full pl-2 pr-1 hover:bg-panel disabled:hover:bg-transparent data-[state=open]:bg-panel">
+                <ServiceIcon id={via} className="size-5" />
+                {!replyTo && services.length > 1 && <ChevronDown className="size-3.5 text-muted" />}
+              </button>
+            </MenuTrigger>
+            <MenuContent align="start" className="w-60">
+              <div className="px-3 pb-1 pt-1.5 text-xs font-medium text-muted">{t("chat.sendVia")}</div>
+              {services.map((s) => (
+                <MenuItem key={s} onSelect={() => { picked.current = true; setSvc(s); ref.current?.focus(); }}>
+                  <ServiceIcon id={s} className="size-5" />
+                  <span className="flex-1">{service(s).name}</span>
+                  {!sendable.includes(s) && <Lock className="size-3.5 text-muted" aria-label={t("chat.locked")} />}
+                  {s === svc && <Check className="size-4 text-accent" />}
+                </MenuItem>
+              ))}
+            </MenuContent>
+          </Menu>
           <Textarea
             ref={ref}
             rows={1}
             value={text}
+            disabled={!can}                      // nothing to write where it cannot go
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey && enterSends && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 go();
-              } else if (e.key === "Escape" && replyTo) onCancelReply();
+              }
             }}
-            placeholder={`${t("chat.placeholder")} · ${t("chat.via")} ${service(replyTo?.service ?? svc ?? services[0]).name}`}
-            className="max-h-44 border-0 bg-transparent py-2.5 pl-4 focus:ring-0 focus-visible:outline-none"
+            placeholder={can ? t("chat.messageVia", { service: service(via).name }) : t("chat.cannotSend", { service: service(via).name })}
+            className="max-h-44 border-0 bg-transparent py-2.5 pl-2 focus:ring-0 focus-visible:outline-none disabled:cursor-not-allowed"
           />
-          {services.length > 1 && (
-            <select value={svc ?? ""} onChange={(e) => { picked.current = true; setSvc(e.target.value); }} className="mb-1.5 rounded-full bg-panel px-2 py-1 text-xs" aria-label={t("chat.via")}>
-              {services.map((s) => <option key={s} value={s}>{service(s).name}</option>)}
-            </select>
-          )}
         </div>
-        <Button data-send variant="primary" size="icon" className="shrink-0 rounded-full" onClick={go} disabled={!text.trim()} aria-label={t("chat.send")}>
-          <SendHorizontal className="size-5" />
-        </Button>
+        {can ? (
+          <Button data-send variant="primary" size="icon" className="shrink-0 rounded-full" onClick={go} disabled={!text.trim()} aria-label={t("chat.send")}>
+            <SendHorizontal className="size-5" />
+          </Button>
+        ) : (
+          <Button data-locked variant="outline" size="icon" className="shrink-0 rounded-full text-muted" onClick={why}
+            aria-label={t("chat.cannotSend", { service: service(via).name })} title={t("chat.cannotSend", { service: service(via).name })}>
+            <Lock className="size-5" />
+          </Button>
+        )}
       </div>
     </div>
   );

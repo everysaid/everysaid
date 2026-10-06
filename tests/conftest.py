@@ -8,7 +8,7 @@ import tempfile
 import pytest
 
 ROOT = tempfile.mkdtemp(prefix="chronika-test-")
-for name in ("DATA", "CACHE", "CONFIG"):
+for name in ("DATA", "CACHE", "CONFIG", "STATE"):
     os.environ[f"CHRONIKA_{name}"] = os.path.join(ROOT, name.lower())
     os.makedirs(os.environ[f"CHRONIKA_{name}"], exist_ok=True)
 os.environ["CHRONIKA_KEYRING"] = "chronika-test"       # never the user's secrets

@@ -127,6 +127,7 @@ export interface ChatDetail {
   services: string[];
   sendable: string[];       // the services something can send to now
   replyable: string[];      // those where an answer to a given message can be sent
+  last_service: string | null;   // where the chat was last active: the way to answer by default
   person_id?: number | null;
   conversation_id?: number | null;
   conversations: number[];
@@ -229,7 +230,8 @@ export interface SettingField {
   required: boolean;
   default: unknown;
   help: string;
-  options: string[];
+  options: { value: string; label: string }[];
+  keeps: Record<string, { key: string; label: string }>;   // choosing that option asks for this secret, kept
 }
 
 export interface PluginManifest {
@@ -279,6 +281,9 @@ export interface PluginInstance {
   live: boolean;
   can_send: boolean;
   log: string[];
+  bar: string;                    // a progress bar's line, drawn in place under the log
+  asks: { key: string; label: string }[];      // typed in for each run, kept nowhere (a password)
+  info: { label: string; value: string }[];    // a few facts for its card (where its backup is, of when)
 }
 
 export interface Stats {

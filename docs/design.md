@@ -306,7 +306,9 @@ Everything above is built, with these differences from the draft:
   (the media view and the lightbox: keep, remove, to the library, each checked against it first).
 - **The MCP SDK** is version 2 (`MCPServer`).
 - **Nothing per service is fixed in the core or the interface**: each plugin declares it.
-  - `service_info` gives how a service looks: name, colour, whether it is calls only.
+  - `service_info` gives how a service looks: name, colour, its icon (an SVG path, shown where the
+    service is chosen to send through), whether it is calls only. A chat answers by default through
+    the service it was last active on; one nothing can send to now still shows, with a lock for Send.
   - `name_weights` gives how much the names it brings are trusted. An address book declares
     `contacts`, the highest by default.
   - `can_send` and `sending(ctx)` say whether it can send now. By default it can when set up; a

@@ -75,6 +75,8 @@ KEYRING = os.environ.get("CHRONIKA_KEYRING") or APP
 DATA = os.environ.get("CHRONIKA_DATA") or platformdirs.user_data_dir(APP, appauthor=False)
 CACHE = os.environ.get("CHRONIKA_CACHE") or platformdirs.user_cache_dir(APP, appauthor=False)
 CONFIG = os.environ.get("CHRONIKA_CONFIG") or platformdirs.user_config_dir(APP, appauthor=False)
+STATE = os.environ.get("CHRONIKA_STATE") or platformdirs.user_state_dir(APP, appauthor=False)   # logs
+LOGS = os.path.join(STATE, "logs")
 
 CONFIG_FILE = os.path.join(CONFIG, "config.toml")
 
@@ -169,12 +171,12 @@ DOG_THRESHOLD = get("review", "dog_threshold", 0.0005)
 REVIEW_REFERENCE = get("review", "reference_model", "claude-sonnet")
 
 
-def iphone_udid():
-    """The iPhone's UDID: the one set, else the only backup in IPHONE_BACKUP_ROOT, else the only
+def iphone_udid(root=None):
+    """The iPhone's UDID: the one set, else the only backup in the backup folder, else the only
     phone on the cable."""
     if udid := get("iphone", "udid"):
         return udid
-    root = IPHONE_BACKUP_ROOT
+    root = root or IPHONE_BACKUP_ROOT
     found = [d for d in os.listdir(root)
              if os.path.exists(os.path.join(root, d, "Manifest.plist"))] if os.path.isdir(root) else []
     if not found:
@@ -251,6 +253,23 @@ def save_secret(name, value):
         f.write(value)
     os.replace(path + ".part", path)
     return path
+
+
+def delete_secret(name):
+    """Take a secret away: from the keyring, and its file if there is one (when the user chose
+    not to keep it any more)."""
+    try:
+        import keyring
+        from keyring.errors import KeyringError, PasswordDeleteError
+        try:
+            keyring.delete_password(KEYRING, name)
+        except (PasswordDeleteError, KeyringError):
+            pass
+    except ImportError:
+        pass
+    path = secret_file(name)
+    if os.path.exists(path):
+        os.remove(path)
 
 
 def move_to_keyring(name):

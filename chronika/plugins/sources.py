@@ -10,8 +10,10 @@ import contextlib
 import io
 import json
 import os
+import queue
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 
@@ -19,6 +21,7 @@ from .. import config
 from ..errors import plugin_error
 from .base import Plugin, Setting
 from .i18n import tr
+from .icons import ICONS
 
 SCRIPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "scripts")
 
@@ -38,20 +41,59 @@ class _Lines(io.TextIOBase):
         return len(s)
 
 
-def run_script(ctx, name, *args, extra_env=None):
-    """One of the project's scripts, its output into the log; raises if it fails."""
+def run_script(ctx, name, *args, extra_env=None, stdin=None):
+    """One of the project's scripts, its output into the log; raises if it fails. stdin: a line
+    given to it (a password), through a pipe: never in its arguments or environment."""
     path = os.path.join(SCRIPTS, name)
     if not os.path.exists(path):
         raise RuntimeError(f"{name} not found (the scripts come with the project's code)")
-    env = dict(os.environ, PYTHONUTF8="1", **(extra_env or {}))
+    env = dict(os.environ, PYTHONUTF8="1", PYTHONUNBUFFERED="1", **(extra_env or {}))   # its lines as they come
     p = subprocess.Popen([sys.executable, path, *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                         stdin=subprocess.DEVNULL, text=True, encoding="utf-8", env=env)
-    for line in p.stdout:
-        line = line.rstrip("\r\n").split("\r")[-1]
-        if line.strip():
-            ctx.log(line)
-    if p.wait():
-        raise RuntimeError(f"{name}: exit code {p.returncode}")
+                         stdin=subprocess.PIPE if stdin else subprocess.DEVNULL, env=env)
+    if stdin:
+        p.stdin.write((stdin + "\n").encode())
+        p.stdin.close()
+    # As a terminal shows it: a line ends with \n; a \r draws the line again (a progress bar). The
+    # bar is one line that changes in place: drawn as it changes (at most every 0.2 s, and its last
+    # state always), and in the log as each drawing ends.
+    chunks = queue.Queue()
+
+    def read():
+        while chunk := os.read(p.stdout.fileno(), 4096):
+            chunks.put(chunk)
+        chunks.put(None)
+    threading.Thread(target=read, daemon=True).start()
+    last, pending, shown, sent, drawn = "", b"", "", "", 0.0
+    while True:
+        try:
+            chunk = chunks.get(timeout=0.2)
+        except queue.Empty:
+            chunk = b""
+        if chunk is None:
+            break
+        pending += chunk
+        while b"\n" in pending:
+            raw, pending = pending.split(b"\n", 1)
+            text = raw.decode("utf-8", "replace").rstrip("\r")
+            line = (text.split("\r")[-1] or shown).rstrip()
+            redrawn = bool(shown) or "\r" in text
+            shown = sent = ""
+            if line.strip():
+                ctx.log(line, redrawn=redrawn)
+                last = line.strip()
+        if b"\r" in pending:
+            parts = pending.decode("utf-8", "replace").split("\r")
+            shown = next((x for x in reversed(parts) if x.strip()), shown)
+            pending = parts[-1].encode()
+        if shown and shown != sent and time.time() - drawn >= 0.2:
+            ctx.progress(shown)
+            sent, drawn = shown, time.time()
+    if pending.strip():
+        line = pending.decode("utf-8", "replace").split("\r")[-1].rstrip()
+        ctx.log(line)
+        last = line.strip()
+    if p.wait():                        # its own last words say why (else its exit code)
+        raise RuntimeError(last or f"{name}: exit code {p.returncode}")
 
 
 def run_importers(ctx, steps):
@@ -96,7 +138,7 @@ LOOKS = {
 
 
 def looks(*services):
-    return {s: LOOKS[s] for s in services}
+    return {s: LOOKS[s] | {"icon": ICONS[s]} for s in services}
 
 
 class IphoneBackup(Plugin):
@@ -111,17 +153,43 @@ class IphoneBackup(Plugin):
     platforms = ("linux", "darwin")
     needs = ("the phone on a USB cable", "libimobiledevice (idevicebackup2)", "the backup password")
     settings = (
-        Setting("udid", "UDID", help="Only with more than one iPhone; otherwise it is found"),
         Setting("backup", "A new backup before importing", "bool", default=True,
                 help="Off: only decrypt the backup already there"),
+        Setting("backup_root", "Backup folder", "path", default=config.IPHONE_BACKUP_ROOT,
+                help="Where the encrypted backup is kept (a folder for each phone inside)"),
+        Setting("udid", "UDID", help="Only with more than one iPhone; otherwise it is found",
+                pattern=r"[0-9A-Fa-f]{8}-?[0-9A-Fa-f]{16}|[0-9A-Fa-f]{40}"),
+        Setting("password", "The backup password", "select", default="ask",
+                options=[("ask", "Asked for at each import, kept nowhere"), ("keyring", "Kept in the system's keyring")],
+                keeps={"keyring": ("backup_password", "The backup password")},
+                help="Going back to asking takes it out of the keyring"),
     )
-    # the two steps apart: the backup over the cable; the import from the backup that is there
-    actions = (("backup_only", "Backup only (no import)"), ("import_only", "Import only (no backup)"))
 
     def check(self, ctx):
-        if not config.secret("backup-password"):
-            return False, "missing: the backup password (scripts/iphone-sync.py --save-password)"
+        if ctx.settings.get("password") == "keyring" and not ctx.secret("backup_password"):
+            return False, "missing: The backup password"
         return True, "ready"
+
+    def asks(self, ctx):
+        return [] if ctx.settings.get("password") == "keyring" else [("backup_password", "The backup password")]
+
+    def _backup(self, ctx):
+        """(the folder of this phone's backup, or None when it is not known yet)."""
+        root = ctx.settings.get("backup_root") or config.IPHONE_BACKUP_ROOT
+        udid = ctx.settings.get("udid")
+        if not udid and os.path.isdir(root):
+            found = [d for d in os.listdir(root) if os.path.exists(os.path.join(root, d, "Manifest.plist"))]
+            udid = found[0] if len(found) == 1 else None
+        return os.path.join(root, udid) if udid else None
+
+    def info(self, ctx):
+        where = self._backup(ctx)
+        root = ctx.settings.get("backup_root") or config.IPHONE_BACKUP_ROOT
+        manifest = where and os.path.join(where, "Manifest.db")
+        if not manifest or not os.path.exists(manifest):
+            return [("Backup", root), ("Last backup", "none yet")]
+        return [("Backup", where), ("Last backup", time.strftime("%Y-%m-%d %H:%M", time.localtime(os.path.getmtime(manifest)))),
+                ("Size", _size(where))]
 
     def _import(self, ctx):
         from .. import calls, media, sms, viber, voip, whatsapp
@@ -130,17 +198,37 @@ class IphoneBackup(Plugin):
                                    ("files", media.run)])
 
     def run_import(self, ctx):
-        args = [] if ctx.settings.get("backup", True) else ["--no-backup"]
-        run_script(ctx, "iphone-sync.py", *args)
+        # first a new backup over the cable (unless turned off), then the databases out of it, then the import
+        args = ["--backup-root", ctx.settings.get("backup_root") or config.IPHONE_BACKUP_ROOT, "--password-stdin"]
+        if ctx.settings.get("udid"):
+            args += ["--udid", ctx.settings["udid"]]
+        if not ctx.settings.get("backup", True):
+            args.append("--no-backup")
+        password = ctx.given.get("backup_password") or ctx.secret("backup_password")
+        if not password:
+            raise plugin_error("The backup password is needed")
+        run_script(ctx, "iphone-sync.py", *args, stdin=password)
         return self._import(ctx)
 
-    def action(self, ctx, name):
-        if name == "backup_only":
-            return run_script(ctx, "iphone-sync.py", "--backup-only")
-        if name == "import_only":           # the databases taken out of the backup that is there, then imported
-            run_script(ctx, "iphone-sync.py", "--no-backup")
-            return self._import(ctx)
-        return super().action(ctx, name)
+
+_sizes = {}
+
+
+def _size(folder):
+    """A backup's size in words (worked out again only when its manifest changes)."""
+    stamp = os.path.getmtime(os.path.join(folder, "Manifest.db"))
+    if _sizes.get(folder, (None,))[0] != stamp:
+        total = sum(e.stat().st_size for e in _walk(folder))
+        _sizes[folder] = (stamp, f"{total / 1e9:.1f} GB" if total >= 1e9 else f"{total / 1e6:.0f} MB")
+    return _sizes[folder][1]
+
+
+def _walk(folder):
+    for e in os.scandir(folder):
+        if e.is_dir(follow_symlinks=False):
+            yield from _walk(e.path)
+        elif e.is_file(follow_symlinks=False):
+            yield e
 
 
 class AndroidAdb(Plugin):
@@ -193,24 +281,69 @@ class WhatsappBridge(Plugin):
         Setting("store", "The bridge's store folder", "path", required=True, default=config.WHATSAPP_BRIDGE),
         Setting("api", "The bridge's REST API", "url", default="http://127.0.0.1:8080"),
         Setting("send", "Sending messages", "bool", default=False,
-                help="A risk for the account; needs a bridge with /api/send"),
+                help="A risk for the account; needs the bridge started with -send. Turned off by itself "
+                     "when WhatsApp warns the account"),
         Setting("interval", "Check every (seconds)", "number", default=10),
     )
     can_send = True
 
     def sending(self, ctx):
-        return bool(ctx.settings.get("send")) and super().sending(ctx)
+        state = self.bridge_state(ctx)
+        return (bool(ctx.settings.get("send")) and state.get("send_enabled") == "1" and not state.get("send_blocked")
+                and super().sending(ctx))
+
+    def check(self, ctx):
+        ok, why = super().check(ctx)
+        blocked = self.bridge_state(ctx).get("send_blocked")
+        return (ok, f"sending blocked by the bridge: {blocked}") if ok and blocked else (ok, why)
 
     def _paths(self, ctx):
         d = ctx.settings.get("store") or ""
         return os.path.join(d, "messages.db"), os.path.join(d, "whatsapp.db")
 
+    def bridge_state(self, ctx):
+        """What the bridge last recorded about its connection (bridge_state: connection, send_enabled,
+        send_blocked, ban_until); empty for a bridge from before that table."""
+        path = self._paths(ctx)[0]
+        if not os.path.exists(path):
+            return {}
+        try:
+            db = config.read_only(path)
+            try:
+                return dict(db.execute("SELECT key, value FROM bridge_state").fetchall())
+            finally:
+                db.close()
+        except Exception:
+            return {}
+
+    def watch_state(self, ctx):
+        """Once the bridge blocks sending (WhatsApp warned the account), turn this instance's sending
+        off too, say so in its log and to the user's devices. Turning it on again is the user's."""
+        blocked = self.bridge_state(ctx).get("send_blocked") or ""
+        if blocked == ctx.state.get("send_blocked", ""):
+            return
+        ctx.save_state(send_blocked=blocked)
+        if not blocked:
+            return
+        ctx.log("WhatsApp warned the account, sending is off: {why}", why=blocked)
+        if ctx.settings.get("send"):
+            from . import update
+            update(ctx.store, ctx.id, settings={"send": False})
+        ctx.host.alert(tr("WhatsApp warned the account", ctx.lang), blocked)
+        ctx.emit({"type": "changed"})
+
     def run_import(self, ctx):
-        from .. import whatsapp
+        from .. import voip, whatsapp
         bridge, store = self._paths(ctx)
+        changed = {}
         # only the bridge's databases: an iPhone's are another instance's
-        return run_importers(ctx, [("WhatsApp (bridge)", lambda a: whatsapp.run(a, iphone_db=None, contacts_db=None,
-                                                                                 bridge_db=bridge, store_db=store))])
+        out = run_importers(ctx, [
+            ("WhatsApp (bridge)", lambda a: changed.update(whatsapp.run(a, iphone_db=None, contacts_db=None,
+                                                                        bridge_db=bridge, store_db=store) or {})),
+            ("WhatsApp calls (bridge)", lambda a: voip.bridge_calls(a, voip.Calls(a), bridge, store))])
+        if changed:     # edits, deletions, reactions on messages already shown
+            ctx.emit({"type": "changed"})
+        return out
 
     async def live(self, ctx):
         # the messages (messages.db) and the chats' state, archived, pinned, muted (the store, whatsapp.db)
@@ -222,6 +355,7 @@ class WhatsappBridge(Plugin):
             if m and m != last:
                 if last is not None:
                     await asyncio.to_thread(self.run_import, ctx)
+                await asyncio.to_thread(self.watch_state, ctx)
                 last = m
             await asyncio.sleep(max(2, int(ctx.settings.get("interval") or 10)))
 
@@ -239,7 +373,12 @@ class WhatsappBridge(Plugin):
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 raise plugin_error("The bridge does not offer sending (/api/send)") from e
-            raise
+            try:                        # the bridge's refusals: off, blocked, a limit, not a chat they wrote in
+                answer = json.loads(e.read() or b"{}")
+            except ValueError:
+                raise e from None
+            await asyncio.to_thread(self.watch_state, ctx)
+            raise plugin_error(answer.get("message") or "Sending failed") from e
         if not answer.get("success", True):
             raise plugin_error(answer.get("message") or "Sending failed")
         await asyncio.to_thread(self.run_import, ctx)      # the bridge stores what it sent

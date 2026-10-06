@@ -2,7 +2,28 @@
 is given in the user's language through tr(). A text without a translation stays in English."""
 
 EL = {
-    "Backup only (no import)": "Μόνο backup (χωρίς εισαγωγή)",
+    "Going back to asking takes it out of the keyring": "Αν γυρίσεις στο να ζητείται, σβήνεται από το keyring",
+    # iphone-sync.py, as its lines show in the app
+    "There is no complete backup yet (its Manifest.plist is missing).":
+        "Δεν υπάρχει ακόμα ολοκληρωμένο backup (λείπει το Manifest.plist του).",
+    "Wrong backup password.": "Λάθος κωδικός backup.",
+    "The iPhone may ask for its passcode: type it there.": "Το iPhone μπορεί να ζητήσει τον κωδικό του: γράψ' τον εκεί.",
+    "The backup failed: the iPhone is locked. Unlock it, and type its passcode there when it asks.":
+        "Το backup απέτυχε: το iPhone είναι κλειδωμένο. Ξεκλείδωσέ το και γράψε τον κωδικό του εκεί όταν τον ζητήσει.",
+    "The backup failed: no iPhone found. Connect it with a cable, unlock it and tap Trust.":
+        "Το backup απέτυχε: δεν βρέθηκε iPhone. Σύνδεσέ το με καλώδιο, ξεκλείδωσέ το και πάτα «Εμπιστεύομαι».",
+    "The backup failed: idevicebackup2 did not finish (see the whole log).":
+        "Το backup απέτυχε: το idevicebackup2 δεν ολοκληρώθηκε (δες το πλήρες log).",
+    "Backup folder": "Φάκελος backup",
+    "Where the encrypted backup is kept (a folder for each phone inside)":
+        "Πού κρατιέται το κρυπτογραφημένο backup (ένας φάκελος για κάθε κινητό μέσα του)",
+    "The backup password": "Ο κωδικός του backup",
+    "Asked for at each import, kept nowhere": "Ζητείται σε κάθε εισαγωγή, δεν φυλάσσεται πουθενά",
+    "Kept in the system's keyring": "Φυλάσσεται στο keyring του συστήματος",
+    "Last backup": "Τελευταίο backup",
+    "none yet": "κανένα ακόμα",
+    "Size": "Μέγεθος",
+    "The backup password is needed": "Χρειάζεται ο κωδικός του backup",
     "Demo (sends into the demo archive)": "Demo (στέλνει στο αρχείο του demo)",
     "Invented: what is sent is only written into the demo archive.": "Επινοημένη: ό,τι στέλνεται γράφεται μόνο στο αρχείο του demo.",
     "Serial": "Σειριακός αριθμός",
@@ -90,13 +111,18 @@ EL = {
     "Only with more than one iPhone; otherwise it is found": "Μόνο με πάνω από ένα iPhone· αλλιώς βρίσκεται μόνο του",
     "A new backup before importing": "Νέο backup πριν την εισαγωγή",
     "Off: only decrypt the backup already there": "Κλειστό: μόνο αποκρυπτογράφηση του backup που υπάρχει",
-    "Import only (no backup)": "Μόνο εισαγωγή (χωρίς backup)",
     "Only when adb sees more than one phone": "Μόνο όταν το adb βλέπει πάνω από ένα κινητό",
     "Decrypted database": "Αποκρυπτογραφημένη βάση",
     "The bridge's store folder": "Φάκελος αποθήκευσης της γέφυρας",
     "The bridge's REST API": "REST API της γέφυρας",
     "Sending messages": "Αποστολή μηνυμάτων",
-    "A risk for the account; needs a bridge with /api/send": "Ρίσκο για τον λογαριασμό· χρειάζεται γέφυρα με /api/send",
+    "A risk for the account; needs the bridge started with -send. Turned off by itself when WhatsApp warns the account":
+        "Ρίσκο για τον λογαριασμό· χρειάζεται τη γέφυρα ξεκινημένη με -send. Κλείνει μόνη της όταν το WhatsApp "
+        "προειδοποιήσει τον λογαριασμό",
+    "sending blocked by the bridge": "η γέφυρα μπλόκαρε την αποστολή",
+    "WhatsApp warned the account, sending is off: {why}": "Το WhatsApp προειδοποίησε τον λογαριασμό, η αποστολή έκλεισε: {why}",
+    "WhatsApp warned the account": "Το WhatsApp προειδοποίησε τον λογαριασμό",
+    "WhatsApp calls (bridge)": "Κλήσεις WhatsApp (γέφυρα)",
     "Check every (seconds)": "Έλεγχος κάθε (δευτερόλεπτα)",
     "Download pictures and videos": "Λήψη φωτογραφιών και βίντεο",
     "Carriers": "Πάροχοι",
@@ -113,7 +139,6 @@ EL = {
     "missing": "λείπει",
     "not found": "δεν βρέθηκε",
     "no answer": "δεν απαντά",
-    "the backup password (scripts/iphone-sync.py --save-password)": "ο κωδικός του backup (scripts/iphone-sync.py --save-password)",
     "api_id and api_hash (scripts/telegram-sync.py --save-credentials)": "api_id και api_hash (scripts/telegram-sync.py --save-credentials)",
     "a login (scripts/telegram-sync.py --login)": "η σύνδεση (scripts/telegram-sync.py --login)",
     "the folder": "ο φάκελος",
