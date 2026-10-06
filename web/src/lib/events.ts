@@ -5,7 +5,9 @@ export type LiveEvent =
   | { type: "hello" | "ping" | "changed" }
   | { type: "new"; chats: Record<string, number>; calls: number }
   | { type: "plugin"; instance: number; running?: string | null; live?: boolean }
-  | { type: "plugin_log"; instance: number; line: string };
+  | { type: "plugin_log"; instance: number; line: string }
+  | { type: "plugin_progress"; instance: number; line: string }     // a line drawn again (a progress bar)
+  | { type: "alert"; title: string; body: string };                  // a plugin's warning, in the user's words
 
 type Listener = (e: LiveEvent) => void;
 const listeners = new Set<Listener>();

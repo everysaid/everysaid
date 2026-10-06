@@ -9,9 +9,12 @@ can be reached live, `live(ctx)` (an async task that stays connected) and `send(
 Library plugins: `find(ctx, sha256, path)`, `store(ctx, path, meta)`, `fetch(ctx, ref, size)`.
 Contacts plugins: `sync(ctx)`.
 """
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 import json
+import os
 import sys
+import threading
 import time
 
 from .. import config
@@ -26,11 +29,20 @@ class Setting:
     required: bool = False
     default: object = None
     help: str = ""
-    options: list = field(default_factory=list)
+    options: list = field(default_factory=list)     # for select: [(value, label)]
+    pattern: str = ""                               # what a value must look like (a regex), if anything
+    keeps: dict = field(default_factory=dict)       # select: {option: (secret key, label)}: choosing it asks
+                                                    # for that secret, kept; leaving it takes the secret away
+
+    def valid(self, value):
+        import re
+        return not self.pattern or value in (None, "") or bool(re.fullmatch(self.pattern, str(value)))
 
     def manifest(self, lang="en"):
         return {"key": self.key, "label": tr(self.label, lang), "type": self.type, "required": self.required,
-                "default": self.default, "help": tr(self.help, lang), "options": self.options}
+                "default": self.default, "help": tr(self.help, lang),
+                "options": [{"value": v, "label": tr(label, lang)} for v, label in self.options],
+                "keeps": {o: {"key": k, "label": tr(label, lang)} for o, (k, label) in self.keeps.items()}}
 
 
 class Plugin:
@@ -47,8 +59,9 @@ class Plugin:
     can_send = False
     can_reply = False           # can send an answer to a given message (quoting it)
     actions = ()                # extra buttons: (id, label)
-    # How each service it brings looks: {service: {"name", "color", "short", "messages"}} ("messages":
-    # False for a service of calls only). Several plugins may bring a service; any of them may say.
+    # How each service it brings looks: {service: {"name", "color", "short", "icon", "messages"}}
+    # ("icon": an SVG path on a 24x24 view, drawn in the colour, where the service is chosen or shown;
+    # "messages": False for a service of calls only). Several plugins may bring a service; any may say.
     service_info = {}
     # The names it brings for people, and how much they are trusted by default: {"<service>/<kind>":
     # weight} (kind: book, its copy of the user's address book; chat, a chat's name; profile, chosen
@@ -84,6 +97,15 @@ class Plugin:
     def chats(self, ctx):
         return []
 
+    def asks(self, ctx):
+        """What it needs typed in for each run, kept nowhere: [(key, label)] (e.g. a password the
+        user chose not to store). The run gets them in ctx.given."""
+        return []
+
+    def info(self, ctx):
+        """A few facts to show on its card: [(label, value)] (e.g. where its backup is, of when)."""
+        return []
+
     def sending(self, ctx):
         """Whether this instance may send now: by default when it can send and is set up; a plugin may
         also make it a setting the user turns on."""
@@ -99,6 +121,22 @@ class Plugin:
         return (not missing, "missing: " + ", ".join(missing) if missing else "ready")
 
 
+_run = threading.local()        # the log file of the run going on in this thread, if any
+
+
+@contextmanager
+def run_log(instance_id, what):
+    """While it lasts, the instance's log lines in this thread go to a file of this run of their own:
+    <logs>/plugin-<id>/<date>-<time>-<what>.log (else to the day's file, as a live connection's do)."""
+    folder = os.path.join(config.LOGS, f"plugin-{instance_id}")
+    os.makedirs(folder, exist_ok=True)
+    _run.path = os.path.join(folder, f"{time.strftime('%Y%m%d-%H%M%S')}-{what}.log")
+    try:
+        yield _run.path
+    finally:
+        _run.path = None
+
+
 class Context:
     """One plugin instance at work: its settings, secrets and state, the archive, and a log."""
 
@@ -112,6 +150,8 @@ class Context:
         self.state = json.loads(row["state"] or "{}")
         self.device_id = row.get("device_id")
         self.lines = []
+        self.bar = ""                   # the line a progress bar draws again and again, under the lines
+        self.given = {}                 # what the user typed in for this run (asks()): never stored
 
     @property
     def store(self):
@@ -122,14 +162,32 @@ class Context:
         """The language the user last chose (setting `language`), for words said without a request."""
         return self.store.setting("language") or "en"
 
-    def log(self, text, **params):
-        """A line of the instance's log, in English with {params}: said in the user's language."""
+    def log(self, text, redrawn=False, **params):
+        """A line of the instance's log, in English with {params}: said in the user's language. The
+        last lines are kept for the interface; every line goes to the log files (see run_log).
+        redrawn: a progress bar's line as it ended, which stays the one bar line of the interface."""
         line = tr(str(text), self.lang)
         if params:
             line = line.format(**params)
+        path = getattr(_run, "path", None) or os.path.join(config.LOGS, f"plugin-{self.id}", f"{time.strftime('%Y%m%d')}-live.log")
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+                f.write("".join(f"{stamp} {part}\n" for part in line.splitlines() or [""]))
+        except OSError:
+            pass                        # a full disk must not stop an import
+        if redrawn:
+            self.progress(line)
+            return
         self.lines.append((int(time.time()), line))
         del self.lines[:-500]
         self.host.emit({"type": "plugin_log", "instance": self.id, "line": line})
+
+    def progress(self, line):
+        """A line being drawn again (a progress bar): shown in place as it changes, not in the log."""
+        self.bar = line
+        self.host.emit({"type": "plugin_progress", "instance": self.id, "line": line})
 
     def secret_name(self, key):
         return f"plugin-{self.id}-{key}"
@@ -139,6 +197,9 @@ class Context:
 
     def save_secret(self, key, value):
         return config.save_secret(self.secret_name(key), value)
+
+    def delete_secret(self, key):
+        config.delete_secret(self.secret_name(key))
 
     def save_state(self, **values):
         self.state.update(values)

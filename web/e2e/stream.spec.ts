@@ -37,14 +37,14 @@ async function y(page: Page, text: string) {
 test.beforeEach(async ({ page }, info) => {
   await signedIn(page, info.project.name);
   if (!chat) {
-    // the person with the most messages that something can send to: a long chat to scroll in
+    // the person with the most messages, last active where something can send: a long chat to scroll in
     chat = await page.evaluate(async () => {
       const h = { "X-Chronika": "1" };
       const chats = (await (await fetch("/api/chats", { headers: h })).json()).items.filter((c: any) => c.type === "person");
       let best = "", most = -1;
       for (const c of chats.slice(0, 12)) {
         const d = await (await fetch(`/api/chats/${c.id}`, { headers: h })).json();
-        if (d.sendable.length && d.person.stats.messages > most) [best, most] = [c.id, d.person.stats.messages];
+        if (d.sendable.includes(d.last_service) && d.person.stats.messages > most) [best, most] = [c.id, d.person.stats.messages];
       }
       return best;
     });

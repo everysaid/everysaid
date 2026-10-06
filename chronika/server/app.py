@@ -560,20 +560,41 @@ def create_app(archive_path=None, auth_path=None):
     def instances(lang: str = "en"):
         return {"items": [host.status(r["id"], lang) for r in plugins.instances(store)]}
 
+    def checked(p, settings, request):
+        """Settings whose values look as they must (a browser may fill a field with anything)."""
+        for s in p.settings:
+            if s.key in settings and not s.valid(settings[s.key]):
+                raise UserError("settings.invalid", 400, field=tr(s.label, request.headers.get("x-lang", "en")),
+                                value=str(settings[s.key]))
+        return settings
+
+    def keep_secrets(p, iid, body):
+        """The secrets given (fields of type secret, and those an option keeps); and away the ones
+        of an option no longer chosen (the user chose not to keep them)."""
+        ctx = host.ctx(iid)
+        kept = {k for s in p.settings for _, (k, _) in s.keeps.items()}
+        wanted = {s.key for s in p.settings if s.type == "secret"} | kept
+        for k, v in (body.get("secrets") or {}).items():
+            if k in wanted and v:
+                ctx.save_secret(k, v)
+        for s in p.settings:
+            for option, (k, _) in s.keeps.items():
+                if ctx.settings.get(s.key) != option:
+                    ctx.delete_secret(k)
+
     @app.post("/api/plugins")
-    def add_instance(body: dict = Body(...)):
+    def add_instance(request: Request, body: dict = Body(...)):
         p = plugins.get(body.get("plugin"))
         if not p:
             raise UserError("unknown_plugin", 400)
+        checked(p, body.get("settings") or {}, request)
         label = (body.get("label") or p.name).strip()
         try:
             iid = plugins.create(store, p.id, label, {k: v for k, v in (body.get("settings") or {}).items()
                                                       if k in {s.key for s in p.settings if s.type != "secret"}})
         except Exception as e:
             raise UserError("failed", 409, reason=str(e))
-        for s in p.settings:
-            if s.type == "secret" and (body.get("secrets") or {}).get(s.key):
-                host.ctx(iid).save_secret(s.key, body["secrets"][s.key])
+        keep_secrets(p, iid, body)
         return host.status(iid)
 
     @app.get("/api/plugins/{iid}")
@@ -583,16 +604,17 @@ def create_app(archive_path=None, auth_path=None):
         return host.status(iid)
 
     @app.patch("/api/plugins/{iid}")
-    def edit_instance(iid: int, body: dict = Body(...)):
+    def edit_instance(iid: int, request: Request, body: dict = Body(...)):
         row = nf(plugins.instance(store, iid))
         p = plugins.get(row["plugin"])
         allowed = {s.key for s in (p.settings if p else ()) if s.type != "secret"}
         settings = {k: v for k, v in (body.get("settings") or {}).items() if k in allowed}
+        if p:
+            checked(p, settings, request)
         plugins.update(store, iid, label=body.get("label"), settings=settings or None, enabled=body.get("enabled"),
                        is_default=body.get("is_default"))
-        for k, v in (body.get("secrets") or {}).items():
-            if p and k in {s.key for s in p.settings if s.type == "secret"} and v:
-                host.ctx(iid).save_secret(k, v)
+        if p:
+            keep_secrets(p, iid, body)
         if body.get("enabled") is False:
             host.stop_live(iid, remember=False)
         return host.status(iid)
@@ -604,11 +626,29 @@ def create_app(archive_path=None, auth_path=None):
         plugins.remove(store, iid)
         return {"ok": True}
 
+    @app.get("/api/plugins/{iid}/logs")
+    def plugin_logs(iid: int):
+        """The instance's whole log files, newest first: one per run, one per day of a live connection."""
+        nf(plugins.instance(store, iid))
+        folder = os.path.join(config.LOGS, f"plugin-{iid}")
+        names = sorted(os.listdir(folder), reverse=True) if os.path.isdir(folder) else []
+        return {"items": [{"name": n, "size": os.path.getsize(os.path.join(folder, n)),
+                           "modified": int(os.path.getmtime(os.path.join(folder, n)))} for n in names if n.endswith(".log")]}
+
+    @app.get("/api/plugins/{iid}/logs/{name}")
+    def plugin_log(iid: int, name: str):
+        if "/" in name or "\\" in name or not name.endswith(".log"):
+            raise UserError("not_found", 404)
+        path = os.path.join(config.LOGS, f"plugin-{iid}", name)
+        if not os.path.isfile(path):
+            raise UserError("not_found", 404)
+        return FileResponse(path, media_type="text/plain; charset=utf-8")
+
     @app.post("/api/plugins/{iid}/run")
     async def run_instance(iid: int, body: dict = Body(default={})):
         nf(plugins.instance(store, iid))
         try:
-            await host.run(iid, body.get("action"))
+            await host.run(iid, body.get("action"), body.get("given"))
         except RuntimeError as e:
             raise UserError("failed", 409, reason=str(e))
         return {"ok": True}

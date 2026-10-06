@@ -12,6 +12,7 @@ it, it is asked first (hidden), so the rest runs unattended. It is never printed
 import argparse
 import getpass
 import os
+import subprocess
 import sys
 
 from iphone_backup_decrypt import EncryptedBackup, RelativePath
@@ -73,7 +74,9 @@ def archived_media():
 ap = argparse.ArgumentParser(description="Back up the iPhone and decrypt its databases.")
 ap.add_argument("-o", "--out", default=OUT, help=f"folder for the decrypted files (default {OUT})")
 ap.add_argument("--no-backup", action="store_true", help="only decrypt the existing backup")
-ap.add_argument("--backup-only", action="store_true", help="only the backup, nothing decrypted")
+ap.add_argument("--backup-root", help="the folder the backups are in (default: [iphone] backup_root)")
+ap.add_argument("--udid", help="which iPhone (default: [iphone] udid, else the only one)")
+ap.add_argument("--password-stdin", action="store_true", help="read the backup password from the standard input")
 ap.add_argument("--full", action="store_true", help="force a full backup instead of an incremental one")
 ap.add_argument("--only", nargs="+", metavar="NAME", help="decrypt only these databases (e.g. whatsapp-calls.sqlite), no media")
 ap.add_argument("--save-password", action="store_true",
@@ -85,7 +88,8 @@ os.umask(0o077)   # everything written here is private: folders 700, files 600
 if args.move_to_keyring:
     config.move_to_keyring(SECRET)
     sys.exit()
-UDID = config.iphone_udid()
+BACKUP_ROOT = args.backup_root or BACKUP_ROOT
+UDID = args.udid or config.iphone_udid(BACKUP_ROOT)
 BACKUP = os.path.join(BACKUP_ROOT, UDID)
 
 
@@ -97,17 +101,25 @@ def open_backup(pw):
 
 have_backup = os.path.exists(os.path.join(BACKUP, "Manifest.plist"))
 if (args.no_backup or args.save_password) and not have_backup:
-    sys.exit("Δεν υπάρχει ολοκληρωμένο backup (λείπει το Manifest.plist).")
+    sys.exit("There is no complete backup yet (its Manifest.plist is missing).")
 
-pw = None if args.save_password else config.secret(SECRET)
-if pw is not None and have_backup:
+if args.password_stdin:            # given for this run only (the app asks for it): never stored
+    pw = sys.stdin.readline().rstrip("\r\n")
+    if have_backup:
+        try:
+            open_backup(pw)
+        except IncorrectPassphraseError:
+            sys.exit("Wrong backup password.")
+else:
+    pw = None if args.save_password else config.secret(SECRET)
+if pw is not None and have_backup and not args.password_stdin:
     try:
         open_backup(pw)
     except IncorrectPassphraseError:
-        sys.exit("Ο αποθηκευμένος κωδικός είναι λάθος· ξαναγράψ' τον με --save-password.")
+        sys.exit("The stored backup password is wrong: store it again with --save-password.")
 
 while pw is None:
-    pw = getpass.getpass("Κωδικός backup (κενό για έξοδο): ")
+    pw = getpass.getpass("Backup password (empty to quit): ")
     if not pw:
         sys.exit(1)
     if not have_backup:     # nothing to check it against yet; the backup itself will tell
@@ -115,25 +127,65 @@ while pw is None:
     try:
         open_backup(pw)
     except IncorrectPassphraseError:
-        print("Λάθος κωδικός.")
+        print("Wrong password.")
         pw = None
         continue
     except Exception as e:
-        print("Άλλο σφάλμα (όχι λάθος κωδικός):", type(e).__name__, e)
+        print("Another error (not a wrong password):", type(e).__name__, e)
         pw = None
         continue
 
 if args.save_password:
-    sys.exit(f"Αποθηκεύτηκε στο {config.save_secret(SECRET, pw)}.")
+    sys.exit(f"Stored in the {config.save_secret(SECRET, pw)}.")
+
+def terminal():
+    """A pseudo-terminal (reader, writer) where the system has them, its lines as written (no \r
+    added before \n); None elsewhere."""
+    try:
+        import pty
+        import termios
+        reader, writer = pty.openpty()
+    except (ImportError, OSError):
+        return None
+    mode = termios.tcgetattr(writer)
+    mode[1] &= ~termios.OPOST
+    termios.tcsetattr(writer, termios.TCSANOW, mode)
+    return reader, writer
+
+
+def read(fd):
+    try:
+        return os.read(fd, 4096)
+    except OSError:                     # a terminal whose writer has closed
+        return b""
+
 
 if not args.no_backup:
     cmd = ["idevicebackup2", "-u", UDID, "backup"] + (["--full"] if args.full else []) + [BACKUP_ROOT]
-    print("Backup:", " ".join(cmd), "(το iPhone μπορεί να ζητήσει τον κωδικό του)")
+    print("Backup:", " ".join(cmd), flush=True)
+    print("The iPhone may ask for its passcode: type it there.", flush=True)
     os.makedirs(BACKUP_ROOT, exist_ok=True)
-    if common.run(cmd).returncode != 0:
-        sys.exit("Το backup απέτυχε· τα αρχεία στο " + args.out + " δεν άλλαξαν.")
-    if args.backup_only:
-        sys.exit(0)
+    # its output as it comes (a backup takes minutes), and kept to say why if it fails
+    # (bytes as they come, its \r of a progress bar kept: the reader draws them as a terminal does).
+    # Into a pipe it would hold its lines back for long, so it gets a terminal where there is one.
+    out = terminal()
+    proc = subprocess.Popen([common.tool(cmd[0]), *cmd[1:]], stdin=subprocess.DEVNULL,
+                            stdout=out[1] if out else subprocess.PIPE, stderr=subprocess.STDOUT)
+    if out:
+        os.close(out[1])
+    said = b""
+    while chunk := read(out[0] if out else proc.stdout.fileno()):
+        sys.stdout.buffer.write(chunk)
+        sys.stdout.flush()
+        said = (said + chunk)[-20000:]
+    said = said.decode("utf-8", "replace")
+    if proc.wait() != 0:
+        # said in the user's words by the app (plugins/i18n.py), so each one whole
+        sys.exit("The backup failed: the iPhone is locked. Unlock it, and type its passcode there when it asks."
+                 if "Device locked" in said or "ErrorCode 208" in said
+                 else "The backup failed: no iPhone found. Connect it with a cable, unlock it and tap Trust."
+                 if "No device found" in said or "ERROR: Could not connect" in said
+                 else "The backup failed: idevicebackup2 did not finish (see the whole log).")
 
 backup = open_backup(pw)
 os.makedirs(args.out, mode=0o700, exist_ok=True)
@@ -178,5 +230,5 @@ for folder, (domain, prefixes, strip) in MEDIA.items():
         os.chmod(dest + ".part", 0o600)
         os.replace(dest + ".part", dest)
         new += 1
-    print(f"OK {folder}: {new} νέα, {skipped} ήδη στο αρχείο, {len(paths)} συνολικά")
-print("Έτοιμο:", args.out)
+    print(f"OK {folder}: {new} new, {skipped} already in the archive, {len(paths)} in all")
+print("Done:", args.out)

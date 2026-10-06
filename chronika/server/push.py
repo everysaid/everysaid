@@ -50,6 +50,13 @@ class Push:
         return self.auth.q("SELECT s.endpoint, s.keys FROM push_subscription s JOIN user u ON u.id = s.user_id "
                            "WHERE u.archive = ?", (archive_path,))
 
+    def alert(self, store, title, body):
+        """A notice about the app itself (a plugin's warning), to every device of the archive's users."""
+        subs = self.subscriptions(store.path)
+        if subs:
+            payload = {"title": title, "body": (body or "")[:240], "chat": None, "tag": "alert"}
+            threading.Thread(target=self._send, args=(subs, [payload]), daemon=True).start()
+
     def notify(self, store, incoming):
         """incoming: [(chat id, message id, text, kind)] of one archive."""
         subs = self.subscriptions(store.path)

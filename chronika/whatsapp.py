@@ -31,7 +31,12 @@ IPHONE_KINDS = {0: "text", 7: "text", 1: "image", 11: "image", 38: "image", 2: "
                 54: "video", 3: "voice", 4: "contact", 5: "location", 8: "file", 15: "sticker",
                 19: "text", 20: "text", 25: "text", 30: "text", 31: "text", 41: "text"}
 METADATA_TEXT = (19, 20, 25, 30, 31, 41)
-BRIDGE_KINDS = {"": "text", "image": "image", "video": "video", "audio": "voice", "document": "file"}
+# The bridge's kinds (`messages.kind`); a bridge from before that column says only its media type.
+BRIDGE_KINDS = {"text": "text", "image": "image", "video": "video", "audio": "voice", "voice": "voice",
+                "document": "file", "sticker": "sticker", "location": "location", "contact": "contact",
+                "poll": "text"}
+BRIDGE_MEDIA_KINDS = {"": "text", "image": "image", "video": "video", "audio": "voice", "document": "file",
+                      "sticker": "sticker"}
 
 
 def ro(path):
@@ -43,6 +48,50 @@ def ro(path):
 def ro_bridge(path):
     """A database that may not be there (the bridge's, or the iPhone's), or None."""
     return ro(path) if path and os.path.exists(path) else None
+
+
+def has_table(db, name):
+    return db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)).fetchone() is not None
+
+
+def bridge_changes(archive, bridge, person, own, reactions):
+    """What the bridge saw happen to messages the archive already has: edits and deletions by their
+    sender (marked; the text stays as the archive first had it), and reactions as they are now
+    (one per person: changed, added, or removed once taken back). Returns the counts."""
+    db, out = archive.db, defaultdict(int)
+    cols = {r[1] for r in bridge.execute("PRAGMA table_info(messages)")}
+    if {"edited", "deleted"} <= cols:
+        for r in bridge.execute("SELECT id, edited, deleted FROM messages WHERE edited OR deleted"):
+            mid = archive.message_by_key("whatsapp", r["id"])
+            if mid:
+                for flag in ("edited", "deleted"):
+                    if r[flag] and db.execute(f"UPDATE message SET {flag} = 1 WHERE id = ? AND NOT {flag}", (mid,)).rowcount:
+                        out[flag] += 1
+    for (_, message_id), rows in reactions.items():
+        mid = archive.message_by_key("whatsapp", message_id)
+        if not mid:
+            continue
+        for jid, mine, emoji in rows:
+            p = None if mine else person(jid)
+            mine = mine or p in own
+            who = None if mine or not p else archive.address(*p)
+            if not mine and who is None:
+                continue
+            old = db.execute("SELECT rowid, emoji FROM reaction WHERE message_id = ? AND " +
+                             ("outgoing = 1" if mine else "address_id = ?"),
+                             (mid,) if mine else (mid, who)).fetchone()
+            if not emoji:
+                if old:
+                    db.execute("DELETE FROM reaction WHERE rowid = ?", (old[0],))
+                    out["reactions"] += 1
+            elif old is None:
+                db.execute("INSERT INTO reaction (message_id, emoji, count, address_id, outgoing) VALUES (?, ?, 1, ?, ?)",
+                           (mid, emoji, who, 1 if mine else None))
+                out["reactions"] += 1
+            elif old[1] != emoji:
+                db.execute("UPDATE reaction SET emoji = ?, code = NULL WHERE rowid = ?", (emoji, old[0]))
+                out["reactions"] += 1
+    return dict(out)
 
 
 def protobuf_strings(data, depth=0):
@@ -267,16 +316,22 @@ def run(archive, iphone_db=IPHONE_DB, contacts_db=CONTACTS_DB, bridge_db=BRIDGE_
 
     # Bridge
     names = dict(bridge.execute("SELECT jid, name FROM chats").fetchall()) if bridge else {}
+    reactions = defaultdict(list)       # (chat, message id) -> [(sender jid, is_from_me, emoji)]
+    if bridge and has_table(bridge, "reactions"):
+        for r in bridge.execute("SELECT chat_jid, message_id, sender, is_from_me, emoji FROM reactions"):
+            reactions[(r["chat_jid"], r["message_id"])].append((r["sender"], bool(r["is_from_me"]), r["emoji"]))
     convs = {}
     for r in bridge.execute("SELECT * FROM messages ORDER BY timestamp") if bridge else ():
         jid = r["chat_jid"]
         if jid not in convs:
             convs[jid] = conversation(archive, person, jid, names.get(jid), [])
         outgoing = bool(r["is_from_me"])
-        add("bridge", f"{jid}/{r['id']}", None, convs[jid],
+        kind = (BRIDGE_KINDS.get(r["kind"], "file") if "kind" in r.keys() and r["kind"]
+                else BRIDGE_MEDIA_KINDS.get(r["media_type"] or "", "file"))
+        add("bridge", f"{jid}/{r['id']}", extras.whatsapp_bridge(r, reactions.get((jid, r["id"]), ())), convs[jid],
             int(datetime.fromisoformat(r["timestamp"]).timestamp() * 1000), outgoing,
-            None if outgoing else person(r["sender"] or jid),
-            BRIDGE_KINDS.get(r["media_type"] or "", "file"), r["content"] or None, r["id"])
+            None if outgoing else person(r["sender"] or jid), kind, r["content"] or None, r["id"])
+    updated = bridge_changes(archive, bridge, person, own, reactions) if bridge else {}
 
     # The names WhatsApp shows, for the handles in the archive (core/names.py orders them against an
     # address book and other services).
@@ -317,3 +372,6 @@ def run(archive, iphone_db=IPHONE_DB, contacts_db=CONTACTS_DB, bridge_db=BRIDGE_
     for source in src:
         print(f"νέα:     {added[source]:7} {source}"
               + (f" ({skipped[source]} υπήρχαν ήδη από άλλη πηγή)" if skipped[source] else ""))
+    if updated:
+        print("αλλαγές σε όσα υπήρχαν:", ", ".join(f"{k} {v}" for k, v in sorted(updated.items())))
+    return updated

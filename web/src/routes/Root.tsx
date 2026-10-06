@@ -4,7 +4,8 @@ import { useTranslation } from "react-i18next";
 import { loadServices } from "@/lib/services";
 import { Outlet, useRouterState } from "@tanstack/react-router";
 import { api } from "@/lib/api";
-import { connectEvents } from "@/lib/events";
+import { connectEvents, onEvent } from "@/lib/events";
+import { toast } from "sonner";
 import { Center, Spinner } from "@/components/ui";
 import { AppShell } from "@/components/AppShell";
 import { LoginScreen, SetupScreen } from "./Auth";
@@ -29,6 +30,10 @@ export function Root() {
   useEffect(() => {
     if (auth.data?.logged_in) return connectEvents(qc);
   }, [auth.data?.logged_in, qc]);
+  // a plugin's warning (as a push too): stays until dismissed
+  useEffect(() => onEvent((e) => {
+    if (e.type === "alert") toast.warning(e.title, { description: e.body, duration: Infinity, closeButton: true });
+  }), []);
   // the server says some things without being asked (logs, notifications): in the language last chosen
   useEffect(() => {
     if (auth.data?.logged_in) api.put("/api/settings", { language: i18n.language }).catch(() => {});

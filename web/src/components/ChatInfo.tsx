@@ -237,7 +237,13 @@ function ChatStates({ chat }: { chat: ChatDetail }) {
                   options={[{ value: "auto", label: t("chat.stateAuto") }, { value: "yes", label: t("chat.stateYes") }, { value: "no", label: t("chat.stateNo") }]} />
               )}
             </div>
-            {field !== "archived" && <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted">
+            {field === "archived" ? (reports.length > 0 && (
+              // where it started from: what each service said when the chat first came (then it is ours alone)
+              <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted">
+                <span>{t("chat.archivedFrom")}</span>
+                {reports.map((r) => <span key={r.service}>· {service(r.service).name}: {r.value ? t("chat.yes") : t("chat.no")}</span>)}
+              </div>
+            )) : <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted">
               <span>{t("chat.stateNow", { value: now ? t("chat.yes") : t("chat.no"), by: by === "user" ? t("chat.stateByYou") : by ? service(by).name : t("chat.stateAuto") })}</span>
               {reports.map((r) => <span key={r.service}>· {service(r.service).name}: {r.value ? t("chat.yes") : t("chat.no")}</span>)}
             </div>}

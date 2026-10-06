@@ -27,7 +27,7 @@ def catalog(lang="en"):
 
 
 def services(lang="en"):
-    """How each service looks, as the plugins that bring it declare: {service: {name, color, short, messages}}."""
+    """How each service looks, as the plugins that bring it declare: {service: {name, color, short, icon, messages}}."""
     out = {}
     for p in REGISTRY.values():
         for sid, info in p.service_info.items():

@@ -191,3 +191,15 @@ def test_changing_ways_in_needs_a_recent_sign_in(app):
         r = getattr(c, method)(path, **({"json": {}} if method == "post" else {}), headers=H)
         assert r.status_code == 403, path
     assert c.get("/api/chats").status_code == 200                                 # everything else still works
+
+
+def test_a_setting_that_is_not_what_it_must_be_is_refused(app):
+    app, c = app
+    login(app, c)
+    made = c.post("/api/plugins", json={"plugin": "iphone-backup", "label": "Test iPhone"}, headers=H).json()
+    bad = c.patch(f"/api/plugins/{made['id']}", json={"settings": {"udid": "Somebody"}}, headers={**H, "X-Lang": "el"})
+    assert bad.status_code == 400 and bad.json()["detail"]["code"] == "settings.invalid"     # a name a browser filled in
+    assert bad.json()["detail"]["params"]["value"] == "Somebody"
+    good = c.patch(f"/api/plugins/{made['id']}", json={"settings": {"udid": "00008110-001A2B3C4D5E6F70"}}, headers=H)
+    assert good.status_code == 200 and good.json()["settings"]["udid"] == "00008110-001A2B3C4D5E6F70"
+    assert c.patch(f"/api/plugins/{made['id']}", json={"settings": {"udid": ""}}, headers=H).status_code == 200   # found by itself

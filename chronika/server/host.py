@@ -15,6 +15,7 @@ import traceback
 from .. import archive as archive_mod, plugins
 from ..core import queries
 from ..plugins.base import Context
+from ..plugins.base import run_log
 from ..plugins.i18n import tr
 from ..errors import UserError
 
@@ -70,6 +71,12 @@ class Host:
             self.push.notify(self.store, incoming)
         return {"type": "new", "chats": chats, "calls": c1 - c0}
 
+    def alert(self, title, body):
+        """Tell the user something about the app (a plugin's warning): on the open apps, and as a push."""
+        self.emit({"type": "alert", "title": title, "body": body})
+        if self.push:
+            self.push.alert(self.store, title, body)
+
     # instances
     def ctx(self, iid):
         row = plugins.instance(self.store, iid)
@@ -78,7 +85,7 @@ class Host:
         old = self.contexts.get(iid)
         c = Context(self, row)
         if old:
-            c.lines = old.lines
+            c.lines, c.bar = old.lines, old.bar
         self.contexts[iid] = c
         return c
 
@@ -86,11 +93,14 @@ class Host:
         row = plugins.instance(self.store, iid)
         p = plugins.get(row["plugin"])
         c = self.contexts.get(iid)
-        ready = p.check(self.ctx(iid)) if p else (False, "unknown plugin")
+        ctx = self.ctx(iid)
+        ready = p.check(ctx) if p else (False, "unknown plugin")
         out = plugins.public(row, lang)
         out.update({"running": self.running.get(iid), "ready": ready[0], "ready_text": tr(ready[1], lang),
                     "live_capable": bool(p and "live" in p.modes), "live": iid in self.live_tasks,
-                    "can_send": bool(p and p.can_send), "log": [line for _, line in (c.lines[-30:] if c else [])]})
+                    "can_send": bool(p and p.can_send), "log": [line for _, line in (c.lines[-30:] if c else [])], "bar": c.bar if c else "",
+                    "asks": [{"key": k, "label": tr(label, lang)} for k, label in (p.asks(ctx) if p else [])],
+                    "info": [{"label": tr(label, lang), "value": tr(value, lang)} for label, value in (p.info(ctx) if p else [])]})
         return out
 
     def _set_status(self, iid, status):
@@ -98,32 +108,45 @@ class Host:
             db.execute("UPDATE plugin_instance SET last_run = ?, last_status = ? WHERE id = ?",
                        (int(time.time()), status[:500], iid))
 
-    async def run(self, iid, action=None):
-        """An import (or a plugin's own action) of one instance, in a thread."""
+    async def run(self, iid, action=None, given=None):
+        """An import (or a plugin's own action) of one instance, in a thread. given: what the user
+        typed in for this run (the plugin's asks()): kept only by this run, in memory."""
         if self.running.get(iid):
             raise UserError("host.running", 409)
         ctx = self.ctx(iid)
+        ctx.lines.clear()
+        ctx.bar = ""                        # the panel shows this run (the earlier ones are in their files)
         p = plugins.get(ctx.plugin_id)
+        wanted = {k for k, _ in p.asks(ctx)} if p else set()
+        ctx.given = {k: v for k, v in (given or {}).items() if k in wanted and v}
         self.running[iid] = "import"
         self.emit({"type": "plugin", "instance": iid, "running": "import"})
 
         def work():
             try:
-                ctx.log("— {what} —", what=tr(action or "import", ctx.lang))
-                (p.action(ctx, action) if action else (p.sync(ctx) if hasattr(p, "sync") else p.run_import(ctx)))
-                self._set_status(iid, "ok")
-                if self.loop:
-                    self.loop.call_soon_threadsafe(self.auto_live, iid)     # now set up, perhaps
-            except Exception as e:
-                ctx.log("error: {e}", e=e)
-                ctx.log(traceback.format_exc().strip().splitlines()[-1])
-                self._set_status(iid, tr("error: {e}", ctx.lang).format(e=e))
+                with run_log(iid, action or "import"):
+                    self._work(ctx, p, iid, action)
             finally:
-                self.running.pop(iid, None)
-                self.emit({"type": "plugin", "instance": iid, "running": None})
-                self.emit({"type": "changed"})
+                ctx.given = {}          # gone with the run
 
         threading.Thread(target=work, name=f"plugin-{iid}", daemon=True).start()
+
+    def _work(self, ctx, p, iid, action):
+        """The run itself (in its thread, its lines in a log file of its own)."""
+        try:
+            ctx.log("— {what} —", what=tr(action or "import", ctx.lang))
+            (p.action(ctx, action) if action else (p.sync(ctx) if hasattr(p, "sync") else p.run_import(ctx)))
+            self._set_status(iid, "ok")
+            if self.loop:
+                self.loop.call_soon_threadsafe(self.auto_live, iid)     # now set up, perhaps
+        except Exception as e:
+            ctx.log("error: {e}", e=e)
+            ctx.log(traceback.format_exc().strip())          # whole, in the log file and the panel
+            self._set_status(iid, str(e))           # the reason ("ok" when it worked): the interface says the rest
+        finally:
+            self.running.pop(iid, None)
+            self.emit({"type": "plugin", "instance": iid, "running": None})
+            self.emit({"type": "changed"})
 
     def auto_live(self, iid):
         """Start a live connection the plugin wants by default, unless the user turned it off or it

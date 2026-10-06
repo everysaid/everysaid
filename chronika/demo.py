@@ -299,7 +299,7 @@ class DemoSender:
         class Sender(Plugin):
             id = "demo-sender"
             name = "Demo (sends into the demo archive)"
-            services = ("whatsapp", "viber", "sms", "telegram", "imessage")
+            services = ("whatsapp", "viber", "sms", "telegram")   # not iMessage: a chat it cannot send to
             description = "Invented: what is sent is only written into the demo archive."
             can_send = True
             can_reply = True
@@ -323,8 +323,9 @@ class DemoSender:
 def env_for(d):
     d = os.path.abspath(d)
     env = dict(os.environ, CHRONIKA_DATA=os.path.join(d, "data"), CHRONIKA_CACHE=os.path.join(d, "cache"),
-               CHRONIKA_CONFIG=os.path.join(d, "config"), CHRONIKA_KEYRING="chronika-demo", CHRONIKA_DEMO="1")
-    for k in ("CHRONIKA_DATA", "CHRONIKA_CACHE", "CHRONIKA_CONFIG"):
+               CHRONIKA_CONFIG=os.path.join(d, "config"), CHRONIKA_STATE=os.path.join(d, "state"),
+               CHRONIKA_KEYRING="chronika-demo", CHRONIKA_DEMO="1")
+    for k in ("CHRONIKA_DATA", "CHRONIKA_CACHE", "CHRONIKA_CONFIG", "CHRONIKA_STATE"):
         os.makedirs(env[k], exist_ok=True)
     cfg = os.path.join(env["CHRONIKA_CONFIG"], "config.toml")
     if not os.path.exists(cfg):
