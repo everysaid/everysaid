@@ -1,4 +1,4 @@
-// Chronika's mark: two speech bubbles, one behind the other (many conversations, one place),
+// Everysaid's mark: two speech bubbles, one behind the other (many conversations, one place),
 // with the lines of a message in the front one.
 export function Logo({ className }: { className?: string }) {
   return (

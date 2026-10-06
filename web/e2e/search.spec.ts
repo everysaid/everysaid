@@ -62,7 +62,7 @@ test("a person's calls and media, from their info: only theirs", async ({ page }
   await signedIn(page, info.project.name);
   // a person with calls
   const { id, title } = await page.evaluate(async () => {
-    const h = { "X-Chronika": "1" };
+    const h = { "X-Everysaid": "1" };
     const calls = (await (await fetch("/api/calls?limit=50", { headers: h })).json()).items;
     const c = calls.find((x: any) => x.chat_id);
     const d = await (await fetch(`/api/chats/${c.chat_id}`, { headers: h })).json();
@@ -73,7 +73,7 @@ test("a person's calls and media, from their info: only theirs", async ({ page }
   await page.locator(`a[href*="/calls?chat=${id}"]`).click();
   await expect(page.locator("[data-chat-filter]")).toContainText(title);
   const names = await page.evaluate(async (chat) => {
-    const r = await (await fetch(`/api/calls?chat=${chat}&limit=200`, { headers: { "X-Chronika": "1" } })).json();
+    const r = await (await fetch(`/api/calls?chat=${chat}&limit=200`, { headers: { "X-Everysaid": "1" } })).json();
     return [...new Set(r.items.map((c: any) => c.chat_id))];
   }, id);
   expect(names).toEqual([id]);
@@ -85,7 +85,7 @@ test("a person's calls and media, from their info: only theirs", async ({ page }
 test("search in one chat: the chat stays shown while typing, as a choice among those it is found in", async ({ page }, info) => {
   await signedIn(page, info.project.name);
   const chat = await page.evaluate(async () => {
-    const h = { "X-Chronika": "1" };
+    const h = { "X-Everysaid": "1" };
     return (await (await fetch("/api/chats", { headers: h })).json()).items.find((c: any) => c.type === "person");
   });
   await page.goto(`/search?chat=${chat.id}`);
@@ -99,7 +99,7 @@ test("search in one chat: the chat stays shown while typing, as a choice among t
 test("search: dates alone show everything of those days, calls too", async ({ page }, info) => {
   await signedIn(page, info.project.name);
   const call = await page.evaluate(async () =>                                  // the day of a call
-    (await (await fetch("/api/calls?limit=1", { headers: { "X-Chronika": "1" } })).json()).items[0].ts as number);
+    (await (await fetch("/api/calls?limit=1", { headers: { "X-Everysaid": "1" } })).json()).items[0].ts as number);
   const d = new Date(call);
   const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   await page.goto("/search");
@@ -112,7 +112,7 @@ test("search: dates alone show everything of those days, calls too", async ({ pa
 test("a date is typed in the app's order, counts only once whole, and goes to the nearest day", async ({ page }, info) => {
   await signedIn(page, info.project.name);
   const id = await page.evaluate(async () =>
-    (await (await fetch("/api/chats", { headers: { "X-Chronika": "1" } })).json()).items.find((c: any) => c.type === "person").id as string);
+    (await (await fetch("/api/chats", { headers: { "X-Everysaid": "1" } })).json()).items.find((c: any) => c.type === "person").id as string);
   await page.goto(`/chat/${id}`);
   await page.getByRole("button", { name: /^(Μετάβαση σε ημερομηνία|Jump to date)$/ }).click();
   const field = page.locator("[data-date-field]");

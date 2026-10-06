@@ -21,7 +21,7 @@ const up = async (page: Page, px = 1500) => {
 const inStream = (page: Page, text: string) => page.locator("[data-stream]").getByText(text, { exact: true });
 const field = (page: Page) => page.locator("[data-composer-body] textarea");
 const incoming = (page: Page, text: string, service?: string) =>
-  page.request.post("/api/demo/incoming", { data: { chat, text, service }, headers: { "X-Chronika": "1" } });
+  page.request.post("/api/demo/incoming", { data: { chat, text, service }, headers: { "X-Everysaid": "1" } });
 const row = (page: Page, text: string) => page.locator("[data-stream] [id^=m]", { has: page.getByText(text, { exact: true }) });
 
 async function send(page: Page, text: string, phone: boolean) {
@@ -39,7 +39,7 @@ test.beforeEach(async ({ page }, info) => {
   if (!chat) {
     // the person with the most messages, last active where something can send: a long chat to scroll in
     chat = await page.evaluate(async () => {
-      const h = { "X-Chronika": "1" };
+      const h = { "X-Everysaid": "1" };
       const chats = (await (await fetch("/api/chats", { headers: h })).json()).items.filter((c: any) => c.type === "person");
       let best = "", most = -1;
       for (const c of chats.slice(0, 12)) {
@@ -131,7 +131,7 @@ test("replying: pick a message, the bar shows it (Esc cancels), the answer goes 
   const phone = info.project.name === "mobile";
   // a service whose messages have their own id (an SMS has none: no answer to it can be sent)
   const service = await page.evaluate(async (c) => {
-    const d = await (await fetch(`/api/chats/${c}`, { headers: { "X-Chronika": "1" } })).json();
+    const d = await (await fetch(`/api/chats/${c}`, { headers: { "X-Everysaid": "1" } })).json();
     return d.replyable.find((s: string) => s !== "sms");
   }, chat);
   const asked = `answer me ${Date.now()}`;

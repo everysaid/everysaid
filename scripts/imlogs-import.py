@@ -1,4 +1,4 @@
-"""Import the logs of Adium and Pidgin (Gaim) into the archive: `chronika/imlogs.py`.
+"""Import the logs of Adium and Pidgin (Gaim) into the archive: `everysaid/imlogs.py`.
 
     uv run python scripts/imlogs-import.py --adium "/path/to/Adium 2.0" --pidgin /path/to/.purple
     uv run python scripts/imlogs-import.py ... --dry-run
@@ -13,8 +13,8 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from chronika import imlogs
-from chronika.archive import DB, Archive
+from everysaid import imlogs
+from everysaid.archive import DB, Archive
 
 
 def main():
@@ -25,7 +25,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="report only, on a throwaway copy of the archive")
     args = ap.parse_args()
     if args.dry_run:
-        tmp = tempfile.mkdtemp(prefix="chronika-imlogs-")
+        tmp = tempfile.mkdtemp(prefix="everysaid-imlogs-")
         path = os.path.join(tmp, "archive.db")
         if os.path.exists(args.db):
             shutil.copy(args.db, path)

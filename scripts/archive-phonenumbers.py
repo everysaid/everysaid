@@ -23,7 +23,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from chronika import archive, config  # noqa: E402
+from everysaid import archive, config  # noqa: E402
 
 
 def v1_address(raw):

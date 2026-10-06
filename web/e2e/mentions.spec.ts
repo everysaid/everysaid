@@ -7,7 +7,7 @@ import { signedIn } from "./demo";
 
 async function whatsappGroup(page: Page) {
   return page.evaluate(async () => {
-    const h = { "X-Chronika": "1" };
+    const h = { "X-Everysaid": "1" };
     const chats = (await (await fetch("/api/chats?kind=group", { headers: h })).json()).items;
     for (const c of chats) {
       const d = await (await fetch(`/api/chats/${c.id}`, { headers: h })).json();
@@ -72,7 +72,7 @@ test("Esc closes the @ list, and a file goes with its caption", async ({ page },
 test("a mention in what arrived shows the person's name, a link to them", async ({ page }, info) => {
   await signedIn(page, info.project.name);
   const found = await page.evaluate(async () => {
-    const h = { "X-Chronika": "1" };
+    const h = { "X-Everysaid": "1" };
     const chats = (await (await fetch("/api/chats?kind=group", { headers: h })).json()).items;
     for (const c of chats) {
       let before: string | undefined;

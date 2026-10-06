@@ -16,7 +16,7 @@ Candidates are the pictures the review page shows (`--paths`, one path per line)
 picture and video the archive still has. For each: faces found (detection score of 0.7 or more,
 as immich), and for each face the named person it matches: the cosine similarity to at least
 MATCHES of that person's faces in immich must be MIN_SIM or more. Results go to
-`~/.cache/chronika/faces.db` (`face`: path, faces, the labels found, other faces), and can be
+`~/.cache/everysaid/faces.db` (`face`: path, faces, the labels found, other faces), and can be
 redone: files already done are skipped. Runs on the CPU (onnxruntime's GPU providers are not
 assumed).
 Nothing leaves the machine.

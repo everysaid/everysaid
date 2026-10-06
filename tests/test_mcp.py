@@ -12,7 +12,7 @@ def call(mcp, name, **args):
 
 
 def test_tools(store):
-    from chronika.mcp_server import build
+    from everysaid.mcp_server import build
     mcp = build(store.path)
     names = {t.name for t in asyncio.run(mcp.list_tools())}
     assert {"search_messages", "read_chat", "get_person", "day_timeline"} <= names
@@ -27,8 +27,8 @@ def test_tools(store):
 
 
 def test_media_on_demand(store, tmp_path):
-    from chronika import plugins
-    from chronika.mcp_server import build
+    from everysaid import plugins
+    from everysaid.mcp_server import build
     lib = tmp_path / "lib"
     lib.mkdir()
     with store.write() as db:

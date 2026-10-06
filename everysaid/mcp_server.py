@@ -1,6 +1,6 @@
-"""`chronika mcp`: the archive for an assistant, as an MCP server over stdio.
+"""`everysaid mcp`: the archive for an assistant, as an MCP server over stdio.
 
-    chronika mcp [--archive PATH]
+    everysaid mcp [--archive PATH]
 
 Every tool is a call into the core (the same answers the app gives). Times are given in the user's
 time zone (config `[owner] timezone`), as ISO text. Reading is free; the changes an assistant can
@@ -53,7 +53,7 @@ def build(archive_path=None):
     from .plugins import services
     store = Store(archive_path or DB)
     known = ", ".join(f"{v['name']} ({k})" for k, v in services().items())
-    mcp = MCPServer("chronika", instructions=(
+    mcp = MCPServer("everysaid", instructions=(
         f"The user's personal archive of messages and calls, from the services its plugins bring: {known}. "
         "A person is one chat (id p<number>) whatever services they were reached on; groups are "
         "c<number>. Find people or chats first (find_people, list_chats), then read (read_chat, search_messages). "
@@ -195,7 +195,7 @@ def build(archive_path=None):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="chronika mcp", description="The archive as an MCP server (stdio).")
+    ap = argparse.ArgumentParser(prog="everysaid mcp", description="The archive as an MCP server (stdio).")
     ap.add_argument("--archive")
     args = ap.parse_args(argv)
     build(args.archive).run()

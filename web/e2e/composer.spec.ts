@@ -8,7 +8,7 @@ import { signedIn } from "./demo";
 test("answers where the chat was last active, with a lock where it cannot send", async ({ page }, info) => {
   await signedIn(page, info.project.name);
   const chat = await page.evaluate(async () => {
-    const h = { "X-Chronika": "1" };
+    const h = { "X-Everysaid": "1" };
     const chats = (await (await fetch("/api/chats", { headers: h })).json()).items;
     for (const c of chats) {
       const d = await (await fetch(`/api/chats/${c.id}`, { headers: h })).json();
@@ -32,7 +32,7 @@ test("answers where the chat was last active, with a lock where it cannot send",
   await expect(items.first()).toBeVisible();
   await expect(items.filter({ has: page.locator("[data-icon]") })).toHaveCount(await items.count());
   await items.filter({ hasText: (await page.evaluate(async (s) => {
-    const h = { "X-Chronika": "1" };
+    const h = { "X-Everysaid": "1" };
     return (await (await fetch("/api/services", { headers: h })).json())[s].name;
   }, chat!.other)) }).click();
   await expect(via).toHaveAttribute("data-via", chat!.other);
@@ -44,7 +44,7 @@ test("answers where the chat was last active, with a lock where it cannot send",
 test("a person's services, all on at first: one turned off leaves its messages out, and comes back", async ({ page }, info) => {
   await signedIn(page, info.project.name);
   const chat = await page.evaluate(async () => {
-    const h = { "X-Chronika": "1" };
+    const h = { "X-Everysaid": "1" };
     const chats = (await (await fetch("/api/chats", { headers: h })).json()).items;
     const looks = await (await fetch("/api/services", { headers: h })).json();
     return chats.find((c: any) => c.type === "person" && c.services.filter((s: string) => looks[s]?.messages).length > 1);
@@ -59,7 +59,7 @@ test("a person's services, all on at first: one turned off leaves its messages o
   await expect(page.locator(`[data-service-toggle="${off}"]`)).toHaveAttribute("aria-pressed", "false");   // only that one
   for (const s of chat.services.slice(1)) await expect(page.locator(`[data-service-toggle="${s}"]`)).toHaveAttribute("aria-pressed", "true");
   const shown = await page.evaluate(async ([id, s]) => {
-    const r = await fetch(`/api/chats/${id}/stream?hide=${s}&limit=80`, { headers: { "X-Chronika": "1" } });
+    const r = await fetch(`/api/chats/${id}/stream?hide=${s}&limit=80`, { headers: { "X-Everysaid": "1" } });
     return (await r.json()).items.map((i: any) => i.service);
   }, [chat.id, off]);
   expect(shown).not.toContain(off);

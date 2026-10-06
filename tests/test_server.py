@@ -6,12 +6,12 @@ from fastapi.testclient import TestClient
 from tests.conftest import PRISTINE
 
 BASE = "http://localhost:8520"
-H = {"X-Chronika": "1"}
+H = {"X-Everysaid": "1"}
 
 
 @pytest.fixture
 def app(tmp_path):
-    from chronika.server.app import create_app
+    from everysaid.server.app import create_app
     db = tmp_path / "archive.db"
     shutil.copy(PRISTINE, db)
     app = create_app(str(db), str(tmp_path / "server.db"))
@@ -22,7 +22,7 @@ def app(tmp_path):
 def login(app, c):
     auth = app.state.auth
     uid = auth.create_user("Test", app.state.store.path)
-    c.cookies.set("chronika_session", auth.new_session(uid, "pytest", "127.0.0.1"))
+    c.cookies.set("everysaid_session", auth.new_session(uid, "pytest", "127.0.0.1"))
     return uid
 
 
@@ -37,7 +37,7 @@ def test_guards(app):
     login(app, c)
     assert c.get("/api/chats").status_code == 200
     first = c.get("/api/chats").json()["items"][0]["id"]
-    assert c.post(f"/api/chats/{first}/read").status_code == 403                 # no X-Chronika
+    assert c.post(f"/api/chats/{first}/read").status_code == 403                 # no X-Everysaid
     assert c.post(f"/api/chats/{first}/read", headers={**H, "Origin": "https://evil.example"}).status_code == 403
     assert c.post(f"/api/chats/{first}/read", headers=H).status_code == 200
 
@@ -114,7 +114,7 @@ def test_websocket(app):
 
 
 def test_password_with_code(app):
-    from chronika.server.auth import totp_at
+    from everysaid.server.auth import totp_at
     import time
     app, c = app
     token = app.state.auth.setup_link()
@@ -141,7 +141,7 @@ def test_password_with_code(app):
 
 
 def test_password_lockout(app):
-    from chronika.server.auth import totp_at, totp_secret
+    from everysaid.server.auth import totp_at, totp_secret
     import time
     app, c = app
     auth = app.state.auth
@@ -209,8 +209,8 @@ def test_mentions_files_receipts_and_read_receipts(app, monkeypatch):
     """A group's members to name with @, a file sent with its caption, who got and read the user's
     messages, and the services told the chat was read: through a plugin that records what it is asked."""
     import time
-    from chronika import plugins
-    from chronika.plugins.base import Plugin
+    from everysaid import plugins
+    from everysaid.plugins.base import Plugin
 
     asked = []
 

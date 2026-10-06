@@ -1,8 +1,8 @@
 import pytest
 
-from chronika import text
-from chronika.core import changes, queries
-from chronika.errors import UserError
+from everysaid import text
+from everysaid.core import changes, queries
+from everysaid.errors import UserError
 
 
 def test_fold():
@@ -135,7 +135,7 @@ def test_context(store):
 
 
 def test_name_order(store):
-    from chronika.core.names import people
+    from everysaid.core.names import people
     with store.write() as db:
         pid = db.execute("INSERT INTO person DEFAULT VALUES").lastrowid
         phone = db.execute("INSERT INTO address (kind_id, value) VALUES ((SELECT id FROM address_kind WHERE name = 'phone'), "
@@ -254,7 +254,7 @@ def test_a_name_is_found_by_parts_of_its_words(store):
 
 
 def test_archived_is_decided_once_when_a_chat_is_first_seen(store):
-    from chronika.archive import Archive
+    from everysaid.archive import Archive
     import time
     p = next(c for c in queries.chats(store) if c["type"] == "person" and len(c["services"]) > 1)
     convs = queries.chat(store, p["id"])["conversations"]
@@ -304,8 +304,8 @@ def test_stats_leave_archived_chats_out_unless_asked(store):
 
 def test_an_archived_chat_stays_archived_and_says_nothing_of_new_messages(store):
     import time
-    from chronika.core import changes
-    from chronika.server.host import Host
+    from everysaid.core import changes
+    from everysaid.server.host import Host
     db = store.read()
     by_chat = {}            # two chats, one conversation of each
     for (c,) in db.execute("SELECT id FROM conversation c WHERE NOT is_group AND EXISTS "
@@ -360,7 +360,7 @@ def test_groups_merge_into_one_chat_and_split_again(store):
 
 
 def test_groups_alike_are_suggested_until_turned_down(store):
-    from chronika.archive import Archive
+    from everysaid.archive import Archive
     a, b = [c for c in queries.chats(store, include_archived=True) if c["type"] == "group"][:2]
     ca, cb = (queries.chat(store, x["id"])["conversation_id"] for x in (a, b))
     arch = Archive(store.path)

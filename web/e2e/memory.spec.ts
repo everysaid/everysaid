@@ -8,7 +8,7 @@ test("a chat keeps its unsent text and its place; the Chats tab comes back to it
   test.skip(info.project.name !== "desktop", "the tabs beside a chat are the wide screen's");
   await signedIn(page, info.project.name);
   const [a, b] = await page.evaluate(async () => {
-    const h = { "X-Chronika": "1" };
+    const h = { "X-Everysaid": "1" };
     const chats = (await (await fetch("/api/chats", { headers: h })).json()).items;
     const out = [];
     for (const c of chats) {
@@ -55,7 +55,7 @@ test("a chat keeps its unsent text and its place; the Chats tab comes back to it
   await page.goto(`/chat/${b}`);
   await page.goto(`/chat/${a}`);
   const latest = await page.evaluate(async (id) => {
-    const p = await (await fetch(`/api/chats/${id}/stream?limit=5`, { headers: { "X-Chronika": "1" } })).json();
+    const p = await (await fetch(`/api/chats/${id}/stream?limit=5`, { headers: { "X-Everysaid": "1" } })).json();
     return `m${p.items.filter((i: any) => i.type === "message").at(-1).id}`;
   }, a);
   await expect(page.locator("[data-latest]")).toBeVisible();

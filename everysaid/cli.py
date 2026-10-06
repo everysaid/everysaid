@@ -1,12 +1,12 @@
-"""The `chronika` command.
+"""The `everysaid` command.
 
-    chronika import [--db PATH] [IMPORTER...]   fill the archive (the importers, in their order)
-    chronika serve [--host H] [--port P]        the app: API, UI, plugins, live connections
-    chronika mcp [--db PATH]                    the MCP server for an assistant (stdio)
-    chronika demo [--dir DIR]                   a demo archive of invented people, for trying the app
-    chronika user ...                           users, passkeys, recovery (see `chronika user -h`)
+    everysaid import [--db PATH] [IMPORTER...]   fill the archive (the importers, in their order)
+    everysaid serve [--host H] [--port P]        the app: API, UI, plugins, live connections
+    everysaid mcp [--db PATH]                    the MCP server for an assistant (stdio)
+    everysaid demo [--dir DIR]                   a demo archive of invented people, for trying the app
+    everysaid user ...                           users, passkeys, recovery (see `everysaid user -h`)
 
-`python -m chronika sms calls ...` (importer names alone) still runs the importers.
+`python -m everysaid sms calls ...` (importer names alone) still runs the importers.
 """
 import argparse
 import os
@@ -18,7 +18,7 @@ COMMANDS = ("import", "serve", "mcp", "demo", "user")
 def cmd_import(argv):
     from . import importers
     from .archive import DB, Archive
-    ap = argparse.ArgumentParser(prog="chronika import", description="Fill the archive from the sources.")
+    ap = argparse.ArgumentParser(prog="everysaid import", description="Fill the archive from the sources.")
     ap.add_argument("--db", default=DB, help=f"archive database (default {DB})")
     ap.add_argument("importers", nargs="*",
                     help=f"{', '.join(importers.IMPORTERS)}; default: config [import] importers, else all")

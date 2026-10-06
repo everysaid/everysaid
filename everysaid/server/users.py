@@ -1,10 +1,10 @@
-"""`chronika user`: what is done on the server's own machine.
+"""`everysaid user`: what is done on the server's own machine.
 
-    chronika user list                      the users
-    chronika user link [--user ID]          a one-time link for a passkey: the first user, another
+    everysaid user list                      the users
+    everysaid user link [--user ID]          a one-time link for a passkey: the first user, another
                                             device, or a way back in after losing every passkey
-    chronika user mcp-token [--user ID]     a token for the MCP server over HTTP
-    chronika user sessions [--user ID]      the open sessions
+    everysaid user mcp-token [--user ID]     a token for the MCP server over HTTP
+    everysaid user sessions [--user ID]      the open sessions
 """
 import argparse
 
@@ -13,7 +13,7 @@ from .auth import Auth
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="chronika user", description="Users, passkeys, recovery.")
+    ap = argparse.ArgumentParser(prog="everysaid user", description="Users, passkeys, recovery.")
     ap.add_argument("what", choices=["list", "link", "mcp-token", "sessions"])
     ap.add_argument("--user", type=int)
     ap.add_argument("--minutes", type=int, default=60)
@@ -25,7 +25,7 @@ def main(argv=None):
         for u in users:
             print(f"{u['id']}\t{u['name']}\t{u['archive']}\t{len(auth.passkeys(u['id']))} passkeys")
         if not users:
-            print("κανένας χρήστης ακόμα: `chronika serve` τυπώνει τον σύνδεσμο πρώτης ρύθμισης")
+            print("κανένας χρήστης ακόμα: `everysaid serve` τυπώνει τον σύνδεσμο πρώτης ρύθμισης")
     elif args.what == "link":
         token = auth.setup_link(uid, args.minutes)
         print(f"{config.SERVER_ORIGIN}/setup#{token}\n(μίας χρήσης, ισχύει {args.minutes} λεπτά"

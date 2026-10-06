@@ -2,7 +2,7 @@ import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 
 const el = {
-  app: { name: "Chronika", tagline: "Όλες οι συνομιλίες σου, από όλες τις υπηρεσίες, σε ένα μέρος." },
+  app: { name: "Everysaid", tagline: "Όλες οι συνομιλίες σου, από όλες τις υπηρεσίες, σε ένα μέρος." },
   nav: { chats: "Συνομιλίες", calls: "Κλήσεις", media: "Πολυμέσα", search: "Αναζήτηση", people: "Πρόσωπα",
     sources: "Πηγές", settings: "Ρυθμίσεις", overview: "Επισκόπηση" },
   common: { error: "Κάτι πήγε στραβά", retry: "Ξανά", cancel: "Άκυρο", save: "Αποθήκευση",
@@ -79,8 +79,8 @@ const el = {
     installHint: "Εγκατάστησέ την για πλήρη οθόνη και ειδοποιήσεις.", update: "Υπάρχει νέα έκδοση", reload: "Ανανέωση" },
   auth: { login: "Σύνδεση με passkey", loginHint: "Με δαχτυλικό αποτύπωμα, πρόσωπο ή κλειδί ασφαλείας.",
     recover: "Χρήση κωδικού ανάκτησης", recoverCode: "Κωδικός ανάκτησης", recoverGo: "Είσοδος", failed: "Η σύνδεση απέτυχε",
-    setupTitle: "Καλώς ήρθες στο Chronika", setupHint: "Φτιάξε το passkey σου: έτσι θα μπαίνεις από κάθε συσκευή, χωρίς κωδικούς.",
-    yourName: "Το όνομά σου", create: "Δημιουργία passkey", invalidLink: "Ο σύνδεσμος ρύθμισης δεν ισχύει ή έληξε. Πάρε νέο με `chronika user link`.",
+    setupTitle: "Καλώς ήρθες στο Everysaid", setupHint: "Φτιάξε το passkey σου: έτσι θα μπαίνεις από κάθε συσκευή, χωρίς κωδικούς.",
+    yourName: "Το όνομά σου", create: "Δημιουργία passkey", invalidLink: "Ο σύνδεσμος ρύθμισης δεν ισχύει ή έληξε. Πάρε νέο με `everysaid user link`.",
     codesTitle: "Οι κωδικοί ανάκτησής σου", codesHint: "Φύλαξέ τους σε ασφαλές μέρος. Ο καθένας χρησιμοποιείται μία φορά, αν χάσεις τους άλλους τρόπους εισόδου. Δεν θα τους ξαναδείς.",
     codesSaved: "Τους φύλαξα", cancelled: "Το passkey δεν ολοκληρώθηκε: ακυρώθηκε, έληξε ο χρόνος, ή ο browser δεν βρήκε πού να το φυλάξει.",
     whereHint: "Αν ο browser σου δεν μπορεί να φτιάξει passkey, μπορείς να μπαίνεις με κωδικό και κωδικό 6 ψηφίων από εφαρμογή επαλήθευσης.",
@@ -92,16 +92,16 @@ const el = {
     passwordSetupHint: "Ένας κωδικός μαζί με κωδικό 6 ψηφίων από εφαρμογή επαλήθευσης στο κινητό σου: χρειάζονται και τα δύο για να μπεις.",
     nameHelp: "Με αυτό το όνομα θα συνδέεσαι", next: "Συνέχεια",
     noPasskeys: "Αυτός ο browser δεν υποστηρίζει passkeys: χρησιμοποίησε κωδικό και εφαρμογή επαλήθευσης.",
-    needsLink: "Για νέα συσκευή: συνδέσου πρώτα σε μια άλλη και πρόσθεσε passkey από τις Ρυθμίσεις, ή πάρε σύνδεσμο με `chronika user link`." },
+    needsLink: "Για νέα συσκευή: συνδέσου πρώτα σε μια άλλη και πρόσθεσε passkey από τις Ρυθμίσεις, ή πάρε σύνδεσμο με `everysaid user link`." },
   overview: { title: "Επισκόπηση", messages: "Μηνύματα", calls: "Κλήσεις", people: "Πρόσωπα", groups: "Ομάδες",
     byService: "Ανά υπηρεσία", byYear: "Ανά έτος", top: "Με ποιους μιλάς περισσότερο", archived: "Αρχειοθετημένες" },
-  // what the server's codes say (chronika/errors.py; tests/test_i18n.py checks each code is here)
+  // what the server's codes say (everysaid/errors.py; tests/test_i18n.py checks each code is here)
   errors: {
     auth: { bad_link: "Ο σύνδεσμος ρύθμισης δεν ισχύει", bad_login: "Λάθος όνομα, κωδικός ή κωδικός 6 ψηφίων. Μετά από 5 αποτυχίες από την ίδια συσκευή, ο κωδικός κλειδώνει για 15 λεπτά.",
       bad_recovery: "Ο κωδικός ανάκτησης δεν ισχύει", challenge_expired: "Η προσπάθεια έληξε: δοκίμασε ξανά",
       code_mismatch: "Ο κωδικός 6 ψηφίων δεν ταιριάζει: έλεγξε ότι η ώρα της συσκευής είναι σωστή",
       foreign_origin: "Το αίτημα ήρθε από άλλη σελίδα και απορρίφθηκε", header_missing: "Το αίτημα απορρίφθηκε (λείπει ο έλεγχος ασφαλείας)",
-      last_passkey: "Δεν σβήνεται το τελευταίο passkey όσο δεν υπάρχει κωδικός εισόδου", link_expired: "Ο σύνδεσμος ρύθμισης έληξε: πάρε νέο με `chronika user link`",
+      last_passkey: "Δεν σβήνεται το τελευταίο passkey όσο δεν υπάρχει κωδικός εισόδου", link_expired: "Ο σύνδεσμος ρύθμισης έληξε: πάρε νέο με `everysaid user link`",
       only_password: "Χωρίς passkey, ο κωδικός είναι ο μόνος τρόπος εισόδου", passkey_failed: "Το passkey δεν επαληθεύτηκε",
       passkey_rejected: "Το passkey δεν επαληθεύτηκε", password_short: "Ο κωδικός θέλει τουλάχιστον 12 χαρακτήρες",
       recent_sign_in: "Για αλλαγές στους τρόπους σύνδεσης χρειάζεται πρόσφατη σύνδεση: αποσυνδέσου και μπες ξανά",
@@ -123,7 +123,7 @@ const el = {
 // English has exactly Greek's keys: a key missing (or extra) in either fails the build.
 type Shape<T> = { [K in keyof T]: T[K] extends string ? string : Shape<T[K]> };
 const en: Shape<typeof el> = {
-  app: { name: "Chronika", tagline: "All your conversations, from every service, in one place." },
+  app: { name: "Everysaid", tagline: "All your conversations, from every service, in one place." },
   nav: { chats: "Chats", calls: "Calls", media: "Media", search: "Search", people: "People", sources: "Sources",
     settings: "Settings", overview: "Overview" },
   common: { error: "Something went wrong", retry: "Retry", cancel: "Cancel", save: "Save",
@@ -195,8 +195,8 @@ const en: Shape<typeof el> = {
     installHint: "Install it for full screen and notifications.", update: "A new version is available", reload: "Reload" },
   auth: { login: "Sign in with a passkey", loginHint: "With your fingerprint, face or a security key.",
     recover: "Use a recovery code", recoverCode: "Recovery code", recoverGo: "Sign in", failed: "Sign-in failed",
-    setupTitle: "Welcome to Chronika", setupHint: "Create your passkey: that is how you will sign in on every device, no passwords.",
-    yourName: "Your name", create: "Create passkey", invalidLink: "The setup link is invalid or expired. Get a new one with `chronika user link`.",
+    setupTitle: "Welcome to Everysaid", setupHint: "Create your passkey: that is how you will sign in on every device, no passwords.",
+    yourName: "Your name", create: "Create passkey", invalidLink: "The setup link is invalid or expired. Get a new one with `everysaid user link`.",
     codesTitle: "Your recovery codes", codesHint: "Keep them somewhere safe. Each works once, if you lose your other ways in. You will not see them again.",
     codesSaved: "I saved them", cancelled: "The passkey was not completed: cancelled, timed out, or the browser found nowhere to keep it.",
     whereHint: "If your browser cannot make a passkey, you can sign in with a password and a 6-digit code from an authenticator app.",
@@ -208,7 +208,7 @@ const en: Shape<typeof el> = {
     passwordSetupHint: "A password together with a 6-digit code from an authenticator app on your phone: both are needed to sign in.",
     nameHelp: "The name you will sign in with", next: "Continue",
     noPasskeys: "This browser does not support passkeys: use a password and an authenticator app.",
-    needsLink: "For a new device: sign in on another one and add a passkey in Settings, or get a link with `chronika user link`." },
+    needsLink: "For a new device: sign in on another one and add a passkey in Settings, or get a link with `everysaid user link`." },
   overview: { title: "Overview", messages: "Messages", calls: "Calls", people: "People", groups: "Groups",
     byService: "By service", byYear: "By year", top: "Who you talk to most", archived: "Archived" },
   errors: {
@@ -216,7 +216,7 @@ const en: Shape<typeof el> = {
       bad_recovery: "The recovery code is not valid", challenge_expired: "The attempt expired: try again",
       code_mismatch: "The 6-digit code does not match: check that the device's time is right",
       foreign_origin: "The request came from another page and was refused", header_missing: "The request was refused (the security check is missing)",
-      last_passkey: "The last passkey cannot go while there is no password", link_expired: "The setup link expired: get a new one with `chronika user link`",
+      last_passkey: "The last passkey cannot go while there is no password", link_expired: "The setup link expired: get a new one with `everysaid user link`",
       only_password: "Without a passkey, the password is the only way in", passkey_failed: "The passkey could not be verified",
       passkey_rejected: "The passkey could not be verified", password_short: "The password needs at least 12 characters",
       recent_sign_in: "Changing the ways in needs a recent sign-in: sign out and in again",

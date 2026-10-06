@@ -152,7 +152,7 @@ export function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () =
           onClick={() => {
             const a = document.createElement("a");
             a.href = URL.createObjectURL(new Blob([text + "\n"], { type: "text/plain" }));
-            a.download = "chronika-recovery-codes.txt";
+            a.download = "everysaid-recovery-codes.txt";
             a.click();
           }}
         >

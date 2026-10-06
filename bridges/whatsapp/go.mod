@@ -1,4 +1,4 @@
-module chronika/whatsapp-bridge
+module everysaid/whatsapp-bridge
 
 go 1.26.0
 

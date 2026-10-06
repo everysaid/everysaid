@@ -345,7 +345,7 @@ class Host:
 
         def done(f):
             if not f.cancelled() and f.exception():
-                logging.getLogger("chronika.server").error("read receipts", exc_info=f.exception())
+                logging.getLogger("everysaid.server").error("read receipts", exc_info=f.exception())
         asyncio.run_coroutine_threadsafe(self.mark_read(chat_id, until), self.loop).add_done_callback(done)
 
     # libraries

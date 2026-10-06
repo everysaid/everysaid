@@ -104,7 +104,7 @@ def main():
     emb = np.array(emb)
     np.savez(store, emb=emb, path=np.array(where))
     gs = groups(emb, args.min)
-    html = ['<!doctype html><meta charset="utf-8"><title>Chronika · Ομάδες προσώπων</title>'
+    html = ['<!doctype html><meta charset="utf-8"><title>Everysaid · Ομάδες προσώπων</title>'
             '<body style="background:#1e1e1e;color:#ddd;font:14px system-ui">']
     for n, g in enumerate(gs[:SHOW], 1):
         pics = len({where[i] for i in g})

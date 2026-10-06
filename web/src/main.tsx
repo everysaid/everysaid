@@ -14,7 +14,7 @@ const queryClient = new QueryClient({
   },
 });
 
-window.addEventListener("chronika:logged-out", () => {
+window.addEventListener("everysaid:logged-out", () => {
   queryClient.setQueryData(["auth"], (old: any) => (old ? { ...old, logged_in: false } : old));
 });
 
