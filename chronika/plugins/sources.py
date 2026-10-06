@@ -136,6 +136,15 @@ LOOKS = {
     "whatsapp": {"name": "WhatsApp", "color": "#25d366", "short": "WA"},
     "viber": {"name": "Viber", "color": "#7360f2", "short": "Vb"},
     "telegram": {"name": "Telegram", "color": "#2aabee", "short": "Tg"},
+    # the messengers of the 2000s, from Adium's and Pidgin's logs
+    "msn": {"name": "MSN", "color": "#1ba1e2", "short": "MSN"},
+    "icq": {"name": "ICQ", "color": "#7ebd00", "short": "ICQ"},
+    "aim": {"name": "AIM", "color": "#f2b600", "short": "AIM"},
+    "yahoo": {"name": "Yahoo", "color": "#720e9e", "short": "Y!"},
+    "jabber": {"name": "Jabber", "color": "#e96d1f", "short": "XMPP"},
+    "skype": {"name": "Skype", "color": "#00aff0", "short": "Sk"},
+    "irc": {"name": "IRC", "color": "#6c757d", "short": "IRC"},
+    "messenger": {"name": "Messenger", "color": "#0084ff", "short": "FB"},
 }
 
 
@@ -584,4 +593,31 @@ class CarrierNotices(Plugin):
         return run_importers(ctx, [("app and carrier calls", voip.run)])
 
 
-PLUGINS = (IphoneBackup, AndroidAdb, ViberDesktop, WhatsappBridge, Telegram, CarrierNotices)
+class ImLogs(Plugin):
+    id = "im-logs"
+    name = "Adium and Pidgin logs"
+    services = ("msn", "icq", "aim", "yahoo", "jabber", "skype", "irc", "messenger", "whatsapp")
+    service_info = looks(*services)
+    name_weights = {"msn/chat": 20, "icq/chat": 20, "aim/chat": 20, "yahoo/chat": 20, "jabber/chat": 20, "skype/chat": 20,
+                    "messenger/chat": 20, "msn/book": 70, "icq/book": 70, "aim/book": 70, "yahoo/book": 70,
+                    "jabber/book": 70, "skype/book": 70}
+    description = ("The logs of the old multi-protocol messengers, Adium (macOS) and Pidgin or Gaim: MSN, ICQ, AIM, "
+                   "Yahoo, Jabber and Google Talk, Skype, IRC, Facebook chat. Read from their folders as they are.")
+    needs = ("Adium's folder (Adium 2.0, Users/Default or Logs), or Pidgin's .purple folder, unpacked",)
+    settings = (Setting("adium", "Adium folder", "path", default=config.get("imlogs", "adium"),
+                        help="Adium 2.0, its Users/Default, or its Logs folder"),
+                Setting("pidgin", "Pidgin folder", "path", default=config.get("imlogs", "pidgin"),
+                        help="The .purple folder (with blist.xml and accounts.xml), or its logs folder"))
+
+    def check(self, ctx):
+        if not (ctx.settings.get("adium") or ctx.settings.get("pidgin")):
+            return False, "missing: a folder of Adium or of Pidgin"
+        return True, "ready"
+
+    def run_import(self, ctx):
+        from .. import imlogs
+        adium, pidgin = ctx.settings.get("adium"), ctx.settings.get("pidgin")
+        return run_importers(ctx, [("Adium and Pidgin logs", lambda a: imlogs.run(a, adium, pidgin))])
+
+
+PLUGINS = (IphoneBackup, AndroidAdb, ViberDesktop, WhatsappBridge, Telegram, CarrierNotices, ImLogs)

@@ -75,6 +75,19 @@ EL = {
     "Viber Desktop export": "Εξαγωγή Viber Desktop",
     "WhatsApp (live bridge)": "WhatsApp (ζωντανή γέφυρα)",
     "Carrier missed-call notices": "Ειδοποιήσεις αναπάντητων του παρόχου",
+    "Adium and Pidgin logs": "Ιστορικό Adium και Pidgin",
+    "The logs of the old multi-protocol messengers, Adium (macOS) and Pidgin or Gaim: MSN, ICQ, AIM, "
+    "Yahoo, Jabber and Google Talk, Skype, IRC, Facebook chat. Read from their folders as they are.":
+        "Το ιστορικό των παλιών προγραμμάτων πολλαπλών πρωτοκόλλων, Adium (macOS) και Pidgin ή Gaim: MSN, ICQ, AIM, "
+        "Yahoo, Jabber και Google Talk, Skype, IRC, Facebook chat. Διαβάζεται από τους φακέλους τους όπως είναι.",
+    "Adium's folder (Adium 2.0, Users/Default or Logs), or Pidgin's .purple folder, unpacked":
+        "Ο φάκελος του Adium (Adium 2.0, Users/Default ή Logs) ή ο φάκελος .purple του Pidgin, αποσυμπιεσμένοι",
+    "Adium folder": "Φάκελος Adium",
+    "Adium 2.0, its Users/Default, or its Logs folder": "Adium 2.0, το Users/Default του, ή ο φάκελος Logs του",
+    "Pidgin folder": "Φάκελος Pidgin",
+    "The .purple folder (with blist.xml and accounts.xml), or its logs folder":
+        "Ο φάκελος .purple (με blist.xml και accounts.xml), ή ο φάκελος logs του",
+    "missing: a folder of Adium or of Pidgin": "λείπει: ένας φάκελος του Adium ή του Pidgin",
     "Folder": "Φάκελος",
     "Address book": "Επαφές (βιβλίο διευθύνσεων)",
     "address book copy": "αντίγραφο των επαφών",

@@ -1062,6 +1062,7 @@ uv run python -m chronika [--db PATH] [sms calls viber whatsapp telegram voip me
 | Media | `(source, source_path, message)` | content sha256 (`media`) |
 | Services with ids per chat (Telegram) | `(source, row_key)` | (`message.key`, `key_scope`) |
 | Sources without ids (Messenger's export) | `(source, row_key)` | `message.fingerprint` within the conversation |
+| Adium and Pidgin logs | `<file>#<index>` as `row_key` | `message.fingerprint` within the conversation (the README, "Adium and Pidgin"; the two programs ran by turns, so none is expected) |
 
 ---
 

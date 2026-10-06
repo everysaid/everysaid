@@ -139,11 +139,11 @@ def test_the_plugins_words_have_greek():
 
 
 # Greek is said through plugins/i18n.py; these files keep Greek of their own on purpose: the
-# dictionary itself, the folding of text, the carriers' notices (they are Greek SMS), the demo's
-# invented people. The importers and the command line still speak Greek (their translation is in
-# the README's plans); new code must not add to this list.
+# dictionary itself, the folding of text, the carriers' notices (they are Greek SMS), the words
+# Pidgin wrote in its logs (imlogs.py), the demo's invented people. The importers and the command
+# line still speak Greek (their translation is in the README's plans); new code must not add to this list.
 GREEK_ALLOWED = {
-    "plugins/i18n.py", "text.py", "demo.py", "voip.py", "carriers",
+    "plugins/i18n.py", "text.py", "demo.py", "voip.py", "carriers", "imlogs.py",
     "cli.py", "config.py", "importers.py", "server/users.py", "server/__init__.py",
     "sms.py", "calls.py", "viber.py", "whatsapp.py", "telegram.py", "media.py", "extras.py", "archive.py",
     "core/store.py", "mcp_server.py",

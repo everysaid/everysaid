@@ -44,6 +44,7 @@ history); nothing in the tracked documentation depends on it.
 | Live Telegram and WhatsApp (bridge), sending where the plugin can | working |
 | The MCP server | working (`chronika mcp`) |
 | A demo archive of invented people | working (`chronika demo`) |
+| The logs of Adium and Pidgin (Gaim): MSN, ICQ, AIM, Yahoo, Jabber/Google Talk, Skype, IRC, Facebook chat | working (`chronika/imlogs.py`, `scripts/imlogs-import.py`) |
 
 ## Folders and configuration
 
@@ -133,6 +134,7 @@ TOML, optional: every key has a general default.
 | `[import] carrier_notices` | none | the parsers of carriers' missed-call SMS to use (`gr`: the Greek one) |
 | `[viber] desktop_export` | none | a decrypted Viber Desktop database |
 | `[whatsapp] bridge` | none | the WhatsApp bridge's store folder (`messages.db`, `whatsapp.db`) |
+| `[imlogs] adium`, `pidgin` | none | the folders of Adium (`Adium 2.0`, `Users/Default` or `Logs`) and of Pidgin (`.purple` or its `logs`), for `imlogs-import.py` and the "Adium and Pidgin logs" source |
 | `[telegram] media`, `no_media` | true, none | `telegram-sync.py --media`: false downloads nothing; `no_media` lists chat ids whose media are passed over |
 | `[immich] url` | none | the immich API: `immich-index.py`, `media-faces.py`, `immich-review.py`'s large previews, `immich-upload.py` |
 | `[immich] data_folder` | none | immich's upload folder, only for `--dump` (its nightly backups and previews) |
@@ -312,6 +314,26 @@ Not in the iPhone backup (the app excludes its messages). Meta's "Download your 
 (JSON); since late 2023 personal chats are end-to-end encrypted and stay on the server only with
 "secure storage" (a PIN), and are believed to be downloadable from Messenger's own settings. Not
 verified yet.
+
+### Adium and Pidgin: the messengers of the 2000s
+
+The logs of the multi-protocol clients, Adium (macOS) and Pidgin or Gaim (libpurple), one file per
+session under the account and the contact, give MSN, ICQ, AIM, Yahoo, Jabber and Google Talk,
+Skype, IRC and Facebook chat (`chronika/imlogs.py`, the "Adium and Pidgin logs" source, or
+`scripts/imlogs-import.py --adium DIR --pidgin DIR`, `--dry-run` to see the counts first). The
+folders are read as they are: unpacking an archive of them is the user's job.
+
+- Google Talk is `jabber` (the same people, by the same addresses); Facebook chat, over XMPP or
+  Adium's plugin, is `messenger`, by Facebook's ids. An MSN or Jabber handle is an email, shared
+  with every service and the address book; the others are ids within their service.
+- Messages have no ids: the fingerprint (second, direction, kind, text) within the conversation
+  tells one seen before, from either program. Status lines are left out; the pictures Adium kept
+  beside its logs come in as the messages' files.
+- Pidgin logs names, not handles: the owner's messages are told by the account's names (the
+  account, its alias in `accounts.xml`, any name speaking in three or more of its conversations).
+  Adium's `alias` and Pidgin's `blist.xml` give people their names (`handle_name`, `chat` and
+  `book`); the owner's own groupings of handles into one person (Adium's metacontacts, Pidgin's
+  contacts of several buddies) merge the people of those handles.
 
 ## The archive
 
