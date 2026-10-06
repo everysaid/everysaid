@@ -1,5 +1,8 @@
+import pytest
+
 from chronika import text
 from chronika.core import changes, queries
+from chronika.errors import UserError
 
 
 def test_fold():
@@ -23,6 +26,16 @@ def test_chats_and_streams(store):
     assert all(i["ts"] <= items[0]["ts"] for i in older["items"])
     newer = queries.stream(store, person["id"], after=older["items"][-1]["cursor"], limit=10)
     assert newer["items"][0]["cursor"] == items[0]["cursor"]
+
+
+def test_a_stream_without_some_services(store):
+    person = next(c for c in queries.chats(store) if c["type"] == "person" and len(c["services"]) > 1)
+    off = person["services"][0]
+    page = queries.stream(store, person["id"], limit=200, hidden={off})
+    assert page["items"] and off not in {i["service"] for i in page["items"]}
+    older = queries.stream(store, person["id"], before=page["items"][0]["cursor"], limit=200, hidden={off})
+    assert all(i["service"] != off for i in older["items"])
+    assert queries.stream(store, person["id"], limit=200, hidden={"no-such-service"}) == queries.stream(store, person["id"], limit=200)
 
 
 def test_walk_whole_stream_once(store):
@@ -65,8 +78,10 @@ def test_merge_and_split(store):
     merged = next(c for c in chats if c["id"] == f"p{a}")
     assert set(persons[1]["services"]) <= set(merged["services"])
     moved = queries.person(store, a)["handles"][-1]["address_id"]
-    changes.split_address(store, moved)
-    assert len(queries.chats(store)) == n_before
+    changes.set_chat_state(store, f"p{a}", archived=True)
+    pid = changes.split_address(store, moved)
+    assert len(queries.chats(store, include_archived=True)) == n_before
+    assert queries.chat(store, f"p{pid}")["archived"]          # split off an archived chat: archived too
 
 
 def test_chat_state_and_unread(store):
@@ -89,9 +104,28 @@ def test_calls_stats_timeline(store):
     assert queries.calls(store, missed=True)["items"]
     s = queries.stats(store)
     assert s["messages"] > 1000 and s["people"] > 10
+    assert s["top_groups"] and {queries.chat(store, g["chat_id"])["type"] for g in s["top_groups"]} == {"group"}
     last = s["last"]
     t = queries.timeline(store, last - 86400_000, last + 1)
     assert t["items"]
+
+
+def test_a_search_of_dates_alone_gives_everything_of_those_days(store):
+    db = store.read()
+    ts = db.execute("SELECT max(ts) FROM message").fetchone()[0]
+    since, until = ts - 30 * 86400_000, ts + 1             # some weeks, with messages and calls
+    r = queries.search(store, "", since=since, until=until, limit=1000)
+    n_msgs = db.execute("SELECT count(*) FROM message WHERE ts >= ? AND ts < ?", (since, until)).fetchone()[0]
+    n_calls = db.execute("SELECT count(*) FROM call WHERE ts >= ? AND ts < ?", (since, until)).fetchone()[0]
+    assert r["total"] == n_msgs + n_calls == len(r["items"]) and n_msgs and n_calls
+    assert [i["ts"] for i in r["items"]] == sorted(i["ts"] for i in r["items"])        # oldest first
+    assert all(i["chat_id"] and i["chat_title"] for i in r["items"] if i["type"] == "call")
+    assert sum(c["count"] for c in r["chats"]) <= r["total"]
+    chat = next(i["chat_id"] for i in r["items"] if i["type"] == "call")
+    one = queries.search(store, "", chat_id=chat, since=since, until=until, limit=1000)
+    assert one["items"] and all(i["chat_id"] == chat for i in one["items"])
+    assert {i["type"] for i in queries.search(store, "", kind="text", since=since, until=until)["items"]} == {"message"}
+    assert queries.search(store, "")["items"] == []                                  # no words, no dates: nothing
 
 
 def test_context(store):
@@ -185,34 +219,66 @@ def test_search_says_where_it_found_and_filters_by_it(store):
         assert [c["chat_id"] for c in only["chats"]] == [c["chat_id"] for c in r["chats"]]   # still every chat
 
 
-def test_an_archived_chat_is_found_by_name(store):
+def test_an_archived_chat_is_found_by_name_only_among_the_archived(store):
     chat = next(c for c in queries.chats(store) if c["type"] == "person")
     changes.set_chat_state(store, chat["id"], archived=True)
     assert chat["id"] not in {c["id"] for c in queries.chats(store)}                      # not in the list
-    found = {c["id"]: c for c in queries.chats(store, q=chat["title"][:4])}
-    assert chat["id"] in found and found[chat["id"]]["archived"]                             # but found, marked
+    assert chat["id"] not in {c["id"] for c in queries.chats(store, q=chat["title"][:4])}    # nor looked for there
+    found = {c["id"]: c for c in queries.chats(store, q=chat["title"][:4], include_archived=True)}
+    assert chat["id"] in found and found[chat["id"]]["archived"]                             # but among them
 
 
-def test_archived_starts_from_the_services_then_is_the_apps_alone(store):
+def test_a_search_is_in_the_archived_chats_or_in_the_others(store):
+    every = queries.search(store, "καλημερα", limit=200)
+    chat = every["chats"][0]["chat_id"]
+    changes.set_chat_state(store, chat, archived=True)
+    out = queries.search(store, "καλημερα", archived=False, limit=200)
+    inside = queries.search(store, "καλημερα", archived=True, limit=200)
+    assert out["total"] + inside["total"] == every["total"] and inside["total"]
+    assert {i["chat_id"] for i in inside["items"]} == {chat} and chat not in {i["chat_id"] for i in out["items"]}
+    assert [c["chat_id"] for c in inside["chats"]] == [chat]
+    assert queries.search(store, "καλημερα", chat_id=chat, archived=False)["total"] == inside["total"]   # asked for: searched
+    ts = inside["items"][0]["ts"]                                   # dates alone too, calls with them
+    days = dict(since=ts - 400 * 86400_000, until=ts + 1, limit=1000)
+    a, b, c = (queries.search(store, "", archived=x, **days) for x in (None, False, True))
+    assert a["total"] == b["total"] + c["total"] and c["total"] and all(i["chat_id"] == chat for i in c["items"])
+
+
+def test_a_name_is_found_by_parts_of_its_words(store):
+    chat = next(c for c in queries.chats(store) if c["type"] == "person" and len(c["title"].split()) > 1
+                and all(len(w) > 3 for w in c["title"].split()))
+    first, last = chat["title"].split()[:2]
+    q = f"{last[:-1]} {first[:-1].upper()}"                     # each word cut short, the other way round
+    assert chat["id"] in {c["id"] for c in queries.chats(store, q=q)}
+    assert chat["person_id"] in {p["id"] for p in queries.people_list(store, q)["items"]}
+
+
+def test_archived_is_decided_once_when_a_chat_is_first_seen(store):
     from chronika.archive import Archive
     import time
+    p = next(c for c in queries.chats(store) if c["type"] == "person" and len(c["services"]) > 1)
+    convs = queries.chat(store, p["id"])["conversations"]
+    g = next(c for c in queries.chats(store) if c["type"] == "group")
+    seen = next(c for c in queries.chats(store) if c["type"] == "person" and c["id"] != p["id"])
     a = Archive(store.path)
     try:
-        # a person reached on two services, one archiving their chat: they stay in view
-        p = next(c for c in queries.chats(store) if c["type"] == "person" and len(c["services"]) > 1)
-        convs = queries.chat(store, p["id"])["conversations"]
-        g = next(c for c in queries.chats(store) if c["type"] == "group")
+        # every chat of the demo was seen when it was made: one no source reported on, not archived
+        assert a.db.execute("SELECT value FROM chat_state WHERE chat = ? AND field = 'archived'", (seen["id"],)).fetchone() == (0,)
+        a.db.execute("DELETE FROM chat_state WHERE chat IN (?, ?)", (p["id"], g["id"]))      # these two: new
         src = a.db.execute("SELECT id FROM source WHERE instance_id IS NOT NULL LIMIT 1").fetchone()[0]
         now = int(time.time() * 1000)
+        # a person reached on two services, one archiving their chat: they stay in view
         a.report_state(src, convs[0], "archived", 1, now)
         a.report_state(src, convs[1], "archived", 0, now)
         a.report_state(src, g["conversation_id"], "archived", 1, now)
+        a.report_state(src, seen["conversation_id"], "archived", 1, now)                  # seen before: no change
         a.init_archived()
         a.db.commit()
     finally:
         a.db.close()
     assert not queries.chat(store, p["id"])["archived"]          # one in view: in view
     assert queries.chat(store, g["id"])["archived"]              # the group archived there: archived here
+    assert not queries.chat(store, seen["id"])["archived"]
     changes.set_chat_state(store, g["id"], archived=False)       # then ours alone
     a = Archive(store.path)
     try:
@@ -222,3 +288,91 @@ def test_archived_starts_from_the_services_then_is_the_apps_alone(store):
     finally:
         a.db.close()
     assert not queries.chat(store, g["id"])["archived"]
+
+
+def test_stats_leave_archived_chats_out_unless_asked(store):
+    every = queries.stats(store, include_archived=True)
+    chat = next(c for c in queries.chats(store) if c["type"] == "person" and c["id"] in {p["chat_id"] for p in every["top_people"]})
+    assert queries.stats(store) == every                            # nothing archived yet
+    changes.set_chat_state(store, chat["id"], archived=True)
+    shown = queries.stats(store)
+    assert shown["people"] == every["people"] - 1
+    assert shown["messages"] < every["messages"]
+    assert chat["id"] not in {p["chat_id"] for p in shown["top_people"]}
+    assert queries.stats(store, include_archived=True) == every
+
+
+def test_an_archived_chat_stays_archived_and_says_nothing_of_new_messages(store):
+    import time
+    from chronika.core import changes
+    from chronika.server.host import Host
+    db = store.read()
+    by_chat = {}            # two chats, one conversation of each
+    for (c,) in db.execute("SELECT id FROM conversation c WHERE NOT is_group AND EXISTS "
+                           "(SELECT 1 FROM message m WHERE m.conversation_id = c.id AND NOT m.outgoing)"):
+        by_chat.setdefault(queries.chat_of_conversation(store, c), c)
+    (archived, other), convs = list(by_chat)[:2], list(by_chat.values())[:2]
+    changes.set_chat_state(store, archived, archived=True)
+    first = db.execute("SELECT max(id) FROM message").fetchone()[0]
+    with store.write() as w:
+        for conv in convs:
+            w.execute("INSERT INTO message (service_id, conversation_id, ts, outgoing, sender_id, kind_id, text) "
+                      "SELECT service_id, conversation_id, ?, 0, sender_id, kind_id, 'hi' FROM message "
+                      "WHERE conversation_id = ? AND NOT outgoing LIMIT 1", (int(time.time() * 1000), conv))
+    last = store.read().execute("SELECT max(id) FROM message").fetchone()[0]
+    host, pushed = Host(store), []
+    host.push = type("P", (), {"notify": lambda self, s, incoming: pushed.extend(incoming)})()
+    event = host._describe_new({"type": "new", "messages": (first, last)})
+    assert event["chats"] == {archived: 1, other: 1}            # both shown as they come
+    assert queries._states(store)[archived][2]                  # still archived
+    assert [c for c, *_ in pushed] == [other]                   # and only the other one notifies
+
+
+def test_groups_merge_into_one_chat_and_split_again(store):
+    gs = [c for c in queries.chats(store, include_archived=True) if c["type"] == "group"][:3]
+    a, b, c = (g["id"] for g in gs)
+    before = {g["id"]: queries.chat(store, g["id"]) for g in gs}
+    changes.set_chat_state(store, b, archived=True, pinned=True)
+    assert changes.merge_groups(store, a, b) == a
+    merged = queries.chat(store, a)
+    assert queries.chat(store, b) is None
+    assert sorted(merged["conversations"]) == sorted(before[a]["conversations"] + before[b]["conversations"])
+    assert {g["conversation_id"] for g in merged["groups"]} == set(merged["conversations"])
+    assert merged["pinned"] and not merged["archived"]          # its choices kept; archived only if both were
+    assert merged["title"] == max((before[a], before[b]), key=lambda x: x["last_ts"])["title"]   # the latest one's name
+    names = {m["name"] for x in (a, b) for m in before[x]["members"]}
+    assert {m["name"] for m in merged["members"]} == names
+    items = queries.stream(store, a, limit=1000)["items"]
+    assert {i["conversation_id"] for i in items if i["type"] == "message"} == set(merged["conversations"])
+    changes.merge_groups(store, a, c)                              # a third
+    assert len(queries.chat(store, a)["groups"]) == 3
+    with pytest.raises(UserError):
+        changes.merge_groups(store, a, a)
+
+    # the one whose id the chat has leaves: the others keep the chat, under another id
+    head = int(a[1:])
+    rest = changes.split_group(store, a, head)
+    assert rest != a and queries.chat(store, rest)["pinned"]
+    assert queries.chat(store, a)["conversations"] == before[a]["conversations"]
+    for g in queries.chat(store, rest)["groups"]:
+        rest = changes.split_group(store, rest, g["conversation_id"])      # (its id changes with its head)
+    assert {x["id"] for x in queries.chats(store, include_archived=True) if x["type"] == "group"} >= {a, b, c}
+
+
+def test_groups_alike_are_suggested_until_turned_down(store):
+    from chronika.archive import Archive
+    a, b = [c for c in queries.chats(store, include_archived=True) if c["type"] == "group"][:2]
+    ca, cb = (queries.chat(store, x["id"])["conversation_id"] for x in (a, b))
+    arch = Archive(store.path)
+    try:                    # b gets a's members: the same people, on another group
+        arch.db.execute("INSERT OR IGNORE INTO conversation_member SELECT ?, address_id FROM conversation_member "
+                        "WHERE conversation_id = ?", (cb, ca))
+        arch.db.execute("DELETE FROM conversation_member WHERE conversation_id = ? AND address_id NOT IN "
+                        "(SELECT address_id FROM conversation_member WHERE conversation_id = ?)", (cb, ca))
+        arch.db.commit()
+    finally:
+        arch.db.close()
+    found = queries.group_suggestions(store, chat_id=a["id"])
+    assert any({x["chat_id"] for x in s["chats"]} == {a["id"], b["id"]} and "members" in s["why"] for s in found)
+    changes.dismiss_group_merge(store, [a["id"], b["id"]])
+    assert not any({x["chat_id"] for x in s["chats"]} == {a["id"], b["id"]} for s in queries.group_suggestions(store))

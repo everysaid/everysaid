@@ -1,6 +1,8 @@
 import i18n from "./i18n";
 
-const loc = () => (i18n.language === "el" ? "el-GR" : i18n.language || "en");
+/** The locale for dates and numbers: the app's language (English as the browser's English region has it). */
+export const loc = () => (i18n.language === "el" ? "el-GR"
+  : navigator.languages?.find((l) => l.toLowerCase().startsWith(`${i18n.language}-`)) ?? (i18n.language || "en"));
 
 function dayStart(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();

@@ -3,7 +3,7 @@
 Imports run in a thread each (one import at a time: they write a lot); live connections are asyncio
 tasks that stay up while the server runs, restarted after an error with a growing pause. Every
 event (a plugin's log line, its state, new messages) goes to the apps listening on the WebSocket;
-new incoming messages also go out as push notifications, except for muted chats.
+new incoming messages also go out as push notifications, except for muted and archived chats.
 """
 import asyncio
 import json
@@ -55,9 +55,11 @@ class Host:
                 pass
 
     def _describe_new(self, event):
-        """Which chats got what: the apps refresh those; push for incoming ones."""
+        """Which chats got what: the apps refresh those; push for incoming ones, except in archived chats
+        (which stay archived: it is decided once, when the chat is first seen, then only by the user)."""
         db = self.store.read()
         (m0, m1), (c0, c1) = event.get("messages", (0, 0)), event.get("calls", (0, 0))
+        states = queries._states(self.store)
         chats, incoming = {}, []
         for mid, conv, outgoing, txt, kind in db.execute(
                 "SELECT m.id, m.conversation_id, m.outgoing, m.text, k.name FROM message m "
@@ -65,7 +67,7 @@ class Host:
             cid = queries.chat_of_conversation(self.store, conv)
             if cid:
                 chats[cid] = chats.get(cid, 0) + 1
-                if not outgoing:
+                if not outgoing and not states.get(cid, (0, 0, 0))[2]:
                     incoming.append((cid, mid, txt, kind))
         if self.push and incoming:
             self.push.notify(self.store, incoming)
@@ -230,6 +232,20 @@ class Host:
         # and at most a minute: a login outside the app changes only the keyring
         return self.store.cached(f"sendable:{int(time.time() // 60)}",
                                  lambda: {s for _, p in self.senders() for s in p.services})
+
+    def unsendable(self):
+        """{service: why}: the services an enabled source reaches but may not send to now, each with what
+        its source says is missing (English, as plugins word it)."""
+        def why():
+            out = {}
+            for row in plugins.instances(self.store, "source"):
+                p = plugins.get(row["plugin"])
+                if row["enabled"] and p and p.can_send:
+                    reason = p.not_sending(self.ctx(row["id"]))
+                    for s in p.services if reason else ():
+                        out.setdefault(s, reason)
+            return out
+        return self.store.cached(f"unsendable:{int(time.time() // 60)}", why)
 
     async def send(self, chat_id, text, conversation_id=None, service=None, reply_to=None):
         """Send text in a chat through the plugin that reaches its service; returns what it said.

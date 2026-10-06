@@ -107,9 +107,14 @@ class Plugin:
         return []
 
     def sending(self, ctx):
-        """Whether this instance may send now: by default when it can send and is set up; a plugin may
-        also make it a setting the user turns on."""
-        return self.can_send and self.check(ctx)[0]
+        """Whether this instance may send now."""
+        return self.can_send and not self.not_sending(ctx)
+
+    def not_sending(self, ctx):
+        """Why this instance may not send now, in a few words for the user ("" when it may): by default
+        when it is not set up; a plugin may add its own reasons (a setting the user turns on)."""
+        ok, why = self.check(ctx)
+        return "" if ok else why
 
     def action(self, ctx, name):
         raise NotImplementedError(name)

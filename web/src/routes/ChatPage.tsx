@@ -7,9 +7,10 @@ import * as Popover from "@radix-ui/react-popover";
 import { ArrowDown, ArrowLeft, BellOff, CalendarDays, Check, ChevronDown, CornerUpLeft, Archive, ArchiveRestore, Info, Lock, MoreVertical, Pin, PinOff, Search, SendHorizontal, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, qs, type Attachment, type ChatDetail, type MessageItem, type StreamItem, type StreamPage } from "@/lib/api";
-import { dayLabel, isoDay, sameDay } from "@/lib/format";
+import { dateOnly, dayLabel, isoDay, sameDay } from "@/lib/format";
 import { onEvent } from "@/lib/events";
 import { useSettings, useWide } from "@/lib/hooks";
+import { draft, keepDraft, keepLastChat, keepPlace, place } from "@/lib/memory";
 import { service } from "@/lib/services";
 import { cn } from "@/lib/utils";
 import { chatRoute } from "@/router";
@@ -17,6 +18,7 @@ import { Avatar, Button, Center, Dialog, IconButton, Menu, MenuContent, MenuItem
 import { Bubble, CallLine, SystemLine } from "@/components/Message";
 import { Lightbox, type LightboxItem } from "@/components/Lightbox";
 import { ChatInfo } from "@/components/ChatInfo";
+import { DateField } from "@/components/DateField";
 import { avatarUrl } from "@/components/ChatList";
 
 const START = 1_000_000_000;
@@ -24,11 +26,11 @@ const PAGE = 80;
 
 export function ChatPage() {
   const { chatId } = chatRoute.useParams();
-  const { m, ts } = chatRoute.useSearch();
-  return <ChatView key={`${chatId}:${m ?? ""}:${ts ?? ""}`} chatId={chatId} jumpTo={m} around={ts} />;
+  const { m, ts, hide } = chatRoute.useSearch();
+  return <ChatView key={`${chatId}:${m ?? ""}:${ts ?? ""}:${hide ?? ""}`} chatId={chatId} jumpTo={m} around={ts} hide={hide} />;
 }
 
-function ChatView({ chatId, jumpTo, around }: { chatId: string; jumpTo?: number; around?: number }) {
+function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: number; around?: number; hide?: string }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -54,19 +56,52 @@ function ChatView({ chatId, jumpTo, around }: { chatId: string; jumpTo?: number;
   const sendable = detail.data?.sendable ?? [];
   const replyable = detail.data?.replyable ?? [];
   const [replyTo, setReplyTo] = useState<MessageItem | null>(null);
+  // where the user was reading, when they come back to the chat (not when sent to a message or a time)
+  const [resume, setResume] = useState(() => (jumpTo || around ? undefined : place(chatId)));
+  const hasNewerRef = useRef(false);
+  hasNewerRef.current = hasNewer;
+  // as the user scrolls (a reload keeps it too): the first row in view, and how far it is scrolled past
+  const remember = useCallback(() => {
+    const el = scroller.current;
+    if (atBottomRef.current && !hasNewerRef.current) return keepPlace(chatId, null);
+    if (!el) return;
+    const edge = el.getBoundingClientRect().top;
+    const row = [...el.querySelectorAll<HTMLElement>("[data-cursor]")].find((r) => r.getBoundingClientRect().bottom > edge + 1);
+    const item = row && itemsRef.current.find((i) => i.cursor === row.dataset.cursor);
+    if (item) keepPlace(chatId, { ts: item.ts, cursor: item.cursor, offset: Math.round(edge - row.getBoundingClientRect().top) });
+  }, [chatId]);
+  useEffect(() => keepLastChat({ chatId, hide }), [chatId, hide]);
+  useEffect(() => { if (ready) remember(); }, [ready, atBottom, hasNewer, remember]);
   const answer = useCallback((m: MessageItem) => {
     setReplyTo(m);
     requestAnimationFrame(() => (document.querySelector("[data-composer-body] textarea") as HTMLElement | null)?.focus());
   }, []);
+
+  // groups merged into this chat or split off it: its stream is another, loaded again
+  const made = detail.data?.conversations.join();
+  const [generation, setGeneration] = useState(0);
+  const wasMade = useRef(made);
+  useEffect(() => {
+    if (wasMade.current !== undefined && made !== undefined && made !== wasMade.current) setGeneration((g) => g + 1);
+    if (made !== undefined) wasMade.current = made;
+  }, [made]);
+
+  // opened where it was left, with newer pages not loaded: the latest instead, here (the address is the same)
+  const latest = () => {
+    keepPlace(chatId, null);
+    setResume(undefined);
+    setReady(false);
+    setGeneration((g) => g + 1);
+  };
 
   // the first page: the latest, or around a message or a time
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        let at = around;
+        let at = around ?? resume?.ts;
         if (jumpTo && !at) at = (await api.get<MessageItem>(`/api/messages/${jumpTo}`)).ts + 1;
-        const page = await api.get<StreamPage>(`/api/chats/${chatId}/stream${qs({ around: at, limit: PAGE })}`);
+        const page = await api.get<StreamPage>(`/api/chats/${chatId}/stream${qs({ around: at, limit: PAGE, hide })}`);
         if (cancelled) return;
         setItems(page.items);
         setFirst(START - page.items.length);
@@ -75,19 +110,20 @@ function ChatView({ chatId, jumpTo, around }: { chatId: string; jumpTo?: number;
         setReady(true);
       } catch (e: any) {
         if (!cancelled) setError(e.message);
+        keepLastChat(null);                 // gone (merged, perhaps): the Chats tab no longer comes back to it
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [chatId, jumpTo, around]);
+  }, [chatId, jumpTo, around, generation]);
 
   const loadOlder = useCallback(async () => {
     const cur = itemsRef.current;
     if (busy.current.older || !hasOlder || !cur.length) return;
     busy.current.older = true;
     try {
-      const page = await api.get<StreamPage>(`/api/chats/${chatId}/stream${qs({ before: cur[0].cursor, limit: PAGE })}`);
+      const page = await api.get<StreamPage>(`/api/chats/${chatId}/stream${qs({ before: cur[0].cursor, limit: PAGE, hide })}`);
       setItems((prev) => [...page.items, ...prev]);
       setFirst((f) => f - page.items.length);
       setHasOlder(page.has_older);
@@ -104,7 +140,7 @@ function ChatView({ chatId, jumpTo, around }: { chatId: string; jumpTo?: number;
       // after the newest the server knows (not a placeholder of a message being sent)
       const last = [...cur].reverse().find((i) => !(i.type === "message" && i.id < 0));
       if (!last) return;
-      const page = await api.get<StreamPage>(`/api/chats/${chatId}/stream${qs({ after: last.cursor, limit: PAGE })}`);
+      const page = await api.get<StreamPage>(`/api/chats/${chatId}/stream${qs({ after: last.cursor, limit: PAGE, hide })}`);
       setItems((prev) => {
         const seen = new Set(prev.map((i) => i.cursor));
         const fresh = page.items.filter((i) => !seen.has(i.cursor));
@@ -133,7 +169,7 @@ function ChatView({ chatId, jumpTo, around }: { chatId: string; jumpTo?: number;
   // sending: the message shows at once, at the end, as being sent (the field is free for the next
   // one); it is replaced by itself when it arrives, or marked as not sent
   const send = useCallback(async (body: string, service: string | null, answered: MessageItem | null) => {
-    if (hasNewer) navigate({ to: "/chat/$chatId", params: { chatId }, search: {} });
+    if (hasNewer) navigate({ to: "/chat/$chatId", params: { chatId }, search: { hide } });
     const id = -Date.now() - Math.random();
     const mark = (status: string) => setItems((prev) => prev.map((i) => (i.type === "message" && i.id === id ? { ...i, status } : i)));
     toEnd.current = true;
@@ -211,18 +247,33 @@ function ChatView({ chatId, jumpTo, around }: { chatId: string; jumpTo?: number;
       virt.current?.scrollToIndex({ index: i, align: "center", behavior: "smooth" });
       setHighlight(id);
     } else {
-      navigate({ to: "/chat/$chatId", params: { chatId }, search: { m: id } });
+      navigate({ to: "/chat/$chatId", params: { chatId }, search: { m: id, hide } });
     }
   }, [chatId, navigate]);
 
   const isGroup = detail.data?.type === "group";
   const title = detail.data?.title ?? "";
+  // a time asked for: the item nearest to it (the day may have nothing: then the nearest day's)
+  const nearest = useMemo(() => {
+    if (!around || !items.length) return 0;
+    const after = items.findIndex((x) => x.ts >= around);
+    if (after < 0) return items.length - 1;
+    return after > 0 && around - items[after - 1].ts < items[after].ts - around ? after - 1 : after;
+  }, [ready]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (ready && around && items.length && !sameDay(items[nearest].ts, around))
+      toast(t("chat.nearestDay", { day: dateOnly(around), near: dateOnly(items[nearest].ts) }));
+  }, [ready]); // eslint-disable-line react-hooks/exhaustive-deps
   const initialIndex = useMemo(() => {
     if (jumpTo) {
       const i = items.findIndex((x) => x.type === "message" && x.id === jumpTo);
       if (i >= 0) return { index: i, align: "center" as const };
     }
-    if (around) return { index: Math.max(0, Math.floor(items.length / 2)), align: "center" as const };
+    if (around) return { index: nearest, align: "center" as const };
+    if (resume) {
+      const i = items.findIndex((x) => x.cursor === resume.cursor);
+      if (i >= 0) return { index: i, align: "start" as const, offset: resume.offset ?? 0 };
+    }
     return items.length - 1;
   }, [ready]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -254,7 +305,7 @@ function ChatView({ chatId, jumpTo, around }: { chatId: string; jumpTo?: number;
         highlight={highlight === item.id} onOpen={openMedia} onJump={jump}
         onReply={item.keyed && replyable.includes(item.service) ? answer : undefined} />;
     }
-    return <div className={cn(next ? "" : "pb-3")}>{sep}{body}</div>;
+    return <div data-cursor={item.cursor} className={cn(next ? "" : "pb-3")}>{sep}{body}</div>;
   }, [first, items, isGroup, highlight, openMedia, jump, replyable.join(), answer]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (error) return <Center><div className="space-y-2"><div className="font-semibold">{t("common.error")}</div><div className="text-sm text-muted">{error}</div></div></Center>;
@@ -262,7 +313,8 @@ function ChatView({ chatId, jumpTo, around }: { chatId: string; jumpTo?: number;
   return (
     <div className="flex h-full">
       <div className="flex min-w-0 flex-1 flex-col">
-        <ChatHeader chat={detail.data} wide={wide} onInfo={() => setInfoOpen((o) => !o)} onJumpDate={(d) => navigate({ to: "/chat/$chatId", params: { chatId }, search: { ts: d } })} />
+        <ChatHeader chat={detail.data} wide={wide} onInfo={() => setInfoOpen((o) => !o)} onJumpDate={(d) => navigate({ to: "/chat/$chatId", params: { chatId }, search: { ts: d, hide } })}
+          hidden={hide ? hide.split(",") : []} onHide={(list) => navigate({ to: "/chat/$chatId", params: { chatId }, search: { hide: list.join(",") || undefined }, replace: true })} />
         <div data-stream className="chat-bg relative min-h-0 flex-1">
           {!ready ? (
             <Center><Spinner className="size-7" /></Center>
@@ -280,6 +332,8 @@ function ChatView({ chatId, jumpTo, around }: { chatId: string; jumpTo?: number;
               startReached={loadOlder}
               endReached={() => loadNewer()}
               atBottomStateChange={setAtBottom}
+              rangeChanged={() => { if (ready) requestAnimationFrame(remember); }}
+              isScrolling={(on) => { if (!on && ready) remember(); }}
               atBottomThreshold={120}
               increaseViewportBy={{ top: 800, bottom: 400 }}
               components={{
@@ -293,7 +347,10 @@ function ChatView({ chatId, jumpTo, around }: { chatId: string; jumpTo?: number;
           )}
           {ready && (!atBottom || hasNewer) && (
             <button
-              onClick={() => (hasNewer ? navigate({ to: "/chat/$chatId", params: { chatId }, search: {} }) : virt.current?.scrollToIndex({ index: items.length - 1, behavior: "smooth" }))}
+              onClick={() => (!hasNewer ? virt.current?.scrollToIndex({ index: items.length - 1, behavior: "smooth" })
+                : jumpTo || around ? navigate({ to: "/chat/$chatId", params: { chatId }, search: { hide } })
+                : latest())}
+              data-latest
               className="absolute bottom-4 right-4 grid size-11 place-items-center rounded-full border border-line bg-panel shadow-lg hover:bg-panel-2"
               aria-label={t("chat.latest")}
             >
@@ -302,8 +359,8 @@ function ChatView({ chatId, jumpTo, around }: { chatId: string; jumpTo?: number;
           )}
         </div>
         {detail.data && (
-          <Composer services={detail.data.services.filter((s) => service(s).messages)} sendable={sendable} replyable={detail.data.replyable}
-            onSend={send} replyTo={replyTo} onCancelReply={() => setReplyTo(null)}
+          <Composer services={detail.data.services.filter((s) => service(s).messages)} sendable={sendable} replyable={detail.data.replyable} missing={detail.data.unsendable}
+            chatId={chatId} onSend={send} replyTo={replyTo} onCancelReply={() => setReplyTo(null)}
             preferred={(!hasNewer && [...items].reverse().find((i) => i.type === "message")?.service) || detail.data.last_service} />
         )}
       </div>
@@ -322,7 +379,10 @@ function ChatView({ chatId, jumpTo, around }: { chatId: string; jumpTo?: number;
   );
 }
 
-function ChatHeader({ chat, wide, onInfo, onJumpDate }: { chat?: ChatDetail; wide: boolean; onInfo: () => void; onJumpDate: (ms: number) => void }) {
+/** hidden: the services the user turned off in this chat (all on at first); each of its services toggles. */
+function ChatHeader({ chat, wide, onInfo, onJumpDate, hidden, onHide }: {
+  chat?: ChatDetail; wide: boolean; onInfo: () => void; onJumpDate: (ms: number) => void; hidden: string[]; onHide: (services: string[]) => void;
+}) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -348,15 +408,30 @@ function ChatHeader({ chat, wide, onInfo, onJumpDate }: { chat?: ChatDetail; wid
           <ArrowLeft className="size-5" />
         </Link>
       )}
-      <button onClick={onInfo} className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl px-1 py-0.5 text-left hover:bg-panel-2">
-        {chat && <Avatar name={title} src={avatarUrl({ type: chat.type, person_id: chat.person_id, avatar: chat.person?.avatar })} group={chat.type === "group"} size={40} />}
+      <div className="flex min-w-0 flex-1 items-center gap-3 px-1">
+        <button onClick={onInfo} className="shrink-0 rounded-full" tabIndex={-1} aria-hidden>       {/* the name beside it is the same, for keyboards */}
+          {chat && <Avatar name={title} src={avatarUrl({ type: chat.type, person_id: chat.person_id, avatar: chat.person?.avatar })} group={chat.type === "group"} size={40} />}
+        </button>
         <div className="min-w-0">
-          <div className="truncate font-semibold">{title}</div>
-          <div className="flex items-center gap-1 overflow-hidden text-xs text-muted">
-            {subtitle ?? chat?.services.filter((s) => service(s).messages).map((s) => <ServiceBadge key={s} id={s} className="px-1.5 py-0" />)}
+          <button onClick={onInfo} className="block max-w-full truncate rounded-lg text-left font-semibold hover:underline">{title}</button>
+          <div className="flex items-center gap-1 overflow-x-auto text-xs text-muted">
+            {subtitle ?? (chat && chat.services.length > 1
+              ? chat.services.map((s) => {
+                  const off = hidden.includes(s);
+                  const last = !off && hidden.length === chat.services.length - 1;     // one stays on
+                  return (
+                    <button key={s} data-service-toggle={s} aria-pressed={!off} disabled={last}
+                      title={t(off ? "chat.showService" : "chat.hideService", { service: service(s).name })}
+                      onClick={() => onHide(off ? hidden.filter((x) => x !== s) : [...hidden, s])}
+                      className={cn("shrink-0 rounded-full transition disabled:cursor-default", off && "opacity-40 grayscale hover:opacity-70")}>
+                      <ServiceBadge id={s} className="px-1.5 py-0" />
+                    </button>
+                  );
+                })
+              : chat?.services.map((s) => <ServiceBadge key={s} id={s} className="px-1.5 py-0" />))}
           </div>
         </div>
-      </button>
+      </div>
       <IconButton label={t("chat.searchIn")} onClick={() => navigate({ to: "/search", search: { chat: chat?.id } })}><Search className="size-5" /></IconButton>
       <Popover.Root open={dateOpen} onOpenChange={setDateOpen}>
         <Popover.Trigger asChild>
@@ -365,13 +440,14 @@ function ChatHeader({ chat, wide, onInfo, onJumpDate }: { chat?: ChatDetail; wid
         <Popover.Portal>
           <Popover.Content align="end" sideOffset={6} className="z-50 rounded-2xl border border-line bg-panel p-3 shadow-xl">
             <div className="mb-2 text-sm font-medium">{t("chat.jumpDate")}</div>
-            <input
-              type="date"
-              className="h-10 rounded-xl border border-line bg-panel px-3 text-sm"
+            <DateField
+              value=""
+              autoFocus
+              label={t("chat.jumpDate")}
               max={isoDay(Date.now())}
-              onChange={(e) => {
-                if (!e.target.value) return;
-                const [y, mo, d] = e.target.value.split("-").map(Number);
+              onChange={(v) => {
+                if (!v) return;
+                const [y, mo, d] = v.split("-").map(Number);
                 setDateOpen(false);
                 onJumpDate(new Date(y, mo - 1, d).getTime());
               }}
@@ -395,10 +471,11 @@ function ChatHeader({ chat, wide, onInfo, onJumpDate }: { chat?: ChatDetail; wid
 }
 
 /** services: those of the chat with messages; sendable / replyable: those something can send to now
- * (or answer a given message in). preferred: where the chat was last active, the way to answer until
+ * (or answer a given message in); missing: why a source cannot send to one now. preferred: where the chat was last active, the way to answer until
  * the user picks another. One it cannot send through still shows, closed, with a lock for Send. */
-function Composer({ services, sendable, replyable, preferred, onSend, replyTo, onCancelReply }: {
-  services: string[]; sendable: string[]; replyable: string[]; preferred?: string | null;
+function Composer({ chatId, services, sendable, replyable, missing, preferred, onSend, replyTo, onCancelReply }: {
+  chatId: string; services: string[]; sendable: string[]; replyable: string[]; missing: Record<string, string>;
+  preferred?: string | null;
   onSend: (text: string, service: string | null, replyTo: MessageItem | null) => void;
   replyTo: MessageItem | null; onCancelReply: () => void;
 }) {
@@ -406,7 +483,8 @@ function Composer({ services, sendable, replyable, preferred, onSend, replyTo, o
   const settings = useSettings();
   const wide = useWide();
   const navigate = useNavigate();
-  const [text, setText] = useState("");
+  const [text, setText] = useState(() => draft(chatId));       // what was left unsent here, kept
+  useEffect(() => keepDraft(chatId, text), [chatId, text]);
   const [svc, setSvc] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   const enterSends = (settings.data?.send_enter as boolean | undefined) ?? wide;
@@ -432,7 +510,7 @@ function Composer({ services, sendable, replyable, preferred, onSend, replyTo, o
   const via = replyTo?.service ?? svc;                 // an answer goes where the message came from
   const can = (replyTo ? replyable : sendable).includes(via);
   const why = () => toast(t("chat.cannotSend", { service: service(via).name }), {
-    description: t("chat.cannotSendHint"), action: { label: t("nav.sources"), onClick: () => navigate({ to: "/sources" }) },
+    description: missing[via] ?? t("chat.cannotSendHint"), action: { label: t("nav.sources"), onClick: () => navigate({ to: "/sources" }) },
   });
   const go = () => {
     const body = text.trim();
@@ -470,8 +548,9 @@ function Composer({ services, sendable, replyable, preferred, onSend, replyTo, o
                 <MenuItem key={s} onSelect={() => { picked.current = true; setSvc(s); ref.current?.focus(); }}>
                   <ServiceIcon id={s} className="size-5" />
                   <span className="flex-1">{service(s).name}</span>
-                  {!sendable.includes(s) && <Lock className="size-3.5 text-muted" aria-label={t("chat.locked")} />}
-                  {s === svc && <Check className="size-4 text-accent" />}
+                  {/* each in its own place, there or not, so neither moves */}
+                  <span className="grid size-4 place-items-center">{!sendable.includes(s) && <Lock className="size-3.5 text-muted" aria-label={t("chat.locked")} />}</span>
+                  <span className="grid size-4 place-items-center">{s === svc && <Check className="size-4 text-accent" />}</span>
                 </MenuItem>
               ))}
             </MenuContent>

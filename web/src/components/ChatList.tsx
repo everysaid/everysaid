@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { keepListPlace, listPlace } from "@/lib/memory";
 import { Link, useParams } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -11,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { service } from "@/lib/services";
 import { Avatar, Button, Empty, Menu, MenuContent, MenuItem, MenuTrigger, Segmented, ServiceDot, Spinner } from "./ui";
 import { Logo } from "./Logo";
+import { GroupSuggestions } from "./GroupMerge";
 
 type Filter = "all" | "person" | "group" | "unread";
 
@@ -56,7 +58,7 @@ function ChatRow({ c, active }: { c: ChatSummary; active: boolean }) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["chats"] }),
   });
   return (
-    <div className={cn("group relative mx-2 my-0.5 rounded-2xl", active ? "bg-accent/12" : "hover:bg-panel-2")}>
+    <div data-chat={c.id} className={cn("group relative mx-2 my-0.5 rounded-2xl", active ? "bg-accent/12" : "hover:bg-panel-2")}>
       <Link to="/chat/$chatId" params={{ chatId: c.id }} className="flex items-center gap-3 px-3 py-2.5">
         <Avatar name={c.title} src={avatarUrl(c)} group={c.type === "group"} size={50} />
         <div className="min-w-0 flex-1">
@@ -108,9 +110,10 @@ function ChatRow({ c, active }: { c: ChatSummary; active: boolean }) {
 
 export function ChatList() {
   const { t } = useTranslation();
-  const [filter, setFilter] = useState<Filter>("all");
-  const [q, setQ] = useState("");
-  const [archived, setArchived] = useState(false);
+  const [was] = useState(listPlace);          // as it was left (this tab), coming back to it
+  const [filter, setFilter] = useState<Filter>((was?.filter as Filter) ?? "all");
+  const [q, setQ] = useState(was?.q ?? "");
+  const [archived, setArchived] = useState(was?.archived ?? false);
   const dq = useDebounced(q, 150);
   const chats = useChats({ q: dq || undefined, archived: archived || undefined });
   const params = useParams({ strict: false }) as { chatId?: string };
@@ -123,6 +126,32 @@ export function ChatList() {
     return list;
   }, [chats.data, filter, archived]);
 
+  // where the list was: the open chat at the same height (wherever new messages moved it), else the
+  // first row that was in view
+  const scroller = useRef<HTMLElement | null>(null);
+  const remember = useCallback(() => {
+    const el = scroller.current;
+    const place: NonNullable<ReturnType<typeof listPlace>> = { ...listPlace(), filter, q, archived };
+    if (el) {                                   // (not drawn yet: where it was stays)
+      delete place.active;
+      const edge = el.getBoundingClientRect().top;
+      const rows = [...el.querySelectorAll<HTMLElement>("[data-chat]")];
+      const first = rows.find((r) => r.getBoundingClientRect().bottom > edge + 1);
+      if (first) place.top = { id: first.dataset.chat!, offset: Math.round(edge - first.getBoundingClientRect().top) };
+      const open = rows.find((r) => r.dataset.chat === params.chatId);
+      if (open) place.active = { id: open.dataset.chat!, at: Math.round(open.getBoundingClientRect().top - edge) };
+    }
+    keepListPlace(place);
+  }, [filter, q, archived, params.chatId]);
+  useEffect(remember, [remember]);              // a filter changed, or another chat opened
+  const start = useMemo(() => {
+    if (!was) return 0;
+    const open = was.active && items.findIndex((c) => c.id === was.active!.id && c.id === params.chatId);
+    if (open !== undefined && open >= 0) return { index: open, align: "start" as const, offset: -was.active!.at };
+    const top = was.top ? items.findIndex((c) => c.id === was.top!.id) : -1;
+    return top >= 0 ? { index: top, align: "start" as const, offset: was.top!.offset } : 0;
+  }, [chats.isSuccess]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div className="flex h-full flex-col bg-panel">
       <div className="space-y-3 px-4 pb-3 pt-[max(1rem,env(safe-area-inset-top))]">
@@ -131,6 +160,8 @@ export function ChatList() {
           <h1 className="text-xl font-semibold tracking-tight">{archived ? t("chats.showArchived") : t("chats.title")}</h1>
           <button
             onClick={() => setArchived(!archived)}
+            data-show-archived
+            aria-pressed={archived}
             className={cn("ml-auto grid size-9 place-items-center rounded-full text-muted hover:bg-panel-2", archived && "bg-accent/12 text-accent")}
             aria-label={t("chats.showArchived")}
             title={t("chats.showArchived")}
@@ -164,6 +195,7 @@ export function ChatList() {
           ]}
         />
       </div>
+      {filter === "group" && !dq && <GroupSuggestions />}
       <div className="min-h-0 flex-1">
         {chats.isLoading ? (
           <div className="grid h-40 place-items-center"><Spinner /></div>
@@ -175,6 +207,9 @@ export function ChatList() {
         ) : (
           <Virtuoso
             data={items}
+            scrollerRef={(el) => { scroller.current = el as HTMLElement | null; }}
+            initialTopMostItemIndex={start}
+            isScrolling={(on) => { if (!on) remember(); }}
             computeItemKey={(_, c) => c.id}
             itemContent={(_, c) => <ChatRow c={c} active={params.chatId === c.id} />}
             increaseViewportBy={400}

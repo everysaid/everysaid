@@ -204,3 +204,23 @@ def test_sending_needs_the_bridge_started_with_send(bridge_instance):
     db.execute("UPDATE bridge_state SET value = '' WHERE key = 'send_enabled'")
     db.commit()
     assert not plugins.get("whatsapp-bridge").sending(host.ctx(iid))
+    assert host.unsendable()["whatsapp"] == "off at the bridge (started without -send)"   # what the lock says
+
+
+def test_its_card_says_what_the_bridge_says_now(bridge_instance, monkeypatch):
+    from chronika import plugins
+    host, iid, _, _ = bridge_instance
+    p = plugins.get("whatsapp-bridge")
+    live = {"connected": True, "connection": "connected", "send_enabled": True, "send_blocked": "",
+            "sent": {"day": 4}, "limits": {"per_day": 300}}
+    monkeypatch.setattr(p, "bridge_status", lambda ctx: live)
+    assert p.info(host.ctx(iid)) == [("Connection", "connected to WhatsApp"), ("Sending", "on, 4 of 300 today")]
+    live.update(connected=False, send_enabled=False)            # its last record says connected; not so now
+    assert p.info(host.ctx(iid)) == [("Connection", "not connected to WhatsApp"),
+                                     ("Sending", "off at the bridge (started without -send)")]
+    live.update(connection="logged_out", send_blocked="logged out: 401")
+    info = host.status(iid, "el")["info"]
+    assert {"label": "Σύνδεση", "value": "αποσυνδέθηκε από το WhatsApp"} in info
+    assert {"label": "Αποστολή", "value": "μπλοκαρισμένη από τη γέφυρα: logged out: 401"} in info
+    monkeypatch.setattr(p, "bridge_status", lambda ctx: None)
+    assert host.status(iid, "el")["info"] == [{"label": "Σύνδεση", "value": "η γέφυρα δεν απαντά"}]
