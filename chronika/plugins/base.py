@@ -58,6 +58,9 @@ class Plugin:
     settings = ()               # Setting(...)
     can_send = False
     can_reply = False           # can send an answer to a given message (quoting it)
+    can_mention = False         # can name people of a group in what it sends (@)
+    can_mark_read = False       # can tell the service a chat was read (read receipts), where the user allows
+    can_send_files = False      # can send a file (a picture, a video, a document) with a caption
     actions = ()                # extra buttons: (id, label)
     # How each service it brings looks: {service: {"name", "color", "short", "icon", "messages"}}
     # ("icon": an SVG path on a 24x24 view, drawn in the colour, where the service is chosen or shown;
@@ -78,6 +81,7 @@ class Plugin:
                 "description": tr(cls.description, lang), "modes": list(cls.modes), "platforms": list(cls.platforms),
                 "available": sys.platform in cls.platforms, "needs": [tr(n, lang) for n in cls.needs],
                 "settings": [s.manifest(lang) for s in cls.settings], "can_send": cls.can_send, "can_reply": cls.can_reply,
+                "can_mention": cls.can_mention, "can_mark_read": cls.can_mark_read, "can_send_files": cls.can_send_files,
                 "actions": [{"id": a, "label": tr(label, lang)} for a, label in cls.actions],
                 "has_chats": cls.chats is not Plugin.chats, "live_default": cls.live_default, "name_weights": dict(cls.name_weights),
                 "state_weights": dict(cls.state_weights)}
@@ -89,10 +93,19 @@ class Plugin:
     async def live(self, ctx):
         raise NotImplementedError
 
-    async def send(self, ctx, conversation, text, reply_to=None):
+    async def send(self, ctx, conversation, text, reply_to=None, mentions=None, file=None):
         """conversation: {id, key, service}; reply_to (where can_reply): {key, id} of the message
-        answered, in that conversation."""
+        answered, in that conversation; mentions (where can_mention): [{start, length, address_id}],
+        the people of a group the text names, each where it is in the text (in characters, e.g.
+        "@name"), for the plugin to write as its service does; file (where can_send_files):
+        {data: bytes, filename, mime_type}, with the text as its caption (which may be empty)."""
         raise NotImplementedError
+
+    async def mark_read(self, ctx, conversation, until):
+        """The user read the conversation ({id, key, service}) up to `until` (Unix ms) in the app:
+        tell the service (read receipts), if the instance's settings allow. Returns how many messages
+        were marked."""
+        return 0
 
     def chats(self, ctx):
         return []

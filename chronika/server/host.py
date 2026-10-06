@@ -7,6 +7,7 @@ new incoming messages also go out as push notifications, except for muted and ar
 """
 import asyncio
 import json
+import logging
 import os
 import threading
 import time
@@ -30,6 +31,7 @@ class Host:
         self.contexts = {}
         self.running = {}           # instance id -> "import" | "live"
         self.live_tasks = {}
+        self.marking = set()            # (instance, conversation) being told it was read now
 
     # events
     def listen(self):
@@ -221,10 +223,14 @@ class Host:
                 out.append((row["id"], p))
         return out
 
+    def able(self, flag):
+        """The services something can send to now with `flag` (can_reply, can_mention, can_send_files)."""
+        return self.store.cached(f"{flag}:{int(time.time() // 60)}",
+                                 lambda: {s for _, p in self.senders() if getattr(p, flag) for s in p.services})
+
     def replyable(self):
         """The services something can send an answer to a given message to now."""
-        return self.store.cached(f"replyable:{int(time.time() // 60)}",
-                                 lambda: {s for _, p in self.senders() if p.can_reply for s in p.services})
+        return self.able("can_reply")
 
     def sendable(self):
         """The services something can send to now (kept until the archive, its plugins included, changes:
@@ -247,10 +253,12 @@ class Host:
             return out
         return self.store.cached(f"unsendable:{int(time.time() // 60)}", why)
 
-    async def send(self, chat_id, text, conversation_id=None, service=None, reply_to=None):
+    async def send(self, chat_id, text, conversation_id=None, service=None, reply_to=None, mentions=None, file=None):
         """Send text in a chat through the plugin that reaches its service; returns what it said.
         reply_to: the id of a message of the chat it answers: then through its conversation, by a
-        plugin that can reply."""
+        plugin that can reply. mentions: [{start, length, address_id}], members of the group the text
+        names (left out where the plugin cannot mention: the text says them anyway). file: {data,
+        filename, mime_type}, the text its caption: only through a plugin that can send files."""
         c = queries.chat(self.store, chat_id)
         if not c:
             raise KeyError(chat_id)
@@ -275,19 +283,70 @@ class Host:
                                       "WHERE c.id = ?", (conv,)).fetchone()
             last = db.execute("SELECT max(ts) FROM message WHERE conversation_id = ?", (conv,)).fetchone()[0] or 0
             for iid, p in senders:
-                if svc in p.services and (answered is None or p.can_reply):
+                if svc in p.services and (answered is None or p.can_reply) and (file is None or p.can_send_files):
                     options.append((last, conv, key, svc, iid, p))
         if service:
             options = [o for o in options if o[3] == service]
         if not options:
-            raise UserError("chat.cannot_reply" if answered else "chat.no_sender", 409)
+            raise UserError("chat.cannot_reply" if answered else "chat.cannot_send_files" if file else "chat.no_sender", 409)
         options.sort(key=lambda o: o[0], reverse=True)          # where the chat was last active
         _, conv, key, service, iid, p = options[0]
+        if mentions:
+            members = {a for (a,) in db.execute("SELECT address_id FROM conversation_member WHERE conversation_id = ?",
+                                                (conv,))}
+            if any(int(m["address_id"]) not in members for m in mentions):
+                raise UserError("chat.not_a_member")
         ctx = self.ctx(iid)
-        result = await (p.send(ctx, {"id": conv, "key": key, "service": service}, text, answered) if answered
-                        else p.send(ctx, {"id": conv, "key": key, "service": service}, text))
+        extra = {}
+        if answered:
+            extra["reply_to"] = answered
+        if mentions and p.can_mention:
+            extra["mentions"] = mentions
+        if file:
+            extra["file"] = file
+        result = await p.send(ctx, {"id": conv, "key": key, "service": service}, text, **extra)
         self.emit({"type": "changed"})
         return {"service": service, "conversation_id": conv, "result": result}
+
+    async def mark_read(self, chat_id, until):
+        """The user read the chat up to `until` (Unix ms) here: each of its conversations with something
+        newer from the others than the service last said was read is told so, through the plugins that
+        can and are connected (a live one only while its connection runs; each sends only where its user
+        allowed), one at a time per conversation. Their errors go to their logs."""
+        c = queries.chat(self.store, chat_id)
+        if not c:
+            return
+        db = self.store.read()
+        for row in plugins.instances(self.store, "source"):
+            p = plugins.get(row["plugin"])
+            if not (row["enabled"] and p and p.can_mark_read) or ("live" in p.modes and row["id"] not in self.live_tasks):
+                continue
+            ctx = self.ctx(row["id"])
+            for conv in c["conversations"]:
+                key, svc, newest, told = db.execute(
+                    "SELECT c.key, s.name, (SELECT max(ts) FROM message WHERE conversation_id = c.id AND NOT outgoing "
+                    "AND ts <= ?), (SELECT max(value) FROM state_report WHERE conversation_id = c.id AND field = 'read_until') "
+                    "FROM conversation c JOIN service s ON s.id = c.service_id WHERE c.id = ?", (until, conv)).fetchone()
+                if svc not in p.services or not newest or (told or 0) >= newest or (row["id"], conv) in self.marking:
+                    continue
+                self.marking.add((row["id"], conv))
+                try:
+                    await p.mark_read(ctx, {"id": conv, "key": key, "service": svc}, until)
+                except Exception as e:      # reading here must not fail on a service's error
+                    ctx.log("read receipts: {e}", e=str(e) or repr(e))
+                finally:
+                    self.marking.discard((row["id"], conv))
+
+    def mark_read_soon(self, chat_id, until):
+        """mark_read on the server's loop, from a request's thread, not waited for (what fails outside
+        a plugin goes to the server's log, not lost)."""
+        if not self.loop:
+            return
+
+        def done(f):
+            if not f.cancelled() and f.exception():
+                logging.getLogger("chronika.server").error("read receipts", exc_info=f.exception())
+        asyncio.run_coroutine_threadsafe(self.mark_read(chat_id, until), self.loop).add_done_callback(done)
 
     # libraries
     def libraries(self):

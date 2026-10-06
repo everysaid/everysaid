@@ -1,11 +1,12 @@
 """The WhatsApp bridge's databases as the importers and the plugin read them: a bridge of this
-version (kinds, replies, places, reactions, edits, deletions, calls, its state), and one from before."""
+version (kinds, replies, places, reactions, edits, deletions, calls, the files it downloaded, its
+state), and one from before; and what the plugin asks the bridge to send."""
 import json
 import sqlite3
 
 import pytest
 
-from chronika import voip, whatsapp
+from chronika import media, voip, whatsapp
 from chronika.archive import Archive
 
 PEER = "15551234567@s.whatsapp.net"
@@ -29,6 +30,14 @@ CREATE TABLE calls (id TEXT PRIMARY KEY, source TEXT, chat_jid TEXT, creator TEX
     end_reason TEXT);
 CREATE TABLE call_participants (call_id TEXT, jid TEXT, outcome TEXT, PRIMARY KEY (call_id, jid));
 CREATE TABLE bridge_state (key TEXT PRIMARY KEY, value TEXT, at TIMESTAMP);
+ALTER TABLE messages ADD COLUMN direct_path TEXT; ALTER TABLE messages ADD COLUMN media_path TEXT;
+ALTER TABLE messages ADD COLUMN media_error TEXT; ALTER TABLE messages ADD COLUMN mentions TEXT;
+ALTER TABLE messages ADD COLUMN read_at TIMESTAMP;
+CREATE TABLE receipts (chat_jid TEXT, message_id TEXT, jid TEXT, type TEXT, timestamp TIMESTAMP,
+    PRIMARY KEY (chat_jid, message_id, jid, type));
+CREATE TABLE group_info (jid TEXT PRIMARY KEY, name TEXT, addressing TEXT, member BOOLEAN, updated_at TIMESTAMP);
+CREATE TABLE group_members (group_jid TEXT, jid TEXT, phone TEXT, lid TEXT, is_admin BOOLEAN, is_super_admin BOOLEAN,
+    PRIMARY KEY (group_jid, jid));
 """
 
 
@@ -224,3 +233,191 @@ def test_its_card_says_what_the_bridge_says_now(bridge_instance, monkeypatch):
     assert {"label": "Αποστολή", "value": "μπλοκαρισμένη από τη γέφυρα: logged out: 401"} in info
     monkeypatch.setattr(p, "bridge_status", lambda ctx: None)
     assert host.status(iid, "el")["info"] == [{"label": "Σύνδεση", "value": "η γέφυρα δεν απαντά"}]
+
+
+def test_the_files_the_bridge_downloaded_go_to_their_messages(store, tmp_path, monkeypatch):
+    monkeypatch.setattr(media, "MEDIA_ROOT", str(tmp_path / "archive-media"))
+    path, db = bridge(tmp_path)
+    rel = f"media/{PEER}/PIC.jpg"
+    (tmp_path / "media" / PEER).mkdir(parents=True)
+    (tmp_path / rel).write_bytes(b"a picture")
+    message(db, "PIC", 1, "look", kind="image", media_type="image", media_path=rel)
+    message(db, "LATER", 2, kind="image", media_type="image")       # not downloaded (yet)
+    run(store, path)
+    a = Archive(store.path)
+    try:
+        media.run(a, [lambda a, s: media.whatsapp_bridge(a, s, str(path))])
+        media.run(a, [lambda a, s: media.whatsapp_bridge(a, s, str(path))])     # again: nothing new
+    finally:
+        a.db.close()
+    rows = store.read().execute("SELECT m.key, md.path FROM attachment t JOIN message m ON m.id = t.message_id "
+                                "JOIN media md ON md.sha256 = t.sha256 JOIN source s ON s.id = t.source_id "
+                                "WHERE s.name = 'whatsapp-bridge'").fetchall()
+    assert [k for k, _ in rows] == ["PIC"]
+    assert (tmp_path / "archive-media" / rows[0][1]).read_bytes() == b"a picture"
+
+
+def test_a_bridge_from_before_has_no_files_to_give(store, tmp_path):
+    path, db = bridge(tmp_path, OLD_SCHEMA)
+    message(db, "PIC", 1, media_type="image")
+    a = Archive(store.path)
+    try:
+        media.run(a, [lambda a, s: media.whatsapp_bridge(a, s, str(path))])
+    finally:
+        a.db.close()
+
+
+def test_an_answer_tells_the_bridge_what_it_answers(bridge_instance, store, tmp_path, monkeypatch):
+    import asyncio
+    import urllib.request
+    from chronika import plugins
+    host, iid, db, _ = bridge_instance
+    message(db, "THEIRS", 1, "a question")
+    message(db, "MINE", 2, "an aside", from_me=1)
+    run(store, tmp_path / "messages.db")
+    sent = []
+
+    class Answer:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def read(self):
+            return b'{"success": true, "id": "NEW"}'
+
+    def urlopen(req, timeout=None):
+        sent.append(json.loads(req.data))
+        return Answer()
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(plugins.get("whatsapp-bridge"), "run_import", lambda ctx: None)
+    p = plugins.get("whatsapp-bridge")
+    conv = {"id": 1, "key": "+15551234567", "service": "whatsapp"}
+    for key in ("THEIRS", "MINE"):
+        mid = row(store, key, "id")[0]
+        asyncio.run(p.send(host.ctx(iid), conv, "yes", {"id": mid, "key": key}))
+    asyncio.run(p.send(host.ctx(iid), conv, "plain"))
+    asyncio.run(p.send(host.ctx(iid), conv, "", file={"data": b"\x89PNG", "filename": "a.png", "mime_type": "image/png"}))
+    assert sent == [
+        {"recipient": "15551234567", "message": "yes", "reply_to": "THEIRS", "reply_sender": "+15551234567",
+         "reply_text": "a question"},
+        {"recipient": "15551234567", "message": "yes", "reply_to": "MINE", "reply_sender": "me",
+         "reply_text": "an aside"},
+        {"recipient": "15551234567", "message": "plain"},
+        {"recipient": "15551234567", "message": "", "media": "iVBORw==", "filename": "a.png", "mime_type": "image/png"}]
+
+
+def test_mentions_and_the_groups_members(store, tmp_path):
+    path, db = bridge(tmp_path)
+    db.execute("INSERT INTO chats VALUES (?, 'Group', ?)", (GROUP, ts(30)))
+    db.execute("INSERT INTO group_members VALUES (?, '98765@lid', '15557654321@s.whatsapp.net', '98765@lid', 0, 0)", (GROUP,))
+    db.execute("INSERT INTO group_members VALUES (?, '15551234567@s.whatsapp.net', '15551234567@s.whatsapp.net', '', 1, 0)",
+               (GROUP,))
+    message(db, "HEY", 1, "@98765 @15551234567 look", chat_jid=GROUP, sender="98765@lid",
+            mentions="98765@lid,15551234567@s.whatsapp.net")
+    run(store, path)
+    run(store, path)                                            # again: nothing twice
+    db_ = store.read()
+    named = db_.execute("SELECT a.value FROM mention n JOIN address a ON a.id = n.address_id JOIN message m "
+                        "ON m.id = n.message_id WHERE m.key = 'HEY' ORDER BY a.value").fetchall()
+    assert named == [("+15551234567",), ("+15557654321",)]     # a LID as the number the group gives for it
+    members = db_.execute("SELECT a.value FROM conversation_member cm JOIN conversation c ON c.id = cm.conversation_id "
+                          "JOIN address a ON a.id = cm.address_id WHERE c.key = ? ORDER BY a.value", (GROUP,)).fetchall()
+    assert members == [("+15551234567",), ("+15557654321",)]
+
+
+def test_a_mention_is_written_as_whatsapp_has_it(bridge_instance, store, monkeypatch):
+    import asyncio
+    import urllib.request
+    from chronika import plugins
+    host, iid, _, _ = bridge_instance
+    with store.write() as w:
+        w.execute("INSERT INTO address (kind_id, value) SELECT id, '+15557654321' FROM address_kind WHERE name = 'phone'")
+        w.execute("INSERT INTO address (kind_id, value, service_id) SELECT k.id, '98765@lid', s.id FROM address_kind k, "
+                  "service s WHERE k.name = 'id' AND s.name = 'whatsapp'")
+    ids = dict(store.read().execute("SELECT value, id FROM address WHERE value IN ('+15557654321', '98765@lid')"))
+    sent = []
+
+    class Answer:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def read(self):
+            return b'{"success": true}'
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: sent.append(json.loads(req.data)) or Answer())
+    p = plugins.get("whatsapp-bridge")
+    monkeypatch.setattr(p, "run_import", lambda ctx: None)
+    text = "🙂 @Maria and @Nikos, hi"
+    asyncio.run(p.send(host.ctx(iid), {"id": 1, "key": GROUP, "service": "whatsapp"}, text,
+                       mentions=[{"start": 2, "length": 6, "address_id": ids["+15557654321"]},
+                                 {"start": 13, "length": 6, "address_id": ids["98765@lid"]}]))
+    assert sent[0]["message"] == "🙂 @15557654321 and @98765, hi"
+    assert sent[0]["mentions"] == ["15557654321", "98765@lid"]
+    assert p.manifest()["can_mention"]
+    # the same person named twice: both places written, the person given once
+    asyncio.run(p.send(host.ctx(iid), {"id": 1, "key": GROUP, "service": "whatsapp"}, "@Maria @Maria",
+                       mentions=[{"start": 0, "length": 6, "address_id": ids["+15557654321"]},
+                                 {"start": 7, "length": 6, "address_id": ids["+15557654321"]}]))
+    assert sent[1]["message"] == "@15557654321 @15557654321" and sent[1]["mentions"] == ["15557654321"]
+
+
+def test_receipts_and_what_the_owner_read(store, tmp_path):
+    path, db = bridge(tmp_path)
+    message(db, "MINE", 1, "seen?", from_me=1)
+    message(db, "THEIRS", 2, "yes")
+    db.executemany("INSERT INTO receipts VALUES (?, ?, ?, ?, ?)", [
+        (PEER, "MINE", PEER, "delivered", ts(1)), (PEER, "MINE", PEER, "read", ts(3)),
+        (PEER, "THEIRS", PEER, "read", ts(4)),                     # not the owner's message: no receipt
+        (PEER, "GONE", PEER, "read", ts(4))])
+    db.execute("UPDATE messages SET read_at = ? WHERE id = 'THEIRS'", (ts(5),))
+    db.commit()
+    a = Archive(store.path)
+    try:                                # the source as the plugin's import leaves it: its instance's
+        whatsapp.run(a, iphone_db=None, contacts_db=None, bridge_db=str(path), store_db=None)
+        a.db.execute("UPDATE source SET instance_id = (SELECT id FROM plugin_instance WHERE plugin = 'whatsapp-bridge') "
+                     "WHERE name = 'whatsapp-bridge'")
+        whatsapp.run(a, iphone_db=None, contacts_db=None, bridge_db=str(path), store_db=None)
+    finally:
+        a.db.close()
+    rows = store.read().execute("SELECT m.key, a.value, r.delivered_at, r.read_at, r.played_at FROM receipt r "
+                                "JOIN message m ON m.id = r.message_id JOIN address a ON a.id = r.address_id "
+                                    "WHERE m.key IN ('MINE', 'THEIRS', 'GONE')").fetchall()
+    assert rows == [("MINE", "+15551234567", whatsapp.ms(ts(1)), whatsapp.ms(ts(3)), None)]
+    report = store.read().execute("SELECT s.value, s.changed_at FROM state_report s JOIN conversation c "
+                                  "ON c.id = s.conversation_id WHERE c.key = '+15551234567' AND s.field = 'read_until'").fetchone()
+    assert report == (whatsapp.ms(ts(2)), whatsapp.ms(ts(5)))
+
+
+def test_read_receipts_only_where_the_user_turned_them_on(bridge_instance, store, monkeypatch):
+    import asyncio
+    import urllib.request
+    from chronika import plugins
+    host, iid, _, _ = bridge_instance
+    sent = []
+
+    class Answer:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def read(self):
+            return b'{"success": true, "marked": 2}'
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: sent.append(
+        (req.full_url, json.loads(req.data))) or Answer())
+    p = plugins.get("whatsapp-bridge")
+    conv = {"id": 1, "key": "+15551234567", "service": "whatsapp"}
+    assert asyncio.run(p.mark_read(host.ctx(iid), conv, 1_790_000_000_500)) == 0 and sent == []   # off by default
+    with store.write() as w:
+        w.execute("UPDATE plugin_instance SET settings = json_set(settings, '$.read_receipts', json('true')) WHERE id = ?", (iid,))
+    assert asyncio.run(p.mark_read(host.ctx(iid), conv, 1_790_000_000_500)) == 2
+    assert sent == [("http://127.0.0.1:8080/api/read", {"recipient": "15551234567", "until": 1_790_000_000})]
+    assert p.manifest()["can_mark_read"]

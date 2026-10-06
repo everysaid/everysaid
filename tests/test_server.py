@@ -203,3 +203,90 @@ def test_a_setting_that_is_not_what_it_must_be_is_refused(app):
     good = c.patch(f"/api/plugins/{made['id']}", json={"settings": {"udid": "00008110-001A2B3C4D5E6F70"}}, headers=H)
     assert good.status_code == 200 and good.json()["settings"]["udid"] == "00008110-001A2B3C4D5E6F70"
     assert c.patch(f"/api/plugins/{made['id']}", json={"settings": {"udid": ""}}, headers=H).status_code == 200   # found by itself
+
+
+def test_mentions_files_receipts_and_read_receipts(app, monkeypatch):
+    """A group's members to name with @, a file sent with its caption, who got and read the user's
+    messages, and the services told the chat was read: through a plugin that records what it is asked."""
+    import time
+    from chronika import plugins
+    from chronika.plugins.base import Plugin
+
+    asked = []
+
+    class Recorder(Plugin):
+        id, kind, services = "demo-sender", "source", ("whatsapp", "telegram", "viber", "sms")
+        can_send = can_reply = can_mention = can_mark_read = can_send_files = True
+
+        def check(self, ctx):
+            return True, "ready"
+
+        async def send(self, ctx, conversation, text, reply_to=None, mentions=None, file=None):
+            asked.append(("send", conversation["service"], text, mentions, file))
+            return {"id": 1}
+
+        async def mark_read(self, ctx, conversation, until):
+            asked.append(("read", conversation["service"], until))
+            return 1
+
+    monkeypatch.setitem(plugins.REGISTRY, "demo-sender", Recorder())
+    app, c = app
+    login(app, c)
+    group = next(x for x in c.get("/api/chats?kind=group").json()["items"]
+                 if "whatsapp" in c.get(f"/api/chats/{x['id']}").json()["services"])
+    detail = c.get(f"/api/chats/{group['id']}").json()
+    assert "whatsapp" in detail["mentionable"] and "whatsapp" in detail["fileable"]
+    member = detail["members"][0]
+    assert member["address_id"] and "whatsapp" in member["services"]
+
+    # the stream: mentions with their tokens, and ticks of the user's messages
+    items = c.get(f"/api/chats/{group['id']}/stream?limit=200").json()["items"]
+    page, before = items, items[0]["cursor"]
+    while not any(i.get("mentions") for i in page) and before:
+        older = c.get(f"/api/chats/{group['id']}/stream?limit=200&before={before}").json()
+        page, before = older["items"], older["items"][0]["cursor"] if older["has_older"] else None
+        items += page
+    named = next(i for i in items if i.get("mentions"))
+    assert named["text"].startswith(named["mentions"][0]["token"]) and named["mentions"][0]["name"]
+    mine = next(i for i in items if i["type"] == "message" and i["outgoing"] and i["receipts"])
+    assert mine["receipts"]["to"] >= mine["receipts"]["delivered"] >= mine["receipts"]["read"]
+    who = c.get(f"/api/messages/{mine['id']}/receipts").json()["items"]
+    assert len(who) == mine["receipts"]["to"] and all(r["delivered_at"] for r in who)
+
+    # @ and a file
+    name = f"@{member['name']}"
+    text = f"🙂 {name} look"
+    r = c.post(f"/api/chats/{group['id']}/send", headers=H, json={
+        "text": text, "service": "whatsapp", "mentions": [{"start": 2, "length": len(name), "address_id": member["address_id"]}]})
+    assert r.status_code == 200, r.text
+    assert asked[-1][3] == [{"start": 2, "length": len(name), "address_id": member["address_id"]}]
+    outside = {a for (a,) in app.state.store.read().execute("SELECT id FROM address")} - {m["address_id"] for m in detail["members"]}
+    r = c.post(f"/api/chats/{group['id']}/send", headers=H, json={
+        "text": "@x hi", "service": "whatsapp", "mentions": [{"start": 0, "length": 2, "address_id": min(outside)}]})
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "chat.not_a_member"
+    aid = member["address_id"]
+    for bad in ([{"start": 3, "length": 2, "address_id": aid}],                  # not an "@"
+                [{"start": -5, "length": 2, "address_id": aid}],                 # outside the text
+                [{"start": 0, "length": 9, "address_id": aid}],
+                [{"start": 0, "length": 2, "address_id": aid}, {"start": 1, "length": 2, "address_id": aid}],
+                [{"start": 0}], "nonsense"):
+        r = c.post(f"/api/chats/{group['id']}/send", headers=H, json={"text": "@x hi", "service": "whatsapp", "mentions": bad})
+        assert r.status_code == 400, bad
+    assert c.post(f"/api/chats/{group['id']}/send", headers=H, json=["not", "an", "object"]).status_code == 400
+    r = c.post(f"/api/chats/{group['id']}/send", headers=H, data={"text": "a\r\n@x b", "service": "whatsapp",
+               "mentions": f'[{{"start": 2, "length": 2, "address_id": {aid}}}]'}, files={"file": ("a.txt", b"t", "text/plain")})
+    assert r.status_code == 200 and asked[-1][2] == "a\n@x b"         # the form's CRLF as one line break
+    r = c.post(f"/api/chats/{group['id']}/send", headers=H, data={"text": "", "service": "whatsapp"},
+               files={"file": ("photo.jpg", b"\xff\xd8 picture", "image/jpeg")})
+    assert r.status_code == 200, r.text
+    assert asked[-1][2] == "" and asked[-1][4] == {"data": b"\xff\xd8 picture", "filename": "photo.jpg", "mime_type": "image/jpeg"}
+    assert c.post(f"/api/chats/{group['id']}/send", headers=H, json={"text": " "}).json()["detail"]["code"] == "empty_message"
+
+    # read here: the services told, where something of the others is newer than what they said was read
+    asked.clear()
+    assert c.post(f"/api/chats/{group['id']}/read", headers=H).status_code == 200
+    for _ in range(50):
+        if asked:
+            break
+        time.sleep(0.05)
+    assert asked and asked[0][0] == "read" and asked[0][1] == "whatsapp"

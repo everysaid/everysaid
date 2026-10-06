@@ -19,7 +19,7 @@ from .archive import IPHONE, IPHONE_DATA, APPLE_EPOCH, address
 
 IPHONE_DB = f"{IPHONE_DATA}/whatsapp.sqlite"
 CONTACTS_DB = f"{IPHONE_DATA}/whatsapp-contacts.sqlite"
-BRIDGE_DIR = config.WHATSAPP_BRIDGE     # optional
+BRIDGE_DIR = config.WHATSAPP_BRIDGE     # there only where a bridge runs
 BRIDGE_DB = os.path.join(BRIDGE_DIR, "messages.db") if BRIDGE_DIR else None
 BRIDGE_STORE = os.path.join(BRIDGE_DIR, "whatsapp.db") if BRIDGE_DIR else None
 
@@ -52,6 +52,67 @@ def ro_bridge(path):
 
 def has_table(db, name):
     return db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)).fetchone() is not None
+
+
+def bridge_members(archive, bridge, person, own):
+    """The groups' members as the bridge last read them, added to their conversations (one who left
+    stays: a member once)."""
+    if not has_table(bridge, "group_members"):
+        return
+    for group, jid in bridge.execute("SELECT group_jid, jid FROM group_members"):
+        conv = archive.find_conversation("whatsapp", group)
+        p = person(jid)
+        if conv and p and p not in own:
+            archive.db.execute("INSERT OR IGNORE INTO conversation_member VALUES (?, ?)", (conv, archive.address(*p)))
+
+
+def bridge_mentions(archive, bridge, person):
+    """Whom each message names with @, also on the messages the archive has from the iPhone."""
+    if "mentions" not in {r[1] for r in bridge.execute("PRAGMA table_info(messages)")}:
+        return
+    for mid_key, mentions in bridge.execute("SELECT id, mentions FROM messages WHERE coalesce(mentions, '') != ''"):
+        mid = archive.message_by_key("whatsapp", mid_key)
+        if not mid:
+            continue
+        for jid in mentions.split(","):
+            p = person(jid)
+            if p:
+                archive.db.execute("INSERT OR IGNORE INTO mention VALUES (?, ?, ?)",
+                                   (mid, archive.address(*p), "@" + jid.split("@")[0]))
+
+
+def ms(stamp):
+    """A bridge timestamp as Unix ms (0 for one not known)."""
+    return int(datetime.fromisoformat(stamp).timestamp() * 1000) if stamp else 0
+
+
+def bridge_receipts(archive, bridge, person, own):
+    """Who got, read and played the owner's messages, and when (the first time each)."""
+    if not has_table(bridge, "receipts"):
+        return
+    for key, jid, kind, stamp in bridge.execute("SELECT message_id, jid, type, timestamp FROM receipts"):
+        if kind not in ("delivered", "read", "played"):
+            continue
+        mid = archive.message_by_key("whatsapp", key)
+        p = person(jid)
+        if not mid or not p or p in own:
+            continue
+        aid = archive.address(*p)
+        archive.db.execute("INSERT OR IGNORE INTO receipt (message_id, address_id) "
+                           "SELECT id, ? FROM message WHERE id = ? AND outgoing", (aid, mid))
+        archive.db.execute(f"UPDATE receipt SET {kind}_at = ? WHERE message_id = ? AND address_id = ? "
+                           f"AND (coalesce({kind}_at, 0) = 0 OR ({kind}_at > ? AND ? > 0))", (ms(stamp), mid, aid, ms(stamp), ms(stamp)))
+
+
+def bridge_read(bridge):
+    """chat jid -> (the newest message the owner read there, when), Unix ms, from the bridge's read_at."""
+    if "read_at" not in {r[1] for r in bridge.execute("PRAGMA table_info(messages)")}:
+        return {}
+    out = {}
+    for jid, stamp, read in bridge.execute("SELECT chat_jid, timestamp, read_at FROM messages WHERE read_at IS NOT NULL"):
+        newest, when = out.get(jid, (0, 0))
+        out[jid] = (max(newest, ms(stamp)), max(when, ms(read)))
+    return out
 
 
 def bridge_changes(archive, bridge, person, own, reactions):
@@ -187,6 +248,9 @@ class People:
             self.lid_phone[user(lid)] = user(jid)
         for lid, pn in store.execute("SELECT lid, pn FROM whatsmeow_lid_map") if store else ():
             self.lid_phone.setdefault(lid, pn)
+        if bridge and has_table(bridge, "group_members"):      # the groups' members, named both ways
+            for lid, pn in bridge.execute("SELECT lid, phone FROM group_members WHERE lid != '' AND phone != ''"):
+                self.lid_phone.setdefault(user(lid), user(pn))
         # Every LID seen anywhere, to tell them from phone numbers in the bridge's bare senders.
         self.lids = set(self.lid_phone)
         for (jid,) in iphone.execute("SELECT ZFROMJID FROM ZWAMESSAGE WHERE ZFROMJID LIKE '%@lid' UNION "
@@ -332,6 +396,10 @@ def run(archive, iphone_db=IPHONE_DB, contacts_db=CONTACTS_DB, bridge_db=BRIDGE_
             int(datetime.fromisoformat(r["timestamp"]).timestamp() * 1000), outgoing,
             None if outgoing else person(r["sender"] or jid), kind, r["content"] or None, r["id"])
     updated = bridge_changes(archive, bridge, person, own, reactions) if bridge else {}
+    if bridge:
+        bridge_members(archive, bridge, person, own)
+        bridge_mentions(archive, bridge, person)
+        bridge_receipts(archive, bridge, person, own)
 
     # The names WhatsApp shows, for the handles in the archive (core/names.py orders them against an
     # address book and other services).
@@ -364,6 +432,10 @@ def run(archive, iphone_db=IPHONE_DB, contacts_db=CONTACTS_DB, bridge_db=BRIDGE_
             report("bridge", jid, "archived", int(bool(archived)), seen["bridge"])
             report("bridge", jid, "pinned", int(bool(pinned)), seen["bridge"])
             report("bridge", jid, "muted", -1 if until == -1 else (until or 0) * 1000, seen["bridge"])
+    if bridge:                          # read up to: what the owner read on any device, as the bridge saw
+        for jid, (newest, when) in bridge_read(bridge).items():
+            conv = archive.find_conversation("whatsapp", person.conversation_key(jid))
+            archive.report_state(src["bridge"], conv, "read_until", newest, when, when)
 
     archive.resolve()
     for sid in src.values():

@@ -10,7 +10,9 @@ step skipped when its source is not there:
 - Android MMS (`android-export.py`): `mms-parts/<part _id>`, message by MMS id, or by time and
   direction where the iPhone's copy of the message was the one kept;
 - Telegram (`telegram-sync.py --media`): `<chat>/<message><ext>`, message by its row key
-  (`telegram.media`).
+  (`telegram.media`);
+- the WhatsApp bridge: the files it downloaded (`messages.media_path`, relative to its store
+  folder), message by its row key, else by its id (the iPhone's copy of the same message).
 
 The Android phone's Viber media were linked once, through a `links.tsv` made by a script since retired
 (docs/data-sources.md, 5.5); their files are gone and the links stay in the archive.
@@ -117,6 +119,26 @@ def whatsapp(archive, store):
         store.link(f"{IPHONE}/whatsapp", src, f"{IPHONE_DATA}/whatsapp-media/{rel}", rel, messages.get(stanza))
 
 
+def whatsapp_bridge(archive, store, database=None):
+    from .whatsapp import BRIDGE_DB
+    database = database or BRIDGE_DB
+    if not database or not os.path.exists(database):
+        return
+    db = ro(database)
+    if "media_path" not in {r[1] for r in db.execute("PRAGMA table_info(messages)")}:
+        return                          # a bridge from before it downloaded files
+    folder = os.path.dirname(database)
+    src = archive.source("whatsapp-bridge", database, "whatsapp-bridge", folder)
+    origins, messages = by_origin(archive, "whatsapp-bridge"), by_key(archive, "whatsapp")
+    for chat, mid, rel in db.execute("SELECT chat_jid, id, media_path FROM messages "
+                                     "WHERE coalesce(media_path, '') != '' ORDER BY timestamp"):
+        path = os.path.abspath(os.path.join(folder, rel))
+        if os.path.commonpath([path, os.path.abspath(folder)]) != os.path.abspath(folder):
+            continue                    # only files within the bridge's folder
+        store.link("whatsapp-bridge", src, path, rel,
+                   origins.get(f"{chat}/{mid}") or messages.get(mid))
+
+
 def viber_iphone(archive, store):
     database = f"{IPHONE_DATA}/viber.sqlite"
     if not os.path.exists(database):
@@ -164,9 +186,12 @@ def mms_export(archive, store, device, database, folder):
         store.link(name, src, path, f"mms-parts/{pid}", message)
 
 
-def run(archive):
+PHONES = (whatsapp, viber_iphone, mms_android)         # what a phone's sources bring
+
+
+def run(archive, steps=(*PHONES, telegram.media, whatsapp_bridge)):
     store = Store(archive)
-    for step in (whatsapp, viber_iphone, mms_android, telegram.media):
+    for step in steps:
         step(archive, store)
         archive.db.commit()
     for source, n in sorted(store.added.items()):

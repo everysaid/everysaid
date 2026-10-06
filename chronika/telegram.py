@@ -8,6 +8,9 @@ same person on other services), else by their Telegram user id; their other hand
 person: the user id, the username and the name their profile shows (what the owner needs to tell
 who is who, and to join them to their contacts later). The owner's own id is an account.
 Calls, which Telegram keeps as service messages, go to `call` too, keyed by the call's id.
+Whom texts name (`@username`, or a name linked to the user) goes to `mention`; a group's members are
+whoever wrote there; how far each chat was read (`chat_read`) becomes its read_until and, in a chat
+with one person, receipts of the owner's messages.
 """
 from collections import defaultdict
 import json
@@ -104,6 +107,12 @@ class People:
         for pid, js in db.execute("SELECT id, json FROM entity UNION ALL SELECT id, json FROM chat"):
             self.entity[pid] = json.loads(js)
         self.me = next((pid for pid, e in self.entity.items() if e.get("is_self")), None)
+        self.username = {}              # lower-case username -> user id, for "@username" in texts
+        for pid, e in self.entity.items():
+            if e.get("_") == "User":
+                for u in [e.get("username")] + [x.get("username") for x in e.get("usernames") or []]:
+                    if u:
+                        self.username.setdefault(u.lower(), pid)
 
     def __call__(self, pid):
         e = self.entity.get(pid, {})
@@ -150,6 +159,60 @@ def reactions(m, person, own):
         return out
     return [(*emoji(x.get("reaction")), x.get("count", 1), None, 1 if x.get("chosen_order") is not None else None)
             for x in results]
+
+
+def mentions(m, person):
+    """[(address, token)]: whom the text names, as "@username" or by their name (an entity Telegram
+    links to the user); the token as the text has it (entities count UTF-16 units)."""
+    out, units = [], None
+    for e in m.get("entities") or []:
+        kind = e.get("_")
+        if kind not in ("MessageEntityMention", "MessageEntityMentionName"):
+            continue
+        units = units or (m.get("message") or "").encode("utf-16-le")
+        token = units[e["offset"] * 2:(e["offset"] + e["length"]) * 2].decode("utf-16-le", "replace")
+        pid = (person.username.get(token.lstrip("@").lower()) if kind == "MessageEntityMention"
+               else e.get("user_id"))
+        if pid:
+            out.append((person(pid), token))
+    return out
+
+
+def reads(archive, db_path=DB, chats=None):
+    """How far each chat was read (telegram.db's `chat_read`): the owner's reading as the chat's
+    read_until; the other's, in a chat with one person, as receipts of the owner's messages (when,
+    where the live connection saw it happen; else 0, known but not when). chats: only these."""
+    if not os.path.exists(db_path):
+        return
+    db = config.read_only(db_path)
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE name = 'chat_read'").fetchone():
+        return
+    person = People(db)
+    src = archive.source(SOURCE, db_path, "telegram", MEDIA)
+    for chat_id, kind, inbox, outbox, outbox_at, observed in db.execute(
+            "SELECT r.chat_id, c.kind, r.inbox, r.outbox, r.outbox_at, r.observed_at FROM chat_read r "
+            "JOIN chat c ON c.id = r.chat_id").fetchall():
+        if chats is not None and chat_id not in chats:
+            continue
+        conv = archive.find_conversation("telegram", str(chat_id))
+        if conv is None:
+            continue
+        if inbox:
+            mid = archive.message_by_key("telegram", str(inbox), conv)
+            row = (archive.db.execute("SELECT ts FROM message WHERE id = ?", (mid,)).fetchone() if mid else
+                   archive.db.execute("SELECT max(ts) FROM message WHERE conversation_id = ? AND "
+                                      "CAST(key AS INTEGER) <= ?", (conv, inbox)).fetchone())
+            if row and row[0]:
+                archive.report_state(src, conv, "read_until", row[0], observed * 1000)
+        if outbox and kind == "user":
+            peer = archive.address(*person(chat_id))
+            mine = ("SELECT id FROM message WHERE conversation_id = ? AND outgoing AND key IS NOT NULL "
+                    "AND CAST(key AS INTEGER) <= ?")
+            archive.db.execute(f"INSERT OR IGNORE INTO receipt (message_id, address_id) SELECT id, ? FROM ({mine})",
+                               (peer, conv, outbox))
+            archive.db.execute(f"UPDATE receipt SET read_at = ? WHERE address_id = ? AND read_at IS NULL "
+                               f"AND message_id IN ({mine})", ((outbox_at or 0) * 1000, peer, conv, outbox))
+    db.close()
 
 
 def call(archive, src, row_key, m, peer, ts):
@@ -201,6 +264,7 @@ def run(archive, db_path=DB, only=None, skip=()):
         rows = (db.execute(f"SELECT id, date, json FROM message WHERE chat_id = ? AND id IN ({','.join('?' * len(ids))}) "
                            f"ORDER BY id", (chat_id, *ids)) if ids is not None else
                 db.execute("SELECT id, date, json FROM message WHERE chat_id = ? ORDER BY id", (chat_id,)))
+        senders, named = set(), []
         for mid, date, js in rows:
             row_key = f"{chat_id}/{mid}"
             m = json.loads(js)
@@ -208,6 +272,10 @@ def run(archive, db_path=DB, only=None, skip=()):
             outgoing = bool(m.get("out"))
             if m["_"] == "MessageService" and m["action"]["_"] == "MessageActionPhoneCall" and kind == "user":
                 calls += call(archive, src, row_key, m, person(chat_id), ts)
+            if not outgoing and kind not in ("user", "saved") and (peer_id(m.get("from_id")) or 0) > 0:
+                senders.add(person(peer_id(m["from_id"])))  # a group's members: whoever wrote there
+            if m.get("entities"):
+                named += [(str(mid), *x) for x in mentions(m, person)]
             if archive.has_origin(src, row_key):
                 continue
             k, subtype, code, x = kind_of(m)
@@ -232,6 +300,13 @@ def run(archive, db_path=DB, only=None, skip=()):
                                 outgoing=outgoing, sender_id=archive.address(*sender) if sender else None,
                                 kind=k, text=m.get("message") or None, key=str(mid), extras=x)
             added[kind] += 1
+        for member in senders - own:
+            archive.db.execute("INSERT OR IGNORE INTO conversation_member VALUES (?, ?)", (conv, archive.address(*member)))
+        for key, who, token in named:
+            message_id = archive.message_by_key("telegram", key, conv)
+            if message_id:
+                archive.db.execute("INSERT OR IGNORE INTO mention VALUES (?, ?, ?)",
+                                   (message_id, archive.address(*who), token))
         archive.db.commit()
     for pid in person.entity:            # profile names, for the people the archive has
         if pid != person.me and person.name(pid):
@@ -240,6 +315,7 @@ def run(archive, db_path=DB, only=None, skip=()):
     for chat_id, archived, synced in db.execute("SELECT id, archived, synced_at FROM chat WHERE synced_at IS NOT NULL").fetchall():
         archive.report_state(src, archive.find_conversation("telegram", str(chat_id)), "archived", int(bool(archived)),
                              synced * 1000)
+    reads(archive, db_path, chats_wanted)
     archive.resolve()
     archive.imported(src)
     archive.db.commit()

@@ -29,7 +29,34 @@ CREATE TABLE IF NOT EXISTS message (
     file TEXT,                          -- the downloaded media, relative to media/
     PRIMARY KEY (chat_id, id)
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS chat_read (     -- how far each chat was read, as Telegram says
+    chat_id INTEGER PRIMARY KEY,
+    inbox INTEGER,                      -- the owner read up to this message (on any device)
+    outbox INTEGER,                     -- the others read the owner's messages up to this one
+    outbox_at INTEGER,                  -- when it last moved, Unix s, where the live connection saw it happen
+    observed_at INTEGER NOT NULL        -- Unix s
+);
 """
+
+
+def note_read(db, chat_id, inbox=None, outbox=None, seen_now=False):
+    """How far a chat was read (either may be None: not said). seen_now: the outbox moved now, seen live.
+    Returns whether either moved on."""
+    now = int(datetime.now().timestamp())
+    was = db.execute("SELECT coalesce(inbox, 0), coalesce(outbox, 0) FROM chat_read WHERE chat_id = ?", (chat_id,)).fetchone()
+    moved = not was or (inbox or 0) > was[0] or (outbox or 0) > was[1]
+    db.execute("INSERT INTO chat_read (chat_id, observed_at) VALUES (?, ?) ON CONFLICT (chat_id) DO NOTHING",
+               (chat_id, now))
+    if inbox is not None:
+        db.execute("UPDATE chat_read SET inbox = max(coalesce(inbox, 0), ?), observed_at = ? WHERE chat_id = ?",
+                   (inbox, now, chat_id))
+    if outbox is not None:
+        # moved on: seen now, its time is now; else when is not known (an earlier time would be wrong
+        # for the messages read since)
+        db.execute("UPDATE chat_read SET outbox_at = CASE WHEN ? <= coalesce(outbox, 0) THEN outbox_at "
+                   "WHEN ? THEN ? ELSE NULL END, outbox = max(coalesce(outbox, 0), ?), observed_at = ? WHERE chat_id = ?",
+                   (outbox, int(seen_now), now, outbox, now, chat_id))
+    return moved
 
 
 def open_store(path=DB):

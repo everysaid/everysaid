@@ -1,16 +1,19 @@
 import { memo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CornerUpLeft, FileText, Forward, ImageOff, MapPin, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Video } from "lucide-react";
-import type { Attachment, CallItem, MessageItem } from "@/lib/api";
+import { Link } from "@tanstack/react-router";
+import { Check, CheckCheck, CornerUpLeft, FileText, Forward, ImageOff, MapPin, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Video } from "lucide-react";
+import type { Attachment, CallItem, Mention, MessageItem, Receipts } from "@/lib/api";
 import { bytes, duration, time } from "@/lib/format";
 import { service } from "@/lib/services";
 import { cn } from "@/lib/utils";
 import { Avatar } from "./ui";
 
 const URL_RE = /(https?:\/\/[^\s<>"')\]]+)/g;
+const BIDI = /[\u202a-\u202e\u2066-\u2069]/g;      // direction marks around a name (Viber writes "\u202a@Name\u202c")
 
-/** Text with its links made clickable (http and https only) and search matches marked. */
-export function RichText({ text, marks }: { text: string; marks?: [string, boolean][] }) {
+/** Text with its links made clickable (http and https only), the people it names shown by name
+ * (a link to them), and search matches marked. */
+export function RichText({ text, marks, mentions }: { text: string; marks?: [string, boolean][]; mentions?: Mention[] }) {
   if (marks?.length) {
     return <>{marks.map(([s, m], i) => (m ? <mark key={i} className="mark">{s}</mark> : <span key={i}>{s}</span>))}</>;
   }
@@ -23,10 +26,51 @@ export function RichText({ text, marks }: { text: string; marks?: [string, boole
             {p}
           </a>
         ) : (
-          <span key={i}>{p}</span>
+          <Named key={i} text={p} mentions={mentions} />
         ),
       )}
     </>
+  );
+}
+
+/** A piece of text with each mention's token (as the service writes it) said as the person's name. */
+function Named({ text, mentions }: { text: string; mentions?: Mention[] }) {
+  const { t } = useTranslation();
+  const known = (mentions ?? []).filter((m) => m.token && text.includes(m.token));
+  if (!known.length) return <span>{text}</span>;
+  const by = new Map(known.map((m) => [m.token!, m]));
+  // each a whole: a name not inside a longer word (one name the start of another), a number not inside a longer one
+  const re = new RegExp(`(?<![\\p{L}\\p{N}_])(${[...by.keys()].sort((a, b) => b.length - a.length)
+    .map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})(?![\\p{L}\\p{N}_])`, "u");
+  return (
+    <span>
+      {text.split(re).map((p, i) => {
+        const m = i % 2 === 1 ? by.get(p) : undefined;
+        if (!m) return p;
+        const bare = p.replace(BIDI, "");
+        const name = m.me ? t("common.me") : m.name || bare.replace(/^@/, "");
+        const label = bare.startsWith("@") ? `@${name}` : name;
+        return m.person_id && !m.me ? (
+          <Link key={i} to="/people/$personId" params={{ personId: String(m.person_id) }} data-mention className="mention" title={bare}>{label}</Link>
+        ) : (
+          <span key={i} data-mention className="mention" title={bare}>{label}</span>
+        );
+      })}
+    </span>
+  );
+}
+
+/** ✓ sent, ✓✓ delivered to all it went to, coloured when all read it; a button to who and when. */
+function Ticks({ r, onInfo }: { r: Receipts; onInfo?: () => void }) {
+  const { t } = useTranslation();
+  const read = r.read >= r.to, delivered = r.delivered >= r.to;
+  const label = read ? t("chat.readAll") : delivered ? t("chat.deliveredAll") : t("chat.sent");
+  const Icon = delivered ? CheckCheck : Check;
+  return (
+    <button data-ticks={read ? "read" : delivered ? "delivered" : "sent"} onClick={onInfo} aria-label={`${label} · ${t("chat.messageInfo")}`}
+      title={label} className="-my-1 rounded px-0.5 py-1 hover:bg-white/15">
+      <Icon className={cn("size-3.5", read && "text-tick-read")} />
+    </button>
   );
 }
 
@@ -125,9 +169,10 @@ export interface BubbleProps {
   onOpen: (a: Attachment, m: MessageItem) => void;
   onJump: (id: number) => void;
   onReply?: (m: MessageItem) => void;    // where an answer to this message can be sent
+  onInfo?: (m: MessageItem) => void;     // who got and read it (the user's own messages)
 }
 
-export const Bubble = memo(function Bubble({ m, group, first, last, showService, highlight, onOpen, onJump, onReply }: BubbleProps) {
+export const Bubble = memo(function Bubble({ m, group, first, last, showService, highlight, onOpen, onJump, onReply, onInfo }: BubbleProps) {
   const { t } = useTranslation();
   // a swipe to the right on a touch screen answers the message (as in the messaging apps)
   const [dx, setDx] = useState(0);
@@ -216,7 +261,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
           )}
           {(m.text || label || m.deleted) && (
             <div className={cn("whitespace-pre-wrap break-words [overflow-wrap:anywhere]", onlyMedia && "px-2 pb-1")}>
-              {m.deleted && !m.text ? t("chat.deleted") : m.text ? <RichText text={m.text} marks={m.highlight} /> : <span className="opacity-70">{label}</span>}
+              {m.deleted && !m.text ? t("chat.deleted") : m.text ? <RichText text={m.text} marks={m.highlight} mentions={m.mentions} /> : <span className="opacity-70">{label}</span>}
             </div>
           )}
           <div className={cn("mt-0.5 flex items-center justify-end gap-1 text-[11px] leading-none", out ? "text-bubble-out-fg/70" : "text-muted", onlyMedia && "absolute bottom-2 right-2.5 rounded-full bg-black/45 px-1.5 py-1 text-white")}>
@@ -225,6 +270,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
             {m.status === "sending" && <span>{t("chat.sending")} ·</span>}
             {m.status === "failed" && <span className="text-danger">{t("chat.sendFailed")} ·</span>}
             <span>{time(m.ts)}</span>
+            {out && m.receipts && <Ticks r={m.receipts} onInfo={onInfo && (() => onInfo(m))} />}
           </div>
         </div>
         {m.reactions.length > 0 && (
