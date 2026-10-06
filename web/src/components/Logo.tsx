@@ -28,7 +28,7 @@ export function Logo({ className }: { className?: string }) {
           <stop offset="1" stopColor="#c29c62" />
         </linearGradient>
       </defs>
-      <g fill="none" stroke="#5e4428" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round">
+      <g transform="translate(90 92) scale(1.06) translate(-90 -92)" fill="none" stroke="#5e4428" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round">
         <path d={`${SHEET}A28.27 19.51 0 0 0 52.19 53.52Z`} fill={`url(#${paper})`} stroke="none" />
         <path d={`${SHEET}A28.27 19.51 0 0 0 52.19 53.52Z`} fill={`url(#${curl})`} stroke="none" />
         <path d={`${ROLL_TOP}Z`} fill={`url(#${face})`} stroke="none" />
