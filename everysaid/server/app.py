@@ -3,7 +3,7 @@
 Guards on every request:
 - Host must name this server (its origin's host, or localhost): no DNS rebinding.
 - Everything under /api needs a session (the cookie), except the login steps.
-- A change (any method but GET/HEAD) needs the header `X-Chronika: 1`, which another site's page
+- A change (any method but GET/HEAD) needs the header `X-Everysaid: 1`, which another site's page
   cannot send without a CORS preflight this server never grants; and its Origin, when sent, must be
   this server's. With SameSite=Strict cookies this closes CSRF.
 - Responses carry a strict Content-Security-Policy (only this server's own scripts), no framing,
@@ -49,7 +49,7 @@ CSP = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
 
 def origins():
     main = config.SERVER_ORIGIN
-    extra = [o.strip().rstrip("/") for o in os.environ.get("CHRONIKA_EXTRA_ORIGINS", "").split(",") if o.strip()]
+    extra = [o.strip().rstrip("/") for o in os.environ.get("EVERYSAID_EXTRA_ORIGINS", "").split(",") if o.strip()]
     return [main, *extra]
 
 
@@ -72,7 +72,7 @@ class Guard(BaseHTTPMiddleware):
         path = request.url.path
         if path.startswith("/api/"):
             if request.method not in ("GET", "HEAD", "OPTIONS"):
-                if request.headers.get("x-chronika") != "1":
+                if request.headers.get("x-everysaid") != "1":
                     return JSONResponse({"detail": {"code": "auth.header_missing", "params": {}}}, 403)
                 origin = request.headers.get("origin")
                 if origin and origin not in self.origins:
@@ -115,7 +115,7 @@ def create_app(archive_path=None, auth_path=None):
         yield
         await host.shutdown()
 
-    app = FastAPI(title="Chronika", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url="/api/openapi.json")
+    app = FastAPI(title="Everysaid", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url="/api/openapi.json")
     app.add_middleware(Guard, auth=auth)
     app.state.auth, app.state.store, app.state.host, app.state.push = auth, store, host, push
 
@@ -168,16 +168,16 @@ def create_app(archive_path=None, auth_path=None):
 
     @app.post("/api/auth/register/options")
     def register_options(request: Request, body: dict = Body(...)):
-        """A new passkey: with a setup token (the first user, or a link from `chronika user link`),
+        """A new passkey: with a setup token (the first user, or a link from `everysaid user link`),
         or from a logged-in session (another device)."""
         if not auth.allow(client_ip(request)):
             raise UserError("too_many", 429)
         uid = changer(request, body.get("token"))
-        name = (body.get("name") or "").strip() or (auth.user(uid)["name"] if uid else "Chronika")
+        name = (body.get("name") or "").strip() or (auth.user(uid)["name"] if uid else "Everysaid")
         user = auth.user(uid) if uid else None
         handle = user["handle"] if user else os.urandom(32)
         opts = generate_registration_options(
-            rp_id=rp_id(), rp_name="Chronika", user_name=name, user_display_name=name, user_id=handle,
+            rp_id=rp_id(), rp_name="Everysaid", user_name=name, user_display_name=name, user_id=handle,
             authenticator_selection=AuthenticatorSelectionCriteria(
                 resident_key=ResidentKeyRequirement.REQUIRED, user_verification=UserVerificationRequirement.PREFERRED),
             exclude_credentials=[PublicKeyCredentialDescriptor(id=bytes.fromhex(p["id"])) for p in auth.passkeys(uid)] if uid else None)
@@ -252,7 +252,7 @@ def create_app(archive_path=None, auth_path=None):
             raise UserError("too_many", 429)
         token = body.get("token")
         uid = changer(request, token)
-        name = (auth.user(uid)["name"] if uid else (body.get("name") or "").strip()) or "Chronika"
+        name = (auth.user(uid)["name"] if uid else (body.get("name") or "").strip()) or "Everysaid"
         secret = totp_secret()
         # long enough to scan the code and choose a password (mistakes do not use it up), and never
         # longer than the setup link it came with
@@ -807,7 +807,7 @@ def create_app(archive_path=None, auth_path=None):
         push.unsubscribe(request.state.uid, body.get("endpoint"))
         return {"ok": True}
 
-    if os.environ.get("CHRONIKA_DEMO"):
+    if os.environ.get("EVERYSAID_DEMO"):
         @app.post("/api/demo/incoming")
         async def demo_incoming(body: dict = Body(...)):
             """Only in the demo: a message arrives in a chat, from the other side (for trying and tests)."""
@@ -824,7 +824,7 @@ def create_app(archive_path=None, auth_path=None):
         subs = push.subscriptions(archive_path)
         if not subs:
             raise UserError("push.no_devices", 409)
-        push._send(subs, [{"title": "Chronika", "body": tr("Test notification", store.setting("language") or "en"),
+        push._send(subs, [{"title": "Everysaid", "body": tr("Test notification", store.setting("language") or "en"),
                            "chat": None, "tag": "test"}])
         return {"ok": True, "devices": len(subs)}
 

@@ -5,15 +5,15 @@ import { mkdirSync } from "node:fs";
 const SHOTS = process.env.SHOTS ?? "/tmp/chr-shots";
 mkdirSync(SHOTS, { recursive: true });
 const DEMO = process.env.DEMO_DIR ?? "/tmp/chr-demo";
-const env = { ...process.env, CHRONIKA_DATA: `${DEMO}/data`, CHRONIKA_CACHE: `${DEMO}/cache`, CHRONIKA_CONFIG: `${DEMO}/config` };
+const env = { ...process.env, EVERYSAID_DATA: `${DEMO}/data`, EVERYSAID_CACHE: `${DEMO}/cache`, EVERYSAID_CONFIG: `${DEMO}/config` };
 
 function setupLink(existing: boolean) {
-  const out = execFileSync("uv", ["run", "chronika", "user", "link", ...(existing ? ["--user", "1"] : [])], { cwd: "..", env }).toString();
+  const out = execFileSync("uv", ["run", "everysaid", "user", "link", ...(existing ? ["--user", "1"] : [])], { cwd: "..", env }).toString();
   return new URL(out.split("\n")[0]).pathname + new URL(out.split("\n")[0]).hash;
 }
 
 function hasUser() {
-  return execFileSync("uv", ["run", "chronika", "user", "list"], { cwd: "..", env }).toString().startsWith("1\t");
+  return execFileSync("uv", ["run", "everysaid", "user", "list"], { cwd: "..", env }).toString().startsWith("1\t");
 }
 
 async function authenticator(page: Page) {
@@ -108,7 +108,7 @@ test("setup, chats, a chat, search, media, sources, settings", async ({ page }, 
 
   // a reaction sits on the bubble's edge, whole, above it
   const withReaction = await page.evaluate(async () => {
-    const h = { "X-Chronika": "1" };
+    const h = { "X-Everysaid": "1" };
     const chats = (await (await fetch("/api/chats", { headers: h })).json()).items;
     for (const c of chats) {
       const page = await (await fetch(`/api/chats/${c.id}/stream?limit=200`, { headers: h })).json();

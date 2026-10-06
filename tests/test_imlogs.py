@@ -2,8 +2,8 @@
 import os
 import plistlib
 
-from chronika import imlogs
-from chronika.archive import Archive
+from everysaid import imlogs
+from everysaid.archive import Archive
 
 ADIUM_XML = """<?xml version="1.0" encoding="UTF-8" ?>
 <chat xmlns="http://purl.org/net/ulf/ns/0.4-02" account="me@hotmail.com" service="MSN">

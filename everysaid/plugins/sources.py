@@ -286,7 +286,7 @@ class WhatsappBridge(Plugin):
     name_weights = {"whatsapp/book": 80, "whatsapp/chat": 50, "whatsapp/profile": 30}
     state_weights = {"muted": 60, "pinned": 0}
     description = ("WhatsApp as it arrives, through a whatsmeow bridge linked as a device "
-                   "(Chronika's bridges/whatsapp). Unofficial: WhatsApp may block accounts that use one; "
+                   "(Everysaid's bridges/whatsapp). Unofficial: WhatsApp may block accounts that use one; "
                    "sending raises that risk.")
     modes = ("import", "live")
     live_default = True

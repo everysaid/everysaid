@@ -3,8 +3,8 @@ on small databases made here (shaped as telegram.db and the iPhone's viber.sqlit
 import json
 import sqlite3
 
-from chronika import telegram, telegram_store, viber
-from chronika.archive import APPLE_EPOCH, IPHONE, Archive
+from everysaid import telegram, telegram_store, viber
+from everysaid.archive import APPLE_EPOCH, IPHONE, Archive
 
 ME, MARIA, BOB, GROUP = 999, 111, 222, -5
 
@@ -155,7 +155,7 @@ def test_telegram_mentions_sent_each_at_its_place(store):
     """Two people named: each "@" dropped, each link where its name is in the text as sent (UTF-16)."""
     import asyncio
     from types import SimpleNamespace
-    from chronika.plugins import telegram_live
+    from everysaid.plugins import telegram_live
     with store.write() as w:
         for uid in ("301", "302"):
             w.execute("INSERT INTO address (kind_id, value, service_id) SELECT k.id, ?, s.id FROM address_kind k, "
@@ -205,7 +205,7 @@ def test_viber_mention_after_an_emoji(store, tmp_path):
 def test_all_who_got_it_are_those_the_service_named_then(store):
     """In a group, "all" is whoever got the user's messages there about then; one who left, or came
     later, is not waited for; a person by two addresses counts once."""
-    from chronika.core import queries
+    from everysaid.core import queries
     r = store.read()
     conv, mid, ts = r.execute("SELECT m.conversation_id, m.id, m.ts FROM message m JOIN conversation c ON c.id = m.conversation_id "
                               "JOIN receipt x ON x.message_id = m.id WHERE c.is_group AND m.outgoing "

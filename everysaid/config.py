@@ -1,9 +1,9 @@
-"""Where Chronika keeps its files, and the settings of `config.toml` in the config folder.
+"""Where Everysaid keeps its files, and the settings of `config.toml` in the config folder.
 
 The folders follow the platform's conventions (platformdirs): on Linux the XDG ones,
-`~/.local/share/chronika` for what cannot be made again (the archive, the review decisions),
-`~/.cache/chronika` for what can, `~/.config/chronika` for the settings and the secrets. The
-environment variables CHRONIKA_DATA, CHRONIKA_CACHE and CHRONIKA_CONFIG move them (a demo or a test
+`~/.local/share/everysaid` for what cannot be made again (the archive, the review decisions),
+`~/.cache/everysaid` for what can, `~/.config/everysaid` for the settings and the secrets. The
+environment variables EVERYSAID_DATA, EVERYSAID_CACHE and EVERYSAID_CONFIG move them (a demo or a test
 archive is kept wholly apart this way). Every setting has a general default, so the file is needed
 only to change one:
 
@@ -33,7 +33,7 @@ only to change one:
     url = "http://host:2283"
     data_folder = "..."             # immich's upload folder, read directly (backups, thumbs)
     container_prefix = "/usr/src/app/upload/"   # the same folder as immich's paths name it
-    make = "Chronika"               # the camera make written into uploaded files
+    make = "Everysaid"               # the camera make written into uploaded files
 
     [ollama]
     url = "http://localhost:11434"  # media-vlm.py's local vision model
@@ -44,8 +44,8 @@ only to change one:
     aside = "..."                   # media-aside.py's folder; default: <data>/aside
 
     [server]
-    origin = "https://chronika.example.org"   # the address the app is reached at; default: http://localhost:8520
-    host = "127.0.0.1"              # where `chronika serve` listens; behind a reverse proxy keep it local
+    origin = "https://everysaid.example.org"   # the address the app is reached at; default: http://localhost:8520
+    host = "127.0.0.1"              # where `everysaid serve` listens; behind a reverse proxy keep it local
     port = 8520
 
     [review]
@@ -67,15 +67,15 @@ import tomllib
 import platformdirs
 import tzlocal
 
-APP = "chronika"
+APP = "everysaid"
 # The keyring's service name for secrets; a demo or a test sets its own, so that it never sees the
 # user's real secrets (and never connects to their accounts).
-KEYRING = os.environ.get("CHRONIKA_KEYRING") or APP
+KEYRING = os.environ.get("EVERYSAID_KEYRING") or APP
 
-DATA = os.environ.get("CHRONIKA_DATA") or platformdirs.user_data_dir(APP, appauthor=False)
-CACHE = os.environ.get("CHRONIKA_CACHE") or platformdirs.user_cache_dir(APP, appauthor=False)
-CONFIG = os.environ.get("CHRONIKA_CONFIG") or platformdirs.user_config_dir(APP, appauthor=False)
-STATE = os.environ.get("CHRONIKA_STATE") or platformdirs.user_state_dir(APP, appauthor=False)   # logs
+DATA = os.environ.get("EVERYSAID_DATA") or platformdirs.user_data_dir(APP, appauthor=False)
+CACHE = os.environ.get("EVERYSAID_CACHE") or platformdirs.user_cache_dir(APP, appauthor=False)
+CONFIG = os.environ.get("EVERYSAID_CONFIG") or platformdirs.user_config_dir(APP, appauthor=False)
+STATE = os.environ.get("EVERYSAID_STATE") or platformdirs.user_state_dir(APP, appauthor=False)   # logs
 LOGS = os.path.join(STATE, "logs")
 
 CONFIG_FILE = os.path.join(CONFIG, "config.toml")
@@ -153,7 +153,7 @@ WHATSAPP_BRIDGE = _path("whatsapp", "bridge")       # for the command line; the 
 IMMICH_URL = (get("immich", "url") or "").rstrip("/") or None
 IMMICH_DATA = _path("immich", "data_folder")
 IMMICH_PREFIX = get("immich", "container_prefix", "/usr/src/app/upload/")
-IMMICH_MAKE = get("immich", "make", "Chronika")
+IMMICH_MAKE = get("immich", "make", "Everysaid")
 OLLAMA_URL = (get("ollama", "url") or "http://localhost:11434").rstrip("/")
 OLLAMA_MODEL = get("ollama", "model", "qwen2.5vl:7b")
 

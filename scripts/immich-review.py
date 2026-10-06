@@ -5,7 +5,7 @@
     then open the address it prints (http://127.0.0.1:8519/?k=..., a key of its own each run)
 
 Nothing goes into immich without the owner's approval; this page records it. It shows the
-candidates from `~/.cache/chronika/match.db` (by default the archive's),
+candidates from `~/.cache/everysaid/match.db` (by default the archive's),
 each next to the most similar picture already in immich (its preview, as `immich-index.py` found
 it; opened large, the larger preview comes through the API, permission asset.view; read only), with the similarity, both dates and both sizes (the chat copy is highlighted when it is the same picture,
 very similar, but larger than immich's), so a duplicate shows at a glance. Filters: how
@@ -15,7 +15,7 @@ minutes, similar, not there; times shown in Greek time), capture date, and the
 decision so far. Select as on the other pages (click, shift+click, drag; ctrl+drag takes away),
 then approve or reject. Double-click opens the pair large: A approves and moves on, R or Delete
 rejects and moves on, U clears the decision, arrows move, Escape closes. Decisions go to
-`~/.local/share/chronika/review.db` (`decision`: SHA-1, path, approved or rejected, the immich asset it
+`~/.local/share/everysaid/review.db` (`decision`: SHA-1, path, approved or rejected, the immich asset it
 was compared with, when): working state only, until they are acted on (the archive then records
 the outcome: a `library_link`, or the file gone). Files set aside with `media-aside.py` are left out. The decisions cannot be remade, so they live in the
 home snapshots, not in `~/.cache` with the rebuildable indexes.
@@ -318,7 +318,7 @@ def thumb(cache, path, size):
     return out if common.jpeg(path, out, size) else None
 
 
-PAGE = """<!doctype html><html lang="el"><meta charset="utf-8"><title>Chronika · Έγκριση για immich</title>
+PAGE = """<!doctype html><html lang="el"><meta charset="utf-8"><title>Everysaid · Έγκριση για immich</title>
 <style>
 body{margin:0;font:13px system-ui;background:#1e1e1e;color:#ddd;user-select:none}
 header{position:sticky;top:0;z-index:5;background:#2b2b2b;padding:8px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;box-shadow:0 2px 6px #0008}

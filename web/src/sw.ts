@@ -19,14 +19,14 @@ self.addEventListener("push", (event) => {
   try {
     data = event.data?.json() ?? {};
   } catch {
-    data = { title: "Chronika", body: event.data?.text() };
+    data = { title: "Everysaid", body: event.data?.text() };
   }
   event.waitUntil(
     (async () => {
       const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       // the chat is open in a visible window: no notification for it
       if (data.chat && wins.some((w) => w.visibilityState === "visible" && new URL(w.url).pathname === `/chat/${data.chat}`)) return;
-      await self.registration.showNotification(data.title || "Chronika", {
+      await self.registration.showNotification(data.title || "Everysaid", {
         body: data.body || "",
         tag: data.tag || data.chat || undefined,
         icon: "/icon-192.png",

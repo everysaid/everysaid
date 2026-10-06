@@ -40,7 +40,7 @@ function Rail() {
   const last = lastChat();
   return (
     <nav className="flex w-[72px] shrink-0 flex-col items-center gap-1 border-r border-line bg-panel py-3">
-      <Link to="/" className="mb-3" aria-label="Chronika">
+      <Link to="/" className="mb-3" aria-label="Everysaid">
         <Logo className="size-10" />
       </Link>
       {NAV.map(({ to, icon: Icon, key }) => (

@@ -1,4 +1,4 @@
-// The server's API. Every change carries X-Chronika: 1 (the server refuses changes without it); every
+// The server's API. Every change carries X-Everysaid: 1 (the server refuses changes without it); every
 // request says the interface's language (X-Lang), in which the server words a source's errors.
 import i18n from "./i18n";
 
@@ -23,7 +23,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     credentials: "same-origin",
     headers: {
       "X-Lang": i18n.language,
-      ...(method !== "GET" ? { "X-Chronika": "1" } : {}),
+      ...(method !== "GET" ? { "X-Everysaid": "1" } : {}),
       ...(body !== undefined && !(body instanceof FormData) ? { "Content-Type": "application/json" } : {}),
     },
     body: body instanceof FormData ? body : body !== undefined ? JSON.stringify(body) : undefined,
@@ -36,7 +36,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
     } catch {
       /* not JSON */
     }
-    if (r.status === 401) window.dispatchEvent(new Event("chronika:logged-out"));
+    if (r.status === 401) window.dispatchEvent(new Event("everysaid:logged-out"));
     throw new ApiError(r.status, msg);
   }
   return r.json() as Promise<T>;

@@ -1,10 +1,10 @@
 """A demo archive of invented people, for trying the app and for its tests: nothing in it is real.
 
-    chronika demo [--dir DIR] [--seed N] [--serve]
+    everysaid demo [--dir DIR] [--seed N] [--serve]
 
 Everything goes under DIR (default `./demo`): `data/` (the archive, the media), `cache/`, `config/`
-(its own config.toml). The command runs itself again with CHRONIKA_DATA, CHRONIKA_CACHE and
-CHRONIKA_CONFIG pointing there, so neither the user's archive nor their settings are touched.
+(its own config.toml). The command runs itself again with EVERYSAID_DATA, EVERYSAID_CACHE and
+EVERYSAID_CONFIG pointing there, so neither the user's archive nor their settings are touched.
 With --serve it then starts the app on it.
 """
 import argparse
@@ -347,7 +347,7 @@ def demo_receipt(host, message_id, field):
 
 class DemoSender:
     """A source that "sends" by writing into the demo archive, and gets an answer a moment later: only
-    in the demo (CHRONIKA_DEMO), so that sending and receiving, and what the interface does after
+    in the demo (EVERYSAID_DEMO), so that sending and receiving, and what the interface does after
     them, can be tried and tested. (The demo also takes incoming messages at /api/demo/incoming.)"""
 
     @staticmethod
@@ -389,12 +389,12 @@ class DemoSender:
 
 def env_for(d):
     d = os.path.abspath(d)
-    env = dict(os.environ, CHRONIKA_DATA=os.path.join(d, "data"), CHRONIKA_CACHE=os.path.join(d, "cache"),
-               CHRONIKA_CONFIG=os.path.join(d, "config"), CHRONIKA_STATE=os.path.join(d, "state"),
-               CHRONIKA_KEYRING="chronika-demo", CHRONIKA_DEMO="1")
-    for k in ("CHRONIKA_DATA", "CHRONIKA_CACHE", "CHRONIKA_CONFIG", "CHRONIKA_STATE"):
+    env = dict(os.environ, EVERYSAID_DATA=os.path.join(d, "data"), EVERYSAID_CACHE=os.path.join(d, "cache"),
+               EVERYSAID_CONFIG=os.path.join(d, "config"), EVERYSAID_STATE=os.path.join(d, "state"),
+               EVERYSAID_KEYRING="everysaid-demo", EVERYSAID_DEMO="1")
+    for k in ("EVERYSAID_DATA", "EVERYSAID_CACHE", "EVERYSAID_CONFIG", "EVERYSAID_STATE"):
         os.makedirs(env[k], exist_ok=True)
-    cfg = os.path.join(env["CHRONIKA_CONFIG"], "config.toml")
+    cfg = os.path.join(env["EVERYSAID_CONFIG"], "config.toml")
     if not os.path.exists(cfg):
         with open(cfg, "w", encoding="utf-8") as f:
             f.write('[owner]\nnumbers = ["+15550000000"]\nregion = "US"\nname = "Demo"\n\n[server]\nport = 8530\n')
@@ -402,7 +402,7 @@ def env_for(d):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="chronika demo", description="A demo archive of invented people.")
+    ap = argparse.ArgumentParser(prog="everysaid demo", description="A demo archive of invented people.")
     ap.add_argument("--dir", default="demo")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--serve", action="store_true", help="then start the app on it")
@@ -412,7 +412,7 @@ def main(argv=None):
         build(args.seed)
         return
     env = env_for(args.dir)
-    subprocess.run([sys.executable, "-m", "chronika", "demo", "--build-here", "--seed", str(args.seed)],
+    subprocess.run([sys.executable, "-m", "everysaid", "demo", "--build-here", "--seed", str(args.seed)],
                    env=env, check=True)
     if args.serve:
-        os.execve(sys.executable, [sys.executable, "-m", "chronika", "serve"], env)
+        os.execve(sys.executable, [sys.executable, "-m", "everysaid", "serve"], env)

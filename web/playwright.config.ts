@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 // End-to-end tests run against a demo archive of invented people (never the user's):
-//   uv run chronika demo --dir /tmp/chr-demo && CHRONIKA_DATA=... chronika serve   (see e2e/README)
+//   uv run everysaid demo --dir /tmp/chr-demo && EVERYSAID_DATA=... everysaid serve   (see e2e/README)
 export default defineConfig({
   testDir: "e2e",
   timeout: 60_000,

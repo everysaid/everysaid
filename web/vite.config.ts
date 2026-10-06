@@ -4,8 +4,8 @@ import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
 import { fileURLToPath, URL } from "node:url";
 
-// The app is served by `chronika serve` (web/dist). In development, `pnpm dev` proxies /api to it:
-// start the server with CHRONIKA_EXTRA_ORIGINS=http://localhost:5173 so passkeys work there too.
+// The app is served by `everysaid serve` (web/dist). In development, `pnpm dev` proxies /api to it:
+// start the server with EVERYSAID_EXTRA_ORIGINS=http://localhost:5173 so passkeys work there too.
 export default defineConfig({
   plugins: [
     react(),
@@ -17,8 +17,8 @@ export default defineConfig({
       registerType: "prompt",
       injectRegister: false,
       manifest: {
-        name: "Chronika",
-        short_name: "Chronika",
+        name: "Everysaid",
+        short_name: "Everysaid",
         description: "Όλες οι συνομιλίες σου σε ένα μέρος",
         start_url: "/",
         scope: "/",

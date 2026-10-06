@@ -1,15 +1,15 @@
 # The app: running, reaching it, the assistant
 
-`chronika serve` is the whole app in one process: the API over the core, the live connections
+`everysaid serve` is the whole app in one process: the API over the core, the live connections
 (Telegram, WhatsApp through a bridge), the PWA (the web/mobile interface) and push notifications.
-`chronika mcp` gives an assistant the same archive. `docs/design.md` explains how it is built.
+`everysaid mcp` gives an assistant the same archive. `docs/design.md` explains how it is built.
 
 ## Building and running
 
 ```
 uv sync --extra app                     # Python: server, MCP, Telegram
-cd web && pnpm install && pnpm build    # the interface, into web/dist (served by chronika serve)
-cd .. && uv run chronika serve          # http://localhost:8520
+cd web && pnpm install && pnpm build    # the interface, into web/dist (served by everysaid serve)
+cd .. && uv run everysaid serve          # http://localhost:8520
 ```
 
 The first start prints a one-time setup link (`.../setup#...`, valid for an hour). Open it, give a
@@ -27,7 +27,7 @@ Either way, ten recovery codes are shown once; keep them somewhere safe. Both wa
 by side (Settings): a passkey where the device can make one, the password elsewhere. If a passkey
 cannot be made in a browser, use the password way: the app does not depend on any one tool.
 
-- `chronika user link` prints a new one-time link at any time: for a passkey on a new device, a new
+- `everysaid user link` prints a new one-time link at any time: for a passkey on a new device, a new
   authenticator app (a lost phone), or a way back in after losing everything else (it needs access
   to the server's machine). A recovery code also lets you in, to set a new password or passkey.
 - In Settings: more passkeys, the signed-in devices (each can be signed out), new recovery codes,
@@ -36,7 +36,7 @@ cannot be made in a browser, use the password way: the app does not depend on an
 ### Trying it on invented data
 
 ```
-uv run chronika demo --dir /tmp/chr-demo --serve     # http://localhost:8530
+uv run everysaid demo --dir /tmp/chr-demo --serve     # http://localhost:8530
 ```
 
 builds an archive of invented people, groups, calls and pictures in that folder (with its own
@@ -49,7 +49,7 @@ Passkeys and push notifications need HTTPS, and passkeys are tied to the address
 
 ```toml
 [server]
-origin = "https://chronika.example.org"   # the address your devices use
+origin = "https://everysaid.example.org"   # the address your devices use
 host = "127.0.0.1"                        # keep it local behind a proxy
 port = 8520
 ```
@@ -59,7 +59,7 @@ Two ways, either is fine:
 - **A reverse proxy with HTTPS** on the internet, e.g. Caddy (certificates are automatic):
 
   ```
-  chronika.example.org {
+  everysaid.example.org {
       reverse_proxy 127.0.0.1:8520
   }
   ```
@@ -75,23 +75,23 @@ Two ways, either is fine:
 
 ### Keeping it running (Linux, systemd user service)
 
-`~/.config/systemd/user/chronika.service`:
+`~/.config/systemd/user/everysaid.service`:
 
 ```ini
 [Unit]
-Description=Chronika
+Description=Everysaid
 After=network-online.target
 
 [Service]
-WorkingDirectory=%h/path/to/chronika
-ExecStart=%h/.local/bin/uv run --extra app chronika serve
+WorkingDirectory=%h/path/to/everysaid
+ExecStart=%h/.local/bin/uv run --extra app everysaid serve
 Restart=on-failure
 
 [Install]
 WantedBy=default.target
 ```
 
-`systemctl --user enable --now chronika`; `loginctl enable-linger $USER` keeps it running without
+`systemctl --user enable --now everysaid`; `loginctl enable-linger $USER` keeps it running without
 a login. (macOS: a launchd agent; Windows: a scheduled task at logon.)
 
 ## On a phone
@@ -108,7 +108,7 @@ WhatsApp bridge, a Viber Desktop export, the carriers' notices; a folder or immi
 library; a CardDAV address book or a .vcf file for names and photos), set it up, import, and for
 Telegram and WhatsApp turn on the live connection. Each instance shows whether it is ready, what it
 needs, and its log as it runs. Sending is possible where the plugin can (Telegram; WhatsApp through
-Chronika's bridge, `bridges/whatsapp/`, started with `-send`, off by default: an unofficial client
+Everysaid's bridge, `bridges/whatsapp/`, started with `-send`, off by default: an unofficial client
 risks the account), answers to a message, mentions and files too: in a group "@" lists its members,
 and the clip sends a file with the text as its caption. Read receipts go out only where turned on
 (the "Send read receipts" of the WhatsApp bridge and of Telegram, off by default), when a chat with
@@ -129,13 +129,13 @@ The iPhone's card shows where its backup is, of when, and how big; "A new backup
 (on by default) takes one over the cable first, else the import decrypts the backup that is there.
 
 Every run of a source writes a whole log of its own (its scripts' output, errors in full), and a
-live connection one a day, in the state folder (`~/.local/state/chronika/logs/` on Linux); the
+live connection one a day, in the state folder (`~/.local/state/everysaid/logs/` on Linux); the
 source's card lists them, each opened whole.
 
 ## The assistant (MCP)
 
 ```json
-{ "mcpServers": { "chronika": { "command": "uv", "args": ["run", "--directory", "/path/to/chronika", "--extra", "mcp", "chronika", "mcp"] } } }
+{ "mcpServers": { "everysaid": { "command": "uv", "args": ["run", "--directory", "/path/to/everysaid", "--extra", "mcp", "everysaid", "mcp"] } } }
 ```
 
 Tools: search messages, list and read chats, a message in context, people, calls, a day's timeline,
@@ -147,6 +147,6 @@ app.
 ```
 uv run pytest                                          # the core, the server, the MCP server (on a demo archive)
 cd web && pnpm dev                                     # the interface with hot reload, /api proxied to :8520
-CHRONIKA_EXTRA_ORIGINS=http://localhost:5173 uv run chronika serve    # so passkeys work on the dev port
+EVERYSAID_EXTRA_ORIGINS=http://localhost:5173 uv run everysaid serve    # so passkeys work on the dev port
 cd web && pnpm exec playwright test                    # end to end, desktop and mobile, against the demo (web/e2e)
 ```

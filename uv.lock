@@ -7,8 +7,8 @@ resolution-markers = [
     "python_full_version < '3.13'",
 ]
 conflicts = [[
-    { package = "chronika", extra = "rocm" },
-    { package = "chronika", extra = "torch" },
+    { package = "everysaid", extra = "rocm" },
+    { package = "everysaid", extra = "torch" },
 ]]
 
 [[package]]
@@ -31,7 +31,7 @@ dependencies = [
     { name = "frozenlist" },
     { name = "multidict" },
     { name = "propcache" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
     { name = "yarl" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/93/2f/6a91adaa2dc26877d6ed2f54c0370c8910f019db7d77c5c6a194611e93ea/aiohttp-3.14.4.tar.gz", hash = "sha256:831fc5bd39ec2517851e348f613ddb5447a47cf4b71cb09845af7ad7ed45d8f9", size = 8077839, upload-time = "2026-10-05T17:43:48.309Z" }
@@ -168,7 +168,7 @@ version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "frozenlist" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/61/62/06741b579156360248d1ec624842ad0edf697050bbaf7c3e46394e106ad1/aiosignal-1.4.0.tar.gz", hash = "sha256:f47eecd9468083c2029cc99945502cb7708b082c232f9aca65da147157b251c7", size = 25007, upload-time = "2025-07-03T22:54:43.528Z" }
 wheels = [
@@ -199,7 +199,7 @@ version = "4.15.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "idna" },
-    { name = "typing-extensions", marker = "python_full_version < '3.15' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.15' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a9/d2/f4d173e22df740bc37b1db102b386ba719b66e95b0f0d751f556b387e6d2/anyio-4.15.1.tar.gz", hash = "sha256:9f28306018cbd6d329e64a36d58256edff76dd996fe423bc957326e578b82a94", size = 276966, upload-time = "2026-09-05T10:42:39.44Z" }
 wheels = [
@@ -285,7 +285,7 @@ name = "cffi"
 version = "2.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "pycparser", marker = "implementation_name != 'PyPy' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
+    { name = "pycparser", marker = "implementation_name != 'PyPy' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/9e/ef/008a1939e372c06329a3fce4279c02f328488f3526744906eeec3da7ad5f/cffi-2.1.1.tar.gz", hash = "sha256:dd31f52ea1086513bb9df30f8fcee9b8918323ae067a3d5b78bc826a000712be", size = 530807, upload-time = "2026-08-03T21:21:18.939Z" }
 wheels = [
@@ -497,14 +497,14 @@ wheels = [
 ]
 
 [[package]]
-name = "chronika"
+name = "everysaid"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "keyring" },
     { name = "phonenumbers" },
     { name = "platformdirs" },
-    { name = "tzdata", marker = "sys_platform == 'win32' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
+    { name = "tzdata", marker = "sys_platform == 'win32' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
     { name = "tzlocal" },
 ]
 
@@ -568,8 +568,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "chronika", extras = ["media"], marker = "extra == 'ml'" },
-    { name = "chronika", extras = ["server", "mcp", "telegram", "iphone"], marker = "extra == 'app'" },
+    { name = "everysaid", extras = ["media"], marker = "extra == 'ml'" },
+    { name = "everysaid", extras = ["server", "mcp", "telegram", "iphone"], marker = "extra == 'app'" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.120" },
     { name = "httpx", marker = "extra == 'server'", specifier = ">=0.28" },
     { name = "imagehash", marker = "extra == 'media'", specifier = ">=4.3" },
@@ -587,10 +587,10 @@ requires-dist = [
     { name = "pywebpush", marker = "extra == 'server'", specifier = ">=2.1" },
     { name = "scipy", marker = "extra == 'ml'", specifier = ">=1.13" },
     { name = "telethon", marker = "extra == 'telegram'", specifier = ">=1.40" },
-    { name = "torch", marker = "sys_platform == 'linux' and extra == 'rocm'", specifier = ">=2.9", index = "https://download.pytorch.org/whl/rocm7.2", conflict = { package = "chronika", extra = "rocm" } },
+    { name = "torch", marker = "sys_platform == 'linux' and extra == 'rocm'", specifier = ">=2.9", index = "https://download.pytorch.org/whl/rocm7.2", conflict = { package = "everysaid", extra = "rocm" } },
     { name = "torch", marker = "extra == 'torch'", specifier = ">=2.9" },
     { name = "transformers", marker = "extra == 'ml'", specifier = ">=4.57" },
-    { name = "triton-rocm", marker = "sys_platform == 'linux' and extra == 'rocm'", index = "https://download.pytorch.org/whl/rocm7.2", conflict = { package = "chronika", extra = "rocm" } },
+    { name = "triton-rocm", marker = "sys_platform == 'linux' and extra == 'rocm'", index = "https://download.pytorch.org/whl/rocm7.2", conflict = { package = "everysaid", extra = "rocm" } },
     { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2025.2" },
     { name = "tzlocal", specifier = ">=5.3" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'server'", specifier = ">=0.38" },
@@ -624,7 +624,7 @@ name = "cryptography"
 version = "50.0.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cffi", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
+    { name = "cffi", marker = "platform_python_implementation != 'PyPy' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/9d/af/182eb91b0df3fe75c4d9f26fe70684569566745f6ba7e5c9c73a862c5252/cryptography-50.0.2.tar.gz", hash = "sha256:7b46165bb56eb4704e2eaaf86f3c940d19154535d9b0ca7d6d590b04060e00d5", size = 880623, upload-time = "2026-09-30T15:30:04.884Z" }
 wheels = [
@@ -1021,12 +1021,12 @@ name = "httpx2"
 version = "2.13.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "anyio", marker = "sys_platform != 'emscripten' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
-    { name = "httpcore2", marker = "sys_platform != 'emscripten' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
-    { name = "httpx2-jsfetch", marker = "sys_platform == 'emscripten' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
+    { name = "anyio", marker = "sys_platform != 'emscripten' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
+    { name = "httpcore2", marker = "sys_platform != 'emscripten' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
+    { name = "httpx2-jsfetch", marker = "sys_platform == 'emscripten' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
     { name = "idna" },
-    { name = "truststore", marker = "sys_platform != 'emscripten' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
+    { name = "truststore", marker = "sys_platform != 'emscripten' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/d5/44/474bef2a0e9d90f1715d32cb98b0738695ca17ba324095fb2497ed7fbd59/httpx2-2.13.1.tar.gz", hash = "sha256:e48744a19e3af5ee48313d0ce5fe941d5422fae5705ea922a4aabf94d7800dfa", size = 100405, upload-time = "2026-09-23T07:47:23.052Z" }
 wheels = [
@@ -1050,7 +1050,7 @@ dependencies = [
     { name = "click" },
     { name = "filelock" },
     { name = "fsspec" },
-    { name = "hf-xet", marker = "platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
+    { name = "hf-xet", marker = "platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
     { name = "httpx" },
     { name = "packaging" },
     { name = "pyyaml" },
@@ -1228,9 +1228,9 @@ dependencies = [
     { name = "jaraco-classes" },
     { name = "jaraco-context" },
     { name = "jaraco-functools" },
-    { name = "jeepney", marker = "sys_platform == 'linux' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
-    { name = "pywin32-ctypes", marker = "sys_platform == 'win32' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
-    { name = "secretstorage", marker = "sys_platform == 'linux' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
+    { name = "jeepney", marker = "sys_platform == 'linux' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
+    { name = "pywin32-ctypes", marker = "sys_platform == 'win32' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
+    { name = "secretstorage", marker = "sys_platform == 'linux' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/43/4b/674af6ef2f97d56f0ab5153bf0bfa28ccb6c3ed4d1babf4305449668807b/keyring-25.7.0.tar.gz", hash = "sha256:fe01bd85eb3f8fb3dd0405defdeac9a5b4f6f0439edbb3149577f244a2e8245b", size = 63516, upload-time = "2025-11-16T16:26:09.482Z" }
 wheels = [
@@ -1387,12 +1387,12 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "python-multipart" },
-    { name = "pywin32", marker = "sys_platform == 'win32' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
+    { name = "pywin32", marker = "sys_platform == 'win32' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
     { name = "sse-starlette" },
     { name = "starlette" },
     { name = "typing-extensions" },
     { name = "typing-inspection" },
-    { name = "uvicorn", marker = "sys_platform != 'emscripten' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
+    { name = "uvicorn", marker = "sys_platform != 'emscripten' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/9d/8d/e0d339616f4810e9051d4aba6887afab289ab1f81875fe908b606cdfd0e3/mcp-2.3.0.tar.gz", hash = "sha256:8b147a50441cf059dc88c684e0aeed3687f0aa0f39c6cde7b90330effd2b34d8", size = 4171955, upload-time = "2026-10-02T22:06:56.091Z" }
 wheels = [
@@ -2448,7 +2448,7 @@ version = "26.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/3f/e8/7325d258199b159eb2c03fe32107533e2832e70e63f4fb88a6aa00023201/pyopenssl-26.4.0.tar.gz", hash = "sha256:28dfcce0162b9211413e26dfbfdf1d24317fbeba18fc93c12400a1856b2a0bc7", size = 182046, upload-time = "2026-08-01T19:50:50.512Z" }
 wheels = [
@@ -2460,7 +2460,7 @@ name = "pytest"
 version = "9.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
     { name = "iniconfig" },
     { name = "packaging" },
     { name = "pluggy" },
@@ -2651,7 +2651,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
     { name = "rpds-py" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/22/f5/df4e9027acead3ecc63e50fe1e36aca1523e1719559c499951bb4b53188f/referencing-0.37.0.tar.gz", hash = "sha256:44aefc3142c5b842538163acb373e24cce6632bd54bdb01b21ad5863489f50d8", size = 78036, upload-time = "2025-10-13T15:30:48.871Z" }
 wheels = [
@@ -3113,7 +3113,7 @@ version = "1.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/7b/2b/3850dc6bf7ef71b088962eba31dafc6cffd2f96e577ebb0bb316df96da3e/starlette-1.7.0.tar.gz", hash = "sha256:c79f74ea63cff761804fbbfb182f1e0b440c2d07b164d24700c5a1bab5d6ff5d", size = 2736246, upload-time = "2026-09-23T07:30:26.35Z" }
 wheels = [
@@ -3195,7 +3195,7 @@ resolution-markers = [
 ]
 dependencies = [
     { name = "cuda-bindings", marker = "python_full_version < '3.15' and sys_platform == 'linux'" },
-    { name = "cuda-toolkit", extra = ["cublas", "cudart", "cufft", "cufile", "cupti", "curand", "cusolver", "cusparse", "nvjitlink", "nvrtc", "nvtx"], marker = "(sys_platform == 'linux' and extra == 'extra-8-chronika-torch') or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
+    { name = "cuda-toolkit", extra = ["cublas", "cudart", "cufft", "cufile", "cupti", "curand", "cusolver", "cusparse", "nvjitlink", "nvrtc", "nvtx"], marker = "(sys_platform == 'linux' and extra == 'extra-8-everysaid-torch') or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
     { name = "filelock" },
     { name = "fsspec" },
     { name = "jinja2" },
@@ -3261,7 +3261,7 @@ name = "tqdm"
 version = "4.70.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0d/ea/b2a5bd54b28a324dae8211928b2d730b6547500342c7e6c6dea08bd0a485/tqdm-4.70.1.tar.gz", hash = "sha256:cefd0eca11b2a37a3aee776544d4f4ae913f02688135b5556b8788dfa474afc4", size = 171846, upload-time = "2026-09-11T07:25:16.601Z" }
 wheels = [
@@ -3331,7 +3331,7 @@ version = "0.27.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "annotated-doc" },
-    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
+    { name = "colorama", marker = "sys_platform == 'win32' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
     { name = "rich" },
     { name = "shellingham" },
 ]
@@ -3375,7 +3375,7 @@ name = "tzlocal"
 version = "5.4.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "tzdata", marker = "sys_platform == 'win32' or (extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
+    { name = "tzdata", marker = "sys_platform == 'win32' or (extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/81/5b/879b2f932adfa7a053c360d50bc896c977fa6426109185f7c12ebdd0cb9d/tzlocal-5.4.4.tar.gz", hash = "sha256:8dbb8660838688a7b6ba4fed31d18dedf842afb4d47ca050d6d891c2c15f3be4", size = 31170, upload-time = "2026-06-29T08:03:40.026Z" }
 wheels = [
@@ -3409,7 +3409,7 @@ standard = [
     { name = "httptools" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
-    { name = "uvloop", marker = "(platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32') or (platform_python_implementation == 'PyPy' and extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch') or (sys_platform == 'cygwin' and extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch') or (sys_platform == 'win32' and extra == 'extra-8-chronika-rocm' and extra == 'extra-8-chronika-torch')" },
+    { name = "uvloop", marker = "(platform_python_implementation != 'PyPy' and sys_platform != 'cygwin' and sys_platform != 'win32') or (platform_python_implementation == 'PyPy' and extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch') or (sys_platform == 'cygwin' and extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch') or (sys_platform == 'win32' and extra == 'extra-8-everysaid-rocm' and extra == 'extra-8-everysaid-torch')" },
     { name = "watchfiles" },
     { name = "websockets" },
 ]

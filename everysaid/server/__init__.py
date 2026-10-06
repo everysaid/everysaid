@@ -1,6 +1,6 @@
-"""`chronika serve`: the app (API, UI, plugins, live connections) on one port.
+"""`everysaid serve`: the app (API, UI, plugins, live connections) on one port.
 
-    chronika serve [--host H] [--port P] [--archive PATH]
+    everysaid serve [--host H] [--port P] [--archive PATH]
 
 Listens on 127.0.0.1:8520 unless config `[server] host/port` say otherwise. To reach it from other
 devices, put it behind a reverse proxy with HTTPS (Caddy, nginx) or a private network (WireGuard,
@@ -15,7 +15,7 @@ import os
 
 
 def log_config(folder):
-    """uvicorn's logging, with warnings and errors (its own and Chronika's) also in a file."""
+    """uvicorn's logging, with warnings and errors (its own and Everysaid's) also in a file."""
     from uvicorn.config import LOGGING_CONFIG
     os.makedirs(folder, exist_ok=True)
     cfg = copy.deepcopy(LOGGING_CONFIG)
@@ -24,13 +24,13 @@ def log_config(folder):
                                "filename": os.path.join(folder, "server.log"), "maxBytes": 5_000_000,
                                "backupCount": 4, "encoding": "utf-8"}
     cfg["loggers"]["uvicorn"]["handlers"].append("file")
-    cfg["loggers"]["chronika"] = {"handlers": ["default", "file"], "level": "WARNING", "propagate": False}
+    cfg["loggers"]["everysaid"] = {"handlers": ["default", "file"], "level": "WARNING", "propagate": False}
     return cfg
 
 
 def main(argv=None):
     from .. import config
-    ap = argparse.ArgumentParser(prog="chronika serve", description="The app: API, UI, plugins, live connections.")
+    ap = argparse.ArgumentParser(prog="everysaid serve", description="The app: API, UI, plugins, live connections.")
     ap.add_argument("--host", default=config.SERVER_HOST)
     ap.add_argument("--port", type=int, default=config.SERVER_PORT)
     ap.add_argument("--archive", help="archive database (default: the user's)")
@@ -39,6 +39,6 @@ def main(argv=None):
     import uvicorn
     from .app import create_app
     app = create_app(args.archive)
-    print(f"Chronika: {config.SERVER_ORIGIN} (ακούει στο {args.host}:{args.port})", flush=True)
+    print(f"Everysaid: {config.SERVER_ORIGIN} (ακούει στο {args.host}:{args.port})", flush=True)
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning", proxy_headers=True,
                 forwarded_allow_ips="127.0.0.1", log_config=log_config(config.LOGS))

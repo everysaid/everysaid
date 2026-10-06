@@ -4,7 +4,7 @@ file back (for showing it in the app).
 
 A file's date is its own EXIF date where it has one (never changed); else the date given (the
 message's, or one the user typed) is written into the copy that is stored, with the camera make
-where the file has none (`make`, by default "Chronika": how chat media are told apart in a library).
+where the file has none (`make`, by default "Everysaid": how chat media are told apart in a library).
 """
 import hashlib
 import json
@@ -183,7 +183,7 @@ class Immich(Plugin):
             when = datetime.fromtimestamp(date_ms / 1000, config.TIMEZONE).isoformat()
             boundary = uuid.uuid4().hex
             name = f"{meta.get('service') or 'chat'} {datetime.fromtimestamp(date_ms / 1000, config.TIMEZONE):%Y-%m-%d %H%M%S}{os.path.splitext(path)[1].lower()}"
-            fields = {"deviceAssetId": meta.get("sha256") or _sha(path), "deviceId": "chronika",
+            fields = {"deviceAssetId": meta.get("sha256") or _sha(path), "deviceId": "everysaid",
                       "fileCreatedAt": when, "fileModifiedAt": when}
             parts = []
             for k, v in fields.items():

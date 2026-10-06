@@ -31,7 +31,7 @@ import time
 
 import common
 from common import config
-from chronika.archive import expand
+from everysaid.archive import expand
 
 ARCHIVE_DB = os.path.join(config.DATA, "archive.db")
 

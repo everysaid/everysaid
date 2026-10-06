@@ -103,8 +103,8 @@ EL = {
         "SMS, MMS, κλήσεις και αποκλεισμένοι αριθμοί ενός κινητού Android, μέσω adb (με USB debugging).",
     "The history Viber Desktop holds (synced from the phone it is linked to), decrypted with scripts/viber-desktop-export.cpp. Linux only: there is no official way.":
         "Το ιστορικό που κρατάει το Viber Desktop (συγχρονισμένο από το κινητό του), αποκρυπτογραφημένο με το scripts/viber-desktop-export.cpp. Μόνο σε Linux: επίσημος δρόμος δεν υπάρχει.",
-    "WhatsApp as it arrives, through a whatsmeow bridge linked as a device (Chronika's bridges/whatsapp). Unofficial: WhatsApp may block accounts that use one; sending raises that risk.":
-        "Το WhatsApp όπως έρχεται, μέσω γέφυρας whatsmeow συνδεδεμένης ως συσκευή (bridges/whatsapp του Chronika). Ανεπίσημο: το WhatsApp μπορεί να μπλοκάρει λογαριασμούς που τη χρησιμοποιούν· η αποστολή μεγαλώνει το ρίσκο.",
+    "WhatsApp as it arrives, through a whatsmeow bridge linked as a device (Everysaid's bridges/whatsapp). Unofficial: WhatsApp may block accounts that use one; sending raises that risk.":
+        "Το WhatsApp όπως έρχεται, μέσω γέφυρας whatsmeow συνδεδεμένης ως συσκευή (bridges/whatsapp του Everysaid). Ανεπίσημο: το WhatsApp μπορεί να μπλοκάρει λογαριασμούς που τη χρησιμοποιούν· η αποστολή μεγαλώνει το ρίσκο.",
     "Every chat but channels and bots, through Telegram's API with the user's own account (Telethon): the whole history, then live.":
         "Όλες οι συνομιλίες εκτός από κανάλια και bots, μέσω του API του Telegram με τον δικό σου λογαριασμό (Telethon): όλο το ιστορικό, μετά live.",
     "Calls known only from the carrier's SMS notices (\"you have a missed call from ...\"), read from the archive's own SMS, by a parser per carrier or country.":

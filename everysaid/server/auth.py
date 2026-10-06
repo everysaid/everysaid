@@ -7,7 +7,7 @@
   together with a 6-digit code from an authenticator app (TOTP, RFC 6238) is the other way: both are
   required. Passwords are kept as scrypt hashes; a code is accepted once.
 - The first passkey of a new server is made through a one-time setup link printed on the terminal
-  (`chronika serve` prints it while there is no user; `chronika user link` prints a new one any time,
+  (`everysaid serve` prints it while there is no user; `everysaid user link` prints a new one any time,
   also for adding a passkey on a new device or after losing one).
 - Recovery codes (ten, each once) let the user in without a passkey, to add a new one.
 - A session is a random token in an HttpOnly, SameSite=Strict cookie (Secure over HTTPS); only its
@@ -29,7 +29,7 @@ from ..errors import UserError
 
 DB = os.path.join(config.DATA, "server.db")
 SESSION_DAYS = 30
-COOKIE = "chronika_session"
+COOKIE = "everysaid_session"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS user (
@@ -155,7 +155,7 @@ class Auth:
         return max(0, int(exp_uid[0] - time.time())) if exp_uid else 0
 
     def take_setup(self, token, consume=False):
-        """(valid, user id or None). Links made by `chronika user link` live in the database."""
+        """(valid, user id or None). Links made by `everysaid user link` live in the database."""
         if not token:
             return False, None
         exp_uid = self.setup_tokens.get(token)
@@ -401,7 +401,7 @@ def totp_check(secret, code, last_step=None, window=1):
     return None
 
 
-def totp_uri(secret, name, issuer="Chronika"):
+def totp_uri(secret, name, issuer="Everysaid"):
     from urllib.parse import quote
     return f"otpauth://totp/{quote(issuer)}:{quote(name)}?secret={secret}&issuer={quote(issuer)}&digits=6&period=30"
 

@@ -12,7 +12,7 @@ answer as wrong (again: right), stored in `vlm.db` (`verdict`) to measure each m
 and the size. `--model M` shows every answer of that one model rather than the pilot, and the pictures it could
 not answer about. Each picture
 shows where it came from: the person, merged across services by number and named from the
-Nextcloud address book (`~/.cache/chronika/contact-names.tsv`, else the name Viber or WhatsApp
+Nextcloud address book (`~/.cache/everysaid/contact-names.tsv`, else the name Viber or WhatsApp
 shows, marked with a dot), or the group; a filter picks one, and the [ and ] keys move to the
 previous or next one. For each file the owner decides keep, aside or delete (on the
 card, with K / A / D / U in the large view, or for everything shown of one person or group, where a
@@ -324,7 +324,7 @@ def thumb(cache, path, size):
     return None
 
 
-PAGE = """<!doctype html><html lang="el"><meta charset="utf-8"><title>Chronika · Τι είπαν τα μοντέλα</title>
+PAGE = """<!doctype html><html lang="el"><meta charset="utf-8"><title>Everysaid · Τι είπαν τα μοντέλα</title>
 <style>
 body{margin:0;font:13px system-ui;background:#1e1e1e;color:#ddd}
 header{position:sticky;top:0;z-index:5;background:#2b2b2b;padding:8px 12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;box-shadow:0 2px 6px #0008}

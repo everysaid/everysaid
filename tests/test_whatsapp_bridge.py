@@ -6,8 +6,8 @@ import sqlite3
 
 import pytest
 
-from chronika import media, voip, whatsapp
-from chronika.archive import Archive
+from everysaid import media, voip, whatsapp
+from everysaid.archive import Archive
 
 PEER = "15551234567@s.whatsapp.net"
 GROUP = "120363000000000001@g.us"
@@ -171,7 +171,7 @@ def test_bridge_calls(store, tmp_path):
 
 @pytest.fixture
 def bridge_instance(store, tmp_path):
-    from chronika.server.host import Host
+    from everysaid.server.host import Host
     path, db = bridge(tmp_path)
     db.execute("INSERT INTO bridge_state VALUES ('send_enabled', '1', ?)", (ts(0),))
     db.commit()
@@ -186,7 +186,7 @@ def bridge_instance(store, tmp_path):
 
 
 def test_the_plugin_turns_sending_off_when_the_bridge_blocks_it(bridge_instance):
-    from chronika import plugins
+    from everysaid import plugins
     host, iid, db, alerts = bridge_instance
     p = plugins.get("whatsapp-bridge")
     assert p.sending(host.ctx(iid))
@@ -208,7 +208,7 @@ def test_the_plugin_turns_sending_off_when_the_bridge_blocks_it(bridge_instance)
 
 
 def test_sending_needs_the_bridge_started_with_send(bridge_instance):
-    from chronika import plugins
+    from everysaid import plugins
     host, iid, db, _ = bridge_instance
     db.execute("UPDATE bridge_state SET value = '' WHERE key = 'send_enabled'")
     db.commit()
@@ -217,7 +217,7 @@ def test_sending_needs_the_bridge_started_with_send(bridge_instance):
 
 
 def test_its_card_says_what_the_bridge_says_now(bridge_instance, monkeypatch):
-    from chronika import plugins
+    from everysaid import plugins
     host, iid, _, _ = bridge_instance
     p = plugins.get("whatsapp-bridge")
     live = {"connected": True, "connection": "connected", "send_enabled": True, "send_blocked": "",
@@ -270,7 +270,7 @@ def test_a_bridge_from_before_has_no_files_to_give(store, tmp_path):
 def test_an_answer_tells_the_bridge_what_it_answers(bridge_instance, store, tmp_path, monkeypatch):
     import asyncio
     import urllib.request
-    from chronika import plugins
+    from everysaid import plugins
     host, iid, db, _ = bridge_instance
     message(db, "THEIRS", 1, "a question")
     message(db, "MINE", 2, "an aside", from_me=1)
@@ -331,7 +331,7 @@ def test_mentions_and_the_groups_members(store, tmp_path):
 def test_a_mention_is_written_as_whatsapp_has_it(bridge_instance, store, monkeypatch):
     import asyncio
     import urllib.request
-    from chronika import plugins
+    from everysaid import plugins
     host, iid, _, _ = bridge_instance
     with store.write() as w:
         w.execute("INSERT INTO address (kind_id, value) SELECT id, '+15557654321' FROM address_kind WHERE name = 'phone'")
@@ -397,7 +397,7 @@ def test_receipts_and_what_the_owner_read(store, tmp_path):
 def test_read_receipts_only_where_the_user_turned_them_on(bridge_instance, store, monkeypatch):
     import asyncio
     import urllib.request
-    from chronika import plugins
+    from everysaid import plugins
     host, iid, _, _ = bridge_instance
     sent = []
 

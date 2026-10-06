@@ -1,10 +1,10 @@
-# Chronika
+# Everysaid
 
 A personal archive of messages and calls: SMS and iMessage, phone and FaceTime calls, Viber,
 WhatsApp, Telegram, with their media, in one SQLite database. It is built from local phone backups
 (iPhone), Android phones over adb, and the services' own APIs and exports. Over it: a core, an app
-for a person (a messenger for the whole history, on desktop and phone, `chronika serve`) and an MCP
-server for an assistant (`chronika mcp`). `docs/app.md` tells how to run them, `docs/design.md`
+for a person (a messenger for the whole history, on desktop and phone, `everysaid serve`) and an MCP
+server for an assistant (`everysaid mcp`). `docs/app.md` tells how to run them, `docs/design.md`
 how they are built.
 
 The goal is a complete, permanent history that does not depend on what the phones keep: a message
@@ -13,7 +13,7 @@ through iCloud. Telegram, and WhatsApp through a bridge, can also be live: new m
 the app as they come, and can be answered from it.
 
 Backups are not the project's job. Keeping the archive itself safe (and the phone backups it reads,
-and the photo library) is the user's concern, with whatever backup they use. What Chronika owes is
+and the photo library) is the user's concern, with whatever backup they use. What Everysaid owes is
 not to lose anything by its own doing (writes in transactions, nothing removed because the source
 dropped it) and to keep what cannot be made again in its data folder, never in the cache, which
 backups skip by convention.
@@ -34,30 +34,30 @@ history); nothing in the tracked documentation depends on it.
 | Old Viber history through Viber Desktop (Linux) | working (`scripts/viber-desktop-export.cpp`) |
 | Telegram through its API | working (`scripts/telegram-sync.py`) |
 | WhatsApp through a live bridge (whatsmeow) | read, for what came after the last backup |
-| Unified archive, deduplicated across sources | working (`chronika`) |
-| Replies, reactions, edits, locations, call outcomes | working (`chronika/extras.py`) |
-| WhatsApp and Viber calls, carrier missed-call notices | working (`chronika/voip.py`) |
+| Unified archive, deduplicated across sources | working (`everysaid`) |
+| Replies, reactions, edits, locations, call outcomes | working (`everysaid/extras.py`) |
+| WhatsApp and Viber calls, carrier missed-call notices | working (`everysaid/voip.py`) |
 | Chat media matched against a photo library (immich) and uploaded with the right date | working (scripts, see "Media") |
-| The core: chats, a person's stream across services, search ignoring accents, people, calls, media, statistics | working (`chronika/core/`) |
-| Plugins: sources, photo libraries (folder, immich), contacts (CardDAV, .vcf), as instances | working (`chronika/plugins/`) |
-| The app: passkeys, the messenger, search, media, people, sources, settings, push, PWA | working (`chronika serve`, `web/`) |
+| The core: chats, a person's stream across services, search ignoring accents, people, calls, media, statistics | working (`everysaid/core/`) |
+| Plugins: sources, photo libraries (folder, immich), contacts (CardDAV, .vcf), as instances | working (`everysaid/plugins/`) |
+| The app: passkeys, the messenger, search, media, people, sources, settings, push, PWA | working (`everysaid serve`, `web/`) |
 | Live Telegram and WhatsApp (bridge), sending where the plugin can | working |
-| The MCP server | working (`chronika mcp`) |
-| A demo archive of invented people | working (`chronika demo`) |
-| The logs of Adium and Pidgin (Gaim): MSN, ICQ, AIM, Yahoo, Jabber/Google Talk, Skype, IRC, Facebook chat | working (`chronika/imlogs.py`, `scripts/imlogs-import.py`) |
+| The MCP server | working (`everysaid mcp`) |
+| A demo archive of invented people | working (`everysaid demo`) |
+| The logs of Adium and Pidgin (Gaim): MSN, ICQ, AIM, Yahoo, Jabber/Google Talk, Skype, IRC, Facebook chat | working (`everysaid/imlogs.py`, `scripts/imlogs-import.py`) |
 
 ## Folders and configuration
 
-`chronika/config.py` is the one place for paths and settings. The three folders follow the
+`everysaid/config.py` is the one place for paths and settings. The three folders follow the
 platform (platformdirs; on Linux the XDG folders, so `XDG_DATA_HOME` and the like move them):
 
 | Folder | Linux | Holds |
 |---|---|---|
-| data | `~/.local/share/chronika` | what cannot be made again: `archive.db`, the review state, the aside folder |
-| cache | `~/.cache/chronika` | what can: the iPhone's extracts, the indexes, `telegram/` |
-| config | `~/.config/chronika` | `config.toml`, and the secrets' files where there is no keyring |
+| data | `~/.local/share/everysaid` | what cannot be made again: `archive.db`, the review state, the aside folder |
+| cache | `~/.cache/everysaid` | what can: the iPhone's extracts, the indexes, `telegram/` |
+| config | `~/.config/everysaid` | `config.toml`, and the secrets' files where there is no keyring |
 
-The environment variables CHRONIKA_DATA, CHRONIKA_CACHE and CHRONIKA_CONFIG move each of them (the
+The environment variables EVERYSAID_DATA, EVERYSAID_CACHE and EVERYSAID_CONFIG move each of them (the
 demo and the tests use them to stay apart). The app adds `<data>/server.db` (users, passkeys,
 sessions, push subscriptions, audit; mode 600), and `<cache>/thumbs/` and `<cache>/avatars/`.
 
@@ -102,7 +102,7 @@ ffmpeg/ffprobe, libimobiledevice (`idevicebackup2`, `idevice_id`), adb.
 
 The iPhone backup password (`backup-password`), the immich API key (`immich-key`), Telegram's
 `telegram-api-id`, `telegram-api-hash` and `telegram-session`, and any later source's token are kept
-in the system's keyring (service `chronika`): Secret Service on Linux (KWallet or GNOME Keyring),
+in the system's keyring (service `everysaid`): Secret Service on Linux (KWallet or GNOME Keyring),
 the Keychain on macOS, the Credential Manager on Windows. Where there is none (a headless Linux
 without a Secret Service, or a session without D-Bus, such as plain ssh), the file of that name in
 the config folder (mode 600) is used instead. `config.secret(name)` reads either;
@@ -130,7 +130,7 @@ TOML, optional: every key has a general default.
 | `[iphone] backup_root` | `<data>/iphone-backup` | where `idevicebackup2` writes |
 | `[android] export` | `<data>/android` | `android-export.py`'s folder: `<device>/android.db` and `mms-parts/` per phone |
 | `[android] device` | `android` | the name of a legacy export `<export>/<device>.db` and of its sources |
-| `[import] importers` | all, in the registry's order | which importers `python -m chronika` runs by default |
+| `[import] importers` | all, in the registry's order | which importers `python -m everysaid` runs by default |
 | `[import] carrier_notices` | none | the parsers of carriers' missed-call SMS to use (`gr`: the Greek one) |
 | `[viber] desktop_export` | none | a decrypted Viber Desktop database |
 | `[whatsapp] bridge` | none | the WhatsApp bridge's store folder (`messages.db`, `whatsapp.db`) |
@@ -139,7 +139,7 @@ TOML, optional: every key has a general default.
 | `[immich] url` | none | the immich API: `immich-index.py`, `media-faces.py`, `immich-review.py`'s large previews, `immich-upload.py` |
 | `[immich] data_folder` | none | immich's upload folder, only for `--dump` (its nightly backups and previews) |
 | `[immich] container_prefix` | `/usr/src/app/upload/` | the same folder as immich's own paths name it |
-| `[immich] make` | `chronika` | the camera make written into uploaded files that have none |
+| `[immich] make` | `everysaid` | the camera make written into uploaded files that have none |
 | `[ollama] url`, `model` | `http://localhost:11434`, `qwen2.5vl:7b` | `media-vlm.py`'s local vision model, also the one the pages show first |
 | `[media] store` | `<data>` | where the archive's media files are (`media/<ab>/...`) |
 | `[server] origin`, `host`, `port` | `http://localhost:8520`, `127.0.0.1`, 8520 | the app's address (passkeys are tied to it) and where it listens |
@@ -303,7 +303,7 @@ be had.
 
 ### WhatsApp: through a live bridge
 
-Chronika's whatsmeow bridge (`bridges/whatsapp/`, begun from whatsapp-mcp's) keeps what arrives
+Everysaid's whatsmeow bridge (`bridges/whatsapp/`, begun from whatsapp-mcp's) keeps what arrives
 after it is linked, files included, in its store folder (`messages.db`, `media/`). The importer takes from it what came after the last iPhone backup, matched by
 stanza id; LIDs (`...@lid`) are mapped to numbers through the iPhone's WhatsApp contacts and the
 bridge's `whatsmeow_lid_map`.
@@ -319,7 +319,7 @@ verified yet.
 
 The logs of the multi-protocol clients, Adium (macOS) and Pidgin or Gaim (libpurple), one file per
 session under the account and the contact, give MSN, ICQ, AIM, Yahoo, Jabber and Google Talk,
-Skype, IRC and Facebook chat (`chronika/imlogs.py`, the "Adium and Pidgin logs" source, or
+Skype, IRC and Facebook chat (`everysaid/imlogs.py`, the "Adium and Pidgin logs" source, or
 `scripts/imlogs-import.py --adium DIR --pidgin DIR`, `--dry-run` to see the counts first). The
 folders are read as they are: unpacking an archive of them is the user's job.
 
@@ -338,20 +338,20 @@ folders are read as they are: unpacking an archive of them is the user's job.
 ## The archive
 
 `<data>/archive.db` (mode 600) holds every message and call once, whatever its source, and is only
-ever added to. Filled by the `chronika` package:
+ever added to. Filled by the `everysaid` package:
 
 ```
-uv run python -m chronika sms calls viber whatsapp telegram voip media   # what is already there is skipped
+uv run python -m everysaid sms calls viber whatsapp telegram voip media   # what is already there is skipped
 ```
 
-Schema (`chronika/archive.py`):
+Schema (`everysaid/archive.py`):
 
 - `message` and `call`: our own `id`; `service_id`, `ts` (Unix ms, UTC), `outgoing`; for messages
   `conversation_id`, `sender_id` (an `address`, NULL when outgoing), `kind_id`, `text`, and `key`,
   the service's own id (Viber token, WhatsApp stanza id, iMessage guid, Telegram message id; NULL
   for SMS/MMS), unique per service or, where a service's ids are unique only per chat
   (`key_scope`), per conversation; for calls `address_id`, `answered`, `duration` (s).
-- What the services add to a message (`chronika/extras.py`, per source): `subtype` (link, pin,
+- What the services add to a message (`everysaid/extras.py`, per source): `subtype` (link, pin,
   gif, video note, deleted, notice, poll, call, group event...), `reply_to` (the quoted message,
   resolved after import from `reply_key`; `reply_text` keeps the quoted text), `edited`, `deleted`,
   `forwarded`, `starred`, `lat`/`lon`/`place` (a shared location, or on Viber messages of other
@@ -366,7 +366,7 @@ Schema (`chronika/archive.py`):
 - `service`, `address_kind`, `message_kind`, `source`: lookup tables; `address` (normalised: E.164
   numbers, lower-case email, a service's id, username or profile name); `person` joins addresses
   (`Archive.alias` adds a handle to an existing person); `conversation` and `conversation_member`.
-- `message_fts`: FTS5 over the text folded (`chronika/text.py`: lower case, no accents of any script,
+- `message_fts`: FTS5 over the text folded (`everysaid/text.py`: lower case, no accents of any script,
   final sigma as sigma), so `καλημερα` finds `Καλημέρα`; written by the archive as it adds a message.
 - The app's tables: `plugin_instance` (every source, library and address book in use, with its
   settings and state; `source.instance_id`, `library_link.instance_id` point to it), `contact` and
@@ -381,32 +381,32 @@ Deduplication. Rows found in more than one source are paired one to one and kept
 origin recorded; where the sources differ, the copy of the device in use at the time wins
 (`device.used_from`/`used_until`).
 
-- SMS and MMS (`chronika/sms.py`): phones carry the same history, copied from phone to phone.
+- SMS and MMS (`everysaid/sms.py`): phones carry the same history, copied from phone to phone.
   Pairs: same direction and text, at most 2 s apart. SMS and MMS are paired together, because
   Android keeps many plain texts as MMS (long ones, or with a link) that the iPhone has as SMS; they
   share one conversation per counterpart. Exact repeats (same second and text, different guid) are
   taken once. On newer iOS many messages have `text` NULL and the text only in `attributedBody`,
-  decoded in `chronika/sms.py`.
-- Calls (`chronika/calls.py`): same number, direction and second.
-- Viber (`chronika/viber.py`): the iPhone's `viber.sqlite` and a Viber Desktop export, matched by
+  decoded in `everysaid/sms.py`.
+- Calls (`everysaid/calls.py`): same number, direction and second.
+- Viber (`everysaid/viber.py`): the iPhone's `viber.sqlite` and a Viber Desktop export, matched by
   token. People are matched by member id and stored by phone number where either source knows it,
   so they meet their SMS and calls; groups by group token. The token's time fills in a missing
   date.
-- WhatsApp (`chronika/whatsapp.py`): the iPhone's `ChatStorage.sqlite`, then the bridge, matched by
+- WhatsApp (`everysaid/whatsapp.py`): the iPhone's `ChatStorage.sqlite`, then the bridge, matched by
   stanza id. Message types are identified from their files (`file`, `ffprobe`) and metadata (GIFs
   are silent mp4s; round video notes; deleted messages); some business messages have their text
   only in the media item's protobuf metadata, which is extracted.
-- Telegram (`chronika/telegram.py`): ids unique per chat (`key_scope`), the row key `<chat>/<id>`.
+- Telegram (`everysaid/telegram.py`): ids unique per chat (`key_scope`), the row key `<chat>/<id>`.
   People by phone where Telegram shows it, else by user id, with the id, username and profile name
   as further handles of the same person; deleted accounts have neither name nor number. Calls,
   which Telegram keeps as service messages, go to `call` too.
-- Calls of the apps and the carrier (`chronika/voip.py`, importer `voip`): WhatsApp's call log
+- Calls of the apps and the carrier (`everysaid/voip.py`, importer `voip`): WhatsApp's call log
   merged with the call bubbles in its chats (type 59), Viber's recents (`ZRECENT`), and the
-  carriers' missed-call SMS notices read from the archive's own SMS (`chronika/carriers/`, one module
+  carriers' missed-call SMS notices read from the archive's own SMS (`everysaid/carriers/`, one module
   per carrier or country, chosen in `[import] carrier_notices`). A call already there from another
   source (same service, person and direction) within 60 s is not added again; calls of the same
   source are never merged.
-- Media (`chronika/media.py`): each file is stored once by content, hard-linked (no extra space)
+- Media (`everysaid/media.py`): each file is stored once by content, hard-linked (no extra space)
   as `media/<ab>/<sha256><ext>`; `media` (sha256, size, mime, path) and `attachment` (message,
   sha256, source, the file's path in that source). Links: iPhone WhatsApp by stanza id
   (`ZWAMEDIAITEM.ZMEDIALOCALPATH`), iPhone Viber by token (`ZATTACHMENT.ZNAME`), Android Viber by

@@ -35,7 +35,7 @@ class Ctx:
 
 
 def test_a_progress_bar_is_one_line_and_a_failure_says_why(tmp_path, monkeypatch):
-    from chronika.plugins import sources
+    from everysaid.plugins import sources
     monkeypatch.setattr(sources, "SCRIPTS", str(tmp_path))
     (tmp_path / "bar.py").write_text(BAR)
     (tmp_path / "fail.py").write_text(FAIL)

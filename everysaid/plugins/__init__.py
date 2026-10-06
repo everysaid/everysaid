@@ -1,6 +1,6 @@
-"""The plugins Chronika knows, by id, and the instances of them in an archive.
+"""The plugins Everysaid knows, by id, and the instances of them in an archive.
 
-    from chronika import plugins
+    from everysaid import plugins
     plugins.catalog()                  # every plugin's manifest, for the UI
     plugins.get("telegram")            # the class
     plugins.instances(store)           # the instances in this archive
@@ -13,7 +13,7 @@ from . import contacts, libraries, sources
 from .i18n import tr
 
 REGISTRY = {p.id: p() for p in (*sources.PLUGINS, *libraries.PLUGINS, *contacts.PLUGINS)}
-if os.environ.get("CHRONIKA_DEMO"):            # the demo's own source, which "sends" into the demo archive
+if os.environ.get("EVERYSAID_DEMO"):            # the demo's own source, which "sends" into the demo archive
     from ..demo import DemoSender
     REGISTRY["demo-sender"] = DemoSender.plugin()
 

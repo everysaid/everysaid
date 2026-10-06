@@ -341,7 +341,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
     const sep = newDay ? (
       <div className="flex justify-center py-2">
         <button
-          onClick={() => document.dispatchEvent(new CustomEvent("chronika:jumpdate"))}
+          onClick={() => document.dispatchEvent(new CustomEvent("everysaid:jumpdate"))}
           className="rounded-full bg-panel/90 px-3 py-1 text-xs font-medium text-muted shadow-sm backdrop-blur"
         >
           {dayLabel(item.ts)}
@@ -448,8 +448,8 @@ function ChatHeader({ chat, wide, onInfo, onJumpDate, hidden, onHide }: {
   const [dateOpen, setDateOpen] = useState(false);
   useEffect(() => {
     const f = () => setDateOpen(true);
-    document.addEventListener("chronika:jumpdate", f);
-    return () => document.removeEventListener("chronika:jumpdate", f);
+    document.addEventListener("everysaid:jumpdate", f);
+    return () => document.removeEventListener("everysaid:jumpdate", f);
   }, []);
   const set = useMutation({
     mutationFn: (body: Record<string, unknown>) => api.patch(`/api/chats/${chat!.id}`, body),

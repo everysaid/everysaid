@@ -1,16 +1,16 @@
 # The WhatsApp bridge
 
 A [whatsmeow](https://github.com/tulir/whatsmeow) client linked to the account as a device (like
-WhatsApp Web), keeping what arrives in SQLite for Chronika's `whatsapp-bridge` source to import and
+WhatsApp Web), keeping what arrives in SQLite for Everysaid's `whatsapp-bridge` source to import and
 watch. It began as the bridge of [whatsapp-mcp](https://github.com/lharries/whatsapp-mcp) (MIT,
-© Luke Harries) and is Chronika's own since: every message kind, reactions, edits, deletions and
+© Luke Harries) and is Everysaid's own since: every message kind, reactions, edits, deletions and
 calls, the files of messages, mentions, the groups' members, receipts, the connection's state,
-and guarded sending. Chronika's MCP server
-(`chronika mcp`) is the way an assistant reads it, with the rest of the archive.
+and guarded sending. Everysaid's MCP server
+(`everysaid mcp`) is the way an assistant reads it, with the rest of the archive.
 
 Unofficial: WhatsApp may block accounts that use such a client; sending raises that risk. The
 bridge never announces itself as online, and marks messages read only when asked (`/api/read`,
-which Chronika calls only where the user turned read receipts on).
+which Everysaid calls only where the user turned read receipts on).
 
 ## Building and linking
 
@@ -18,12 +18,12 @@ which Chronika calls only where the user turned read receipts on).
 cd bridges/whatsapp
 go build -o whatsapp-bridge        # needs Go and a C compiler (go-sqlite3)
 go test ./...                      # on an in-memory database, never a store
-./whatsapp-bridge -store ~/.local/share/chronika/whatsapp-bridge
+./whatsapp-bridge -store ~/.local/share/everysaid/whatsapp-bridge
 ```
 
 The first start prints a QR code: scan it in WhatsApp on the phone (Linked devices). After that it
 starts on its own. The store folder holds the session's keys (`whatsapp.db`), the messages
-(`messages.db`) and the downloaded files (`media/`): keep it private, and in the backups. Chronika
+(`messages.db`) and the downloaded files (`media/`): keep it private, and in the backups. Everysaid
 looks for it where `[whatsapp] bridge` in its `config.toml` says, else in its data folder
 (`whatsapp-bridge/`); the source's settings can name another.
 
@@ -42,12 +42,12 @@ looks for it where `[whatsapp] bridge` in its `config.toml` says, else in its da
 
 ```ini
 [Unit]
-Description=WhatsApp bridge for Chronika
+Description=WhatsApp bridge for Everysaid
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=%h/path/to/chronika/bridges/whatsapp/whatsapp-bridge -store %h/.local/share/chronika/whatsapp-bridge
+ExecStart=%h/path/to/everysaid/bridges/whatsapp/whatsapp-bridge -store %h/.local/share/everysaid/whatsapp-bridge
 Restart=always
 RestartSec=5
 
@@ -131,6 +131,6 @@ block is kept in `bridge_state`, survives restarts, and is cleared only on purpo
 curl -X POST -H "Content-Type: application/json" http://127.0.0.1:8080/api/unblock
 ```
 
-Chronika turns its own sending off when it sees a block, and tells the user's devices. WhatsApp's
+Everysaid turns its own sending off when it sees a block, and tells the user's devices. WhatsApp's
 temporary-ban reasons are all signs of bulk messaging: sending to too many people, being blocked
 by many users, creating too many groups, the same message too many times, broadcast lists.

@@ -2,7 +2,7 @@
 
 The interface's words are in web/src/lib/i18n.ts (Greek and English; tsc already fails when a key is
 in one and not the other); the server's (plugins, logs, notifications) are English in code with the
-Greek in chronika/plugins/i18n.py. These tests check what tsc cannot: that every key the code uses
+Greek in everysaid/plugins/i18n.py. These tests check what tsc cannot: that every key the code uses
 exists and none is left unused, that the server's error codes and the archive's vocabularies have
 words, that no text in the interface bypasses t(), that the plugins' words have Greek, and that no
 Greek is left in the Python code outside the dictionaries.
@@ -86,7 +86,7 @@ def test_every_key_used_exists_and_none_is_unused():
 def test_server_error_codes_have_words():
     keys = ui_keys()
     codes = set()
-    for p in (ROOT / "chronika").rglob("*.py"):
+    for p in (ROOT / "everysaid").rglob("*.py"):
         s = p.read_text(encoding="utf-8")
         codes |= set(re.findall(r'UserError\(\s*"([\w.]+)"', s)) | set(re.findall(r'"code": "([\w.]+)"', s))
     missing = {c for c in codes if f"errors.{c}" not in keys}
@@ -94,14 +94,14 @@ def test_server_error_codes_have_words():
 
 
 def test_the_archives_vocabularies_have_words():
-    from chronika import archive
+    from everysaid import archive
     keys = ui_keys()
     assert {f"kind.{k}" for k in archive.MESSAGE_KINDS} <= keys
     assert {f"call.{d}" for d in archive.VOCABULARY["call.detail"]} <= keys
 
 
 def test_no_text_in_the_interface_bypasses_t():
-    allowed = {"Chronika", "QR", "Ελληνικά", "English", "Passkey", "abcd-ef01-2345-6789"}
+    allowed = {"Everysaid", "QR", "Ελληνικά", "English", "Passkey", "abcd-ef01-2345-6789"}
     found = []
     for path, src in sources().items():
         if path.suffix != ".tsx":
@@ -123,7 +123,7 @@ PROPER = {"Telegram", "WhatsApp", "Viber", "iMessage", "SMS", "MMS", "RCS", "Fac
 
 
 def test_the_plugins_words_have_greek():
-    from chronika import plugins
+    from everysaid import plugins
     same = []
     for p in plugins.REGISTRY.values():
         el, en = p.manifest("el"), p.manifest("en")
@@ -152,8 +152,8 @@ GREEK_ALLOWED = {
 
 def test_no_greek_in_the_python_code():
     found = []
-    for p in (ROOT / "chronika").rglob("*.py"):
-        rel = p.relative_to(ROOT / "chronika").as_posix()
+    for p in (ROOT / "everysaid").rglob("*.py"):
+        rel = p.relative_to(ROOT / "everysaid").as_posix()
         if rel in GREEK_ALLOWED or rel.split("/")[0] in GREEK_ALLOWED:
             continue
         text = p.read_text(encoding="utf-8")

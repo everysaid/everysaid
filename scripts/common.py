@@ -14,7 +14,7 @@ import urllib.parse
 import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from chronika import config, media  # noqa: E402
+from everysaid import config, media  # noqa: E402
 
 link_or_copy = media.link_or_copy       # a hard link, or a copy across file systems
 
@@ -199,7 +199,7 @@ def page(html):
 
 
 def _cookie(handler):
-    return f"chronika-{handler.server.server_address[1]}"      # one per port: two pages do not share it
+    return f"everysaid-{handler.server.server_address[1]}"      # one per port: two pages do not share it
 
 
 def _host(handler):

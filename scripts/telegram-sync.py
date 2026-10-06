@@ -45,7 +45,7 @@ from telethon.sessions import StringSession
 from telethon.tl.types import Channel, Chat, InputMessagesFilterPhotoVideo, InputMessagesFilterRoundVoice, User
 
 from common import config
-from chronika import telegram_store
+from everysaid import telegram_store
 
 SESSION = "telegram-session"
 OUT = os.path.join(config.CACHE, "telegram")

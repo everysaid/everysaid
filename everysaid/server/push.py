@@ -88,7 +88,7 @@ class Push:
     def _send(self, subs, payloads):
         from pywebpush import WebPushException, webpush
         vapid, _ = self.key()
-        claims = {"sub": f"mailto:{config.get('server', 'contact', 'chronika@localhost')}"}
+        claims = {"sub": f"mailto:{config.get('server', 'contact', 'everysaid@localhost')}"}
         for endpoint, keys in subs:
             for p in payloads:
                 try:

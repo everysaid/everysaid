@@ -4,9 +4,9 @@ import { createHmac } from "node:crypto";
 import { execFileSync } from "node:child_process";
 
 // What the end-to-end tests share: the demo's folders, an authenticator's code, and a way in (a
-// one-time link from `chronika user link`, then a password with an authenticator code).
+// one-time link from `everysaid user link`, then a password with an authenticator code).
 const DEMO = process.env.DEMO_DIR ?? "/tmp/chr-demo";
-export const env = { ...process.env, CHRONIKA_DATA: `${DEMO}/data`, CHRONIKA_CACHE: `${DEMO}/cache`, CHRONIKA_CONFIG: `${DEMO}/config` };
+export const env = { ...process.env, EVERYSAID_DATA: `${DEMO}/data`, EVERYSAID_CACHE: `${DEMO}/cache`, EVERYSAID_CONFIG: `${DEMO}/config` };
 
 export function totp(secret: string, offset = 0) {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -21,7 +21,7 @@ export function totp(secret: string, offset = 0) {
 }
 
 export function setupLink() {
-  const out = execFileSync("uv", ["run", "chronika", "user", "link", "--user", "1"], { cwd: "..", env }).toString();
+  const out = execFileSync("uv", ["run", "everysaid", "user", "link", "--user", "1"], { cwd: "..", env }).toString();
   const url = new URL(out.split("\n")[0]);
   return url.pathname + url.hash;
 }
