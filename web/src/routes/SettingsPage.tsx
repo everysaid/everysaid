@@ -183,6 +183,10 @@ export function SettingsPage() {
                 <Switch checked={(settings.data?.show_unnamed as boolean | undefined) ?? false} label={t("settings.showUnnamed")}
                   onChange={(v) => api.put("/api/settings", { show_unnamed: v }).then(() => qc.invalidateQueries(), (e) => toast.error(e.message))} />
               </Line>
+              <Line label={t("settings.showShortNumbers")} hint={t("settings.showShortNumbersHint")}>
+                <Switch checked={(settings.data?.show_short_numbers as boolean | undefined) ?? false} label={t("settings.showShortNumbers")}
+                  onChange={(v) => api.put("/api/settings", { show_short_numbers: v }).then(() => qc.invalidateQueries(), (e) => toast.error(e.message))} />
+              </Line>
               <Line label={t("settings.hideEmptyGroups")} hint={t("settings.hideEmptyGroupsHint")}>
                 <Switch checked={(settings.data?.hide_empty_groups as boolean | undefined) ?? true} label={t("settings.hideEmptyGroups")}
                   onChange={(v) => api.put("/api/settings", { hide_empty_groups: v }).then(() => qc.invalidateQueries(), (e) => toast.error(e.message))} />

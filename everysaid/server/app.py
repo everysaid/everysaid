@@ -389,7 +389,8 @@ def create_app(archive_path=None, auth_path=None):
                                        unnamed=bool(store.setting("show_unnamed", False)) if unnamed is None else unnamed,
                                        min_messages=max(0, min_messages), max_messages=max_messages, with_services=split(services),
                                        without_services=split(no_services), people_only=only,
-                                       empty_groups=not store.setting("hide_empty_groups", True))}
+                                       empty_groups=not store.setting("hide_empty_groups", True),
+                                       short=bool(store.setting("show_short_numbers", False)))}
 
     @app.get("/api/chats/{chat_id}")
     def chat(chat_id: str, request: Request):
@@ -538,6 +539,7 @@ def create_app(archive_path=None, auth_path=None):
         tagged = labels.by_person(store, suggested=bool(store.setting("show_tone", False)))
         only = {pid for pid, ls in tagged.items() if any(x["id"] == label for x in ls)} if label else None
         out = queries.people_list(store, q, min(limit, 5000), offset, unnamed=bool(store.setting("show_unnamed", False)) or bool(label),
+                                  short=bool(store.setting("show_short_numbers", False)) or bool(label),
                                   only=only)
         for p in out["items"]:
             p["labels"] = tagged.get(p["id"], [])
@@ -715,7 +717,8 @@ def create_app(archive_path=None, auth_path=None):
     def calls(chat: str | None = None, missed: bool = False, service: str | None = None, before: int | None = None,
               limit: int = 60):
         return queries.calls(store, chat_id=chat, missed=missed, service=service, before=before, limit=min(limit, 200),
-                             unnamed=bool(store.setting("show_unnamed", False)))
+                             unnamed=bool(store.setting("show_unnamed", False)),
+                             short=bool(store.setting("show_short_numbers", False)))
 
     @app.get("/api/media")
     def media(chat: str | None = None, kind: str = "all", before: int | None = None, limit: int = 60,
@@ -953,7 +956,7 @@ def create_app(archive_path=None, auth_path=None):
     def settings_put(body: dict = Body(...)):
         for k, v in body.items():
             if k in ("theme", "language", "push_preview", "density", "send_enter", "unread_since", "show_unnamed",
-                     "show_tone", "mcp_labels", "hide_empty_groups"):
+                     "show_tone", "mcp_labels", "hide_empty_groups", "show_short_numbers"):
                 changes.set_setting(store, k, v)
             elif k == "hidden_services" and isinstance(v, list) and all(isinstance(x, str) for x in v):
                 changes.set_setting(store, k, v)

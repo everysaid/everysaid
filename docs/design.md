@@ -356,6 +356,9 @@ Everything above is built, with these differences from the draft:
   or either, and a label.
 - **Hidden services** (Settings → Services, `hidden_services`): nothing of them shows anywhere
   (chats, streams, calls, search, media, the day's timeline); the archive keeps all of it.
+- **Short numbers** (five digits or fewer: carriers, banks, services) stay out of the chats, calls
+  and people unless the user shows them (Settings → Names, `show_short_numbers`, off by default); a
+  person is left out only when every handle of theirs is one; a search still finds them.
 - **Groups with no one else** (everyone left, or the source listed no members) stay out of the chat
   list unless the user shows them (Settings → Names, `hide_empty_groups`, on by default); a search
   still finds them, and one with an unread message still shows.
