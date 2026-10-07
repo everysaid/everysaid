@@ -8,6 +8,12 @@ import { execFileSync } from "node:child_process";
 const DEMO = process.env.DEMO_DIR ?? "/tmp/chr-demo";
 export const env = { ...process.env, EVERYSAID_DATA: `${DEMO}/data`, EVERYSAID_CACHE: `${DEMO}/cache`, EVERYSAID_CONFIG: `${DEMO}/config` };
 
+/** The everysaid command: EVERYSAID_CMD (e.g. a built binary), else the project's own through uv. */
+export function everysaid(...args: string[]) {
+  const cmd = (process.env.EVERYSAID_CMD ?? "uv run everysaid").split(" ");
+  return execFileSync(cmd[0], [...cmd.slice(1), ...args], { cwd: "..", env }).toString();
+}
+
 export function totp(secret: string, offset = 0) {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
   let bits = "";
@@ -21,7 +27,7 @@ export function totp(secret: string, offset = 0) {
 }
 
 export function setupLink() {
-  const out = execFileSync("uv", ["run", "everysaid", "user", "link", "--user", "1"], { cwd: "..", env }).toString();
+  const out = everysaid("user", "link", "--user", "1");
   const url = new URL(out.split("\n")[0]);
   return url.pathname + url.hash;
 }

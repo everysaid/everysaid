@@ -1,19 +1,17 @@
 import { expect, test, type Page } from "@playwright/test";
-import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
+import { everysaid } from "./demo";
 
 const SHOTS = process.env.SHOTS ?? "/tmp/chr-shots";
 mkdirSync(SHOTS, { recursive: true });
-const DEMO = process.env.DEMO_DIR ?? "/tmp/chr-demo";
-const env = { ...process.env, EVERYSAID_DATA: `${DEMO}/data`, EVERYSAID_CACHE: `${DEMO}/cache`, EVERYSAID_CONFIG: `${DEMO}/config` };
 
 function setupLink(existing: boolean) {
-  const out = execFileSync("uv", ["run", "everysaid", "user", "link", ...(existing ? ["--user", "1"] : [])], { cwd: "..", env }).toString();
+  const out = everysaid("user", "link", ...(existing ? ["--user", "1"] : []));
   return new URL(out.split("\n")[0]).pathname + new URL(out.split("\n")[0]).hash;
 }
 
 function hasUser() {
-  return execFileSync("uv", ["run", "everysaid", "user", "list"], { cwd: "..", env }).toString().startsWith("1\t");
+  return everysaid("user", "list").startsWith("1\t");
 }
 
 async function authenticator(page: Page) {
