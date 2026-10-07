@@ -10,12 +10,14 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 
 	"everysaid/internal/config"
 	"everysaid/internal/db"
@@ -142,11 +144,19 @@ func fileExt(p *tg.Photo, d *tg.Document) string {
 	}
 	for _, a := range d.Attributes {
 		if f, ok := a.(*tg.DocumentAttributeFilename); ok {
-			return path.Ext(strings.ReplaceAll(f.FileName, `\`, "/"))
+			// the sender's name for it: only an extension made of letters and digits becomes part of
+			// the path (not ":", "?", a control character, which some file systems refuse or read
+			// otherwise)
+			if ext := path.Ext(strings.ReplaceAll(f.FileName, `\`, "/")); plainExt.MatchString(ext) {
+				return ext
+			}
+			return ""
 		}
 	}
 	return ""
 }
+
+var plainExt = regexp.MustCompile(`^\.[A-Za-z0-9]{1,16}$`)
 
 // strippedHeader is the JPEG header Telegram strips from inline thumbnails (Telethon's
 // stripped_photo_to_jpg, from Telegram Desktop).
@@ -324,8 +334,19 @@ func mediaRun(ctx context.Context, c *conn, dryRun bool, only map[int64]bool, ou
 				}
 				rel := fmt.Sprintf("%d/%d%s", chatID, m.GetID(), fileExt(p, d))
 				dest := filepath.Join(MediaPath(), filepath.FromSlash(rel))
-				if _, err := download(ctx, c.api, m, dest+".part"); err != nil {
-					return err
+				wrote, err := download(ctx, c.api, m, dest+".part")
+				if err != nil {
+					if _, flood := tgerr.AsFloodWait(err); flood || ctx.Err() != nil {
+						return err
+					}
+					// one file Telegram will not give does not keep the others back; it is tried again
+					// the next time
+					os.Remove(dest + ".part")
+					fmt.Fprintf(out, "\n%s\n", out.say("{file}: not downloaded ({e})", map[string]any{"file": rel, "e": err.Error()}))
+					continue
+				}
+				if !wrote {
+					continue // a picture without a size to download
 				}
 				if err := os.Rename(dest+".part", dest); err != nil {
 					return err

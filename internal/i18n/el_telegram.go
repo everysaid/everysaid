@@ -20,6 +20,7 @@ func init() {
 		"{n} new messages in {db}":                                    "{n} νέα μηνύματα στο {db}",
 		"{n} files, {gb} GB, in {chats} chats":                        "{n} αρχεία, {gb} GB, σε {chats} συνομιλίες",
 		"{n} downloaded into {folder}":                                "{n} κατέβηκαν στο {folder}",
+		"{file}: not downloaded ({e})":                                "{file}: δεν κατέβηκε ({e})",
 		"[telegram] media = false in config: no media are downloaded": "[telegram] media = false στις ρυθμίσεις: δεν κατεβαίνουν αρχεία",
 		"Telegram live":                                               "Telegram ζωντανά",
 		"Not signed in to Telegram yet (everysaid telegram-sync --save-credentials, --login)": "Δεν έχει γίνει ακόμα σύνδεση στο Telegram (everysaid telegram-sync --save-credentials, --login)",

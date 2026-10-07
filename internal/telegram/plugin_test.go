@@ -257,8 +257,9 @@ func TestSendAndRead(t *testing.T) {
 	if _, err := cn.dialogs(newTestCtx()); err != nil {
 		t.Fatal(err)
 	}
-	lives.Store(in.iid, cn)
-	defer lives.Delete(in.iid)
+	_, release, _ := one.take(newTestCtx(), false)
+	defer release()
+	defer one.share(cn)()
 	var p Plugin
 	res, err := p.Send(newTestCtx(), c, plugins.Conversation{ID: conv, Key: "2", Service: "telegram"}, "🙂 @Bob, hi",
 		&plugins.Reply{ID: 1, Key: "7"}, []plugins.Mention{{Start: 2, Length: 4, AddressID: bobID}}, nil)
