@@ -46,6 +46,7 @@ type smsRec struct {
 	kind     string
 	text     string // "" is none
 	key      string
+	code     string // the source's own service, where it is not one we know
 }
 
 // attributedText is the plain text of an NSAttributedString typedstream (sms.db attributedBody).
@@ -157,8 +158,9 @@ func readIphoneSMS(path string) []*smsRec {
 			mem = []archive.Handle{*sender}
 		}
 		service, ok := services[str(r["service"])]
-		if !ok {
-			panic(fmt.Errorf("sms.db: unknown service %q", str(r["service"])))
+		code := ""
+		if !ok { // a service of a later iOS: taken as SMS (no key), its name kept as the message's code
+			service, code = "sms", "sms.db:"+str(r["service"])
 		}
 		if service == "sms" && (truthy(r["cache_has_attachments"]) || (chat != nil && toInt(chat["style"]) == groupStyle)) {
 			service = "mms"
@@ -194,7 +196,7 @@ func readIphoneSMS(path string) []*smsRec {
 			key = guid
 		}
 		recs = append(recs, &smsRec{archive.Iphone() + "/sms", guid, r, service, ts, truthy(r["is_from_me"]), sender, mem,
-			kind, cleanText(text), key})
+			kind, cleanText(text), key, code})
 	})
 	return recs
 }
@@ -214,7 +216,7 @@ func readAndroidSMS(path string, own map[archive.Handle]bool, device string) []*
 		}
 		date, _ := pyInt(r["date"])
 		recs = append(recs, &smsRec{device + "/sms", pyStr(r["_id"]), r, "sms", date, outgoing, sender,
-			[]archive.Handle{addr}, "text", cleanText(str(r["body"])), ""})
+			[]archive.Handle{addr}, "text", cleanText(str(r["body"])), "", ""})
 	}
 	parts, addrs := map[any][]row{}, map[any][]row{}
 	for _, p := range maps(d, "SELECT * FROM mms_part ORDER BY CAST(seq AS INTEGER), CAST(_id AS INTEGER)") {
@@ -260,7 +262,7 @@ func readAndroidSMS(path string, own map[archive.Handle]bool, device string) []*
 		}
 		date, _ := pyInt(r["date"])
 		recs = append(recs, &smsRec{device + "/mms", pyStr(r["_id"]), r, "mms", date * 1000, outgoing, sender, members,
-			kind, cleanText(text.String()), ""})
+			kind, cleanText(text.String()), "", ""})
 	}
 	return recs
 }
@@ -497,6 +499,9 @@ func SMS(a *archive.Archive, out func(string), opt SMSOptions) (err error) {
 		var x *archive.Extras
 		if r.source == iph+"/sms" {
 			x = imessageExtras(r.raw)
+			if r.code != "" && x.SubtypeCode == "" {
+				x.SubtypeCode = r.code
+			}
 		}
 		a.AddMessage(sid, r.rowKey, archive.Message{Service: r.service, ConversationID: conv, TS: r.ts, Outgoing: r.outgoing,
 			SenderID: senderID, Kind: r.kind, Text: r.text, Key: r.key, Extras: x})

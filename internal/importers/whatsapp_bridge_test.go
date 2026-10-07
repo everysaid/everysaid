@@ -169,9 +169,11 @@ func TestBridgeChangesToMessagesAlreadyThere(t *testing.T) {
 	db.Exec(d, "UPDATE messages SET deleted = 1 WHERE id = 'M2'")
 	db.Exec(d, "UPDATE reactions SET emoji = '😂' WHERE NOT is_from_me") // changed
 	db.Exec(d, "UPDATE reactions SET emoji = '' WHERE is_from_me")      // taken back
-	eq(t, "changes", runBridge(t, a, path), map[string]int{"edited": 1, "deleted": 1, "reactions": 2})
-	eq(t, "M1", msgRow(a, "M1", "text, edited"), []any{"see you at 8", int64(1)}) // the text the archive first had
+	eq(t, "changes", runBridge(t, a, path), map[string]int{"text": 1, "edited": 1, "deleted": 1, "reactions": 2})
+	eq(t, "M1", msgRow(a, "M1", "text, edited"), []any{"see you at 9", int64(1)}) // the new text, as WhatsApp shows it
 	eq(t, "M2", msgRow(a, "M2", "text, deleted"), []any{"oops", int64(1)})        // kept, marked
+	eq(t, "found by the new", searchKeys(a, "9"), []string{"M1"})
+	eq(t, "unchanged again", runBridge(t, a, path), map[string]int{})
 	eq(t, "reactions", reactionsOf(a, "M1"), [][2]any{{"😂", nil}})
 	eq(t, "again", runBridge(t, a, path), map[string]int{})
 }

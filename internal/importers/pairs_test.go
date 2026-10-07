@@ -182,3 +182,22 @@ CREATE TABLE message (ROWID INTEGER PRIMARY KEY, guid TEXT, date INTEGER, is_fro
 	eq(t, "tapbacks", db.Strs(a.Tx(), "SELECT r.emoji FROM reaction r JOIN message m ON m.id = r.message_id "+
 		"WHERE m.key = 'B' ORDER BY r.emoji"), []string{"❤️"})
 }
+
+// TestSMSUnknownService: a service sms.db names that the importer does not know (a later iOS's)
+// does not stop the import: its messages come in as SMS, the service's own name kept as their
+// code.
+func TestSMSUnknownService(t *testing.T) {
+	a, _ := newArchive(t)
+	path := iphoneSMSDB(t, t.TempDir())
+	d, err := db.Open(path)
+	must(t, err)
+	db.Exec(d, "INSERT INTO message VALUES (2, 'G2', ?, 1, 'Satellite', 'all fine here', NULL, 1, 0, 0, NULL, NULL, 0)",
+		(pairTS/1000-archive.AppleEpoch+60)*1_000_000_000)
+	d.Close()
+	must(t, SMS(a, nil, SMSOptions{IphoneDB: path, Exports: []archive.AndroidExport{}}))
+	eq(t, "messages", a.Int("SELECT count(*) FROM message"), int64(2))
+	var service, code string
+	a.Row("SELECT s.name, m.subtype_code FROM message m JOIN service s ON s.id = m.service_id WHERE m.text = 'all fine here'",
+		nil, &service, &code)
+	eq(t, "kept as", []string{service, code}, []string{"sms", "sms.db:Satellite"})
+}

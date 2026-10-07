@@ -176,28 +176,36 @@ func bridgeRead(bridge *sql.DB) ([]string, map[string]readAt) {
 
 type reactionKey struct{ chat, message string }
 
-// bridgeChanges: what the bridge saw happen to messages the archive already has: edits and
-// deletions by their sender (marked; the text stays as the archive first had it), and reactions as
+// bridgeChanges: what the bridge saw happen to messages the archive already has (from it or from
+// the iPhone: the same stanza id): an edit's new text, marked edited; a deletion marked (the text
+// kept); and reactions as
 // they are now (one per person: changed, added, or removed once taken back). Returns the counts.
 func bridgeChanges(a *archive.Archive, bridge *sql.DB, person *waPeople, own map[archive.Handle]bool,
 	order []reactionKey, reactions map[reactionKey][]bridgeReaction) map[string]int {
 	out := map[string]int{}
 	cols := columns(bridge, "messages")
 	if cols["edited"] && cols["deleted"] {
-		for _, r := range maps(bridge, "SELECT id, edited, deleted FROM messages WHERE edited OR deleted") {
+		for _, r := range maps(bridge, "SELECT "+selectAll(bridge, "messages", "")+" FROM messages WHERE edited OR deleted") {
 			key, isStr := r["id"].(string)
 			if !isStr {
 				continue
 			}
 			mid, ok := a.MessageByKey("whatsapp", key, 0)
-			if ok && mid != 0 {
-				for _, flag := range []string{"edited", "deleted"} {
-					if truthy(r[flag]) {
-						if n, _ := a.Exec("UPDATE message SET "+flag+" = 1 WHERE id = ? AND NOT "+flag, mid).RowsAffected(); n > 0 {
-							out[flag]++
-						}
-					}
+			if !ok || mid == 0 {
+				continue
+			}
+			c := Change{Edited: truthy(r["edited"]), Deleted: truthy(r["deleted"])}
+			if c.Edited && !c.Deleted { // content is the last version: the text as the import makes it
+				t := whatsappBridgeExtras(r, nil).Text
+				if t == "" {
+					t = str(r["content"])
 				}
+				if t != "" {
+					c.Text = &t
+				}
+			}
+			for _, k := range ApplyChange(a, mid, c) {
+				out[k]++
 			}
 		}
 	}

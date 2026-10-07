@@ -5,6 +5,7 @@ package importers
 import (
 	"os"
 	"testing"
+	"time"
 
 	"everysaid/internal/archive"
 	"everysaid/internal/config"
@@ -72,4 +73,31 @@ func TestViberTokenTime(t *testing.T) {
 	eq(t, "date 0.0", tokenTime(float64(0), token), want)
 	eq(t, "a date", tokenTime(float64(800_000_000), token), int64(800_000_000+archive.AppleEpoch)*1000)
 	eq(t, "no token", tokenTime(int64(0), 0), int64(0))
+}
+
+// TestMediaSameSizeAnotherFile: a source path linked before may hold another file now (a new
+// export whose part numbers start again); one of the same size is not taken for the old one: its
+// hash is reused only while the file is the stored one (same size and time), else read again.
+func TestMediaSameSizeAnotherFile(t *testing.T) {
+	a, _ := newArchive(t)
+	s := NewStore(a)
+	s.Root = t.TempDir()
+	dir := t.TempDir()
+	path := dir + "/part-1"
+	src := a.Source("test/mms", "test.db", "", dir)
+	conv := a.Conversation("sms", []archive.Handle{archive.H("phone", "+15557770001")}, "", "")
+	m1 := a.AddMessage(src, "1", archive.Message{Service: "sms", ConversationID: conv, TS: 1, Kind: "image"})
+	m2 := a.AddMessage(src, "2", archive.Message{Service: "sms", ConversationID: conv, TS: 2, Kind: "image"})
+	must(t, os.WriteFile(path, []byte("first picture"), 0o600))
+	s.Link("test/mms", src, path, "part-1", m1)
+	must(t, os.Remove(path))
+	must(t, os.WriteFile(path, []byte("other picture"), 0o600)) // the same size
+	future := time.Now().Add(time.Hour)
+	must(t, os.Chtimes(path, future, future))
+	s.Link("test/mms", src, path, "part-1", m2)
+	hashes := db.Strs(a.Tx(), "SELECT sha256 FROM attachment ORDER BY message_id")
+	if len(hashes) != 2 || hashes[0] == hashes[1] {
+		t.Fatalf("two files of the same size at one path: hashes %v", hashes)
+	}
+	eq(t, "the second's", hashes[1], sha256File(path))
 }

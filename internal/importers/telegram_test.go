@@ -3,8 +3,10 @@ package importers
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"everysaid/internal/archive"
 	"everysaid/internal/config"
 	"everysaid/internal/db"
 	"everysaid/internal/telegramstore"
@@ -61,8 +63,8 @@ func msgType(a interface {
 
 // TestTelegramChangesToMessagesThere: the live connection writes an edited message (and its
 // reactions as they are now) over its row in telegram.db and imports it at once; a message already
-// in the archive is marked edited, its text kept as the archive first had it (as with WhatsApp),
-// and its reactions follow what Telegram says now, also once they are taken back.
+// in the archive takes the new text (found by search under it, no longer under the old), marked
+// edited, and its reactions follow what Telegram says now, also once they are taken back.
 func TestTelegramChangesToMessagesThere(t *testing.T) {
 	a, _ := newArchive(t)
 	path := filepath.Join(t.TempDir(), "telegram.db")
@@ -77,18 +79,20 @@ func TestTelegramChangesToMessagesThere(t *testing.T) {
 	}
 	edited := func() int64 { return a.Int("SELECT edited FROM message WHERE key = '11'") }
 
-	set(M{"_": "Message", "id": 11, "message": "theirs, changed", "from_id": M{"user_id": tgMaria}, "edit_date": 1_790_000_500,
+	set(M{"_": "Message", "id": 11, "message": "corrected", "from_id": M{"user_id": tgMaria}, "edit_date": 1_790_000_500,
 		"reactions": M{"_": "MessageReactions", "results": []M{{"reaction": M{"_": "ReactionEmoji", "emoticon": "👍"}, "count": 1,
 			"chosen_order": 0}}, "recent_reactions": []M{{"peer_id": M{"user_id": tgMe}, "reaction": M{"_": "ReactionEmoji",
 			"emoticon": "👍"}, "my": true}}}})
 	must(t, Telegram(a, nil, TelegramOptions{DBPath: path, Only: only}))
 	eq(t, "edited", edited(), int64(1))
-	eq(t, "text kept", msgRow(a, "11", "text")[0], "theirs")
+	eq(t, "new text", msgRow(a, "11", "text")[0], "corrected")
+	eq(t, "found by the new", searchKeys(a, "corrected"), []string{"11"})
+	eq(t, "not by the old", len(searchKeys(a, "theirs")), 0)
 	eq(t, "reactions", reactions(), []string{"👍  1"})
 	must(t, Telegram(a, nil, TelegramOptions{DBPath: path})) // again: nothing changes
 	eq(t, "reactions again", reactions(), []string{"👍  1"})
 
-	set(M{"_": "Message", "id": 11, "message": "theirs, changed", "from_id": M{"user_id": tgMaria}, "edit_date": 1_790_000_500,
+	set(M{"_": "Message", "id": 11, "message": "corrected", "from_id": M{"user_id": tgMaria}, "edit_date": 1_790_000_500,
 		"reactions": M{"_": "MessageReactions", "results": []M{}}})
 	must(t, Telegram(a, nil, TelegramOptions{DBPath: path, Only: only}))
 	eq(t, "taken back", len(reactions()), 0)
@@ -98,4 +102,17 @@ func TestTelegramChangesToMessagesThere(t *testing.T) {
 		"out": true, "edit_date": 1_790_000_600, "edit_hide": true}), tgMaria)
 	must(t, Telegram(a, nil, TelegramOptions{DBPath: path}))
 	eq(t, "hidden edit", a.Int("SELECT edited FROM message WHERE key = '10' AND outgoing"), int64(0))
+}
+
+// searchKeys are the keys of the messages the search tables find for a word, by words and by
+// trigrams (each must give the same, for a word long enough to have trigrams).
+func searchKeys(a *archive.Archive, word string) []string {
+	words := db.Strs(a.Tx(), "SELECT m.key FROM message m WHERE m.id IN (SELECT rowid FROM message_fts "+
+		"WHERE message_fts MATCH ?) ORDER BY m.key", word)
+	tri := db.Strs(a.Tx(), "SELECT m.key FROM message m WHERE m.id IN (SELECT rowid FROM message_tri "+
+		"WHERE message_tri MATCH ?) ORDER BY m.key", word)
+	if len([]rune(word)) >= 3 && strings.Join(words, ",") != strings.Join(tri, ",") { // trigrams: 3 or more
+		return append(words, "≠ trigrams: "+strings.Join(tri, ","))
+	}
+	return words
 }
