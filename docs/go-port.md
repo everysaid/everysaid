@@ -28,9 +28,10 @@ part of the distribution.
 
 ## Rules
 
-- **A faithful port.** Each Go file says at the top which Python file it ports. Same behaviour,
+- **A correct port.** Each Go file says at the top which Python file it ports. Same behaviour,
   same SQL, same JSON shapes (keys, nulls, order of lists), same edge cases; the Python is the
-  specification. Where Python's semantics differ from Go's (`str.lower`, `\s` and `\d` being
+  specification where it is right. Not bug for bug: where the Python is wrong, the Go does what is
+  right and sensible (as other messaging clients do), and the report lists each such case. Where Python's semantics differ from Go's (`str.lower`, `\s` and `\d` being
   Unicode, `isalnum`, integer division of negatives, `round`, sorting stability, dict order),
   match Python's. Comments keep the project's style: plain prose saying why, not what.
 - **The archive does not change.** Same schema, same files, same keyring names, same folders: the
