@@ -10,18 +10,27 @@ import { keepPeoplePlace, peoplePlace, type PeoplePlace } from "@/lib/memory";
 import { Avatar, Empty, LoadingBar, Spinner } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { MergeSuggestion, WHY, type Suggestion } from "@/components/MergeSuggestion";
+import { labelName, useLabels } from "@/components/Labels";
+import { cn } from "@/lib/utils";
+import type { LabelKind } from "@/lib/api";
+
+type Row = { id: number; name: string; handles: number;
+  labels: { id: number; kind: LabelKind; key: string | null; name: string | null; state: "yes" | "suggested" }[] };
 
 export function PeoplePage() {
   const { t } = useTranslation();
   const [was] = useState(peoplePlace);       // as it was left (this tab), coming back to it
   const [q, setQ] = useState(was?.q ?? "");
   const dq = useDebounced(q, 200);
+  const [label, setLabel] = useState<number | undefined>(was?.label);
+  const labels = useLabels();
+  const used = (labels.data?.items ?? []).filter((l) => l.uses.yes + l.uses.suggested > 0 || l.id === label);
   const list = useInfiniteQuery({
-    queryKey: ["people", dq],
+    queryKey: ["people", dq, label],
     initialPageParam: 0,
     // coming back: the first page as long as what was loaded then, so the row left in view is there
-    queryFn: ({ pageParam }) => api.get<{ items: { id: number; name: string; handles: number }[]; total: number }>(`/api/people${qs({
-      q: dq, limit: pageParam === 0 && was && dq === was.q ? Math.max(200, was.loaded) : 200, offset: pageParam })}`),
+    queryFn: ({ pageParam }) => api.get<{ items: Row[]; total: number }>(`/api/people${qs({
+      q: dq, label, limit: pageParam === 0 && was && dq === was.q ? Math.max(200, was.loaded) : 200, offset: pageParam })}`),
     getNextPageParam: (last, pages) => {
       const n = pages.reduce((a, p) => a + p.items.length, 0);
       return n < last.total ? n : undefined;
@@ -30,7 +39,7 @@ export function PeoplePage() {
   const people = list.data?.pages.flatMap((p) => p.items) ?? [];
   const scroller = useRef<HTMLElement | null>(null);
   const remember = useCallback(() => {
-    const place: PeoplePlace = { q, loaded: people.length };
+    const place: PeoplePlace = { q, label, loaded: people.length };
     const el = scroller.current;
     if (el) {
       const edge = el.getBoundingClientRect().top;
@@ -39,10 +48,10 @@ export function PeoplePage() {
                                offset: Math.round(edge - first.getBoundingClientRect().top) };
     } else if (was?.q === q) place.top = was.top;
     keepPeoplePlace(place);
-  }, [q, people.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [q, label, people.length]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(remember, [remember]);
   const start = useMemo(() => {
-    if (!was?.top || dq !== was.q) return 0;
+    if (!was?.top || dq !== was.q || label !== was.label) return 0;
     const found = people.findIndex((p) => p.id === was.top!.id);
     const i = found >= 0 ? found : Math.min(was.top.index, people.length - 1);     // gone (merged): about there
     return i >= 0 ? { index: i, align: "start" as const, offset: was!.top!.offset } : 0;
@@ -70,8 +79,19 @@ export function PeoplePage() {
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("people.search")}
             className="h-10 w-full rounded-full bg-panel-2 pl-9 pr-4 text-sm outline-none placeholder:text-muted focus:ring-2 focus:ring-accent/30" />
         </div>
+        {used.length > 0 && (
+          <div className="mt-2 flex gap-1.5 overflow-x-auto pb-0.5" data-label-filter>
+            {used.map((l) => (
+              <button key={l.id} type="button" onClick={() => setLabel(label === l.id ? undefined : l.id)} aria-pressed={label === l.id}
+                data-filter={l.key ?? l.name}
+                className={cn("shrink-0 rounded-full border px-3 py-1 text-xs", label === l.id ? "border-accent bg-accent text-accent-fg" : "border-line hover:bg-panel-2")}>
+                {labelName(t, l)}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
-      {!dq && (sugg.data?.items.length ?? 0) > 0 && (
+      {!dq && !label && (sugg.data?.items.length ?? 0) > 0 && (
         <div className="border-b border-line bg-panel px-4 pb-3 md:px-6">
           <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted"><Sparkles className="size-3.5" />{t("people.suggestions")}
             <Link to="/people/merge" className="ml-auto normal-case tracking-normal text-accent hover:underline" data-alike-all>{t("people.alikeAll")}</Link>
@@ -107,6 +127,10 @@ export function PeoplePage() {
             <Link to="/people/$personId" params={{ personId: String(p.id) }} data-person={p.id} data-index={i} className="mx-auto flex max-w-3xl items-center gap-3 px-4 py-2 hover:bg-panel-2 md:px-6">
               <Avatar name={p.name} size={40} />
               <span className="min-w-0 flex-1 truncate">{p.name}</span>
+              {p.labels.slice(0, 3).map((l) => (
+                <span key={l.id} className={cn("hidden shrink-0 rounded-full px-2 py-0.5 text-[11px] sm:inline",
+                  l.state === "yes" ? "bg-accent/12 text-fg" : "border border-dashed border-line text-muted")}>{labelName(t, l)}</span>
+              ))}
               {p.handles > 1 && <span className="text-xs text-muted">{p.handles}</span>}
             </Link>
           )} />

@@ -1,14 +1,16 @@
 import { Fragment, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { BookUser, ChevronDown, Images, ListChecks, Play, Plus, Radio, Settings2, Smartphone, Sparkles, Trash2 } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
+import { BookUser, ChevronDown, Images, ListChecks, Pause, Play, Plus, Radio, Settings2, Smartphone, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api, type PluginChat, type PluginInstance, type PluginManifest, type SettingField } from "@/lib/api";
 import { bytes, dateOnly, isoDay, number, relative } from "@/lib/format";
 import { onEvent } from "@/lib/events";
 import { service } from "@/lib/services";
 import { cn } from "@/lib/utils";
-import { Button, Card, Dialog, Field, Input, Section, Spinner, Switch } from "@/components/ui";
+import { Button, Card, Dialog, Field, Input, Section, Segmented, Spinner, Switch } from "@/components/ui";
+import { sourcesRoute } from "@/router";
 import { PageHeader } from "@/components/PageHeader";
 import { DateField } from "@/components/DateField";
 
@@ -25,13 +27,23 @@ export function SourcesPage() {
   const instances = useQuery({ queryKey: ["plugins", lang], queryFn: () => api.get<{ items: PluginInstance[] }>(`/api/plugins?lang=${lang}`), refetchInterval: 15000 });
   const catalog = useQuery({ queryKey: ["catalog", lang], queryFn: () => api.get<{ items: PluginManifest[] }>(`/api/plugins/catalog?lang=${lang}`), staleTime: Infinity });
   const [adding, setAdding] = useState(false);
+  const navigate = useNavigate();
+  const tab = sourcesRoute.useSearch().tab ?? "source";
+  const count = (kind: string) => instances.data?.items.filter((i) => i.kind === kind).length ?? 0;
   return (
     <div className="flex h-full flex-col">
       <PageHeader title={t("sources.title")} subtitle={t("sources.subtitle")}
         actions={<Button variant="primary" size="sm" onClick={() => setAdding(true)}><Plus className="size-4" />{t("sources.add")}</Button>} />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl space-y-8 p-4 md:p-6">
-          {instances.isLoading ? <Spinner /> : KINDS.map(({ kind, icon: Icon }) => {
+          <div className="-mx-4 overflow-x-auto px-4 md:mx-0 md:px-0">
+            <Segmented value={tab} onChange={(v) => navigate({ to: "/sources", search: { tab: v === "source" ? undefined : v }, replace: true })}
+              options={[...KINDS.map(({ kind, icon: Icon }) => ({ value: kind as string, label: (
+                <span className="flex items-center gap-1.5 whitespace-nowrap"><Icon className="size-3.5" />{t(`sources.tab.${kind}`)}
+                  {count(kind) > 0 && <span className="text-muted">{count(kind)}</span>}</span>) })),
+                { value: "devices", label: <span className="flex items-center gap-1.5 whitespace-nowrap"><Smartphone className="size-3.5" />{t("sources.tab.devices")}</span> }]} />
+          </div>
+          {instances.isLoading ? <Spinner /> : KINDS.filter(({ kind }) => kind === tab).map(({ kind, icon: Icon }) => {
             const list = instances.data?.items.filter((i) => i.kind === kind) ?? [];
             return (
               <Section key={kind} title={<span className="flex items-center gap-2"><Icon className="size-4" />{t(`sources.${kind}`)}</span>}>
@@ -41,7 +53,7 @@ export function SourcesPage() {
               </Section>
             );
           })}
-          <Devices />
+          {tab === "devices" && <Devices />}
         </div>
       </div>
       {catalog.data && <AddDialog open={adding} onOpenChange={setAdding} catalog={catalog.data.items} />}
@@ -86,7 +98,7 @@ function InstanceCard({ i, manifest }: { i: PluginInstance; manifest?: PluginMan
             <span className="font-semibold">{i.label}</span>
             <span className="text-xs text-muted">{i.name}</span>
             {i.is_default && <span className="rounded-full bg-accent/15 px-2 py-0.5 text-[11px] font-medium text-accent">{t("sources.default")}</span>}
-            {i.live && <span className="flex items-center gap-1 rounded-full bg-ok/15 px-2 py-0.5 text-[11px] font-medium text-ok"><Radio className="size-3" />{t("sources.liveBadge")}</span>}
+            {i.live && <span className="flex items-center gap-1 rounded-full bg-ok/15 px-2 py-0.5 text-[11px] font-medium text-ok"><Radio className="size-3" />{i.kind === "analysis" ? t("sources.analysisOn") : t("sources.liveBadge")}</span>}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
             <span className={cn("flex items-center gap-1", i.ready ? "text-ok" : "text-danger")}>
@@ -114,10 +126,15 @@ function InstanceCard({ i, manifest }: { i: PluginInstance; manifest?: PluginMan
             {!i.running && <Play className="size-3.5" />}{i.running ? t("sources.running") : t("sources.run")}
           </Button>
         )}
-        {manifest?.actions.map((a) => (
+        {i.kind === "analysis" && (
+          <Button size="sm" variant={i.live ? "outline" : "primary"} onClick={() => live.mutate(!i.live)} disabled={!i.enabled || !i.ready} data-analysis-toggle>
+            {i.live ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}{i.live ? t("sources.analysisPause") : t("sources.analysisStart")}
+          </Button>
+        )}
+        {manifest?.actions.filter((a) => !i.idle_actions?.includes(a.id)).map((a) => (
           <Button key={a.id} size="sm" variant="outline" onClick={() => start(a.id)} disabled={!!i.running || !i.enabled}>{a.label}</Button>
         ))}
-        {i.live_capable && (
+        {i.live_capable && i.kind !== "analysis" && (
           <label className="flex items-center gap-2 px-2 text-sm">
             <Switch checked={i.live} onChange={(v) => live.mutate(v)} disabled={!i.enabled} /> {t("sources.live")}
           </label>
@@ -231,6 +248,7 @@ function SettingsDialog({ open, onOpenChange, manifest, instance }: { open: bool
 function AddDialog({ open, onOpenChange, catalog }: { open: boolean; onOpenChange: (o: boolean) => void; catalog: PluginManifest[] }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const [chosen, setChosen] = useState<PluginManifest | null>(null);
   const [label, setLabel] = useState("");
   const [values, setValues] = useState<Record<string, unknown>>({});
@@ -246,7 +264,12 @@ function AddDialog({ open, onOpenChange, catalog }: { open: boolean; onOpenChang
   };
   const add = useMutation({
     mutationFn: () => api.post("/api/plugins", { plugin: chosen!.id, label, settings: values, secrets }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["plugins"] }); onOpenChange(false); toast.success(t("common.done")); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["plugins"] });
+      onOpenChange(false);
+      toast.success(t("common.done"));
+      navigate({ to: "/sources", search: { tab: chosen!.kind === "source" ? undefined : chosen!.kind }, replace: true });   // where it now is
+    },
     onError: (e: Error) => toast.error(e.message),
   });
   return (

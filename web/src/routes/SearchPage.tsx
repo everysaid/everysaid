@@ -71,7 +71,7 @@ export function SearchPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <PageHeader title={t("nav.search")} />
+      <PageHeader title={t("nav.search")} back={search.chat ? `/chat/${search.chat}` : undefined} />
       <div className="space-y-3 border-b border-line bg-panel px-4 pb-3 md:px-6">
         <div className="relative">
           <Search className="pointer-events-none absolute left-3.5 top-1/2 size-5 -translate-y-1/2 text-muted" />

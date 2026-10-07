@@ -313,7 +313,7 @@ export interface SettingField {
 export interface PluginManifest {
   id: string;
   name: string;
-  kind: "source" | "library" | "contacts";
+  kind: "source" | "library" | "contacts" | "analysis";
   services: string[];
   description: string;
   modes: string[];
@@ -341,7 +341,7 @@ export interface PluginChat {
 export interface PluginInstance {
   id: number;
   plugin: string;
-  kind: "source" | "library" | "contacts";
+  kind: "source" | "library" | "contacts" | "analysis";
   label: string;
   settings: Record<string, unknown>;
   enabled: boolean;
@@ -359,6 +359,7 @@ export interface PluginInstance {
   log: string[];
   bar: string;                    // a progress bar's line, drawn in place under the log
   asks: { key: string; label: string }[];      // typed in for each run, kept nowhere (a password)
+  idle_actions?: string[];                     // actions with nothing to do now: not shown
   info: { label: string; value: string }[];    // a few facts for its card (where its backup is, of when)
 }
 

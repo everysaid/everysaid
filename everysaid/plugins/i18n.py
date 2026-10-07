@@ -210,7 +210,7 @@ EL = {
     "{model}: {e}": "{model}: {e}",
     "the analysis is forgotten: {n} suggestions; your own labels stay":
         "η ανάλυση σβήστηκε: {n} προτάσεις· οι δικές σου ετικέτες μένουν",
-    "{n} people to read again": "{n} πρόσωπα θα διαβαστούν ξανά",
+    "{n} people to read again; they are read while the analysis runs": "{n} πρόσωπα θα διαβαστούν ξανά, όσο τρέχει η ανάλυση",
     "again": "ξανά κρίση",
     "forget": "σβήσιμο της ανάλυσης",
 }

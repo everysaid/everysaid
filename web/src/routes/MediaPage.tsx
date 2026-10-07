@@ -69,6 +69,7 @@ export function MediaPage() {
     <div className="flex h-full flex-col">
       <PageHeader
         title={t("media.title")}
+        back={chat ? `/chat/${chat}` : undefined}
         actions={
           <Button variant={selecting ? "primary" : "ghost"} size="sm" onClick={() => { setSelecting(!selecting); setSelected(new Set()); }}>
             {selecting ? <X className="size-4" /> : <CheckSquare className="size-4" />} {t("media.select")}

@@ -60,3 +60,26 @@ test("labels: the lists are the user's: a tone added, renamed, merged into anoth
   await expect(acme).toHaveCount(0);
   await expect(tones.locator("[data-label=professional]")).toBeVisible();
 });
+
+// A label given to someone shows on the list of people, and the list is filtered by it.
+test("labels: on the list of people, and a filter by them", async ({ page }, info) => {
+  await signedIn(page, info.project.name);
+  const pid = await page.evaluate(async () => {
+    const h = { "X-Everysaid": "1", "Content-Type": "application/json" };
+    const p = (await (await fetch("/api/people?limit=1", { headers: h })).json()).items[0];
+    const friend = (await (await fetch("/api/labels", { headers: h })).json()).items.find((l: any) => l.key === "friend");
+    await fetch(`/api/people/${p.id}/labels/${friend.id}`, { method: "PUT", headers: h, body: JSON.stringify({ state: "yes" }) });
+    return p.id;
+  });
+  await page.goto("/people");
+  await page.locator("[data-label-filter] [data-filter=friend]").click();
+  await expect(page.locator("[data-person]")).toHaveCount(1);
+  await expect(page.locator(`[data-person="${pid}"]`)).toBeVisible();
+  await page.locator("[data-label-filter] [data-filter=friend]").click();
+  await expect(page.locator("[data-person]").nth(1)).toBeVisible();
+  await page.evaluate(async (pid) => {
+    const h = { "X-Everysaid": "1", "Content-Type": "application/json" };
+    const friend = (await (await fetch("/api/labels", { headers: h })).json()).items.find((l: any) => l.key === "friend");
+    await fetch(`/api/people/${pid}/labels/${friend.id}`, { method: "PUT", headers: h, body: JSON.stringify({ state: null }) });
+  }, pid);
+});

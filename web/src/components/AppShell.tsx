@@ -1,4 +1,5 @@
 import { Link, useRouterState } from "@tanstack/react-router";
+import { markNav } from "@/lib/back";
 import { useTranslation } from "react-i18next";
 import { BarChart3, Images, MessagesSquare, MoreHorizontal, Phone, Plug, Search, Settings, Users } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -48,6 +49,7 @@ function Rail() {
           <Link
             // Chats: back to the chat open last (archived or not), as it was left
             {...(key === "chats" && last ? { to: "/chat/$chatId", params: { chatId: last.chatId }, search: { hide: last.hide } } : { to })}
+            onClick={markNav}
             className={cn(
               "relative grid size-12 place-items-center rounded-2xl text-muted transition-colors hover:bg-panel-2 hover:text-fg",
               section === to && "bg-accent/12 text-accent hover:bg-accent/15 hover:text-accent",
@@ -83,6 +85,7 @@ function BottomTabs() {
         <Link
           key={to}
           to={to}
+          onClick={markNav}
           className={cn("relative flex flex-col items-center gap-0.5 py-2 text-[11px] text-muted", section === to && "text-accent")}
         >
           <Icon className="size-6" />
@@ -102,7 +105,7 @@ function BottomTabs() {
         </MenuTrigger>
         <MenuContent>
           {NAV.slice(4).map(({ to, icon: Icon, key }) => (
-            <MenuItem key={to} icon={<Icon />} onSelect={() => navigate({ to })}>{t(`nav.${key}`)}</MenuItem>
+            <MenuItem key={to} icon={<Icon />} onSelect={() => { markNav(); navigate({ to }); }}>{t(`nav.${key}`)}</MenuItem>
           ))}
         </MenuContent>
       </Menu>

@@ -89,6 +89,7 @@ export function keepListPlace(p: ListPlace) {
  * row in view. */
 export interface PeoplePlace {
   q: string;
+  label?: number;                // the label the list was filtered by
   loaded: number;
   top?: { id: number; index: number; offset: number };
 }

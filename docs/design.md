@@ -344,6 +344,14 @@ Everything above is built, with these differences from the draft:
   merge the labels go over and the person is read again; on a split, too. The models' labels show
   only when the user asks (`show_tone`), the assistant sees labels only when allowed (`mcp_labels`);
   "forget the analysis" takes away all the models said and keeps the user's.
+- Labels show on the list of people too (the user's, and the models' where shown), which is
+  filtered by one with a click.
+- **Back**: every page reached from another has a way back to it, on every screen size; one opened
+  from the app's menu has none (the menu is the way on), and one opened directly goes back to its
+  section (a person's page to People, the calls or media of a chat to the chat). On a wide screen
+  a chat shows back only when it was opened from another page (the list is beside it).
+- **Sources** are in tabs by kind (messages, pictures, contacts, analysis, devices); the local
+  analysis has a start and pause button, and an action shows only when it has something to do.
 - **Names found** for people without one: from their handles (an email's or a user name's words,
   where one is a first name the archive knows: `first.last@…` is "First Last"), and
   from the local analysis. Shown on the page of those without a name and on the person's page,

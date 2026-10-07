@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
@@ -7,6 +7,7 @@ import * as Popover from "@radix-ui/react-popover";
 import { ArrowDown, ArrowLeft, BellOff, CalendarDays, Check, ChevronDown, CornerUpLeft, Archive, ArchiveRestore, FileText, Info, Lock, MoreVertical, Paperclip, Pin, PinOff, Search, SendHorizontal, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, qs, type Attachment, type ChatDetail, type Member, type MessageItem, type StreamItem, type StreamPage } from "@/lib/api";
+import { useBack } from "@/lib/back";
 import { bytes, dateOnly, dayLabel, isoDay, sameDay } from "@/lib/format";
 import { onEvent } from "@/lib/events";
 import { useSettings, useWide } from "@/lib/hooks";
@@ -458,14 +459,16 @@ function ChatHeader({ chat, wide, onInfo, onJumpDate, hidden, onHide }: {
       qc.invalidateQueries({ queryKey: ["chat", chat!.id] });
     },
   });
+  const back = useBack("/");
   const title = chat?.title ?? "";
   const subtitle = chat?.type === "group" ? `${chat.members?.length ?? 0} ${t("chat.members")}` : null;
   return (
     <header className="flex items-center gap-2 border-b border-line bg-panel/95 px-2 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))] backdrop-blur md:px-4">
-      {!wide && (
-        <Link to="/" className="grid size-10 place-items-center rounded-full hover:bg-panel-2" aria-label={t("common.back")}>
+      {(!wide || (back.from && back.from !== "/" && !back.from.startsWith("/chat/"))) && (
+        <button type="button" onClick={back.go} className="grid size-10 shrink-0 place-items-center rounded-full hover:bg-panel-2"
+          aria-label={t("common.back")} title={t("common.back")} data-back>
           <ArrowLeft className="size-5" />
-        </Link>
+        </button>
       )}
       <div className="flex min-w-0 flex-1 items-center gap-3 px-1">
         <button onClick={onInfo} className="shrink-0 rounded-full" tabIndex={-1} aria-hidden>       {/* the name beside it is the same, for keyboards */}
