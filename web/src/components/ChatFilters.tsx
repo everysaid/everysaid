@@ -58,7 +58,7 @@ export function ChatFiltersButton({ value, onChange, seen }: { value: ChatFilter
   const n = activeFilters(value);
   const set = (part: Partial<ChatFilters>) => onChange({ ...value, ...part });
   const step = Math.max(0, STEPS.findIndex((s) => s >= value.minMessages));
-  const unnamed = value.unnamed ?? Boolean(settings.data?.show_unnamed);
+  const unnamed = value.unnamed ?? ((settings.data?.show_unnamed as boolean | undefined) ?? true);
   const services = [...new Set([...seen, ...Object.keys(value.services)])].filter((s) => service(s).messages !== false || value.services[s]).sort();
   const used = (labels.data?.items ?? []).filter((l) => l.uses.yes + l.uses.suggested > 0 || l.id === value.label);
   const cycle = (s: string) => {

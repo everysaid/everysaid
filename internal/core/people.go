@@ -147,9 +147,11 @@ func PeopleList(s *Store, o PeopleListOptions) M {
 	}
 	act := active(s)
 	type entry struct {
-		m    M
-		fold string
+		m       M
+		fold    string
+		unnamed bool
 	}
+	unnamed := unnamedPeople(s).People
 	var list []entry
 	for _, pid := range ppl.PeopleOrder {
 		if ppl.Me[pid] || hidden[pid] || !act[pid] || (o.Only != nil && !o.Only[pid]) {
@@ -165,9 +167,16 @@ func PeopleList(s *Store, o PeopleListOptions) M {
 				continue
 			}
 		}
-		list = append(list, entry{M{"id": pid, "name": name, "handles": len(ppl.Handles[pid])}, text.Fold(name)})
+		list = append(list, entry{M{"id": pid, "name": name, "handles": len(ppl.Handles[pid])}, text.Fold(name), unnamed[pid]})
 	}
-	sort.SliceStable(list, func(i, j int) bool { return list[i].fold < list[j].fold })
+	// by name, those without one after them all: their numbers and handles ("+30…", "@…") would
+	// otherwise come first and be among the names
+	sort.SliceStable(list, func(i, j int) bool {
+		if list[i].unnamed != list[j].unnamed {
+			return list[j].unnamed
+		}
+		return list[i].fold < list[j].fold
+	})
 	limit := o.Limit
 	if limit == 0 {
 		limit = 100

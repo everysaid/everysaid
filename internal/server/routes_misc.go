@@ -61,7 +61,7 @@ func (s *Server) miscRoutes() {
 			return nil, err
 		}
 		out, err := core.Calls(s.Store, core.CallsOptions{ChatID: q.str("chat"), Missed: missed, Service: q.str("service"),
-			Before: before, Limit: clampLimit(limit, 200), Unnamed: s.setting("show_unnamed", false),
+			Before: before, Limit: clampLimit(limit, 200), Unnamed: s.setting("show_unnamed", true),
 			Short: s.setting("show_short_numbers", false)})
 		if err != nil {
 			return nil, is404(err, nil)
