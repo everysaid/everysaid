@@ -280,8 +280,16 @@ export function SettingsPage() {
                 </Button>
               </Line>
               <Line label={t("settings.mcp")} hint={t("settings.mcpHint")}>
-                <Button size="sm" onClick={() => api.post<{ token: string }>("/api/auth/mcp-token", { label: "MCP" }).then((r) => setToken(r.token))}>{t("settings.newToken")}</Button>
+                <Button size="sm" onClick={() => api.post<{ token: string }>("/api/auth/mcp-token", { label: "MCP" }).then((r) => { setToken(r.token); refreshAccount(); }, (e) => toast.error(e.message))}>{t("settings.newToken")}</Button>
               </Line>
+              {a?.mcp_tokens?.map((m) => (
+                <Line key={m.id} label={m.label || "MCP"}
+                  hint={`${t("settings.tokenMade", { when: relative(m.created_at) })} · ${m.last_used ? t("settings.tokenUsed", { when: relative(m.last_used) }) : t("settings.tokenUnused")}`}>
+                  <Button size="sm" variant="ghost" onClick={() => confirm(t("settings.revokeToken") + "?") && api.del(`/api/auth/mcp-tokens/${m.id}`).then(refreshAccount, (e) => toast.error(e.message))}>
+                    {t("settings.revokeToken")}
+                  </Button>
+                </Line>
+              ))}
             </Card>
             <Button variant="outline" className="w-full" onClick={() => api.post("/api/auth/logout").then(() => location.assign("/"))}>
               <LogOut className="size-4" />{t("settings.logout")}
@@ -295,7 +303,7 @@ export function SettingsPage() {
                 {a.audit.slice(0, 15).map((e, i) => (
                   <div key={i} className="flex gap-3 px-4 py-2">
                     <span className="shrink-0 text-muted">{fullDate(e.ts * 1000)}</span>
-                    <span className="min-w-0 truncate">{e.event}{e.detail ? ` · ${e.detail}` : ""}</span>
+                    <span className="min-w-0 truncate">{t(`audit.${e.event.replace(/ /g, "_")}`, { defaultValue: e.event })}{e.detail ? ` · ${e.detail}` : ""}</span>
                   </div>
                 ))}
               </Card>
