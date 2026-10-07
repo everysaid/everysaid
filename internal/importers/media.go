@@ -14,7 +14,8 @@
 //   - the WhatsApp bridge: the files it downloaded (messages.media_path, relative to its store
 //     folder), message by its row key, else by its id (the iPhone's copy of the same message).
 //
-// A file already linked from the same source path is not hashed again, unless its size has changed.
+// A file already linked from the same source path is not hashed again while it is the stored one
+// (same size and time).
 package importers
 
 import (
@@ -87,6 +88,17 @@ func fileSize(path string) int64 {
 	return fi.Size()
 }
 
+// sameFile says whether two paths hold the same file as far as size and time tell (false when
+// either is not there).
+func sameFile(a, b string) bool {
+	fa, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	fb, err := os.Stat(b)
+	return err == nil && (os.SameFile(fa, fb) || fa.Size() == fb.Size() && fa.ModTime().Equal(fb.ModTime()))
+}
+
 type missingKey struct{ source, why string }
 
 // Store links files to messages, each file stored once.
@@ -116,12 +128,14 @@ func (s *Store) Link(source string, sourceID int64, path, rel string, messageID 
 	if a.Exists("SELECT 1 FROM attachment WHERE source_id = ? AND source_path = ? AND message_id = ?", sourceID, rel, messageID) {
 		return
 	}
-	// the file of this source path hashed before, unless it is another file now (a new export whose
-	// part numbers start again): then its size tells
+	// the file of this source path hashed before, while it is the same file: the stored copy (a hard
+	// link to it, or a copy keeping its time) of the same size and time; else (another file now, as
+	// in a new export whose part numbers start again, or the copy gone to the library) read again
 	var digest string
-	var known sql.NullString
-	if a.Row("SELECT a.sha256 FROM attachment a JOIN media md ON md.sha256 = a.sha256 "+
-		"WHERE a.source_id = ? AND a.source_path = ? AND md.size = ?", []any{sourceID, rel, fileSize(path)}, &known) && known.Valid {
+	var known, stored sql.NullString
+	if a.Row("SELECT a.sha256, md.path FROM attachment a JOIN media md ON md.sha256 = a.sha256 "+
+		"WHERE a.source_id = ? AND a.source_path = ? AND md.size = ?", []any{sourceID, rel, fileSize(path)}, &known, &stored) &&
+		known.Valid && sameFile(path, filepath.Join(s.Root, stored.String)) {
 		digest = known.String
 	} else {
 		digest = sha256File(path)

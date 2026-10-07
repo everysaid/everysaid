@@ -233,6 +233,9 @@ type ViberOptions struct {
 	NoDesktop           bool
 }
 
+// viberEdit is an edit event of the iPhone: the token of the message edited, and its new text.
+type viberEdit struct{ key, text string }
+
 type viberMsg struct {
 	extra    *archive.Extras
 	conv     int64
@@ -319,6 +322,7 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 	var convOrder []int64
 	convMembers := map[int64][]archive.Handle{}
 	var iphoneRecs map[int64]viberMsg
+	var edits []viberEdit // in the order they were made
 	var iphoneOrder []int64
 	iphoneKeys := map[string]int64{}
 	if iphone != nil {
@@ -403,7 +407,12 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 			if !known {
 				panic(&db.Error{Query: "ZVIBERMESSAGE", Err: fmt.Errorf("KeyError: %v", r["ZCONVERSATION"])})
 			}
-			iphoneRecs[pk] = viberMsg{viberIphoneExtras(r, locations), conv, tokenTime(r["ZDATE"], toInt(r["ZTOKEN"])),
+			extra := viberIphoneExtras(r, locations)
+			if extra.EditsKey != "" { // an edit: the message edited takes its text, it is no line of its own
+				edits = append(edits, viberEdit{extra.EditsKey, str(r["ZTEXT"])})
+				continue
+			}
+			iphoneRecs[pk] = viberMsg{extra, conv, tokenTime(r["ZDATE"], toInt(r["ZTOKEN"])),
 				outgoing, sender, kind, str(r["ZTEXT"]), key}
 			iphoneOrder = append(iphoneOrder, pk)
 			if key != "" {
@@ -501,6 +510,15 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 	for _, pk := range takenOrder {
 		if mid, ok := a.MessageByKey("viber", iphoneRecs[pk].key, 0); ok && mid != 0 {
 			a.Exec("INSERT OR IGNORE INTO message_origin VALUES (?, ?, ?)", src["iphone"], fmt.Sprint(pk), mid)
+		}
+	}
+	for _, e := range edits {
+		if mid, ok := a.MessageByKey("viber", e.key, 0); ok && mid != 0 {
+			c := Change{Edited: true}
+			if e.text != "" {
+				c.Text = &e.text
+			}
+			ApplyChange(a, mid, c)
 		}
 	}
 	if iphone != nil { // observed: when the backup's copy was made

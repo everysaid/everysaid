@@ -229,3 +229,30 @@ func TestViberMentionAfterAnEmoji(t *testing.T) {
 		t.Fatalf("token %q", token)
 	}
 }
+
+// TestViberEditEvents: on the iPhone an edit is a row of its own (systemInvalidMessage, its
+// metadata naming the token edited) carrying the new text. As Viber shows it, the message edited
+// takes the new text, marked edited, and the edit is no line of its own; also when the edit comes
+// in a later import than the message.
+func TestViberEditEvents(t *testing.T) {
+	for _, later := range []bool{false, true} {
+		a, _ := newArchive(t)
+		path := filepath.Join(t.TempDir(), "viber.sqlite")
+		viberDB(t, path)
+		opt := ViberOptions{IphoneDB: path, NoDesktop: true}
+		if later {
+			must(t, Viber(a, nil, opt))
+		}
+		d, err := db.Open(path)
+		must(t, err)
+		db.Exec(d, "INSERT INTO ZVIBERMESSAGE (Z_PK, ZSTATE, ZSYSTEMTYPE, ZCONVERSATION, ZDATE, ZTOKEN, ZPHONENUMINDEX, "+
+			"ZTEXT, ZMETADATA, ZLIKESCOUNT) VALUES (6, 'received', 'systemInvalidMessage', 10, ?, 1006, 1, 'two, fixed', ?, 0)",
+			1_790_000_100-archive.AppleEpoch, js(M{"edit": M{"token": 1002}}))
+		d.Close()
+		must(t, Viber(a, nil, opt))
+		must(t, Viber(a, nil, opt)) // again: nothing changes
+		eq(t, "messages", a.Int("SELECT count(*) FROM message"), int64(5))
+		eq(t, "edited", msgRow(a, "1002", "text, edited"), []any{"two, fixed", int64(1)})
+		eq(t, "found by the new", searchKeys(a, "fixed"), []string{"1002"})
+	}
+}
