@@ -1,0 +1,231 @@
+// Ports tests/test_marks.py (its importer parts): mentions, receipts and how far chats were read,
+// as the Telegram and Viber importers bring them, on small databases made here (shaped as
+// telegram.db and the iPhone's viber.sqlite).
+package importers
+
+import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"path/filepath"
+	"reflect"
+	"testing"
+
+	"everysaid/internal/archive"
+	"everysaid/internal/db"
+	"everysaid/internal/telegramstore"
+)
+
+const (
+	tgMe, tgMaria, tgBob, tgGroup = 999, 111, 222, -5
+)
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func js(v any) string {
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+type M = map[string]any
+
+func newArchive(t *testing.T) (*archive.Archive, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "archive.db")
+	a, err := archive.Open(path)
+	must(t, err)
+	t.Cleanup(func() { a.Close() })
+	return a, path
+}
+
+func telegramDB(t *testing.T, path string) *sql.DB {
+	d, err := telegramstore.Open(path)
+	must(t, err)
+	t.Cleanup(func() { d.Close() })
+	for _, e := range []struct {
+		id   int64
+		user M
+	}{
+		{tgMe, M{"_": "User", "id": tgMe, "is_self": true, "phone": "15550000000"}},
+		{tgMaria, M{"_": "User", "id": tgMaria, "first_name": "Maria", "username": "Maria_K", "phone": "15557770001"}},
+		{tgBob, M{"_": "User", "id": tgBob, "first_name": "Bob"}},
+	} {
+		db.Exec(d, "INSERT INTO entity VALUES (?, ?)", e.id, js(e.user))
+	}
+	db.Exec(d, "INSERT INTO chat VALUES (?, 'group', 'Friends', 0, '{}', 1)", tgGroup)
+	db.Exec(d, "INSERT INTO chat VALUES (?, 'user', 'Maria', 0, ?, 1)", tgMaria,
+		js(M{"_": "User", "id": tgMaria, "username": "Maria_K", "phone": "15557770001"}))
+	text := "hi 😀 @maria_k and Bob" // the emoji is two UTF-16 units: the offsets count them so
+	msgs := []struct {
+		chat, id int64
+		m        M
+	}{
+		{tgGroup, 1, M{"_": "Message", "id": 1, "message": text, "from_id": M{"user_id": tgBob},
+			"entities": []M{{"_": "MessageEntityMention", "offset": 6, "length": 8},
+				{"_": "MessageEntityMentionName", "offset": 19, "length": 3, "user_id": tgBob},
+				{"_": "MessageEntityBold", "offset": 0, "length": 2}}}},
+		{tgGroup, 2, M{"_": "Message", "id": 2, "message": "from Maria", "from_id": M{"user_id": tgMaria}}},
+		{tgGroup, 3, M{"_": "Message", "id": 3, "message": "anonymous admin", "from_id": M{"channel_id": 77}}},
+		{tgMaria, 10, M{"_": "Message", "id": 10, "message": "mine 1", "out": true}},
+		{tgMaria, 11, M{"_": "Message", "id": 11, "message": "theirs", "from_id": M{"user_id": tgMaria}}},
+		{tgMaria, 12, M{"_": "Message", "id": 12, "message": "mine 2", "out": true}},
+		{tgMaria, 13, M{"_": "Message", "id": 13, "message": "mine 3", "out": true}},
+	}
+	for _, m := range msgs {
+		db.Exec(d, "INSERT INTO message (chat_id, id, date, json) VALUES (?, ?, ?, ?)", m.chat, m.id, 1_790_000_000+m.id, js(m.m))
+	}
+	return d
+}
+
+func p64(n int64) *int64 { return &n }
+
+func pairs(rows []map[string]any, a, b string) [][2]any {
+	var out [][2]any
+	for _, r := range rows {
+		out = append(out, [2]any{r[a], r[b]})
+	}
+	return out
+}
+
+func TestTelegramMentionsMembersAndReads(t *testing.T) {
+	a, _ := newArchive(t)
+	path := filepath.Join(t.TempDir(), "telegram.db")
+	d := telegramDB(t, path)
+	_, err := telegramstore.NoteRead(d, tgMaria, p64(11), p64(10), false)
+	must(t, err)
+	a.Exec("INSERT INTO plugin_instance (plugin, kind, label, created_at) VALUES ('telegram', 'source', 'T', 0)")
+	iid := a.Int("SELECT max(id) FROM plugin_instance")
+	must(t, Telegram(a, nil, TelegramOptions{DBPath: path}))
+	a.Exec("UPDATE source SET instance_id = ? WHERE name = 'telegram'", iid)
+	must(t, Telegram(a, nil, TelegramOptions{DBPath: path})) // again, now with an instance: the reads are reported
+	a.Commit()
+
+	group := a.Int("SELECT c.id FROM conversation c JOIN service s ON s.id = c.service_id WHERE s.name = 'telegram' AND c.key = ?",
+		fmt.Sprint(tgGroup))
+	named := pairs(db.Maps(a.Tx(), "SELECT a.value, n.token FROM mention n JOIN address a ON a.id = n.address_id "+
+		"JOIN message m ON m.id = n.message_id WHERE m.conversation_id = ? ORDER BY n.token", group), "value", "token")
+	if want := [][2]any{{"+15557770001", "@maria_k"}, {fmt.Sprint(tgBob), "Bob"}}; !reflect.DeepEqual(named, want) {
+		t.Fatalf("mentions %v", named)
+	}
+	members := db.Strs(a.Tx(), "SELECT a.value FROM conversation_member cm JOIN address a ON a.id = cm.address_id "+
+		"WHERE cm.conversation_id = ? ORDER BY a.value", group)
+	if want := []string{"+15557770001", fmt.Sprint(tgBob)}; !reflect.DeepEqual(members, want) { // whoever wrote there; not an anonymous admin
+		t.Fatalf("members %v", members)
+	}
+	chat := a.Int("SELECT c.id FROM conversation c JOIN service s ON s.id = c.service_id WHERE s.name = 'telegram' AND c.key = ?",
+		fmt.Sprint(tgMaria))
+	got := pairs(db.Maps(a.Tx(), "SELECT m.key, r.read_at FROM receipt r JOIN message m ON m.id = r.message_id "+
+		"WHERE m.conversation_id = ? ORDER BY m.key", chat), "key", "read_at")
+	if want := [][2]any{{"10", int64(0)}}; !reflect.DeepEqual(got, want) { // read, when not known
+		t.Fatalf("receipts %v", got)
+	}
+	if read := a.Int("SELECT value FROM state_report WHERE conversation_id = ? AND field = 'read_until'", chat); read != (1_790_000_000+11)*1000 {
+		t.Fatalf("read_until %d", read)
+	}
+
+	// seen live: the other read up to 13 now; 10 keeps its "known, not when"
+	_, err = telegramstore.NoteRead(d, tgMaria, nil, p64(13), true)
+	must(t, err)
+	must(t, TelegramReads(a, nil, path, map[int64]bool{tgMaria: true}))
+	a.Commit()
+	readAt := map[string]int64{}
+	for _, r := range db.Maps(a.Tx(), "SELECT m.key, r.read_at FROM receipt r JOIN message m ON m.id = r.message_id "+
+		"WHERE m.conversation_id = ?", chat) {
+		readAt[r["key"].(string)] = r["read_at"].(int64)
+	}
+	if _, theirs := readAt["11"]; readAt["10"] != 0 || readAt["12"] <= 0 || readAt["12"] != readAt["13"] || theirs {
+		t.Fatalf("receipts after %v", readAt)
+	}
+}
+
+func viberDB(t *testing.T, path string) {
+	d, err := db.Open(path)
+	must(t, err)
+	defer d.Close()
+	db.Exec(d, `
+    CREATE TABLE ZMEMBER (Z_PK INTEGER PRIMARY KEY, ZMEMBERID TEXT);
+    CREATE TABLE ZPHONENUMBER (ZMEMBER INTEGER, ZCANONIZEDPHONENUM TEXT, ZPHONE TEXT);
+    CREATE TABLE Z_5PHONENUMINDEXES (Z_5CONVERSATIONS INTEGER, Z_10PHONENUMINDEXES INTEGER);
+    CREATE TABLE ZCONVERSATION (Z_PK INTEGER PRIMARY KEY, ZGROUPID INTEGER, ZNAME TEXT, ZSUBTYPE INTEGER,
+        ZLASTREADTOKEN INTEGER, ZSEENSTATUSLASTTOKEN INTEGER);
+    CREATE TABLE ZATTACHMENT (Z_PK INTEGER PRIMARY KEY, ZTYPE TEXT);
+    CREATE TABLE ZVIBERLOCATION (Z_PK INTEGER PRIMARY KEY, ZLATITUDE REAL, ZLONGITUDE REAL, ZADDRESS TEXT);
+    CREATE TABLE ZVIBERMESSAGE (Z_PK INTEGER PRIMARY KEY, ZSTATE TEXT, ZSYSTEMTYPE TEXT, ZATTACHMENT INTEGER,
+        ZCONVERSATION INTEGER, ZDATE REAL, ZTOKEN INTEGER, ZPHONENUMINDEX INTEGER, ZTEXT TEXT, ZMETADATA TEXT,
+        ZCLIENTMETADATA TEXT, ZCALLTYPE INTEGER, ZLIKESCOUNT INTEGER, ZLOCATION INTEGER, ZCALLSCOUNT INTEGER,
+        ZFORWARDTYPE INTEGER, ZLIKESTYPE INTEGER);
+    INSERT INTO ZMEMBER VALUES (1, 'mid-anna'), (2, 'mid-nick');
+    INSERT INTO ZPHONENUMBER VALUES (1, '+15558880001', NULL), (2, '+15558880002', NULL);
+    INSERT INTO Z_5PHONENUMINDEXES VALUES (10, 1), (20, 1), (20, 2);
+    INSERT INTO ZCONVERSATION VALUES (10, NULL, NULL, 0, 1002, 1003), (20, 4242, 'Team', 0, NULL, NULL);`)
+	date := 1_790_000_000 - archive.AppleEpoch
+	mention := js(M{"textMetaInfo": []M{{"type": 0, "memberId": "mid-nick", "start": 4, "end": 11}}})
+	rows := []struct {
+		token        int64
+		state        string
+		conv         int64
+		sender       any
+		text         string
+		md           any
+	}{
+		{1001, "delivered", 10, nil, "one", nil}, {1002, "received", 10, 1, "two", nil},
+		{1003, "delivered", 10, nil, "three", nil}, {1004, "delivered", 10, nil, "four", nil},
+		{2001, "received", 20, 1, "hey ‪@Nick‬, look", mention},
+	}
+	for i, r := range rows {
+		db.Exec(d, "INSERT INTO ZVIBERMESSAGE (Z_PK, ZSTATE, ZSYSTEMTYPE, ZCONVERSATION, ZDATE, ZTOKEN, ZPHONENUMINDEX, "+
+			"ZTEXT, ZMETADATA, ZLIKESCOUNT) VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, 0)",
+			i+1, r.state, r.conv, date+i, r.token, r.sender, r.text, r.md)
+	}
+}
+
+func TestViberMentionsSeenAndRead(t *testing.T) {
+	a, _ := newArchive(t)
+	path := filepath.Join(t.TempDir(), "viber.sqlite")
+	viberDB(t, path)
+	a.Exec("INSERT INTO plugin_instance (plugin, kind, label, created_at) VALUES ('iphone-backup', 'source', 'P', 0)")
+	iid := a.Int("SELECT max(id) FROM plugin_instance")
+	a.Exec("INSERT INTO source (name, path, instance_id) VALUES (?, ?, ?)", archive.Iphone()+"/viber", path, iid)
+	must(t, Viber(a, nil, ViberOptions{IphoneDB: path, NoDesktop: true}))
+	named := pairs(db.Maps(a.Tx(), "SELECT a.value, n.token FROM mention n JOIN address a ON a.id = n.address_id "+
+		"JOIN message m ON m.id = n.message_id WHERE m.key = '2001'"), "value", "token")
+	if want := [][2]any{{"+15558880002", "‪@Nick‬"}}; !reflect.DeepEqual(named, want) {
+		t.Fatalf("mentions %q", named)
+	}
+	var seen [][4]any
+	for _, r := range db.Maps(a.Tx(), "SELECT m.key, a.value, r.read_at, r.delivered_at FROM receipt r JOIN message m ON m.id = r.message_id "+
+		"JOIN address a ON a.id = r.address_id WHERE m.key LIKE '100%' ORDER BY m.key") {
+		seen = append(seen, [4]any{r["key"], r["value"], r["read_at"], r["delivered_at"]})
+	}
+	want := [][4]any{{"1001", "+15558880001", int64(0), nil}, {"1003", "+15558880001", int64(0), nil}} // not 1004, not theirs
+	if !reflect.DeepEqual(seen, want) {
+		t.Fatalf("seen %v", seen)
+	}
+	conv := a.Int("SELECT conversation_id FROM message WHERE key = '1001'")
+	if read := a.Int("SELECT value FROM state_report WHERE conversation_id = ? AND field = 'read_until'", conv); read != (1_790_000_000+1)*1000 {
+		t.Fatalf("read_until %d", read)
+	}
+}
+
+// Viber counts where a mention is in UTF-16 units: an emoji before it is two.
+func TestViberMentionAfterAnEmoji(t *testing.T) {
+	a, _ := newArchive(t)
+	path := filepath.Join(t.TempDir(), "viber.sqlite")
+	viberDB(t, path)
+	d, err := db.Open(path)
+	must(t, err)
+	db.Exec(d, "UPDATE ZVIBERMESSAGE SET ZTEXT = ?, ZMETADATA = ? WHERE ZTOKEN = 2001", "😀 ‪@Nick‬ hi",
+		js(M{"textMetaInfo": []M{{"type": 0, "memberId": "mid-nick", "start": 3, "end": 10}, {"type": 0, "memberId": "mid-nick"}}}))
+	d.Close()
+	must(t, Viber(a, nil, ViberOptions{IphoneDB: path, NoDesktop: true}))
+	var token string
+	a.Row("SELECT n.token FROM mention n JOIN message m ON m.id = n.message_id WHERE m.key = '2001'", nil, &token)
+	if token != "‪@Nick‬" {
+		t.Fatalf("token %q", token)
+	}
+}
