@@ -15,6 +15,9 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
+
+	"golang.org/x/text/encoding/ianaindex"
 )
 
 // Value is a phone number or an email of a card, with its label ("cell", "home", ...; "" for none).
@@ -35,9 +38,13 @@ type Card struct {
 
 var (
 	folded   = regexp.MustCompile(`\r?\n[ \t]`)
-	typeList = regexp.MustCompile(`TYPE=([A-Z,]+)`)
-	typeWord = regexp.MustCompile(`TYPE=([A-Z]+)`)
+	typeList = regexp.MustCompile(`TYPE="?([A-Z,]+)`)
+	typeWord = regexp.MustCompile(`TYPE="?(?:IMAGE/)?([A-Z]+)`) // JPEG (2.1, 3.0) or image/jpeg
+	charset  = regexp.MustCompile(`CHARSET="?([A-Z0-9_.:-]+)`)
 )
+
+// encodings are the bare words of vCard 2.1 that say how a value is written, not what it is.
+var encodings = map[string]bool{"QUOTED-PRINTABLE": true, "BASE64": true, "B": true, "8BIT": true, "7BIT": true}
 
 func hasPrefixFold(s, prefix string) bool {
 	return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
@@ -52,7 +59,7 @@ func label(params []string, p string) string {
 	var words []string
 	for _, x := range params {
 		x = strings.ToUpper(strings.TrimSpace(x))
-		if x != "" && x != "PREF" && !strings.Contains(x, "=") {
+		if x != "" && x != "PREF" && !encodings[x] && !strings.Contains(x, "=") {
 			words = append(words, x)
 		}
 	}
@@ -71,9 +78,67 @@ func decode64(s string) ([]byte, error) {
 	return base64.RawStdEncoding.DecodeString(clean)
 }
 
+// softBreaks joins the lines of vCard 2.1's quoted-printable values: such a value goes on over
+// lines that end with "=" (the next line not indented, so not a fold).
+func softBreaks(text string) string {
+	lines := strings.Split(text, "\n")
+	out := lines[:0]
+	for i := 0; i < len(lines); i++ {
+		l := lines[i]
+		if head, _, ok := strings.Cut(l, ":"); ok && strings.Contains(strings.ToUpper(head), "QUOTED-PRINTABLE") {
+			for strings.HasSuffix(l, "=") && i+1 < len(lines) {
+				i++
+				l = l[:len(l)-1] + lines[i]
+			}
+		}
+		out = append(out, l)
+	}
+	return strings.Join(out, "\n")
+}
+
+// unquote is a quoted-printable value (=XX for a byte; anything else as it is) read in its
+// charset (UTF-8 unless the property says another).
+func unquote(value, params string) string {
+	nibble := func(c byte) (byte, bool) {
+		switch {
+		case c >= '0' && c <= '9':
+			return c - '0', true
+		case c >= 'A' && c <= 'F':
+			return c - 'A' + 10, true
+		case c >= 'a' && c <= 'f':
+			return c - 'a' + 10, true
+		}
+		return 0, false
+	}
+	var b []byte
+	for i := 0; i < len(value); i++ {
+		if value[i] == '=' && i+2 < len(value) {
+			hi, ok1 := nibble(value[i+1])
+			lo, ok2 := nibble(value[i+2])
+			if ok1 && ok2 {
+				b = append(b, hi<<4|lo)
+				i += 2
+				continue
+			}
+		}
+		b = append(b, value[i])
+	}
+	if m := charset.FindStringSubmatch(params); m != nil && m[1] != "UTF-8" && m[1] != "UTF8" {
+		if enc, err := ianaindex.MIME.Encoding(m[1]); err == nil && enc != nil {
+			if d, err := enc.NewDecoder().Bytes(b); err == nil {
+				return string(d)
+			}
+		}
+	}
+	if !utf8.Valid(b) {
+		return strings.ToValidUTF8(string(b), "\uFFFD")
+	}
+	return string(b)
+}
+
 // ParseVcards reads the cards of a vCard text (vCard 2.1, 3.0 and 4.0).
 func ParseVcards(data string) []Card {
-	text := folded.ReplaceAllString(strings.ReplaceAll(data, "\r\n", "\n"), "") // unfold
+	text := folded.ReplaceAllString(softBreaks(strings.ReplaceAll(data, "\r\n", "\n")), "") // unfold
 	var cards []Card
 	var card *Card
 	var n string
@@ -108,7 +173,10 @@ func ParseVcards(data string) []Card {
 		name := strings.ToUpper(dotted[len(dotted)-1]) // item1.TEL -> TEL
 		params := parts[1:]
 		p := strings.ToUpper(strings.Join(params, ";"))
-		value = strings.NewReplacer(`\,`, ",", `\;`, ";", `\n`, "\n", `\N`, "\n").Replace(value)
+		if strings.Contains(p, "QUOTED-PRINTABLE") {
+			value = unquote(value, p)
+		}
+		value = strings.NewReplacer(`\\`, `\`, `\,`, ",", `\;`, ";", `\n`, "\n", `\N`, "\n").Replace(value)
 		switch name {
 		case "FN":
 			card.Name = strings.TrimSpace(value)

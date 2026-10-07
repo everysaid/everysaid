@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -51,10 +52,7 @@ func SaveCards(c *plugins.Context, cards []Card) (int, int, error) {
 		for _, card := range cards {
 			var photo any
 			if card.Photo != nil {
-				ext := card.Photo.Ext
-				if ext == "jpeg" {
-					ext = "jpg"
-				}
+				ext := photoExt(card.Photo)
 				sum := sha256.Sum256(card.Photo.Data)
 				name := hex.EncodeToString(sum[:]) + "." + ext
 				path := filepath.Join(Avatars(), name)
@@ -97,6 +95,24 @@ func SaveCards(c *plugins.Context, cards []Card) (int, int, error) {
 		return nil
 	})
 	return len(cards), linked, err
+}
+
+var safeExt = regexp.MustCompile(`^[a-z0-9]{1,8}$`)
+
+// photoExt is the extension of a photo's file: the kind the card says where it is a plain word (it
+// comes from outside, and goes into a path), else the kind its bytes show.
+func photoExt(p *Photo) string {
+	ext := strings.ToLower(p.Ext)
+	if !safeExt.MatchString(ext) {
+		ext = "img"
+		if kind, ok := strings.CutPrefix(http.DetectContentType(p.Data), "image/"); ok && safeExt.MatchString(kind) {
+			ext = kind
+		}
+	}
+	if ext == "jpeg" {
+		ext = "jpg"
+	}
+	return ext
 }
 
 func saved(c *plugins.Context, cards []Card) error {
@@ -155,6 +171,7 @@ const addressbookQuery = `<?xml version="1.0" encoding="utf-8"?><c:addressbook-q
 	`</c:addressbook-query>`
 
 type multistatus struct {
+	XMLName   xml.Name `xml:"DAV: multistatus"` // another answer is no address book
 	Responses []struct {
 		Href     string `xml:"DAV: href"`
 		Propstat []struct {
@@ -175,6 +192,12 @@ func (e *HTTPError) Error() string {
 	return fmt.Sprintf("HTTP %d %s for %s", e.Code, http.StatusText(e.Code), e.URL)
 }
 
+// davClient follows no redirect: Go would turn the REPORT into a GET (for 301 to 303), whose answer
+// is no address book; the user is told the code instead, as the Python's httpx did.
+var davClient = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+// Sync replaces the contacts by the address book's: only from a full answer (207 Multi-Status) of
+// the address book, so that a wrong one never empties them.
 func (CardDav) Sync(c *plugins.Context) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -186,12 +209,12 @@ func (CardDav) Sync(c *plugins.Context) error {
 	req.Header.Set("Depth", "1")
 	req.Header.Set("Content-Type", "application/xml; charset=utf-8")
 	req.SetBasicAuth(c.Str("username"), c.Secret("password"))
-	r, err := http.DefaultClient.Do(req)
+	r, err := davClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer r.Body.Close()
-	if r.StatusCode >= 400 {
+	if r.StatusCode != http.StatusMultiStatus {
 		return &HTTPError{r.StatusCode, url}
 	}
 	body, err := io.ReadAll(r.Body)

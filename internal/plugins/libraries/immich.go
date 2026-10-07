@@ -65,6 +65,18 @@ type HTTPError struct {
 
 func (e *HTTPError) Error() string { return fmt.Sprintf("HTTP Error %d: %s", e.Code, e.Status) }
 
+// client takes the API key to the address set and no further: a redirect to another host is refused
+// (Go, as the Python, would send the key along to it).
+var client = &http.Client{CheckRedirect: func(r *http.Request, via []*http.Request) error {
+	if r.URL.Hostname() != via[0].URL.Hostname() {
+		return fmt.Errorf("immich's address sends elsewhere (%s): set that one", r.URL.Host)
+	}
+	if len(via) >= 10 {
+		return fmt.Errorf("stopped after %d redirects", len(via))
+	}
+	return nil
+}}
+
 // request asks immich's API; the answer's body and type.
 func request(c *plugins.Context, method, path string, body io.Reader, size int64, ctype string, timeout time.Duration) ([]byte, string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -81,7 +93,7 @@ func request(c *plugins.Context, method, path string, body io.Reader, size int64
 	if ctype != "" {
 		req.Header.Set("Content-Type", ctype)
 	}
-	r, err := http.DefaultClient.Do(req)
+	r, err := client.Do(req)
 	if err != nil {
 		return nil, "", err
 	}

@@ -170,10 +170,13 @@ func PreparedCopy(src string, dateMS int64, make, service string) (string, error
 	}
 	if tool, err := exec.LookPath("exiftool"); err == nil && dateMS != 0 {
 		w := when(dateMS)
-		// only where the file has no capture date of its own (-if): an EXIF date is never changed
-		exec.Command(tool, "-q", "-q", "-overwrite_original", "-P", "-m",
-			"-if", "not $DateTimeOriginal and not $CreateDate",
-			"-AllDates="+w.Format("2006:01:02 15:04:05"), "-OffsetTimeOriginal="+w.Format("-07:00"), tmp).Run()
+		// only where the file has no capture date of its own (-if): an EXIF date is never changed. A
+		// date of zeros is none (a video's container always has one, zeros where nothing set it).
+		// QuickTime keeps UTC: the date goes with its offset, which exiftool turns into UTC there and
+		// leaves out of EXIF's local dates.
+		exec.Command(tool, "-q", "-q", "-overwrite_original", "-P", "-m", "-api", "QuickTimeUTC",
+			"-if", `"$DateTimeOriginal $CreateDate" !~ /[1-9]/`,
+			"-AllDates="+w.Format("2006:01:02 15:04:05-07:00"), "-OffsetTimeOriginal="+w.Format("-07:00"), tmp).Run()
 		if make != "" {
 			exec.Command(tool, "-q", "-q", "-overwrite_original", "-P", "-m", "-if", "not $Make",
 				"-Make="+make, "-Model="+service, tmp).Run()

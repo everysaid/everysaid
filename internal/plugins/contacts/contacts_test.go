@@ -2,12 +2,14 @@ package contacts
 
 import (
 	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -206,5 +208,92 @@ func TestCardDav(t *testing.T) {
 	}
 	if n := db.Int(s.Read(), "SELECT count(*) FROM contact_address"); n != 2 {
 		t.Fatal(n)
+	}
+}
+
+// qp is a value in quoted-printable, every byte of it, with a soft break after the first n bytes.
+func qp(s string, n int) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if i == n {
+			b.WriteString("=\n")
+		}
+		fmt.Fprintf(&b, "=%02X", s[i])
+	}
+	return b.String()
+}
+
+// vCard 2.1 as phones export it: values in quoted-printable over several lines, in a charset of
+// their own, and the other ways cards name their types.
+func TestVcardEncodings(t *testing.T) {
+	cards := ParseVcards("BEGIN:VCARD\r\nVERSION:2.1\r\n" +
+		"N;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE:" + qp("Οικονόμου", 6) + ";" + qp("Κατερίνα", 4) + ";;;\n" +
+		"FN;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE:" + qp("Κατερίνα Οικονόμου", 10) + "\n" +
+		"TEL;CELL;ENCODING=QUOTED-PRINTABLE:" + qp("+30 694 000 0001", 3) + "\n" +
+		"END:VCARD\n" +
+		"BEGIN:VCARD\nVERSION:2.1\nFN;CHARSET=WINDOWS-1253;QUOTED-PRINTABLE:=CC=E1=F1=DF=E1\nTEL;TYPE=\"cell,voice\":+1 555 0100\n" +
+		"PHOTO;ENCODING=b;TYPE=image/png:" + base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n")) + "\n" +
+		"NOTE:a back\\\\slash\nEND:VCARD\n")
+	if len(cards) != 2 {
+		t.Fatalf("%d cards", len(cards))
+	}
+	if k := cards[0]; k.Name != "Κατερίνα Οικονόμου" || !reflect.DeepEqual(k.Phones, []Value{{"+30 694 000 0001", "cell"}}) {
+		t.Fatalf("%+v", k)
+	}
+	if k := cards[1]; k.Name != "Μαρία" || !reflect.DeepEqual(k.Phones, []Value{{"+1 555 0100", "cell,voice"}}) ||
+		k.Photo == nil || k.Photo.Ext != "png" {
+		t.Fatalf("%+v", k)
+	}
+}
+
+// What a card says of its photo goes into a file's name: only a plain word does, whatever a card
+// (from a server, a file) holds.
+func TestPhotoNames(t *testing.T) {
+	png := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"))
+	_, c := archiveWith(t, "vcard-file", M{"path": "unused.vcf"})
+	cards := ParseVcards("BEGIN:VCARD\nFN:A\nUID:a\nPHOTO:data:image\\..\\..\\evil;base64," + png + "\nEND:VCARD\n" +
+		"BEGIN:VCARD\nFN:B\nUID:b\nPHOTO:data:image/x.y;base64," + png + "\nEND:VCARD\n")
+	if _, _, err := SaveCards(c, cards); err != nil {
+		t.Fatal(err)
+	}
+	name := regexp.MustCompile(`^[0-9a-f]{64}\.png$`)
+	for _, p := range db.Strs(c.Store().Read(), "SELECT photo FROM contact ORDER BY uid") {
+		if !name.MatchString(p) {
+			t.Fatalf("photo file %q", p)
+		}
+	}
+}
+
+// A CardDAV answer that is not the address book's (a redirect, a page) leaves the contacts as they
+// are: nothing is taken as an address book without contacts.
+func TestCardDavWrongAnswer(t *testing.T) {
+	mode := ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case mode == "redirect" && r.URL.Path != "/moved/":
+			http.Redirect(w, r, "/moved/", http.StatusMovedPermanently)
+		case mode == "page" || r.URL.Path == "/moved/":
+			w.Header().Set("Content-Type", "application/xml")
+			io.WriteString(w, `<?xml version="1.0"?><d:error xmlns:d="DAV:"/>`)
+		default:
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(207)
+			io.WriteString(w, `<?xml version="1.0"?><d:multistatus xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">`+
+				`<d:response><d:href>/c/1.vcf</d:href><d:propstat><d:prop><card:address-data>`+card30+
+				`</card:address-data></d:prop></d:propstat></d:response></d:multistatus>`)
+		}
+	}))
+	defer srv.Close()
+	s, c := archiveWith(t, "carddav", M{"url": srv.URL + "/c/", "username": "me"})
+	if err := (CardDav{}).Sync(c); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode = range []string{"redirect", "page"} {
+		if err := (CardDav{}).Sync(c); err == nil {
+			t.Fatalf("%s: taken as the address book", mode)
+		}
+		if n := db.Int(s.Read(), "SELECT count(*) FROM contact"); n != 1 {
+			t.Fatalf("%s: %d contacts left", mode, n)
+		}
 	}
 }
