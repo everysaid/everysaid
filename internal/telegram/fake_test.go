@@ -1,0 +1,290 @@
+package telegram
+
+// A fake of the Telegram API surface this package uses, answering gotd's own client (tg.Client over
+// a tg.Invoker): every test runs on invented chats in temporary folders, never on a real account,
+// a real store or a real archive, and nothing connects to Telegram.
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"sync"
+	"testing"
+
+	"github.com/gotd/td/bin"
+	"github.com/gotd/td/tg"
+
+	"everysaid/internal/config"
+)
+
+func TestMain(m *testing.M) {
+	dir, _ := os.MkdirTemp("", "everysaid-telegram-test")
+	for k, v := range map[string]string{"EVERYSAID_DATA": "data", "EVERYSAID_CACHE": "cache",
+		"EVERYSAID_CONFIG": "config", "EVERYSAID_STATE": "state"} {
+		os.Setenv(k, filepath.Join(dir, v))
+	}
+	os.Setenv("EVERYSAID_KEYRING", "everysaid-test-telegram")
+	config.Load()
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
+
+// fakeChat is one dialog of the fake account.
+type fakeChat struct {
+	entity   any // *tg.User, *tg.Chat, *tg.Channel
+	peer     tg.PeerClass
+	messages []tg.MessageClass // any order
+	folder   int
+	pinned   bool
+	readIn   int
+	readOut  int
+	mute     int
+}
+
+type fake struct {
+	mu       sync.Mutex
+	self     *tg.User
+	chats    []*fakeChat
+	users    []tg.UserClass // all users the answers carry
+	calls    []string
+	requests []bin.Encoder
+	files    map[int64][]byte // document id -> its bytes
+	nextID   int
+}
+
+func (f *fake) chat(peer tg.PeerClass) *fakeChat {
+	for _, c := range f.chats {
+		if PeerID(c.peer) == PeerID(peer) {
+			return c
+		}
+	}
+	return nil
+}
+
+func inputToPeer(p tg.InputPeerClass, self int64) tg.PeerClass {
+	switch p := p.(type) {
+	case *tg.InputPeerUser:
+		return &tg.PeerUser{UserID: p.UserID}
+	case *tg.InputPeerSelf:
+		return &tg.PeerUser{UserID: self}
+	case *tg.InputPeerChat:
+		return &tg.PeerChat{ChatID: p.ChatID}
+	case *tg.InputPeerChannel:
+		return &tg.PeerChannel{ChannelID: p.ChannelID}
+	}
+	return nil
+}
+
+func (f *fake) chatsList() []tg.ChatClass {
+	var out []tg.ChatClass
+	for _, c := range f.chats {
+		if ch, ok := c.entity.(tg.ChatClass); ok {
+			out = append(out, ch)
+		}
+	}
+	return out
+}
+
+func sortedDesc(ms []tg.MessageClass) []tg.MessageClass {
+	out := append([]tg.MessageClass{}, ms...)
+	sort.Slice(out, func(i, j int) bool { return out[i].GetID() > out[j].GetID() })
+	return out
+}
+
+// history answers getHistory as Telegram does: newest first, from the first message older than
+// offset_id, moved by add_offset, limit of them.
+func history(ms []tg.MessageClass, offsetID, addOffset, limit int) []tg.MessageClass {
+	ms = sortedDesc(ms)
+	p := len(ms)
+	if offsetID == 0 {
+		p = 0
+	} else {
+		for i, m := range ms {
+			if m.GetID() < offsetID {
+				p = i
+				break
+			}
+		}
+	}
+	from := max(0, p+addOffset)
+	to := min(len(ms), max(from, p+addOffset+limit))
+	return ms[from:to]
+}
+
+func (f *fake) answer(input bin.Encoder) (bin.Encoder, error) {
+	switch r := input.(type) {
+	case *tg.MessagesGetDialogsRequest:
+		f.calls = append(f.calls, "getDialogs")
+		start := 0
+		if p := inputToPeer(r.OffsetPeer, f.self.ID); p != nil {
+			for i, c := range f.chats {
+				if PeerID(c.peer) == PeerID(p) {
+					start = i + 1
+				}
+			}
+		}
+		end := min(len(f.chats), start+r.Limit)
+		out := &tg.MessagesDialogsSlice{Count: len(f.chats), Users: f.users, Chats: f.chatsList()}
+		for _, c := range f.chats[start:end] {
+			top := sortedDesc(c.messages)
+			d := &tg.Dialog{Peer: c.peer, ReadInboxMaxID: c.readIn, ReadOutboxMaxID: c.readOut, Pinned: c.pinned}
+			if c.mute != 0 {
+				d.NotifySettings.SetMuteUntil(c.mute)
+			}
+			if c.folder != 0 {
+				d.SetFolderID(c.folder)
+			}
+			if len(top) > 0 {
+				d.TopMessage = top[0].GetID()
+				out.Messages = append(out.Messages, top[0])
+			}
+			out.Dialogs = append(out.Dialogs, d)
+		}
+		return &tg.MessagesDialogsBox{Dialogs: out}, nil
+	case *tg.MessagesGetHistoryRequest:
+		f.calls = append(f.calls, "getHistory")
+		c := f.chat(inputToPeer(r.Peer, f.self.ID))
+		if c == nil {
+			return nil, fmt.Errorf("PEER_ID_INVALID")
+		}
+		return &tg.MessagesMessagesBox{Messages: &tg.MessagesMessagesSlice{Count: len(c.messages),
+			Messages: history(c.messages, r.OffsetID, r.AddOffset, r.Limit), Users: f.users, Chats: f.chatsList()}}, nil
+	case *tg.MessagesSearchRequest:
+		f.calls = append(f.calls, "search")
+		c := f.chat(inputToPeer(r.Peer, f.self.ID))
+		n := 0
+		for _, m := range c.messages {
+			if msg, ok := m.(*tg.Message); ok && msg.Media != nil {
+				n++
+			}
+		}
+		return &tg.MessagesMessagesBox{Messages: &tg.MessagesMessagesSlice{Count: n}}, nil
+	case *tg.MessagesGetMessagesRequest:
+		f.calls = append(f.calls, "getMessages")
+		var out []tg.MessageClass
+		for _, in := range r.ID {
+			id := in.(*tg.InputMessageID).ID
+			for _, c := range f.chats {
+				if _, ch := c.peer.(*tg.PeerChannel); ch {
+					continue
+				}
+				for _, m := range c.messages {
+					if m.GetID() == id {
+						out = append(out, m)
+					}
+				}
+			}
+		}
+		return &tg.MessagesMessagesBox{Messages: &tg.MessagesMessages{Messages: out, Users: f.users}}, nil
+	case *tg.UploadGetFileRequest:
+		f.calls = append(f.calls, "getFile")
+		loc := r.Location.(*tg.InputDocumentFileLocation)
+		data := f.files[loc.ID]
+		if r.Offset >= int64(len(data)) {
+			data = nil
+		} else {
+			data = data[r.Offset:min(int64(len(data)), r.Offset+int64(r.Limit))]
+		}
+		return &tg.UploadFileBox{File: &tg.UploadFile{Type: &tg.StorageFileUnknown{}, Bytes: data}}, nil
+	case *tg.MessagesSendMessageRequest:
+		f.calls = append(f.calls, "sendMessage")
+		f.requests = append(f.requests, r)
+		f.nextID++
+		return &tg.UpdatesBox{Updates: &tg.UpdateShortSentMessage{Out: true, ID: f.nextID, Date: 1700000000}}, nil
+	case *tg.UsersGetUsersRequest:
+		f.calls = append(f.calls, "getUsers")
+		var out []tg.UserClass
+		for _, in := range r.ID {
+			for _, u := range f.users {
+				if u.(*tg.User).ID == in.(*tg.InputUser).UserID {
+					out = append(out, u)
+				}
+			}
+		}
+		return &tg.UserClassVector{Elems: out}, nil
+	case *tg.MessagesReadHistoryRequest:
+		f.calls = append(f.calls, "readHistory")
+		f.requests = append(f.requests, r)
+		return &tg.MessagesAffectedMessages{}, nil
+	}
+	return nil, fmt.Errorf("the fake does not answer %T", input)
+}
+
+func (f *fake) Invoke(ctx context.Context, input bin.Encoder, output bin.Decoder) error {
+	f.mu.Lock()
+	resp, err := f.answer(input)
+	f.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	var b bin.Buffer
+	if err := resp.Encode(&b); err != nil {
+		return err
+	}
+	return output.Decode(&b)
+}
+
+func (f *fake) conn() *conn { return newConn(tg.NewClient(f)) }
+
+func user(id int64, first string, hash int64) *tg.User {
+	u := &tg.User{ID: id, FirstName: first}
+	u.SetAccessHash(hash)
+	return u
+}
+
+func text(id int, peer tg.PeerClass, from int64, date int, s string, out bool) *tg.Message {
+	m := &tg.Message{ID: id, PeerID: peer, Date: date, Message: s}
+	m.SetOut(out)
+	if from != 0 {
+		m.SetFromID(&tg.PeerUser{UserID: from})
+	}
+	return m
+}
+
+// account is the invented account: the owner (1), user 2 with 250 messages, a group (10) of
+// five, a channel and a bot that stay out, and Saved Messages.
+func account() *fake {
+	self := user(1, "Me", 11)
+	self.SetSelf(true)
+	bob := user(2, "Bob", 22)
+	bot := user(3, "Botty", 33)
+	bot.SetBot(true)
+	channel := &tg.Channel{ID: 20, Title: "News", Photo: &tg.ChatPhotoEmpty{}}
+	channel.SetBroadcast(true)
+	channel.SetAccessHash(44)
+	group := &tg.Chat{ID: 10, Title: "Friends", Photo: &tg.ChatPhotoEmpty{}}
+	f := &fake{self: self, users: []tg.UserClass{self, bob, bot}, nextID: 1000, files: map[int64][]byte{}}
+	bobChat := &fakeChat{entity: bob, peer: &tg.PeerUser{UserID: 2}, readIn: 240, readOut: 245, pinned: true, mute: 2147483647}
+	for i := 1; i <= 250; i++ {
+		bobChat.messages = append(bobChat.messages, text(i, &tg.PeerUser{UserID: 2}, 0, 1600000000+i, fmt.Sprint("m", i), i%2 == 0))
+	}
+	groupChat := &fakeChat{entity: group, peer: &tg.PeerChat{ChatID: 10}, folder: 1}
+	for i := 1; i <= 5; i++ {
+		groupChat.messages = append(groupChat.messages, text(i, &tg.PeerChat{ChatID: 10}, 2, 1600000000+i, "g", false))
+	}
+	f.chats = []*fakeChat{bobChat, groupChat,
+		{entity: channel, peer: &tg.PeerChannel{ChannelID: 20}, messages: []tg.MessageClass{text(1, &tg.PeerChannel{ChannelID: 20}, 0, 1600000000, "n", false)}},
+		{entity: bot, peer: &tg.PeerUser{UserID: 3}, messages: []tg.MessageClass{text(1, &tg.PeerUser{UserID: 3}, 0, 1600000000, "b", false)}},
+		{entity: self, peer: &tg.PeerUser{UserID: 1}, messages: []tg.MessageClass{text(1, &tg.PeerUser{UserID: 1}, 1, 1600000000, "note", true)}},
+	}
+	return f
+}
+
+// many is an account of n people, one message each, for the dialogs' pages.
+func many(n int) *fake {
+	self := user(1, "Me", 11)
+	self.SetSelf(true)
+	f := &fake{self: self, users: []tg.UserClass{self}}
+	for i := 0; i < n; i++ {
+		u := user(int64(100+i), fmt.Sprint("P", i), int64(i))
+		f.users = append(f.users, u)
+		peer := &tg.PeerUser{UserID: u.ID}
+		f.chats = append(f.chats, &fakeChat{entity: u, peer: peer, messages: []tg.MessageClass{text(1, peer, 0, 1600000000-i, "x", false)}})
+	}
+	return f
+}
+
+func newTestCtx() context.Context { return context.Background() }
