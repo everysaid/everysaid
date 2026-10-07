@@ -403,3 +403,12 @@ def test_accounts_in_settings(app):
     assert "whatsapp" in items and "accounts" in items["whatsapp"]
     assert c.put("/api/settings", json={"hidden_accounts": [1, 2]}, headers=H).json()["hidden_accounts"] == [1, 2]
     assert c.put("/api/settings", json={"hidden_accounts": ["x"]}, headers=H).json()["hidden_accounts"] == [1, 2]   # not ids: kept as it was
+
+
+def test_a_person_with_their_latest_messages(app):
+    app, c = app
+    login(app, c)
+    pid = c.get("/api/chats").json()["items"][0]["person_id"] or c.get("/api/people").json()["items"][0]["id"]
+    assert "recent" not in c.get(f"/api/people/{pid}").json()
+    got = c.get(f"/api/people/{pid}", params={"recent": 3}).json()["recent"]
+    assert 0 < len(got) <= 3 and {"ts", "outgoing", "text"} <= set(got[0])

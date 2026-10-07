@@ -118,3 +118,19 @@ test("people: without a name, one named and one the same as someone", async ({ p
   });
   expect(undone).toEqual([200, 200]);
 });
+
+// Merging by name: each one found can be looked at first (handles, how much, latest messages).
+test("people: who is this, before merging", async ({ page }, info) => {
+  await signedIn(page, info.project.name);
+  await page.goto("/people");
+  await page.locator("[data-person]").first().click();
+  await page.getByRole("button", { name: /Συγχώνευση με|Merge with/ }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("textbox").fill("Ελ");
+  await dialog.locator("[data-peek]").first().click();
+  const panel = dialog.locator("[data-peek-panel]");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(/μηνύματα|messages/);
+  await dialog.locator("[data-peek]").first().click();
+  await expect(panel).toHaveCount(0);
+});

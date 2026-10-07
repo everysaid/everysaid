@@ -10,6 +10,7 @@ import { dateOnly, number } from "@/lib/format";
 import { useDebounced } from "@/lib/hooks";
 import { Avatar, Button, Dialog, Empty, Input, LoadingBar, ServiceBadge, Spinner, Switch } from "@/components/ui";
 import { GuessLine, labelName, Votes } from "@/components/Labels";
+import { usePeek } from "@/components/PersonPeek";
 import { PageHeader } from "@/components/PageHeader";
 
 type Recent = { ts: number; outgoing: boolean; text: string };
@@ -134,6 +135,7 @@ function SameAs({ p, onClose, onDone }: { p: Unnamed | null; onClose: () => void
   const [q, setQ] = useState("");
   const dq = useDebounced(q, 200);
   const refresh = useRefreshOthers();
+  const peek = usePeek();
   const res = useQuery({
     queryKey: ["people", "same-as", dq],
     enabled: !!p && dq.length > 1,
@@ -151,10 +153,15 @@ function SameAs({ p, onClose, onDone }: { p: Unnamed | null; onClose: () => void
         <Input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("people.search")} data-same-search />
         <div className="mt-3 divide-y divide-line">
           {res.data?.items.filter((x) => x.id !== p?.id).map((x) => (
-            <div key={x.id} className="flex items-center gap-3 py-2">
-              <Avatar name={x.name} size={36} />
-              <span className="min-w-0 flex-1 truncate">{x.name}</span>
-              <Button size="sm" variant="primary" onClick={() => merge.mutate(x)} loading={merge.isPending} data-same-pick>{t("people.mergeConfirm")}</Button>
+            <div key={x.id}>
+              <div className="flex items-center gap-3 py-2">
+                <Avatar name={x.name} size={36} />
+                <span className="min-w-0 flex-1 truncate">{x.name}</span>
+                {peek.button(x.id)}
+                <Button size="sm" variant="primary" onClick={() => merge.mutate(x)}
+                  loading={merge.isPending && merge.variables?.id === x.id} disabled={merge.isPending} data-same-pick>{t("people.mergeConfirm")}</Button>
+              </div>
+              {peek.panel(x.id)}
             </div>
           ))}
         </div>

@@ -11,6 +11,7 @@ import { personRoute } from "@/router";
 import { Avatar, Button, Card, Center, Dialog, Field, Input, ServiceBadge, Spinner, Textarea } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { GuessLine, PersonLabels } from "@/components/Labels";
+import { usePeek } from "@/components/PersonPeek";
 
 export function PersonPage() {
   const { t } = useTranslation();
@@ -115,6 +116,7 @@ function MergeDialog({ open, onOpenChange, person, onDone }: { open: boolean; on
   const { t } = useTranslation();
   const [q, setQ] = useState("");
   const dq = useDebounced(q, 200);
+  const peek = usePeek();
   const res = useQuery({
     queryKey: ["people", "merge", dq],
     enabled: open && dq.length > 1,
@@ -130,10 +132,15 @@ function MergeDialog({ open, onOpenChange, person, onDone }: { open: boolean; on
       <Input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("people.search")} />
       <div className="mt-3 divide-y divide-line">
         {res.data?.items.filter((x) => x.id !== person.id).map((x) => (
-          <div key={x.id} className="flex items-center gap-3 py-2">
-            <Avatar name={x.name} size={36} />
-            <span className="min-w-0 flex-1 truncate">{x.name}</span>
-            <Button size="sm" variant="primary" onClick={() => merge.mutate(x.id)} loading={merge.isPending}>{t("people.mergeConfirm")}</Button>
+          <div key={x.id}>
+            <div className="flex items-center gap-3 py-2">
+              <Avatar name={x.name} size={36} />
+              <span className="min-w-0 flex-1 truncate">{x.name}</span>
+              {peek.button(x.id)}
+              <Button size="sm" variant="primary" onClick={() => merge.mutate(x.id)}
+                loading={merge.isPending && merge.variables === x.id} disabled={merge.isPending}>{t("people.mergeConfirm")}</Button>
+            </div>
+            {peek.panel(x.id)}
           </div>
         ))}
       </div>

@@ -588,8 +588,12 @@ def create_app(archive_path=None, auth_path=None):
         return {"ok": True}
 
     @app.get("/api/people/{pid}")
-    def person(pid: int):
-        return described(nf(queries.person(store, pid)))
+    def person(pid: int, recent: int = 0):
+        """recent: with their latest messages, so many (a little of their history, to tell them apart)"""
+        p = described(nf(queries.person(store, pid)))
+        if recent:
+            p["recent"] = queries._recent(store, pid, min(recent, 20))
+        return p
 
     @app.put("/api/people/{pid}/labels/{lid}")
     def person_label(pid: int, lid: int, body: dict = Body(...)):
