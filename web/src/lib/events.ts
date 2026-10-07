@@ -7,6 +7,7 @@ export type LiveEvent =
   | { type: "plugin"; instance: number; running?: string | null; live?: boolean }
   | { type: "plugin_log"; instance: number; line: string }
   | { type: "plugin_progress"; instance: number; line: string }     // a line drawn again (a progress bar)
+  | { type: "plugin_qr"; instance: number; code: string }           // a code to link a device (WhatsApp, Signal): shown as a QR
   | { type: "alert"; title: string; body: string };                  // a plugin's warning, in the user's words
 
 type Listener = (e: LiveEvent) => void;

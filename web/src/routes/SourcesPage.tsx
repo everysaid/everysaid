@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { api, type PluginChat, type PluginInstance, type PluginManifest, type SettingField } from "@/lib/api";
 import { bytes, dateOnly, isoDay, number, relative } from "@/lib/format";
 import { onEvent } from "@/lib/events";
+import QRCode from "qrcode";
 import { service } from "@/lib/services";
 import { cn } from "@/lib/utils";
 import { Button, Card, Dialog, Field, Input, Section, Segmented, Spinner, Switch } from "@/components/ui";
@@ -76,7 +77,17 @@ function InstanceCard({ i, manifest }: { i: PluginInstance; manifest?: PluginMan
       setLog((l) => [...l.slice(-199), e.line]);
     }
     if (e.type === "plugin_progress" && e.instance === i.id) setDrawing(e.line);
+    if (e.type === "plugin_qr" && e.instance === i.id) setLinkCode(e.code || null);
+    if (e.type === "plugin" && e.instance === i.id && !e.running) setLinkCode(null);     // the link ended: linked, or given up
   }), [i.id]);
+  const [linkCode, setLinkCode] = useState<string | null>(null);     // a device being linked: the code the phone scans
+  const [qr, setQr] = useState<string | null>(null);
+  useEffect(() => {
+    if (!linkCode) return setQr(null);
+    let gone = false;
+    QRCode.toDataURL(linkCode, { margin: 1, width: 240 }).then((u) => !gone && setQr(u));
+    return () => { gone = true; };
+  }, [linkCode]);
   const refresh = () => qc.invalidateQueries({ queryKey: ["plugins"] });
   const run = useMutation({
     mutationFn: (b: { action?: string; given?: Record<string, string> }) => api.post(`/api/plugins/${i.id}/run`, b),
@@ -112,6 +123,12 @@ function InstanceCard({ i, manifest }: { i: PluginInstance; manifest?: PluginMan
             </span>
             {manifest?.services.map((s) => <span key={s} style={{ color: service(s).color }}>● {service(s).name}</span>)}
           </div>
+          {qr && (
+            <div data-link-code className="mt-3 flex flex-col items-start gap-2">
+              <img src={qr} alt="QR" className="size-60 rounded-lg bg-white p-2" />
+              <span className="text-xs text-muted">{t("sources.scanToLink")}</span>
+            </div>
+          )}
           {i.info.length > 0 && (
             <dl data-info className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
               {i.info.map((f) => <Fragment key={f.label}><dt className="text-muted">{f.label}</dt><dd className="break-all font-mono">{f.value}</dd></Fragment>)}
