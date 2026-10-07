@@ -10,6 +10,7 @@ package whatsapp
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -62,6 +63,54 @@ func (store *MessageStore) writeMedia(rel string, data []byte) error {
 	return os.Rename(tmp, path)
 }
 
+var (
+	errSaving     = errors.New("failed to save media file")
+	errIncomplete = errors.New("incomplete media information for download")
+)
+
+// gone: WhatsApp no longer has the file, or what came is not it. It is recorded (media_error) and
+// not tried again; anything else (not connected, the network, the disk) is tried again at the next
+// start, while WhatsApp still keeps the file.
+func gone(err error) bool {
+	for _, e := range []error{errIncomplete, whatsmeow.ErrMediaDownloadFailedWith403, whatsmeow.ErrMediaDownloadFailedWith404,
+		whatsmeow.ErrMediaDownloadFailedWith410, whatsmeow.ErrNoURLPresent, whatsmeow.ErrTooShortFile,
+		whatsmeow.ErrInvalidMediaHMAC, whatsmeow.ErrInvalidMediaEncSHA256, whatsmeow.ErrInvalidMediaSHA256,
+		whatsmeow.ErrInvalidUnencryptedMediaSHA256, whatsmeow.ErrUnknownMediaType, whatsmeow.ErrFileLengthMismatch} {
+		if errors.Is(err, e) {
+			return true
+		}
+	}
+	return false
+}
+
+// downloadTo downloads a file into its place in the store, whole or not at all: written as it comes
+// (a document may be as large as 2 GB, too much to hold in memory) into a temporary file that is
+// renamed once WhatsApp's hashes check out.
+func (store *MessageStore) downloadTo(client *whatsmeow.Client, d *MediaDownloader, rel string) error {
+	path := filepath.Join(store.dir, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return fmt.Errorf("%w: %v", errSaving, err)
+	}
+	tmp := path + ".part"
+	f, err := os.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return fmt.Errorf("%w: %v", errSaving, err)
+	}
+	err = client.DownloadToFile(context.Background(), d, f)
+	if cerr := f.Close(); err == nil && cerr != nil {
+		err = fmt.Errorf("%w: %v", errSaving, cerr)
+	}
+	if err == nil {
+		if err = os.Rename(tmp, path); err != nil {
+			err = fmt.Errorf("%w: %v", errSaving, err)
+		}
+	}
+	if err != nil {
+		os.Remove(tmp)
+	}
+	return err
+}
+
 // download returns the absolute path of a message's file, downloading it unless it is there.
 func (store *MessageStore) download(client *whatsmeow.Client, id, chatJID string) (string, error) {
 	var mediaType, filename, url, directPath, mediaPath sql.NullString
@@ -85,21 +134,20 @@ func (store *MessageStore) download(client *whatsmeow.Client, id, chatJID string
 		return "", fmt.Errorf("not a media message")
 	}
 	if (url.String == "" && directPath.String == "") || len(mediaKey) == 0 || len(fileEncSHA256) == 0 {
-		return "", fmt.Errorf("incomplete media information for download")
+		store.db.Exec("UPDATE messages SET media_error = ? WHERE id = ? AND chat_jid = ?", errIncomplete.Error(), id, chatJID)
+		return "", errIncomplete
 	}
 	d := &MediaDownloader{URL: url.String, DirectPath: directPath.String, MediaKey: mediaKey,
 		FileLength: uint64(fileLength.Int64), FileSHA256: fileSHA256, FileEncSHA256: fileEncSHA256, MediaType: waType}
 	if d.DirectPath == "" {
 		d.DirectPath = extractDirectPathFromURL(url.String)
 	}
-	data, err := client.Download(context.Background(), d)
-	if err != nil {
-		store.db.Exec("UPDATE messages SET media_error = ? WHERE id = ? AND chat_jid = ?", err.Error(), id, chatJID)
-		return "", fmt.Errorf("failed to download media: %v", err)
-	}
 	rel := mediaFile(mediaType.String, filename.String, chatJID, id)
-	if err := store.writeMedia(rel, data); err != nil {
-		return "", fmt.Errorf("failed to save media file: %v", err)
+	if err := store.downloadTo(client, d, rel); err != nil {
+		if gone(err) {
+			store.db.Exec("UPDATE messages SET media_error = ? WHERE id = ? AND chat_jid = ?", err.Error(), id, chatJID)
+		}
+		return "", fmt.Errorf("failed to download media: %v", err)
 	}
 	store.db.Exec("UPDATE messages SET media_path = ?, media_error = NULL WHERE id = ? AND chat_jid = ?", rel, id, chatJID)
 	return filepath.Abs(filepath.Join(store.dir, rel))
@@ -122,7 +170,7 @@ func startDownloads(client *whatsmeow.Client, store *MessageStore, logger waLog.
 	// what arrived while it was not running, or before this version
 	rows, err := store.db.Query(`SELECT id, chat_jid FROM messages WHERE coalesce(media_type, '') != ''
 		AND coalesce(media_path, '') = '' AND media_error IS NULL AND coalesce(subtype, '') != 'view_once'
-		AND timestamp > ? ORDER BY timestamp`, time.Now().Add(-downloadBackfill))
+		AND NOT `+channelsSQL+` AND timestamp > ? ORDER BY timestamp`, time.Now().Add(-downloadBackfill))
 	if err == nil {
 		var jobs []mediaJob
 		for rows.Next() {
@@ -152,7 +200,7 @@ func (d *Downloads) queue(id, chatJID string) {
 func (d *Downloads) wanted(j mediaJob) bool {
 	var n int
 	d.store.db.QueryRow(`SELECT count(*) FROM messages WHERE id = ? AND chat_jid = ? AND coalesce(media_type, '') != ''
-		AND coalesce(media_path, '') = '' AND coalesce(subtype, '') != 'view_once'`, j.id, j.chatJID).Scan(&n)
+		AND coalesce(media_path, '') = '' AND coalesce(subtype, '') != 'view_once' AND NOT `+channelsSQL, j.id, j.chatJID).Scan(&n)
 	return n > 0
 }
 
@@ -172,7 +220,7 @@ func (d *Downloads) run() {
 		}
 		var err error
 		for attempt, wait := 1, 10*time.Second; ; attempt, wait = attempt+1, wait*3 {
-			if _, err = d.store.download(d.client, j.id, j.chatJID); err == nil || attempt == 3 {
+			if _, err = d.store.download(d.client, j.id, j.chatJID); err == nil || gone(err) || attempt == 3 {
 				break
 			}
 			select {

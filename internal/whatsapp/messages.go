@@ -7,8 +7,10 @@ package whatsapp
 // the edits and deletions of earlier messages.
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -349,6 +351,16 @@ func nullable(s string) interface{} {
 	return s
 }
 
+// isChannel: channels (newsletters) and status (everyone's, status@broadcast) are never kept: not
+// wanted in the archive, and their files would be downloaded for nothing. A broadcast list of the
+// account's own is not one: what was sent through it is kept.
+func isChannel(jid types.JID) bool {
+	return jid.Server == types.NewsletterServer || jid == types.StatusBroadcastJID
+}
+
+// channelsSQL is isChannel for a chat_jid column.
+const channelsSQL = "(chat_jid LIKE '%@newsletter' OR chat_jid = 'status@broadcast')"
+
 // ownJID is the account's own jid, as reactions and calls name it.
 func ownJID(client *whatsmeow.Client) string {
 	if client.Store.ID == nil {
@@ -357,18 +369,79 @@ func ownJID(client *whatsmeow.Client) string {
 	return client.Store.ID.ToNonAD().String()
 }
 
+// alternates are a person's jids: the one given, the other one the message names (alt), and what
+// whatsmeow knows of the number of a LID or the LID of a number. One person's chat may be kept
+// under either.
+func alternates(client *whatsmeow.Client, jid, alt types.JID) []string {
+	out := []string{}
+	add := func(j types.JID) {
+		if s := jidString(j); s != "" && !slices.Contains(out, s) {
+			out = append(out, s)
+		}
+	}
+	add(jid)
+	add(alt)
+	if client != nil {
+		ctx := context.Background()
+		switch jid.Server {
+		case types.DefaultUserServer:
+			if lid, err := client.Store.LIDs.GetLIDForPN(ctx, jid.ToNonAD()); err == nil {
+				add(lid)
+			}
+		case types.HiddenUserServer:
+			if pn, err := client.Store.LIDs.GetPNForLID(ctx, jid.ToNonAD()); err == nil {
+				add(pn)
+			}
+		}
+	}
+	return out
+}
+
+// changeable is the chat of the earlier message an edit or a deletion names, and whether whoever
+// sent it may change it, as WhatsApp allows: an edit only its author; a deletion its author, or in
+// a group an admin. Anything else (another member forging one) is ignored, as the apps do.
+func changeable(client *whatsmeow.Client, store *MessageStore, evt *events.Message, id string, deletion bool) (string, bool) {
+	info := evt.Info
+	group := info.Chat.Server == types.GroupServer
+	chats := []string{info.Chat.String()}
+	if !group {
+		alt := info.SenderAlt
+		if info.IsFromMe {
+			alt = info.RecipientAlt
+		}
+		chats = alternates(client, info.Chat, alt)
+	}
+	for _, chat := range chats {
+		var sender sql.NullString
+		var fromMe sql.NullBool
+		if store.db.QueryRow("SELECT sender, is_from_me FROM messages WHERE id = ? AND chat_jid = ?", id, chat).Scan(&sender, &fromMe) != nil {
+			continue
+		}
+		var author bool
+		switch {
+		case fromMe.Bool || info.IsFromMe:
+			author = fromMe.Bool == info.IsFromMe
+		case sender.String == "":
+			author = !group // a person's chat has one other side
+		default:
+			author = slices.Contains(alternates(client, info.Sender, info.SenderAlt), sender.String)
+		}
+		return chat, author || (deletion && group)
+	}
+	return "", false
+}
+
 // processMessage stores a message, or applies what it does to an earlier one (an edit, a
 // deletion, a reaction), or records the call it logs. name: the chat's name where already known.
 func processMessage(client *whatsmeow.Client, store *MessageStore, evt *events.Message, name string, logger waLog.Logger) {
 	msg := evt.Message
-	if msg == nil {
+	if msg == nil || isChannel(evt.Info.Chat) {
 		return
 	}
 	chatJID := evt.Info.Chat.String()
 	sender := evt.Info.Sender.ToNonAD().String()
 
 	if pm := msg.GetProtocolMessage(); pm != nil {
-		target := pm.GetKey().GetID()
 		switch pm.GetType() {
 		case waE2E.ProtocolMessage_MESSAGE_EDIT:
 			edited := pm.GetEditedMessage()
@@ -376,14 +449,18 @@ func processMessage(client *whatsmeow.Client, store *MessageStore, evt *events.M
 			if ci := contextInfo(edited); ci != nil {
 				mentions = ci.GetMentionedJID()
 			}
-			if _, err := store.db.Exec("UPDATE messages SET content = ?, mentions = ?, edited = 1 WHERE id = ? AND chat_jid = ?",
-				messageText(edited), nullable(strings.Join(mentions, ",")), target, chatJID); err != nil {
-				logger.Warnf("Failed to store edit: %v", err)
+			if chat, ok := changeable(client, store, evt, pm.GetKey().GetID(), false); ok {
+				if _, err := store.db.Exec("UPDATE messages SET content = ?, mentions = ?, edited = 1 WHERE id = ? AND chat_jid = ?",
+					messageText(edited), nullable(strings.Join(mentions, ",")), pm.GetKey().GetID(), chat); err != nil {
+					logger.Warnf("Failed to store edit: %v", err)
+				}
 			}
 		case waE2E.ProtocolMessage_REVOKE:
-			if _, err := store.db.Exec("UPDATE messages SET deleted = 1 WHERE id = ? AND chat_jid = ?",
-				target, chatJID); err != nil {
-				logger.Warnf("Failed to store deletion: %v", err)
+			if chat, ok := changeable(client, store, evt, pm.GetKey().GetID(), true); ok {
+				if _, err := store.db.Exec("UPDATE messages SET deleted = 1 WHERE id = ? AND chat_jid = ?",
+					pm.GetKey().GetID(), chat); err != nil {
+					logger.Warnf("Failed to store deletion: %v", err)
+				}
 			}
 		}
 		return

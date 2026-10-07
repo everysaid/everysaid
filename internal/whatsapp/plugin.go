@@ -8,6 +8,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -225,7 +226,9 @@ func watchState(c *plugins.Context) {
 func (p Plugin) RunImport(c *plugins.Context) error { return runImport(c) }
 
 // standaloneAnswers says whether the standalone bridge answers on its REST API: it may be running
-// on this store, and a second connection with the same device would take its session over.
+// on this store, and a second connection with the same device would take its session over. Only
+// its own answer counts (its status, as JSON): anything else on that port (another program) does
+// not keep the connection from starting.
 func standaloneAnswers(c *plugins.Context) bool {
 	api := strings.TrimRight(c.Str("api"), "/")
 	if api == "" {
@@ -236,8 +239,14 @@ func standaloneAnswers(c *plugins.Context) bool {
 	if err != nil {
 		return false
 	}
-	r.Body.Close()
-	return true
+	defer r.Body.Close()
+	var status map[string]any
+	if r.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&status) != nil {
+		return false
+	}
+	_, connected := status["connected"]
+	_, blocked := status["send_blocked"]
+	return connected && blocked
 }
 
 // Live runs the connection, and imports what it keeps (messages.db) and the chats' state, archived,
