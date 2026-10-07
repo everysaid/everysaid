@@ -8,12 +8,14 @@
 package sourcekit
 
 import (
+	"database/sql"
 	"errors"
 	"strings"
 	"sync"
 	"time"
 
 	"everysaid/internal/archive"
+	"everysaid/internal/db"
 	"everysaid/internal/errs"
 	"everysaid/internal/i18n"
 	"everysaid/internal/importers"
@@ -102,6 +104,10 @@ func RunImporters(c *plugins.Context, steps []Step) (msgs, calls [2]int64, err e
 	if err != nil {
 		return
 	}
+	// the card's "last run": an import of a live connection is one too, not only one the user started
+	c.Store().MustWrite(func(tx *sql.Tx) {
+		db.Exec(tx, "UPDATE plugin_instance SET last_run = ?, last_status = 'ok' WHERE id = ?", time.Now().Unix(), c.ID)
+	})
 	if msgs[1] > msgs[0] || calls[1] > calls[0] {
 		c.Emit(plugins.M{"type": "new", "messages": []int64{msgs[0], msgs[1]}, "calls": []int64{calls[0], calls[1]}})
 	}
