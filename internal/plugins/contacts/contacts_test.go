@@ -163,10 +163,13 @@ func TestVcardFileSync(t *testing.T) {
 }
 
 func TestCardDav(t *testing.T) {
+	var mu sync.Mutex // got is the server's goroutines' as well
 	var got struct {
 		method, depth, user, pass, body string
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
 		b, _ := io.ReadAll(r.Body)
 		got.method, got.depth, got.body = r.Method, r.Header.Get("Depth"), string(b)
 		got.user, got.pass, _ = r.BasicAuth()
@@ -198,6 +201,8 @@ func TestCardDav(t *testing.T) {
 	if err := (CardDav{}).Sync(c); err != nil {
 		t.Fatal(err)
 	}
+	mu.Lock()
+	defer mu.Unlock()
 	if got.method != "REPORT" || got.depth != "1" || got.user != "me" || !strings.Contains(got.body, "addressbook-query") {
 		t.Fatalf("%+v", got)
 	}
@@ -267,8 +272,12 @@ func TestPhotoNames(t *testing.T) {
 // A CardDAV answer that is not the address book's (a redirect, a page) leaves the contacts as they
 // are: nothing is taken as an address book without contacts.
 func TestCardDavWrongAnswer(t *testing.T) {
+	var mu sync.Mutex // mode is the server's goroutines' as well
 	mode := ""
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		mode := mode
+		mu.Unlock()
 		switch {
 		case mode == "redirect" && r.URL.Path != "/moved/":
 			http.Redirect(w, r, "/moved/", http.StatusMovedPermanently)
@@ -288,7 +297,10 @@ func TestCardDavWrongAnswer(t *testing.T) {
 	if err := (CardDav{}).Sync(c); err != nil {
 		t.Fatal(err)
 	}
-	for _, mode = range []string{"redirect", "page"} {
+	for _, m := range []string{"redirect", "page"} {
+		mu.Lock()
+		mode = m
+		mu.Unlock()
 		if err := (CardDav{}).Sync(c); err == nil {
 			t.Fatalf("%s: taken as the address book", mode)
 		}
@@ -306,9 +318,13 @@ func TestCardDavSyncToken(t *testing.T) {
 		return "BEGIN:VCARD\nVERSION:3.0\nUID:" + uid + "\nFN:" + name + "\nTEL:" + tel + "\nEND:VCARD\n"
 	}
 	type entry struct{ href, data string }
+	// what the server was asked, and how it answers: shared with its goroutines, under mu
+	var mu sync.Mutex
 	var asked []string
 	var answer func(token string) (entries []entry, gone []string, next string, more bool)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
 		b, _ := io.ReadAll(r.Body)
 		body := string(b)
 		var out strings.Builder
@@ -356,44 +372,51 @@ func TestCardDavSyncToken(t *testing.T) {
 	names := func() string {
 		return strings.Join(db.Strs(s.Read(), "SELECT name FROM contact ORDER BY name"), ",")
 	}
+	set := func(f func(token string) ([]entry, []string, string, bool)) {
+		mu.Lock()
+		answer, asked = f, nil
+		mu.Unlock()
+	}
 	sync := func(want string, calls ...string) {
 		t.Helper()
-		asked = nil
 		if err := (CardDav{}).Sync(c); err != nil {
 			t.Fatal(err)
 		}
-		if names() != want || strings.Join(asked, " ") != strings.Join(calls, " ") {
-			t.Fatalf("contacts %s, asked %v", names(), asked)
+		mu.Lock()
+		got := strings.Join(asked, " ")
+		mu.Unlock()
+		if names() != want || got != strings.Join(calls, " ") {
+			t.Fatalf("contacts %s, asked %v", names(), got)
 		}
 	}
 	// the first time everything, in two parts
-	answer = func(token string) ([]entry, []string, string, bool) {
+	set(func(token string) ([]entry, []string, string, bool) {
 		if token == "" {
 			return []entry{{"/c/a.vcf", card("a", "Alpha", "+306940000001")}}, nil, "p1", true
 		}
 		return []entry{{"/c/b.vcf", card("b", "Beta", "+306940000002")}}, nil, "t1", false
-	}
+	})
 	sync("Alpha,Beta", "sync:", "sync:p1")
 	// then what changed: Alpha renamed, Beta gone, Gamma new (without its card)
-	answer = func(token string) ([]entry, []string, string, bool) {
+	set(func(token string) ([]entry, []string, string, bool) {
 		if token != "t1" {
-			t.Fatalf("token %q", token)
+			t.Errorf("token %q", token) // in the server's goroutine: no Fatal
 		}
 		return []entry{{"/c/a.vcf", card("a", "Alpha Two", "+306940000001")}, {"/c/c.vcf", ""}}, []string{"/c/b.vcf"}, "t2", false
-	}
+	})
 	sync("Alpha Two,Gamma", "sync:t1", "multiget")
 	if n := db.Int(s.Read(), "SELECT count(*) FROM contact_address"); n != 1 { // Alpha's: the archive's only number
 		t.Fatal(n, "addresses")
 	}
 	// a token no longer taken: everything again, what is not in it gone
-	answer = func(token string) ([]entry, []string, string, bool) {
+	set(func(token string) ([]entry, []string, string, bool) {
 		if token == "t2" {
 			return nil, nil, "", false
 		}
 		return []entry{{"/c/a.vcf", card("a", "Alpha", "+306940000001")}}, nil, "t3", false
-	}
+	})
 	sync("Alpha", "sync:t2", "sync:")
 	// a server that has no sync tokens: the whole address book, asked for at once
-	answer = func(string) ([]entry, []string, string, bool) { return nil, nil, "", false }
+	set(func(string) ([]entry, []string, string, bool) { return nil, nil, "", false })
 	sync("", "sync:t3", "sync:", "query")
 }
