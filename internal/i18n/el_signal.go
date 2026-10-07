@@ -1,0 +1,43 @@
+package i18n
+
+// The words of the Signal source (internal/signal) that el.go does not have.
+func init() {
+	for k, v := range map[string]string{
+		"Signal as it arrives, through a helper linked to the account as a device (like Signal Desktop): what arrives from the moment it is linked, not the history before it.": "Το Signal όπως έρχεται, μέσω ενός βοηθητικού προγράμματος συνδεδεμένου στον λογαριασμό ως συσκευή (όπως το Signal Desktop): ό,τι έρχεται από τη στιγμή της σύνδεσης, όχι το ιστορικό πριν από αυτήν.",
+		"the Signal helper (everysaid-signal)":                       "το βοηθητικό πρόγραμμα του Signal (everysaid-signal)",
+		"a link from the phone (a QR code)":                          "σύνδεση από το κινητό (ένας κωδικός QR)",
+		"The Signal helper (everysaid-signal)":                       "Το βοηθητικό πρόγραμμα του Signal (everysaid-signal)",
+		"Empty: the one next to Everysaid, else the one on the PATH": "Κενό: αυτό που βρίσκεται δίπλα στο Everysaid, αλλιώς αυτό που βρίσκεται στο PATH",
+		"This device's name on the phone":                            "Το όνομα αυτής της συσκευής στο κινητό",
+		"Download pictures, videos and files":                        "Λήψη φωτογραφιών, βίντεο και αρχείων",
+		"Link this computer (QR code)":                               "Σύνδεση αυτού του υπολογιστή (κωδικός QR)",
+		"Ask the phone for its contacts":                             "Ζήτα από το κινητό τις επαφές του",
+		"not connected to Signal":                                    "χωρίς σύνδεση στο Signal",
+		"connected to Signal":                                        "συνδεδεμένο στο Signal",
+		"waiting for the phone to scan the code":                     "αναμονή να σαρώσει το κινητό τον κωδικό",
+		"not linked yet (Link this computer)":                        "δεν έχει συνδεθεί ακόμα (Σύνδεση αυτού του υπολογιστή)",
+		"Link code":                                                  "Κωδικός σύνδεσης",
+		"Account":                                                    "Λογαριασμός",
+		"The Signal helper (everysaid-signal) is not installed: put it next to Everysaid or on the PATH": "Το βοηθητικό πρόγραμμα του Signal (everysaid-signal) δεν είναι εγκατεστημένο: βάλε το δίπλα στο Everysaid ή στο PATH",
+		"The Signal helper's store cannot be opened with the passphrase in the keyring":                  "Η αποθήκη του βοηθητικού προγράμματος του Signal δεν ανοίγει με τη φράση πρόσβασης που υπάρχει στο keyring",
+		"Not linked to Signal yet: use “Link this computer” and scan the code with the phone":            "Δεν έχει γίνει ακόμα σύνδεση στο Signal: πάτα «Σύνδεση αυτού του υπολογιστή» και σάρωσε τον κωδικό με το κινητό",
+		"Already linked to Signal":                                          "Είναι ήδη συνδεδεμένο στο Signal",
+		"This message cannot be answered":                                   "Δεν μπορείς να απαντήσεις σε αυτό το μήνυμα",
+		"Scan this code in Signal on the phone (Settings, Linked devices):": "Σάρωσε αυτόν τον κωδικό στο Signal του κινητού (Ρυθμίσεις, Συνδεδεμένες συσκευές):",
+		"a message from {who} could not be read":                            "ένα μήνυμα από {who} δεν μπόρεσε να διαβαστεί",
+		"Linked to Signal as {phone}":                                       "Συνδέθηκε στο Signal ως {phone}",
+		"linked: bringing what waited on Signal's server":                   "συνδεδεμένο: φέρνει ό,τι περίμενε στον server του Signal",
+		"Bringing what waited on Signal's server":                           "Φέρνω ό,τι περίμενε στον server του Signal",
+		"Up to date with Signal":                                            "Ενημερωμένο με το Signal",
+		"Contacts from the phone: {n}":                                      "Επαφές από το κινητό: {n}",
+		"No code was scanned in time":                                       "Κανένας κωδικός δεν σαρώθηκε εγκαίρως",
+		"Contacts":                                                          "Επαφές",
+		"Groups":                                                            "Ομάδες",
+		"Asked the phone for its contacts":                                  "Ζητήθηκαν από το κινητό οι επαφές του",
+		"the connection to Signal ended":                                    "η σύνδεση με το Signal τερματίστηκε",
+		"the Signal helper stopped":                                         "το βοηθητικό πρόγραμμα του Signal σταμάτησε",
+		"unknown action":                                                    "άγνωστη ενέργεια",
+	} {
+		EL[k] = v
+	}
+}
