@@ -285,11 +285,13 @@ func tgReactions(m map[string]any, person *tgPeople, own map[archive.Handle]bool
 	if len(recent) > 0 && int64(len(recent)) == sum { // everyone who reacted, by name
 		for _, x := range recent {
 			xm := obj(x)
-			who := person.of(peerID(xm["peer_id"]))
-			mine := truthy(xm["my"]) || own[who]
+			// no peer: not known who (the Python made an address "None" of it)
+			pid, known := peerID(xm["peer_id"])
+			who := person.of(pid, known)
+			mine := truthy(xm["my"]) || (known && own[who])
 			e, c := tgEmoji(xm["reaction"])
 			rr := archive.Reaction{Emoji: e, Code: c, Count: 1, Outgoing: mine}
-			if !mine {
+			if !mine && known {
 				rr.Who = who
 			}
 			out = append(out, rr)
@@ -409,8 +411,11 @@ func telegramCall(a *archive.Archive, src int64, rowKey string, m map[string]any
 	if a.HasOrigin(src, rowKey, "call_origin") {
 		return 0
 	}
-	key := pyStr(action["call_id"])
-	if a.Exists("SELECT 1 FROM call WHERE service_id = ? AND key = ?", a.Service.ID("telegram"), key) {
+	key := "" // no call id: no key (the Python keyed it "None")
+	if action["call_id"] != nil {
+		key = pyStr(action["call_id"])
+	}
+	if key != "" && a.Exists("SELECT 1 FROM call WHERE service_id = ? AND key = ?", a.Service.ID("telegram"), key) {
 		return 0
 	}
 	reasonV, hasReason := obj(action["reason"])["_"]

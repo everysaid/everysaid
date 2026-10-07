@@ -166,16 +166,16 @@ func viberDB(t *testing.T, path string) {
 	date := 1_790_000_000 - archive.AppleEpoch
 	mention := js(M{"textMetaInfo": []M{{"type": 0, "memberId": "mid-nick", "start": 4, "end": 11}}})
 	rows := []struct {
-		token        int64
-		state        string
-		conv         int64
-		sender       any
-		text         string
-		md           any
+		token  int64
+		state  string
+		conv   int64
+		sender any
+		text   string
+		md     any
 	}{
 		{1001, "delivered", 10, nil, "one", nil}, {1002, "received", 10, 1, "two", nil},
 		{1003, "delivered", 10, nil, "three", nil}, {1004, "delivered", 10, nil, "four", nil},
-		{2001, "received", 20, 1, "hey ‪@Nick‬, look", mention},
+		{2001, "received", 20, 1, "hey \u202a@Nick\u202c, look", mention},
 	}
 	for i, r := range rows {
 		db.Exec(d, "INSERT INTO ZVIBERMESSAGE (Z_PK, ZSTATE, ZSYSTEMTYPE, ZCONVERSATION, ZDATE, ZTOKEN, ZPHONENUMINDEX, "+
@@ -194,7 +194,7 @@ func TestViberMentionsSeenAndRead(t *testing.T) {
 	must(t, Viber(a, nil, ViberOptions{IphoneDB: path, NoDesktop: true}))
 	named := pairs(db.Maps(a.Tx(), "SELECT a.value, n.token FROM mention n JOIN address a ON a.id = n.address_id "+
 		"JOIN message m ON m.id = n.message_id WHERE m.key = '2001'"), "value", "token")
-	if want := [][2]any{{"+15558880002", "‪@Nick‬"}}; !reflect.DeepEqual(named, want) {
+	if want := [][2]any{{"+15558880002", "\u202a@Nick\u202c"}}; !reflect.DeepEqual(named, want) {
 		t.Fatalf("mentions %q", named)
 	}
 	var seen [][4]any
@@ -219,13 +219,13 @@ func TestViberMentionAfterAnEmoji(t *testing.T) {
 	viberDB(t, path)
 	d, err := db.Open(path)
 	must(t, err)
-	db.Exec(d, "UPDATE ZVIBERMESSAGE SET ZTEXT = ?, ZMETADATA = ? WHERE ZTOKEN = 2001", "😀 ‪@Nick‬ hi",
+	db.Exec(d, "UPDATE ZVIBERMESSAGE SET ZTEXT = ?, ZMETADATA = ? WHERE ZTOKEN = 2001", "😀 \u202a@Nick\u202c hi",
 		js(M{"textMetaInfo": []M{{"type": 0, "memberId": "mid-nick", "start": 3, "end": 10}, {"type": 0, "memberId": "mid-nick"}}}))
 	d.Close()
 	must(t, Viber(a, nil, ViberOptions{IphoneDB: path, NoDesktop: true}))
 	var token string
 	a.Row("SELECT n.token FROM mention n JOIN message m ON m.id = n.message_id WHERE m.key = '2001'", nil, &token)
-	if token != "‪@Nick‬" {
+	if token != "\u202a@Nick\u202c" {
 		t.Fatalf("token %q", token)
 	}
 }

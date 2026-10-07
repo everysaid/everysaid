@@ -168,7 +168,7 @@ func TestBridgeChangesToMessagesAlreadyThere(t *testing.T) {
 	db.Exec(d, "UPDATE messages SET content = 'see you at 9', edited = 1 WHERE id = 'M1'")
 	db.Exec(d, "UPDATE messages SET deleted = 1 WHERE id = 'M2'")
 	db.Exec(d, "UPDATE reactions SET emoji = '😂' WHERE NOT is_from_me") // changed
-	db.Exec(d, "UPDATE reactions SET emoji = '' WHERE is_from_me")        // taken back
+	db.Exec(d, "UPDATE reactions SET emoji = '' WHERE is_from_me")      // taken back
 	eq(t, "changes", runBridge(t, a, path), map[string]int{"edited": 1, "deleted": 1, "reactions": 2})
 	eq(t, "M1", msgRow(a, "M1", "text, edited"), []any{"see you at 8", int64(1)}) // the text the archive first had
 	eq(t, "M2", msgRow(a, "M2", "text, deleted"), []any{"oops", int64(1)})        // kept, marked
@@ -196,7 +196,7 @@ func TestBridgeCalls(t *testing.T) {
 		{"L2", "log", waPeer, nil, 0, 0, 0, waTS(10), "MISSED", 0, nil, nil, nil},
 		{"E1", "event", waPeer, waPeer, 0, 0, 0, waTS(20), nil, nil, waTS(20), "2026-10-06 10:21:30+03:00", "terminate"},
 		{"E2", "event", waPeer, waPeer, 0, 0, 0, waTS(40), nil, nil, nil, waTS(40), "reject"},
-		{"E3", "event", waPeer, waPeer, 0, 0, 0, waTS(50), nil, nil, nil, nil, nil},           // still ringing
+		{"E3", "event", waPeer, waPeer, 0, 0, 0, waTS(50), nil, nil, nil, nil, nil},            // still ringing
 		{"E4", "event", waPeer, waPeer, 0, 0, 0, waTS(10), nil, nil, nil, waTS(10), "timeout"}, // the same call as L2
 	}
 	for _, c := range calls {

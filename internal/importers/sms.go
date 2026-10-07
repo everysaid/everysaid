@@ -80,7 +80,7 @@ func attributedText(blob []byte) (string, bool) {
 
 // cleanText is the text without object marks, stripped; "" for none.
 func cleanText(text string) string {
-	return pyStrip(strings.ReplaceAll(text, "￼", ""))
+	return pyStrip(strings.ReplaceAll(text, "\ufffc", ""))
 }
 
 func kindOfMime(mime string) string {

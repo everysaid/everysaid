@@ -69,6 +69,7 @@ var imContactList = map[string]any{"MetaContact Ownership": map[string]any{
 // imSetup points Everysaid's folders into the test's own, with an [owner] as the Python tests have.
 func imSetup(t *testing.T) string {
 	t.Helper()
+	t.Cleanup(config.Load) // after t.Setenv has put the folders back
 	dir := t.TempDir()
 	for _, v := range []string{"DATA", "CACHE", "CONFIG", "STATE"} {
 		p := filepath.Join(dir, strings.ToLower(v))
@@ -78,7 +79,6 @@ func imSetup(t *testing.T) string {
 	t.Setenv("EVERYSAID_KEYRING", "everysaid-test")
 	os.WriteFile(filepath.Join(dir, "config", "config.toml"), []byte("[owner]\nnumbers = [\"+15550000000\"]\nregion = \"US\"\n"), 0o600)
 	config.Load()
-	t.Cleanup(config.Load)
 	return dir
 }
 
