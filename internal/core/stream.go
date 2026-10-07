@@ -120,9 +120,16 @@ func fetch(s *Store, convs, addrs []int64, where string, args, callArgs []any, o
 			rows = append(rows, r)
 		})
 	}
-	if len(addrs) > 0 {
-		a := append(append(db.Args(addrs), callArgs...), limit)
-		db.Each(q, "SELECT id, ts FROM call WHERE address_id IN ("+db.Marks(len(addrs))+") AND conversation_id IS NULL AND "+
+	// a person's calls by their addresses; a chat's own calls (a group call) by its conversations
+	for _, of := range []struct {
+		cond string
+		ids  []int64
+	}{{"address_id IN (%s) AND conversation_id IS NULL", addrs}, {"conversation_id IN (%s)", convs}} {
+		if len(of.ids) == 0 {
+			continue
+		}
+		a := append(append(db.Args(of.ids), callArgs...), limit)
+		db.Each(q, "SELECT id, ts FROM call WHERE "+fmt.Sprintf(of.cond, db.Marks(len(of.ids)))+" AND "+
 			where+" ORDER BY ts "+order+", id "+order+" LIMIT ?", a, func(scan func(...any)) {
 			r := Item{Type: "c"}
 			scan(&r.ID, &r.TS)
@@ -130,6 +137,13 @@ func fetch(s *Store, convs, addrs []int64, where string, args, callArgs []any, o
 		})
 	}
 	return rows
+}
+
+// callsOf is SQL: the calls of a chat, those with its people's addresses (not of a group) and those
+// of its conversations (a group call), with its arguments.
+func callsOf(convs, addrs []int64) (string, []any) {
+	return "(conversation_id IN (" + db.Marks(len(convs)) + ") OR (conversation_id IS NULL AND address_id IN (" +
+		db.Marks(len(addrs)) + ")))", append(db.Args(convs), db.Args(addrs)...)
 }
 
 // StreamOptions: a page Before or After a cursor, or Around a time (Unix ms); Hidden services'

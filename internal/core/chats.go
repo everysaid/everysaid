@@ -754,6 +754,37 @@ func named(words []string, texts ...string) bool {
 	return true
 }
 
+// byHandle says whether a search finds a person by their handles, as a messenger finds a contact
+// by number: every word in one of them, or the digits typed (spaces, +, dashes, brackets left out)
+// in one of their numbers.
+func byHandle(ppl *People, pid int64, words []string, q string) bool {
+	values := []string{}
+	for _, h := range ppl.Handles[pid] {
+		values = append(values, h.Value)
+	}
+	if named(words, values...) {
+		return true
+	}
+	digits := strings.Map(func(r rune) rune {
+		switch {
+		case r >= '0' && r <= '9':
+			return r
+		case r == ' ' || r == '+' || r == '-' || r == '(' || r == ')' || r == '.' || r == '/':
+			return -1
+		}
+		return 'x'
+	}, q)
+	if len(digits) < 3 || strings.Contains(digits, "x") {
+		return false
+	}
+	for _, h := range ppl.Handles[pid] {
+		if h.Kind == "phone" && strings.Contains(h.Value, digits) {
+			return true
+		}
+	}
+	return false
+}
+
 type peopleSet struct {
 	People    map[int64]bool
 	Addresses map[int64]bool
@@ -945,7 +976,7 @@ func Chats(s *Store, o ChatsOptions) []M {
 			}
 		}
 		title := ChatTitle(s, chat)
-		if qf != nil && !named(qf, title) {
+		if qf != nil && !named(qf, title) && !(isPerson && byHandle(ppl, chat.PersonID, qf, o.Q)) {
 			continue
 		}
 		items = append(items, item{st.Pinned, lastTS, chat, title, st})
