@@ -17,7 +17,7 @@ web/node_modules/
 web/dist/
 web/test-results/
 web/playwright-report/
-demo/
+/demo/
 .coverage
 
 # The WhatsApp bridge's build, and a store made by running it from its folder
