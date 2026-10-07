@@ -70,6 +70,16 @@ type Bridge struct {
 	sender    *Sender
 	downloads *Downloads
 	pairing   chan chan error // a request to link a device, answered when it is done
+
+	// While an event, a send or a read is handled the stores stay open: ending takes this for
+	// writing, after which nothing is written (closed).
+	handling sync.RWMutex
+	closed   bool
+	// history-sync notifications received and not yet handled: whatsmeow acknowledges one to the phone
+	// at once and downloads it later, apart from the connection, so it would be lost if the store
+	// closed in between
+	history map[string]int
+	said    chan any // what Run acts on: connected, logged out, a temporary ban, a connect failure
 }
 
 var (
@@ -96,7 +106,8 @@ var ErrRunning = errors.New("this WhatsApp store is already connected")
 
 // New is a bridge on a store folder, not running yet.
 func New(dir string, opts Options, hooks Hooks) *Bridge {
-	b := &Bridge{Dir: dir, opts: opts, hooks: hooks, pairing: make(chan chan error)}
+	b := &Bridge{Dir: dir, opts: opts, hooks: hooks, pairing: make(chan chan error), history: map[string]int{},
+		said: make(chan any, 64)}
 	b.log = &logger{b: b}
 	return b
 }
@@ -133,11 +144,25 @@ func OpenDevices(ctx context.Context, dir string, log waLog.Logger) (*sqlstore.C
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	return sqlstore.New(ctx, "sqlite", dsn(filepath.Join(dir, "whatsapp.db")), log)
+	path := filepath.Join(dir, "whatsapp.db")
+	c, err := sqlstore.New(ctx, "sqlite", dsn(path), log)
+	if err == nil {
+		private(dir, path)
+	}
+	return c, err
 }
 
-// Run connects to WhatsApp and stays connected until ctx ends (nil) or the connection cannot be
-// made. A store without a linked device waits for Pair.
+// private keeps the store folder and a database of it to the user alone: the session's keys and the
+// messages are in them (SQLite makes a database, and its journal, as the umask allows, often
+// readable by all; a store made by the standalone bridge is so).
+func private(dir, path string) {
+	os.Chmod(dir, 0700)
+	os.Chmod(path, 0600)
+}
+
+// Run connects to WhatsApp and stays connected until ctx ends (nil), the device is logged out or a
+// temporary ban ends (nil: to be started again), or the connection cannot be made (stay). A store
+// without a linked device waits for Pair.
 func (b *Bridge) Run(ctx context.Context) error {
 	k := key(b.Dir)
 	runningMu.Lock()
@@ -177,32 +202,9 @@ func (b *Bridge) Run(ctx context.Context) error {
 	b.store, b.client, b.sender = store, client, sender
 	b.mu.Unlock()
 
-	client.AddEventHandler(func(evt any) {
-		switch v := evt.(type) {
-		case *events.Message:
-			processMessage(client, store, v, "", b.log)
-			b.mu.Lock()
-			d := b.downloads
-			b.mu.Unlock()
-			if d != nil {
-				d.queue(v.Info.ID, v.Info.Chat.String())
-			}
-		case *events.HistorySync:
-			handleHistorySync(client, store, v, b.log)
-		case *events.CallOffer, *events.CallOfferNotice, *events.CallAccept, *events.CallReject, *events.CallTerminate:
-			handleCallEvent(client, store, v, b.log)
-		case *events.Receipt:
-			handleReceipt(store, v, b.log)
-		case *events.JoinedGroup, *events.GroupInfo:
-			handleGroupEvent(client, store, v, b.log)
-		case *events.Connected, *events.Disconnected, *events.LoggedOut, *events.TemporaryBan,
-			*events.ConnectFailure, *events.StreamReplaced, *events.ClientOutdated:
-			handleStateEvent(store, v, b.log)
-		}
-	})
+	client.AddEventHandler(func(evt any) { b.handle(client, store, evt) })
 	defer func() {
-		client.RemoveEventHandlers()
-		client.Disconnect()
+		b.end(client)
 		b.mu.Lock()
 		if b.downloads != nil {
 			b.downloads.stop()
@@ -218,31 +220,136 @@ func (b *Bridge) Run(ctx context.Context) error {
 	} else if err := client.Connect(); err != nil {
 		return fmt.Errorf("failed to connect: %v", err)
 	}
+	return b.stay(ctx, func() {
+		nameLIDChats(client, store, b.log)
+		go refreshGroups(client, store, b.log)
+		store.setState("send_enabled", "")
+		if sender.enabled {
+			store.setState("send_enabled", "1")
+		}
+		if b.opts.Download {
+			d := startDownloads(client, store, b.log)
+			b.mu.Lock()
+			b.downloads = d
+			b.mu.Unlock()
+		}
+	})
+}
 
-	// a moment for the connection to settle
-	select {
-	case <-ctx.Done():
-		return nil
-	case <-time.After(2 * time.Second):
+// stay keeps the connection until ctx ends, doing ready's work once it is first up. whatsmeow
+// reconnects by itself after a network's failure; where it does not, Run ends as WhatsApp Desktop
+// would act: logged out (the device is gone), it starts again to be linked anew; temporarily banned,
+// it waits for the ban to end before connecting again; a connect failure of another kind is tried
+// again later (the host's growing pause). Replaced by another client, or too old, it stays
+// disconnected until the user starts it again: connecting again would take the session back each time.
+func (b *Bridge) stay(ctx context.Context, ready func()) error {
+	up := false
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case evt := <-b.said:
+			switch v := evt.(type) {
+			case *events.Connected:
+				if !up {
+					up = true
+					ready()
+				}
+			case *events.LoggedOut:
+				return nil
+			case *events.TemporaryBan:
+				wait := v.Expire
+				if wait <= 0 {
+					wait = time.Hour
+				}
+				select {
+				case <-ctx.Done():
+				case <-time.After(wait):
+				}
+				return nil
+			case *events.ConnectFailure:
+				return fmt.Errorf("connect failure: %s", v.Reason)
+			}
+		}
 	}
-	if !client.IsConnected() {
-		return errors.New("failed to establish stable connection")
-	}
+}
 
-	nameLIDChats(client, store, b.log)
-	go refreshGroups(client, store, b.log)
-	store.setState("send_enabled", "")
-	if sender.enabled {
-		store.setState("send_enabled", "1")
+// handle is the client's event handler.
+func (b *Bridge) handle(client *whatsmeow.Client, store *MessageStore, evt any) {
+	b.handling.RLock()
+	defer b.handling.RUnlock()
+	if b.closed {
+		return
 	}
-	if b.opts.Download {
-		d := startDownloads(client, store, b.log)
+	switch v := evt.(type) {
+	case *events.Message:
+		if n := v.Message.GetProtocolMessage().GetHistorySyncNotification(); n != nil && v.Info.IsFromMe {
+			b.historyPending(n.GetDirectPath(), 1)
+		}
+		processMessage(client, store, v, "", b.log)
 		b.mu.Lock()
-		b.downloads = d
+		d := b.downloads
 		b.mu.Unlock()
+		if d != nil {
+			d.queue(v.Info.ID, v.Info.Chat.String())
+		}
+	case *events.HistorySync:
+		handleHistorySync(client, store, v, b.log)
+		b.historyPending(v.Notification.GetDirectPath(), -1)
+	case *events.CallOffer, *events.CallOfferNotice, *events.CallAccept, *events.CallReject, *events.CallTerminate:
+		handleCallEvent(client, store, v, b.log)
+	case *events.Receipt:
+		handleReceipt(store, v, b.log)
+	case *events.JoinedGroup, *events.GroupInfo:
+		handleGroupEvent(client, store, v, b.log)
+	case *events.Connected, *events.Disconnected, *events.LoggedOut, *events.TemporaryBan,
+		*events.ConnectFailure, *events.StreamReplaced, *events.ClientOutdated:
+		handleStateEvent(store, v, b.log)
+		select {
+		case b.said <- v:
+		default:
+		}
 	}
-	<-ctx.Done()
-	return nil
+}
+
+func (b *Bridge) historyPending(key string, n int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.history[key] += n; b.history[key] <= 0 {
+		delete(b.history, key)
+	}
+}
+
+func (b *Bridge) historyWaiting() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.history) > 0
+}
+
+// How long ending waits for history the phone sent and whatsmeow is still downloading.
+var historyWait = time.Minute
+
+// end disconnects, lets the history already acknowledged arrive (for a while), and waits for what
+// is being handled; after it nothing is written.
+func (b *Bridge) end(client *whatsmeow.Client) {
+	client.Disconnect()
+	for deadline := time.Now().Add(historyWait); b.historyWaiting() && time.Now().Before(deadline); {
+		time.Sleep(100 * time.Millisecond)
+	}
+	b.handling.Lock()
+	b.closed = true
+	b.handling.Unlock()
+	client.RemoveEventHandlers()
+}
+
+// open holds the stores open while a request is handled: false once the bridge has ended.
+func (b *Bridge) open() bool {
+	b.handling.RLock()
+	if b.closed {
+		b.handling.RUnlock()
+		return false
+	}
+	return true
 }
 
 // waitPairing waits for a request to link (Pair), then shows QR codes until one is scanned (nil),
@@ -368,18 +475,20 @@ var ErrNotConnected = errors.New("not connected to WhatsApp")
 // Send sends (POST /api/send): an HTTP status and the answer, as the bridge gave them.
 func (b *Bridge) Send(req SendRequest) (int, SendResponse) {
 	_, _, sender := b.parts()
-	if sender == nil {
+	if sender == nil || !b.open() {
 		return 503, SendResponse{Message: ErrNotConnected.Error()}
 	}
+	defer b.handling.RUnlock()
 	return sender.send(req)
 }
 
 // MarkRead sends read receipts (POST /api/read).
 func (b *Bridge) MarkRead(req ReadRequest) (int, map[string]any) {
 	_, _, sender := b.parts()
-	if sender == nil {
+	if sender == nil || !b.open() {
 		return 503, map[string]any{"success": false, "message": ErrNotConnected.Error()}
 	}
+	defer b.handling.RUnlock()
 	req.Recipient = strings.TrimSpace(req.Recipient)
 	return sender.markRead(req)
 }
@@ -387,9 +496,10 @@ func (b *Bridge) MarkRead(req ReadRequest) (int, map[string]any) {
 // Download is a message's file, downloaded now unless it was before (POST /api/download).
 func (b *Bridge) Download(id, chatJID string) (string, error) {
 	client, store, _ := b.parts()
-	if store == nil {
+	if store == nil || !b.open() {
 		return "", ErrNotConnected
 	}
+	defer b.handling.RUnlock()
 	return store.download(client, id, chatJID)
 }
 

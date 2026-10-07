@@ -87,11 +87,21 @@ func (s *Sender) counts() map[string]int {
 // chatFor finds the existing chat a recipient means where the other side has written: a number
 // may be kept under its LID.
 func (s *Sender) chatFor(recipient string) (types.JID, error) {
+	chats, err := s.chatsFor(recipient)
+	if err != nil {
+		return types.JID{}, err
+	}
+	return chats[0], nil
+}
+
+// chatsFor is every chat a recipient means where the other side has written: one person's may be
+// kept under both their number and their LID (before and after WhatsApp moved the chat to LIDs).
+func (s *Sender) chatsFor(recipient string) ([]types.JID, error) {
 	var candidates []types.JID
 	if strings.Contains(recipient, "@") {
 		j, err := types.ParseJID(recipient)
 		if err != nil {
-			return types.JID{}, fmt.Errorf("not a jid: %v", err)
+			return nil, fmt.Errorf("not a jid: %v", err)
 		}
 		candidates = append(candidates, j.ToNonAD())
 	} else {
@@ -106,19 +116,23 @@ func (s *Sender) chatFor(recipient string) (types.JID, error) {
 			candidates = append(candidates, pn)
 		}
 	}
+	var chats []types.JID
 	for _, c := range candidates {
 		switch c.Server {
 		case types.DefaultUserServer, types.HiddenUserServer, types.GroupServer:
 		default:
-			return types.JID{}, fmt.Errorf("not a person's or a group's chat: %s", c)
+			return nil, fmt.Errorf("not a person's or a group's chat: %s", c)
 		}
 		var n int
 		s.store.db.QueryRow("SELECT count(*) FROM messages WHERE chat_jid = ? AND NOT is_from_me", c.String()).Scan(&n)
 		if n > 0 {
-			return c, nil
+			chats = append(chats, c)
 		}
 	}
-	return types.JID{}, fmt.Errorf("no chat with %s where they have written: the bridge sends only there", recipient)
+	if len(chats) == 0 {
+		return nil, fmt.Errorf("no chat with %s where they have written: the bridge sends only there", recipient)
+	}
+	return chats, nil
 }
 
 // send returns an HTTP status and the answer.

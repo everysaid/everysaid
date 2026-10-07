@@ -50,6 +50,9 @@ func (store *MessageStore) markedRead(ids []string, at time.Time) {
 }
 
 func handleReceipt(store *MessageStore, v *events.Receipt, logger waLog.Logger) {
+	if isChannel(v.Chat) {
+		return
+	}
 	var kind string
 	switch v.Type {
 	case types.ReceiptTypeDelivered:
@@ -126,33 +129,60 @@ func (s *Sender) markRead(req ReadRequest) (int, map[string]interface{}) {
 	if !s.client.IsConnected() || !s.client.IsLoggedIn() {
 		return fail(http.StatusServiceUnavailable, "not connected to WhatsApp")
 	}
-	chat, err := s.chatFor(req.Recipient)
+	batches, err := s.toMark(req.Recipient, until(req.Until))
 	if err != nil {
 		return fail(http.StatusNotFound, "%v", err)
 	}
-	until := time.Now()
-	if req.Until > 0 && time.Unix(req.Until, 0).Before(until) {
-		until = time.Unix(req.Until, 0)
-	}
-	bySender, err := s.unread(chat, until)
-	if err != nil {
-		return fail(http.StatusInternalServerError, "%v", err)
-	}
 	now, marked := time.Now(), 0
-	for sender, ids := range bySender {
-		var from types.JID // a person's chat: no sender
-		if chat.Server == types.GroupServer {
-			if from, err = types.ParseJID(sender); err != nil {
-				continue
-			}
-		}
-		if err := s.client.MarkRead(context.Background(), ids, now, chat, from); err != nil {
+	for _, b := range batches {
+		if err := s.client.MarkRead(context.Background(), b.ids, now, b.chat, b.from); err != nil {
 			return fail(http.StatusInternalServerError, "marking read failed: %v", err)
 		}
-		s.store.markedRead(ids, now)
-		marked += len(ids)
+		s.store.markedRead(b.ids, now)
+		marked += len(b.ids)
 	}
 	return http.StatusOK, map[string]interface{}{"success": true, "marked": marked}
+}
+
+// until is a read request's time: now, or the one given if earlier.
+func until(unix int64) time.Time {
+	now := time.Now()
+	if unix > 0 && time.Unix(unix, 0).Before(now) {
+		return time.Unix(unix, 0)
+	}
+	return now
+}
+
+// readBatch is what one read receipt says: messages of a chat, from one sender in a group.
+type readBatch struct {
+	chat, from types.JID
+	ids        []string
+}
+
+// toMark is what to mark read for a recipient: in each of their chats (a number's and a LID's),
+// the messages not read yet up to a time.
+func (s *Sender) toMark(recipient string, until time.Time) ([]readBatch, error) {
+	chats, err := s.chatsFor(recipient)
+	if err != nil {
+		return nil, err
+	}
+	var out []readBatch
+	for _, chat := range chats {
+		bySender, err := s.unread(chat, until)
+		if err != nil {
+			return nil, err
+		}
+		for sender, ids := range bySender {
+			var from types.JID // a person's chat: no sender
+			if chat.Server == types.GroupServer {
+				if from, err = types.ParseJID(sender); err != nil {
+					continue
+				}
+			}
+			out = append(out, readBatch{chat, from, ids})
+		}
+	}
+	return out, nil
 }
 
 // unread is the chat's messages from others not read yet, up to a time and readBack old, by sender.

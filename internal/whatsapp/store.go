@@ -59,6 +59,7 @@ func OpenMessages(dir string) (*MessageStore, error) {
 		d.Close()
 		return nil, err
 	}
+	private(dir, filepath.Join(dir, "messages.db"))
 	return store, nil
 }
 
@@ -223,6 +224,9 @@ func handleHistorySync(client *whatsmeow.Client, store *MessageStore, historySyn
 		jid, err := types.ParseJID(chatJID)
 		if err != nil {
 			logger.Warnf("Failed to parse JID %s: %v", chatJID, err)
+			continue
+		}
+		if isChannel(jid) {
 			continue
 		}
 		name := chatName(client, store, jid, chatJID, conversation, "", logger)
