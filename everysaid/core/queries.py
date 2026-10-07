@@ -102,9 +102,17 @@ def _chat_index(store):
             return out - ppl.me
         # the user's notes to themselves, on every service (Viber's notes, Telegram's saved messages, an
         # SMS to one's own number): one chat, with the id of the first of them
-        # (none of anyone else, ever: not a chat whose people the sources did not list)
-        heard = {c for (c,) in db.execute("SELECT DISTINCT conversation_id FROM message WHERE outgoing = 0")}
-        alone = {cid for cid, _, is_group, _ in rows if not is_group and cid not in heard and not others_of(cid)}
+        # (none of anyone else, ever: not a chat whose people the sources did not list; one the owner
+        # wrote from another device of theirs, which a source may give as received, is still theirs)
+        mine = ppl.own_addresses | {a for pid in ppl.me for a in ppl.addresses(pid)}
+        # (a service's own notice, "messages are end-to-end encrypted", is no one's)
+        heard = {c for c, sender in db.execute(
+            "SELECT DISTINCT conversation_id, sender_id FROM message WHERE outgoing = 0 "
+            "AND kind_id != (SELECT id FROM message_kind WHERE name = 'system')") if sender not in mine}
+        # and the owner a member of it (their own number or account, or the source said so): not a chat
+        # whose source listed no one
+        alone = {cid for cid, _, is_group, _ in rows
+                 if not is_group and cid not in heard and members[cid] and set(members[cid]) <= mine}
         notes = min(alone, default=None)
         for cid, sid, is_group, title in rows:
             others = others_of(cid)
@@ -279,7 +287,9 @@ def _unread(store, chat, since):
         return 0
     q = ",".join("?" * len(chat["conversations"]))
     return store.read().execute(
-        f"SELECT count(*) FROM message WHERE conversation_id IN ({q}) AND outgoing = 0 AND ts > ?",
+        f"SELECT count(*) FROM message WHERE conversation_id IN ({q}) AND outgoing = 0 AND ts > ? "
+        f"AND (sender_id IS NULL OR sender_id NOT IN (SELECT address_id FROM account)) "      # not the owner's own, from another device
+        f"AND kind_id != (SELECT id FROM message_kind WHERE name = 'system')",               # nor a service's notice
         (*chat["conversations"], since)).fetchone()[0]
 
 

@@ -79,8 +79,9 @@ export function Thumb({ a, onOpen, className }: { a: Attachment; onOpen?: () => 
   const isVideo = a.mime?.startsWith("video/");
   if (a.available === "gone") {
     return (
-      <div className={cn("grid h-36 w-56 place-items-center rounded-xl bg-black/10 text-xs opacity-70", className)}>
-        <span className="flex flex-col items-center gap-1"><ImageOff className="size-5" />{t("chat.gone")}</span>
+      // a line, not a picture's place: nothing is there to see
+      <div data-gone className="flex items-center gap-2 py-0.5 text-sm opacity-70">
+        <ImageOff className="size-4 shrink-0" />{t("chat.gone")}
       </div>
     );
   }
@@ -201,7 +202,8 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
   const svc = service(m.service);
   const media = m.attachments.filter((a) => a.mime?.startsWith("image/") || a.mime?.startsWith("video/"));
   const others = m.attachments.filter((a) => !media.includes(a));
-  const onlyMedia = media.length > 0 && !m.text && !others.length && !m.reply;
+  // pictures alone: the time over them (not when none of them is there any more: a line of text then)
+  const onlyMedia = media.some((a) => a.available !== "gone") && !m.text && !others.length && !m.reply;
   const label = m.kind !== "text" && !m.attachments.length && !m.text && !m.location ? t(`kind.${m.kind}`, { defaultValue: m.kind }) : null;
   return (
     <div id={`m${m.id}`} className={cn("group/msg flex gap-2 px-3 md:px-6", out ? "justify-end" : "justify-start", first ? "mt-2" : "mt-0.5")}>

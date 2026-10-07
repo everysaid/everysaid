@@ -500,8 +500,23 @@ def test_notes_to_self_are_one_chat_across_services(store):
         kind = db.execute("SELECT id FROM message_kind WHERE name = 'text'").fetchone()[0]
         db.execute("INSERT INTO message (service_id, conversation_id, ts, outgoing, kind_id, text) "
                    "VALUES (?, ?, 1700000000000, 1, ?, 'a note')", (tg, cid, kind))
+        # WhatsApp's chat with oneself, one message of it given as received from the owner (another device)
+        wa = db.execute("SELECT id FROM service WHERE name = 'whatsapp'").fetchone()[0]
+        wid = db.execute("INSERT INTO conversation (service_id, key, is_group) VALUES (?, 'self', 0)", (wa,)).lastrowid
+        db.execute("INSERT INTO conversation_member VALUES (?, ?)", (wid, own))
+        db.execute("INSERT INTO message (service_id, conversation_id, ts, outgoing, sender_id, kind_id, text) "
+                   "VALUES (?, ?, 1700000001000, 0, ?, ?, 'from my other phone')", (wa, wid, own, kind))
+        # and a notice of the service in it, given as received from its member (the owner)
+        system = db.execute("SELECT id FROM message_kind WHERE name = 'system'").fetchone()[0]
+        db.execute("INSERT INTO message (service_id, conversation_id, ts, outgoing, sender_id, kind_id, text) "
+                   "VALUES (?, ?, 1700000002000, 0, ?, ?, 'end-to-end encrypted')", (wa, wid, own, system))
+        # a chat whose source listed no one, only the owner writing in it: not notes
+        nobody = db.execute("INSERT INTO conversation (service_id, key, is_group) VALUES (?, 'someone', 0)", (tg,)).lastrowid
+        db.execute("INSERT INTO message (service_id, conversation_id, ts, outgoing, kind_id, text) "
+                   "VALUES (?, ?, 1700000003000, 1, ?, 'hello?')", (tg, nobody, kind))
     index, conv_chat = queries._chat_index(store)
-    assert conv_chat[cid] == notes["id"]
+    assert conv_chat[cid] == notes["id"] and conv_chat[wid] == notes["id"]
+    assert conv_chat[nobody] != notes["id"]
     one = index[notes["id"]]
     assert {"viber", "telegram"} <= one["services"]
     assert queries.chat_title(store, one) in ("Notes", "Σημειώσεις")
