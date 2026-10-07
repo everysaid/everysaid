@@ -237,11 +237,15 @@ func (s *Server) Run(ctx context.Context) error {
 	return s.Serve(ctx, ln)
 }
 
+// idleTimeout: a kept-alive connection with nothing asked of it is closed after so long (the
+// WebSocket, taken over, is not one of them).
+var idleTimeout = 2 * time.Minute
+
 // Serve is Run on a listener of the caller's.
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	hs := &http.Server{Handler: s, ReadHeaderTimeout: 30 * time.Second,
+	hs := &http.Server{Handler: s, ReadHeaderTimeout: 30 * time.Second, IdleTimeout: idleTimeout,
 		ErrorLog:    slog.NewLogLogger(s.log.Handler(), slog.LevelWarn),
 		BaseContext: func(net.Listener) context.Context { return ctx }}
 	s.Start(ctx)

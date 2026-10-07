@@ -4,6 +4,7 @@ package server
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -104,6 +105,9 @@ func (s *Server) miscRoutes() {
 		}
 		if err := core.DecideMedia(s.Store, q.r.PathValue("sha"), decision, date.Value); err != nil {
 			return nil, passUser(err, func(e error) error { return failed(400, e.Error()) })
+		}
+		if decision == "remove" { // what the user chose to delete (the scripts carry it out later)
+			s.Auth.Log(&q.uid, "media to remove", pyCut(q.r.PathValue("sha"), 12))
 		}
 		return M{"ok": true}, nil
 	})
@@ -319,7 +323,7 @@ func (s *Server) miscRoutes() {
 
 	h("POST /api/push/subscribe", bodyRequired, func(q *req) (any, error) {
 		endpoint, _ := q.get("endpoint").(string)
-		if !strings.HasPrefix(endpoint, "https://") {
+		if !pushEndpointOK(q.r.Context(), endpoint) { // the server will post to it: only a push service on the internet
 			return nil, errs.New("push.bad_subscription", 400, nil)
 		}
 		s.Push.Subscribe(q.uid, q.body)
@@ -650,13 +654,15 @@ func (s *Server) pluginRoutes() {
 		if err != nil {
 			return nil, err
 		}
-		if plugins.GetInstance(s.Store, iid) == nil {
+		row := plugins.GetInstance(s.Store, iid)
+		if row == nil {
 			return nil, notFound("")
 		}
 		s.Host.StopLive(iid, false)
 		if err := plugins.Remove(s.Store, iid); err != nil {
 			return nil, err
 		}
+		s.Auth.Log(&q.uid, "plugin removed", fmt.Sprintf("%d %s: %s", iid, row.Plugin, row.Label))
 		return M{"ok": true}, nil
 	})
 

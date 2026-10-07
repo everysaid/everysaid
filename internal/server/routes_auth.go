@@ -392,7 +392,7 @@ func (s *Server) authRoutes() {
 		}
 		return M{"user": M{"id": u.ID, "name": u.Name, "archive": u.Archive}, "passkeys": s.Auth.Passkeys(q.uid),
 			"sessions": sessions, "recovery_left": s.Auth.RecoveryLeft(q.uid), "audit": s.Auth.Audit(q.uid, 50),
-			"has_password": s.Auth.HasPassword(q.uid)}, nil
+			"has_password": s.Auth.HasPassword(q.uid), "mcp_tokens": s.Auth.MCPTokens(q.uid)}, nil
 	})
 
 	h("DELETE /api/auth/sessions/{sid}", bodyNone, func(q *req) (any, error) {
@@ -434,6 +434,16 @@ func (s *Server) authRoutes() {
 			label = "MCP"
 		}
 		return M{"token": s.Auth.NewMCPToken(q.uid, pyCut(label, 60))}, nil
+	})
+
+	h("DELETE /api/auth/mcp-tokens/{tid}", bodyNone, func(q *req) (any, error) {
+		if _, _, err := s.changer(q.r, ""); err != nil { // as making one: a stolen session cannot cut the user's own off
+			return nil, err
+		}
+		if !s.Auth.RevokeMCPToken(q.uid, q.r.PathValue("tid")) {
+			return nil, notFound("")
+		}
+		return M{"ok": true}, nil
 	})
 }
 

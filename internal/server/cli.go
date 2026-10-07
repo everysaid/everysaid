@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"everysaid/internal/config"
 	"everysaid/internal/i18n"
@@ -52,12 +53,14 @@ func ServeMain(argv []string, out io.Writer) error {
 //	list         the users
 //	link         a one-time link for a passkey: the first user, another device, or a way back in
 //	             after losing every passkey
-//	mcp-token    a token for the MCP server over HTTP
+//	mcp-token    a token for the MCP server over HTTP (--revoke ID: ends one)
+//	mcp-tokens   the MCP tokens: id, label, when made, when last used
 //	sessions     the open sessions
 func UserMain(argv []string, out io.Writer) error {
 	fs := flag.NewFlagSet("everysaid user", flag.ContinueOnError)
 	user := fs.Int64("user", 0, "the user (default: the first)")
 	minutes := fs.Int("minutes", 60, "how long a link is valid")
+	revoke := fs.String("revoke", "", "mcp-token: end the token of this id (from mcp-tokens)")
 	what := ""
 	if len(argv) > 0 && !strings.HasPrefix(argv[0], "-") {
 		what, argv = argv[0], argv[1:]
@@ -69,9 +72,9 @@ func UserMain(argv []string, out io.Writer) error {
 		what = fs.Arg(0)
 	}
 	switch what {
-	case "list", "link", "mcp-token", "sessions":
+	case "list", "link", "mcp-token", "mcp-tokens", "sessions":
 	default:
-		return fmt.Errorf("everysaid user: list, link, mcp-token or sessions")
+		return fmt.Errorf("everysaid user: list, link, mcp-token, mcp-tokens or sessions")
 	}
 	auth, err := OpenAuth("")
 	if err != nil {
@@ -106,7 +109,24 @@ func UserMain(argv []string, out io.Writer) error {
 		if uid == 0 {
 			return fmt.Errorf("%s", i18n.Say("no user", nil))
 		}
+		if *revoke != "" {
+			if !auth.RevokeMCPToken(uid, *revoke) {
+				return fmt.Errorf("%s", i18n.Say("no such token: {id}", M{"id": *revoke}))
+			}
+			fmt.Fprintln(out, i18n.Say("token {id} revoked", M{"id": *revoke}))
+			return nil
+		}
 		fmt.Fprintln(out, auth.NewMCPToken(uid, "cli"))
+	case "mcp-tokens":
+		when := func(v any) string {
+			if n, ok := v.(int64); ok {
+				return time.Unix(n, 0).Format("2006-01-02 15:04")
+			}
+			return i18n.Say("never", nil)
+		}
+		for _, t := range auth.MCPTokens(uid) {
+			fmt.Fprintf(out, "%v\t%v\t%s\t%s\n", t["id"], noneStr(t["label"]), when(t["created_at"]), when(t["last_used"]))
+		}
 	case "sessions":
 		for _, s := range auth.Sessions(uid) {
 			fmt.Fprintf(out, "%v\t%v\t%v\t%v\n", s["id"], noneStr(s["via"]), noneStr(s["ip"]), noneStr(s["agent"]))

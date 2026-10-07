@@ -822,16 +822,17 @@ func (h *Host) MarkRead(ctx context.Context, chatID string, until int64) (err er
 				"AND ts <= ?), (SELECT max(value) FROM state_report WHERE conversation_id = c.id AND field = 'read_until') "+
 				"FROM conversation c JOIN service s ON s.id = c.service_id WHERE c.id = ?", []any{until, conv},
 				&key, &svc, &newest, &told)
-			k := [2]int64{row.ID, conv}
-			h.mu.Lock()
-			busy := h.marking[k]
-			h.mu.Unlock()
-			if !contains(p.Info().Services, svc) || newest.Int64 == 0 || told.Int64 >= newest.Int64 || busy {
+			if !contains(p.Info().Services, svc) || newest.Int64 == 0 || told.Int64 >= newest.Int64 {
 				continue
 			}
-			h.mu.Lock()
+			k := [2]int64{row.ID, conv}
+			h.mu.Lock() // looked at and taken at once: of two reads at once, one tells the service
+			busy := h.marking[k]
 			h.marking[k] = true
 			h.mu.Unlock()
+			if busy {
+				continue
+			}
 			func() {
 				defer func() {
 					if r := recover(); r != nil {

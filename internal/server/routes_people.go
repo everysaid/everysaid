@@ -400,6 +400,7 @@ func (s *Server) peopleRoutes() {
 		if err := core.RemoveLabel(s.Store, lid); err != nil {
 			return nil, is404(err, nil)
 		}
+		s.Auth.Log(&q.uid, "label removed", itoa(lid))
 		return M{"items": core.Labels(s.Store, "")}, nil
 	})
 
@@ -416,6 +417,7 @@ func (s *Server) peopleRoutes() {
 		if err := core.MergeLabels(s.Store, into, lid); err != nil {
 			return nil, passUser(err, func(e error) error { return failed(400, e.Error()) })
 		}
+		s.Auth.Log(&q.uid, "label merged", fmt.Sprintf("%d into %d", lid, into))
 		return M{"items": core.Labels(s.Store, "")}, nil
 	})
 

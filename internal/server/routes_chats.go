@@ -494,7 +494,9 @@ func checkMentions(text string, given any) ([]plugins.Mention, error) {
 	runes := []rune(text)
 	end := 0
 	for _, m := range out {
-		if m.Start < end || m.Length < 2 || m.Start+m.Length > len(runes) || m.Start < 0 || runes[m.Start] != '@' {
+		// as written, never m.Start+m.Length: huge numbers would wrap around
+		if m.Start < end || m.Start < 0 || m.Length < 2 || m.Start > len(runes) || m.Length > len(runes)-m.Start ||
+			runes[m.Start] != '@' {
 			return nil, bad
 		}
 		end = m.Start + m.Length
