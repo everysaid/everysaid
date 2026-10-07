@@ -1,0 +1,226 @@
+// Ports demo_message, demo_receipt and DemoSender of everysaid/demo.py: what the demo does while it
+// is served (sending into the demo archive, answers, receipts, messages arriving).
+
+package demo
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"everysaid/internal/archive"
+	"everysaid/internal/config"
+	"everysaid/internal/core"
+	"everysaid/internal/importers"
+	"everysaid/internal/plugins"
+)
+
+// ImportLocker is a host that has a lock for writing into the archive from outside the store (the
+// importers' lock); Message and Receipt take it where the host has one.
+type ImportLocker interface {
+	ImportLock() sync.Locker
+}
+
+func lock(h plugins.Host) func() {
+	if l, ok := h.(ImportLocker); ok {
+		m := l.ImportLock()
+		m.Lock()
+		return m.Unlock
+	}
+	return func() {}
+}
+
+// splitext is os.path.splitext's extension: from the last dot of the last part, unless that part
+// starts with its only dots.
+func splitext(p string) string {
+	base := p[strings.LastIndexAny(p, `/`+string(os.PathSeparator))+1:]
+	i := strings.LastIndex(base, ".")
+	if i <= 0 || strings.Trim(base[:i], ".") == "" {
+		return ""
+	}
+	return base[i:]
+}
+
+// Message writes a message into the demo archive as if a service had brought it (sent by the user,
+// or from the other side of the conversation), and tells the apps; it returns its id. mentions:
+// where in the text (in characters) each member is named; file: attached.
+func Message(h plugins.Host, conversationID int64, text string, outgoing bool, replyKey string,
+	mentions []plugins.Mention, file *plugins.File) (id int64, err error) {
+	var m0 any
+	func() {
+		defer lock(h)()
+		var a *archive.Archive
+		a, err = archive.Open(h.Store().Path)
+		if err != nil {
+			return
+		}
+		defer a.Close()
+		defer archive.Recover(&err)
+		src := a.Source("demo/live", "demo", "", "")
+		var service string
+		a.Row("SELECT s.name FROM conversation c JOIN service s ON s.id = c.service_id WHERE c.id = ?",
+			[]any{conversationID}, &service)
+		var who int64
+		if !outgoing {
+			who = a.Int("SELECT address_id FROM conversation_member WHERE conversation_id = ? AND "+
+				"address_id NOT IN (SELECT address_id FROM account) LIMIT 1", conversationID)
+		}
+		if v, ok := a.IntOK("SELECT max(id) FROM message"); ok {
+			m0 = v
+		}
+		n := time.Now().UnixNano()
+		kind := "text"
+		if file != nil {
+			switch {
+			case strings.HasPrefix(file.MimeType, "image/"):
+				kind = "image"
+			case strings.HasPrefix(file.MimeType, "video/"):
+				kind = "video"
+			default:
+				kind = "file"
+			}
+		}
+		key := ""
+		if service != "sms" {
+			key = fmt.Sprintf("demo-live-%d", n)
+		}
+		var x *archive.Extras
+		if replyKey != "" {
+			x = &archive.Extras{ReplyKey: replyKey}
+		}
+		mid := a.AddMessage(src, fmt.Sprintf("live-%d", n), archive.Message{Service: service, ConversationID: conversationID,
+			TS: n / 1_000_000, Outgoing: outgoing, SenderID: who, Kind: kind, Text: text, Key: key, Extras: x})
+		runes := []rune(text)
+		for _, m := range mentions {
+			from, to := min(max(m.Start, 0), len(runes)), min(max(m.Start+m.Length, 0), len(runes))
+			a.Exec("INSERT OR IGNORE INTO mention VALUES (?, ?, ?)", mid, m.AddressID, string(runes[from:max(from, to)]))
+		}
+		if file != nil {
+			folder := filepath.Join(config.Cache, "demo-src")
+			if err := os.MkdirAll(folder, 0o777); err != nil {
+				panic(err)
+			}
+			rel := fmt.Sprintf("live-%d%s", n, strings.ToLower(splitext(file.Filename)))
+			if err := os.WriteFile(filepath.Join(folder, rel), file.Data, 0o666); err != nil {
+				panic(err)
+			}
+			importers.NewStore(a).Link("demo/live", src, filepath.Join(folder, rel), rel, mid)
+		}
+		a.Resolve()
+		a.Commit()
+		id = a.Int("SELECT max(id) FROM message")
+	}()
+	if err != nil {
+		return 0, err
+	}
+	h.Emit(core.M{"type": "new", "messages": []any{m0, id}, "calls": []any{0, 0}})
+	return id, nil
+}
+
+// Receipt: the members of the message's conversation got (field "delivered") or read ("read") it now.
+func Receipt(h plugins.Host, messageID int64, field string) (err error) {
+	if field != "delivered" && field != "read" {
+		return fmt.Errorf("demo: no receipt field %q", field)
+	}
+	func() {
+		defer lock(h)()
+		var a *archive.Archive
+		a, err = archive.Open(h.Store().Path)
+		if err != nil {
+			return
+		}
+		defer a.Close()
+		defer archive.Recover(&err)
+		for _, aid := range a.Ints("SELECT address_id FROM conversation_member WHERE conversation_id = "+
+			"(SELECT conversation_id FROM message WHERE id = ?) AND address_id NOT IN "+
+			"(SELECT address_id FROM account)", messageID) {
+			a.Exec("INSERT OR IGNORE INTO receipt (message_id, address_id) VALUES (?, ?)", messageID, aid)
+			a.Exec("UPDATE receipt SET "+field+"_at = ? WHERE message_id = ? AND address_id = ?",
+				time.Now().UnixMilli(), messageID, aid)
+		}
+		a.Commit()
+	}()
+	if err != nil {
+		return err
+	}
+	h.Emit(core.M{"type": "changed"})
+	return nil
+}
+
+// Sender is a source that "sends" by writing into the demo archive, and gets an answer a moment
+// later: only in the demo (EVERYSAID_DEMO), so that sending and receiving, and what the interface
+// does after them, can be tried and tested. (The demo also takes incoming messages at
+// /api/demo/incoming, through Message.)
+type Sender struct{}
+
+var senderInfo = &plugins.Info{
+	ID:           "demo-sender",
+	Name:         "Demo (sends into the demo archive)",
+	Kind:         "source",
+	Services:     []string{"whatsapp", "viber", "sms", "telegram"}, // not iMessage: a chat it cannot send to
+	Description:  "Invented: what is sent is only written into the demo archive.",
+	CanSend:      true,
+	CanReply:     true,
+	CanMention:   true,
+	CanMarkRead:  true,
+	CanSendFiles: true,
+}
+
+func (Sender) Info() *plugins.Info { return senderInfo }
+
+func (Sender) Check(c *plugins.Context) (bool, string) { return true, "ready" }
+
+// after runs fn a moment later, as Python's threading.Timer; its failure goes to the instance's log.
+func after(c *plugins.Context, d time.Duration, fn func() error) {
+	time.AfterFunc(d, func() {
+		if err := fn(); err != nil {
+			c.Logf("%v", err)
+		}
+	})
+}
+
+func (Sender) Send(ctx context.Context, c *plugins.Context, conv plugins.Conversation, text string, reply *plugins.Reply,
+	mentions []plugins.Mention, file *plugins.File) (any, error) {
+	select { // as a real service takes a moment
+	case <-time.After(800 * time.Millisecond):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	replyKey := ""
+	if reply != nil {
+		replyKey = reply.Key
+	}
+	h := c.Host()
+	mid, err := Message(h, conv.ID, text, true, replyKey, mentions, file)
+	if err != nil {
+		return nil, err
+	}
+	if conv.Service == "whatsapp" || conv.Service == "telegram" { // they tell who got and read it
+		after(c, time.Second, func() error { return Receipt(h, mid, "delivered") })
+		after(c, 2500*time.Millisecond, func() error { return Receipt(h, mid, "read") })
+	}
+	if !strings.HasPrefix(text, "quiet:") { // the other side answers (a test may want silence)
+		after(c, 1500*time.Millisecond, func() error {
+			_, err := Message(h, conv.ID, "↩ "+text, false, "", nil, nil)
+			return err
+		})
+	}
+	return core.M{"id": mid}, nil
+}
+
+func (Sender) MarkRead(ctx context.Context, c *plugins.Context, conv plugins.Conversation, until int64) (int, error) {
+	return 1, nil
+}
+
+// RegisterIfDemo adds the demo's sender to the plugins when EVERYSAID_DEMO is set (as Python's
+// plugins/__init__.py does). The command line calls it at its start, after every other plugin
+// has registered (so it comes last, as in Python), and Main again once it has set the variable.
+func RegisterIfDemo() {
+	if os.Getenv("EVERYSAID_DEMO") != "" {
+		plugins.Register(Sender{})
+	}
+}
