@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/gotd/td/session"
+
+	"everysaid/internal/i18n"
 )
 
 // fakeSecrets puts a map in place of the keyring for a test.
@@ -90,12 +92,17 @@ func TestNoSession(t *testing.T) {
 func TestCheck(t *testing.T) {
 	values := fakeSecrets(t, map[string]string{})
 	var p Plugin
-	if ok, why := p.Check(nil); ok || why != "missing: api_id and api_hash (scripts/telegram-sync.py --save-credentials)" {
+	if ok, why := p.Check(nil); ok || why != "missing: api_id and api_hash (everysaid telegram-sync --save-credentials)" {
 		t.Fatal(why)
 	}
 	values[SecretAPIID], values[SecretAPIHash] = "123", "abc"
-	if ok, why := p.Check(nil); ok || why != "missing: a login (scripts/telegram-sync.py --login)" {
+	if ok, why := p.Check(nil); ok || why != "missing: a login (everysaid telegram-sync --login)" {
 		t.Fatal(why)
+	} else if el := i18n.Tr(why, "el"); el != "λείπει: η σύνδεση (everysaid telegram-sync --login)" {
+		t.Fatal(el)
+	}
+	if el := i18n.Tr(notSignedIn, "el"); el == notSignedIn || i18n.Tr(expired, "el") == expired {
+		t.Fatal("untranslated")
 	}
 	values[SecretTelethon] = "1x"
 	if ok, why := p.Check(nil); !ok || why != "ready" {
