@@ -134,7 +134,10 @@ func Sync(ctx context.Context, o SyncOptions, w io.Writer) error {
 		}
 		return syncRun(ctx, c, out)
 	}
-	open, done, err := one.take(ctx, !o.Login)
+	open, done, err := one.take(ctx, !o.Login, nil)
+	if errors.Is(err, errHeld) {
+		return errors.New(out.say(heldElsewhere, nil))
+	}
 	if err != nil {
 		return err
 	}

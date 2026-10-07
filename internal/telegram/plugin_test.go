@@ -257,7 +257,7 @@ func TestSendAndRead(t *testing.T) {
 	if _, err := cn.dialogs(newTestCtx()); err != nil {
 		t.Fatal(err)
 	}
-	_, release, _ := one.take(newTestCtx(), false)
+	_, release, _ := one.take(newTestCtx(), false, nil)
 	defer release()
 	defer one.share(cn)()
 	var p Plugin

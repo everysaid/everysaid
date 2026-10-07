@@ -56,7 +56,7 @@ func withThreshold(ctx context.Context, d time.Duration) context.Context {
 // an import's sync, or a send while neither runs) would be two sessions of one key, each saving
 // the session over the other's. A client open offers its connection to the others, which use it
 // instead of opening their own; only the live connection, which needs its own updates, and a login
-// wait for the open one to end.
+// wait for the open one to end. Across processes the lock file (lock.go) does the same.
 type gate struct {
 	mu      sync.Mutex
 	busy    bool          // a client is open
@@ -73,8 +73,9 @@ func (g *gate) notify() { // with mu held
 }
 
 // take is the connection open now (share: if it may be used), or else the right to open one; done
-// gives back either.
-func (g *gate) take(ctx context.Context, share bool) (cn *conn, done func(), err error) {
+// gives back either. When another process has the session: errHeld, or, given waiting (called
+// once), it waits for it to end.
+func (g *gate) take(ctx context.Context, share bool, waiting func()) (cn *conn, done func(), err error) {
 	for {
 		g.mu.Lock()
 		if share && g.shared != nil {
@@ -88,23 +89,52 @@ func (g *gate) take(ctx context.Context, share bool) (cn *conn, done func(), err
 				g.mu.Unlock()
 			}, nil
 		}
+		var retry <-chan time.Time
 		if !g.busy {
-			g.busy = true
-			g.mu.Unlock()
-			return nil, func() {
-				g.mu.Lock()
-				g.busy = false
-				g.notify()
+			f, err := lockSession()
+			if err == nil {
+				g.busy = true
 				g.mu.Unlock()
-			}, nil
+				return nil, func() {
+					g.mu.Lock()
+					unlockSession(f)
+					g.busy = false
+					g.notify()
+					g.mu.Unlock()
+				}, nil
+			}
+			if !errors.Is(err, errHeld) || waiting == nil {
+				g.mu.Unlock()
+				return nil, nil, err
+			}
+			waiting()
+			waiting = func() {}
+			retry = time.After(5 * time.Second)
 		}
 		ch := g.changed
 		g.mu.Unlock()
 		select {
 		case <-ch:
+		case <-retry:
 		case <-ctx.Done():
 			return nil, nil, ctx.Err()
 		}
+	}
+}
+
+// borrow is the connection open now, if there is one, and its giving back.
+func (g *gate) borrow() (*conn, func()) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.shared == nil {
+		return nil, nil
+	}
+	g.users++
+	return g.shared, func() {
+		g.mu.Lock()
+		g.users--
+		g.notify()
+		g.mu.Unlock()
 	}
 }
 
