@@ -145,7 +145,8 @@ func Search(s *Store, q string, o SearchOptions) (M, error) {
 	if len(where) == 0 {
 		return M{"items": []M{}, "total": 0}, nil
 	}
-	where = append(where, shown(s, "m.service_id", ""))
+	// a message deleted for everyone is kept, not offered: shown only when opened in its chat
+	where = append(where, shown(s, "m.service_id", ""), "NOT m.deleted")
 	q2 := s.Read()
 	lk := lookupsOf(s)
 	if o.Service != "" {

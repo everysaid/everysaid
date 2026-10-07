@@ -137,6 +137,22 @@ func (s *Server) chatRoutes() {
 			}
 		}
 		c["sendable"], c["replyable"], c["mentionable"], c["fileable"], c["unsendable"] = sendable, replyable, mentionable, fileable, unsendable
+		// what can be done to a message, by service: the emoji (null: any), whether any other emoji
+		// may be put too, and how long after sending an edit or a deletion for everyone is allowed
+		react, free, edit, del := s.Host.Reactable()
+		reactions, freeReactions, editable, deletable := M{}, M{}, M{}, M{}
+		for _, x := range services {
+			if r, ok := react[x]; ok {
+				reactions[x], freeReactions[x] = r, free[x]
+			}
+			if e, ok := edit[x]; ok {
+				editable[x] = e
+			}
+			if d, ok := del[x]; ok {
+				deletable[x] = d
+			}
+		}
+		c["reactions"], c["free_reactions"], c["editable"], c["deletable"] = reactions, freeReactions, editable, deletable
 		return c, nil
 	})
 
@@ -277,6 +293,40 @@ func (s *Server) chatRoutes() {
 			return nil, is404(err, func(e error) error { return failed(409, e.Error()) })
 		}
 		return out, nil
+	})
+
+	act := func(q *req, a MessageAction) (any, error) {
+		mid, err := q.pathInt("mid")
+		if err != nil {
+			return nil, err
+		}
+		out, err := s.Host.Act(q.r.Context(), mid, a)
+		if err != nil {
+			return nil, is404(err, func(e error) error { return failed(409, e.Error()) })
+		}
+		return out, nil
+	}
+
+	// the user's reaction on a message: an emoji puts it (in place of theirs), "" takes it back
+	h("POST /api/messages/{mid}/reaction", bodyRequired, func(q *req) (any, error) {
+		emoji := strings.TrimFunc(q.text("emoji"), isPySpace)
+		if len([]rune(emoji)) > 16 {
+			return nil, failed(400, "emoji")
+		}
+		return act(q, MessageAction{Kind: "react", Emoji: emoji})
+	})
+
+	h("POST /api/messages/{mid}/edit", bodyRequired, func(q *req) (any, error) {
+		text := strings.TrimFunc(q.text("text"), isPySpace)
+		if text == "" {
+			return nil, errs.New("empty_message", 400, nil)
+		}
+		return act(q, MessageAction{Kind: "edit", Text: text})
+	})
+
+	// deleted for everyone in the chat, through its service
+	h("POST /api/messages/{mid}/delete", bodyRequired, func(q *req) (any, error) {
+		return act(q, MessageAction{Kind: "delete"})
 	})
 
 	h("GET /api/messages/{mid}/receipts", bodyNone, func(q *req) (any, error) {

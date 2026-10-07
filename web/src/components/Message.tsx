@@ -1,12 +1,12 @@
-import { memo, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "@tanstack/react-router";
-import { Check, CheckCheck, CornerUpLeft, FileText, Forward, ImageOff, MapPin, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Video } from "lucide-react";
+import { Check, CheckCheck, CornerUpLeft, FileText, Forward, ImageOff, MapPin, Pencil, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Plus, SmilePlus, Trash2, Video } from "lucide-react";
 import type { Attachment, CallItem, Mention, MessageItem, Receipts } from "@/lib/api";
 import { bytes, duration, time } from "@/lib/format";
 import { service } from "@/lib/services";
 import { cn } from "@/lib/utils";
-import { Avatar } from "./ui";
+import { Avatar, Menu, MenuContent, MenuItem, MenuTrigger } from "./ui";
 
 const URL_RE = /(https?:\/\/[^\s<>"')\]]+)/g;
 const BIDI = /[\u202a-\u202e\u2066-\u2069]/g;      // direction marks around a name (Viber writes "\u202a@Name\u202c")
@@ -171,27 +171,125 @@ export interface BubbleProps {
   onJump: (id: number) => void;
   onReply?: (m: MessageItem) => void;    // where an answer to this message can be sent
   onInfo?: (m: MessageItem) => void;     // who got and read it (the user's own messages)
+  // what can be done to it through its service now: a reaction ("" takes the user's back), an edit,
+  // a deletion for everyone (the user's own)
+  react?: { quick: string[]; all: string[] | null; free: boolean; on: (m: MessageItem, emoji: string) => void };
+  onEdit?: (m: MessageItem) => void;
+  onDelete?: (m: MessageItem) => void;
 }
 
-export const Bubble = memo(function Bubble({ m, group, first, last, showService, highlight, onOpen, onJump, onReply, onInfo }: BubbleProps) {
+// what is offered where a service takes any emoji, after its own quick ones
+const COMMON = ["👍", "❤️", "😂", "😮", "😢", "🙏", "👎", "😡", "🔥", "🎉", "👏", "🥰", "😍", "🤣", "😊", "😁", "😉", "😎",
+  "🤔", "🙄", "😅", "😭", "😱", "🤯", "🥳", "🤩", "😘", "🤗", "🙈", "💪", "👌", "✌️", "🤝", "🙌", "💯", "✅", "❌", "⭐",
+  "💔", "💙", "💚", "💛", "🌹", "☕", "🍻", "🎂", "😴", "🤢", "🫠", "👀"];
+
+/** One emoji, as typed or pasted (a flag, a skin tone, a family are one). */
+export function oneEmoji(s: string): string | null {
+  const t = s.trim();
+  if (!t) return null;
+  const parts = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(t)];
+  return parts.length === 1 && /\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(t) ? t : null;
+}
+
+/** The actions of a message: its service's quick reactions, any other it takes, answer, edit,
+ * delete for everyone. Opened by its button, or by a long press on a touch screen (open). */
+function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange }: {
+  m: MessageItem; react?: BubbleProps["react"]; onReply?: (m: MessageItem) => void; onEdit?: (m: MessageItem) => void;
+  onDelete?: (m: MessageItem) => void; open: boolean; onOpenChange: (o: boolean) => void;
+}) {
   const { t } = useTranslation();
+  const [more, setMore] = useState(false);
+  const [typed, setTyped] = useState("");
+  useEffect(() => { if (!open) { setMore(false); setTyped(""); } }, [open]);
+  const mine = m.reactions.find((r) => r.mine)?.emoji ?? null;
+  const put = (e: string) => { onOpenChange(false); react?.on(m, e === mine ? "" : e); };
+  const others = react ? (react.free ? [...react.quick, ...COMMON.filter((e) => !react.quick.includes(e))] : react.all ?? []) : [];
+  const typedOne = oneEmoji(typed);
+  return (
+    <Menu open={open} onOpenChange={onOpenChange}>
+      <MenuTrigger asChild>
+        <button data-actions aria-label={t("chat.actions")} title={t("chat.actions")}
+          className="self-center rounded-full p-1.5 text-muted opacity-0 transition hover:bg-panel-2 hover:text-fg focus:opacity-100 group-hover/msg:opacity-100 data-[state=open]:opacity-100">
+          <SmilePlus className="size-4" />
+        </button>
+      </MenuTrigger>
+      <MenuContent align={m.outgoing ? "end" : "start"} className="w-72">
+        {react && (
+          <div data-reactions className="flex items-center gap-0.5 px-1 py-1">
+            {react.quick.slice(0, 6).map((e) => (
+              <button key={e} data-react={e} onClick={() => put(e)} aria-label={`${t("chat.react")} ${e}`}
+                className={cn("grid size-9 place-items-center rounded-full text-xl hover:bg-panel-2", e === mine && "bg-accent/15")}>{e}</button>
+            ))}
+            {others.length > 6 || react.free ? (
+              <button data-more-reactions onClick={() => setMore((x) => !x)} aria-label={t("chat.moreReactions")} title={t("chat.moreReactions")}
+                className="grid size-9 place-items-center rounded-full text-muted hover:bg-panel-2 hover:text-fg"><Plus className="size-5" /></button>
+            ) : null}
+          </div>
+        )}
+        {react && more && (
+          <div data-reaction-picker className="border-t border-line px-1 pb-1 pt-1.5">
+            <div className="grid max-h-48 grid-cols-8 overflow-y-auto">
+              {others.slice(react.free ? 0 : 6).map((e) => (
+                <button key={e} onClick={() => put(e)} aria-label={`${t("chat.react")} ${e}`}
+                  className={cn("grid size-8 place-items-center rounded-lg text-lg hover:bg-panel-2", e === mine && "bg-accent/15")}>{e}</button>
+              ))}
+            </div>
+            {react.free && (
+              <form className="mt-1 flex items-center gap-1 px-1" onSubmit={(e) => { e.preventDefault(); if (typedOne) put(typedOne); }}>
+                <input data-emoji-input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={t("chat.emojiHint")}
+                  onKeyDown={(e) => e.stopPropagation()}
+                  className="h-8 min-w-0 flex-1 rounded-lg border border-line bg-panel-2 px-2 text-sm outline-none focus:border-accent" />
+                <button type="submit" disabled={!typedOne} className="h-8 rounded-lg px-2 text-sm font-medium text-accent disabled:opacity-40">{t("chat.react")}</button>
+              </form>
+            )}
+          </div>
+        )}
+        {mine && react && <MenuItem onSelect={() => react.on(m, "")}><span className="w-5 text-center">{mine}</span>{t("chat.removeReaction")}</MenuItem>}
+        {onReply && <MenuItem icon={<CornerUpLeft className="size-4" />} onSelect={() => onReply(m)}>{t("chat.reply")}</MenuItem>}
+        {onEdit && <MenuItem icon={<Pencil className="size-4" />} onSelect={() => onEdit(m)}>{t("chat.edit")}</MenuItem>}
+        {onDelete && <MenuItem danger icon={<Trash2 className="size-4" />} onSelect={() => onDelete(m)}>{t("chat.deleteForAll")}</MenuItem>}
+      </MenuContent>
+    </Menu>
+  );
+}
+
+export const Bubble = memo(function Bubble({ m, group, first, last, showService, highlight, onOpen, onJump, onReply, onInfo, react, onEdit, onDelete }: BubbleProps) {
+  const { t } = useTranslation();
+  const [menu, setMenu] = useState(false);
+  // deleted for everyone: the notice, as the service shows it; what it was, on a tap
+  const [reveal, setReveal] = useState(false);
+  const hidden = m.deleted && !reveal;
+  const hasActions = m.id > 0 && !m.deleted && !!(react || onEdit || onDelete);
+  const press = useRef<ReturnType<typeof setTimeout> | null>(null);   // a long press opens the actions
+  const unpress = () => { if (press.current) clearTimeout(press.current); press.current = null; };
   // a swipe to the right on a touch screen answers the message (as in the messaging apps)
   const [dx, setDx] = useState(0);
   const moved = useRef(0);              // as far as the finger went (the state may lag a frame behind)
   const start = useRef<{ x: number; y: number } | null>(null);
   const shift = (x: number) => { moved.current = x; setDx(x); };
   const swipe = onReply && m.id > 0 ? {
-    onPointerDown: (e: React.PointerEvent) => { if (e.pointerType === "touch") start.current = { x: e.clientX, y: e.clientY }; },
+    onPointerDown: (e: React.PointerEvent) => {
+      if (e.pointerType !== "touch") return;
+      start.current = { x: e.clientX, y: e.clientY };
+      if (hasActions) press.current = setTimeout(() => { start.current = null; shift(0); setMenu(true); }, 500);
+    },
     onPointerMove: (e: React.PointerEvent) => {
       const s0 = start.current;
       if (!s0) return;
       const x = e.clientX - s0.x;
+      if (Math.abs(x) > 8 || Math.abs(e.clientY - s0.y) > 8) unpress();
       if (Math.abs(e.clientY - s0.y) > 30 && x < 20) { start.current = null; shift(0); return; }   // a scroll, not a swipe
       shift(Math.max(0, Math.min(x, 90)));
     },
-    onPointerUp: () => { if (start.current && moved.current > 60) onReply(m); start.current = null; shift(0); },
-    onPointerCancel: () => { start.current = null; shift(0); },
+    onPointerUp: () => { unpress(); if (start.current && moved.current > 60) onReply(m); start.current = null; shift(0); },
+    onPointerCancel: () => { unpress(); start.current = null; shift(0); },
+  } : hasActions ? {
+    onPointerDown: (e: React.PointerEvent) => { if (e.pointerType === "touch") press.current = setTimeout(() => setMenu(true), 500); },
+    onPointerMove: unpress, onPointerUp: unpress, onPointerCancel: unpress,
   } : {};
+  const actions = hasActions && (
+    <Actions m={m} react={react} onReply={onReply} onEdit={onEdit} onDelete={onDelete} open={menu} onOpenChange={setMenu} />
+  );
   const replyButton = onReply && m.id > 0 && (
     <button data-reply onClick={() => onReply(m)} aria-label={t("chat.reply")} title={t("chat.reply")}
       className="self-center rounded-full p-1.5 text-muted opacity-0 transition hover:bg-panel-2 hover:text-fg focus:opacity-100 group-hover/msg:opacity-100">
@@ -203,10 +301,11 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
   const media = m.attachments.filter((a) => a.mime?.startsWith("image/") || a.mime?.startsWith("video/"));
   const others = m.attachments.filter((a) => !media.includes(a));
   // pictures alone: the time over them (not when none of them is there any more: a line of text then)
-  const onlyMedia = media.some((a) => a.available !== "gone") && !m.text && !others.length && !m.reply;
+  const onlyMedia = !(m.deleted && !reveal) && media.some((a) => a.available !== "gone") && !m.text && !others.length && !m.reply;
   const label = m.kind !== "text" && !m.attachments.length && !m.text && !m.location ? t(`kind.${m.kind}`, { defaultValue: m.kind }) : null;
   return (
     <div id={`m${m.id}`} className={cn("group/msg flex gap-2 px-3 md:px-6", out ? "justify-end" : "justify-start", first ? "mt-2" : "mt-0.5")}>
+      {out && actions}
       {out && replyButton}
       {group && !out && (
         <div className="w-8 shrink-0 self-end">{last && <Avatar name={m.sender || "?"} size={32} />}</div>
@@ -227,6 +326,12 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
             highlight && "flash",
           )}
         >
+          {hidden ? (
+            <button data-deleted onClick={() => setReveal(true)} title={t("chat.showDeleted")}
+              className="flex items-center gap-1.5 text-left opacity-80">
+              <Trash2 className="size-3.5 shrink-0" />{t("chat.deleted")}
+            </button>
+          ) : <>
           {m.forwarded && (
             <div className="mb-1 flex items-center gap-1 text-xs opacity-70"><Forward className="size-3" />{t("chat.forwarded")}</div>
           )}
@@ -266,6 +371,8 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
               {m.deleted && !m.text ? t("chat.deleted") : m.text ? <RichText text={m.text} marks={m.highlight} mentions={m.mentions} /> : <span className="opacity-70">{label}</span>}
             </div>
           )}
+          {m.deleted && <div className="mt-0.5 text-xs opacity-70">{t("chat.deleted")}</div>}
+          </>}
           <div className={cn("mt-0.5 flex items-center justify-end gap-1 text-[11px] leading-none", out ? "text-bubble-out-fg/70" : "text-muted", onlyMedia && "absolute bottom-2 right-2.5 rounded-full bg-black/45 px-1.5 py-1 text-white")}>
             {showService && <span className="flex items-center gap-1"><span className="size-1.5 rounded-full" style={{ background: svc.color }} />{svc.name} ·</span>}
             {m.edited && <span>{t("chat.edited")} ·</span>}
@@ -275,21 +382,28 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
             {out && m.receipts && <Ticks r={m.receipts} onInfo={onInfo && (() => onInfo(m))} />}
           </div>
         </div>
-        {m.reactions.length > 0 && (
+        {m.reactions.length > 0 && !hidden && (
           // over the bubble's lower edge, at its start (the time is at its end); the bubble is
           // positioned, so this must be too, and above it
           <div className="relative z-10 -mt-2 mb-1 flex flex-wrap justify-start gap-1 self-stretch px-2.5">
-            {groupReactions(m).map((r) => (
-              <span key={r.key} title={r.who} data-reaction
-                className={cn("inline-flex items-center gap-0.5 rounded-full bg-panel px-1.5 py-1 text-[13px] leading-none shadow-sm ring-2 ring-bg",
-                  r.mine && "bg-accent/15")}>
-                {r.emoji}{r.count > 1 && <span className="ml-0.5 text-muted">{r.count}</span>}
-              </span>
-            ))}
+            {groupReactions(m).map((r) => {
+              // the user's own taken back with a tap, another's put as theirs, where the service takes it
+              const tap = react && !m.deleted && m.id > 0 && (r.mine || react.free || react.all === null || react.all.includes(r.emoji)) && r.emoji !== "❔"
+                ? () => react.on(m, r.mine ? "" : r.emoji) : undefined;
+              const cls = cn("inline-flex items-center gap-0.5 rounded-full bg-panel px-1.5 py-1 text-[13px] leading-none shadow-sm ring-2 ring-bg",
+                r.mine && "bg-accent/15", tap && "hover:bg-panel-2");
+              const body = <>{r.emoji}{r.count > 1 && <span className="ml-0.5 text-muted">{r.count}</span>}</>;
+              return tap ? (
+                <button key={r.key} title={r.mine ? t("chat.removeReaction") : r.who} data-reaction data-mine={r.mine || undefined} onClick={tap} className={cls}>{body}</button>
+              ) : (
+                <span key={r.key} title={r.who} data-reaction className={cls}>{body}</span>
+              );
+            })}
           </div>
         )}
       </div>
       {!out && replyButton}
+      {!out && actions}
     </div>
   );
 });

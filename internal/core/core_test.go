@@ -1399,3 +1399,29 @@ func TestNamesThatSoundTheSame(t *testing.T) {
 		t.Fatal("different names sound the same")
 	}
 }
+
+// A message deleted for everyone is kept, but not offered: not found by search, not among the media.
+func TestDeletedForEveryoneIsNotOffered(t *testing.T) {
+	s := store(t)
+	found := items(search(t, s, "καλημερα", core.SearchOptions{}))
+	before := total(search(t, s, "καλημερα", core.SearchOptions{}))
+	media, _ := core.Media(s, core.MediaOptions{Kind: "image", Limit: 100000})
+	pics := media["items"].([]core.M)
+	gone := i64(found[0]["id"])
+	pic := i64(pics[0]["message_id"])
+	if err := s.Write(func(tx *sql.Tx) error {
+		_, err := tx.Exec("UPDATE message SET deleted = 1 WHERE id IN (?, ?)", gone, pic)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if after := total(search(t, s, "καλημερα", core.SearchOptions{})); after != before-1 {
+		t.Fatal(before, after)
+	}
+	media, _ = core.Media(s, core.MediaOptions{Kind: "image", Limit: 100000})
+	for _, m := range media["items"].([]core.M) {
+		if i64(m["message_id"]) == pic {
+			t.Fatal("a deleted message's picture offered")
+		}
+	}
+}

@@ -787,6 +787,140 @@ func (h *Host) Send(ctx context.Context, chatID string, r SendRequest) (out M, e
 	return M{"service": o.service, "conversation_id": o.conv, "result": result}, nil
 }
 
+// MessageAction is what the user does to one message: a reaction ("" takes the user's back), an
+// edit, a deletion for everyone.
+type MessageAction struct {
+	Kind  string // react, edit, delete
+	Emoji string
+	Text  string
+}
+
+// able says whether a plugin's manifest allows an action ("" for sending at all).
+func able(i *plugins.Info, kind string) bool {
+	switch kind {
+	case "react":
+		return i.CanReact
+	case "edit":
+		return i.CanEdit
+	case "delete":
+		return i.CanDelete
+	}
+	return true
+}
+
+// Allows says whether the plugin may put this emoji; the variation selector is left out of the
+// comparison ("❤️" is Telegram's "❤").
+func Allows(i *plugins.Info, emoji string) bool {
+	if emoji == "" || i.Reactions == nil || i.FreeReactions {
+		return true
+	}
+	bare := func(s string) string { return strings.ReplaceAll(s, "\ufe0f", "") }
+	for _, r := range i.Reactions {
+		if bare(r) == bare(emoji) {
+			return true
+		}
+	}
+	return false
+}
+
+// Act does an action on a message through the source that reaches its service and can; the source's
+// own import then brings the change into the archive. Edits and deletions are of the user's own
+// messages only, within the service's time for them.
+func (h *Host) Act(ctx context.Context, messageID int64, a MessageAction) (out M, err error) {
+	defer db.Recover(&err)
+	q := h.store.Read()
+	var conv, ts int64
+	var outgoing bool
+	var key, convKey sql.NullString
+	var svc string
+	if !db.Row(q, "SELECT m.conversation_id, m.ts, m.outgoing, m.key, c.key, s.name FROM message m "+
+		"JOIN conversation c ON c.id = m.conversation_id JOIN service s ON s.id = c.service_id WHERE m.id = ?",
+		[]any{messageID}, &conv, &ts, &outgoing, &key, &convKey, &svc) {
+		return nil, core.ErrNotFound
+	}
+	if key.String == "" {
+		return nil, errs.New("message.no_key", 409, nil)
+	}
+	if a.Kind != "react" && !outgoing {
+		return nil, errs.New("message.not_own", 409, nil)
+	}
+	var chosen *sender
+	for _, s := range h.Senders() {
+		i := s.p.Info()
+		if contains(i.Services, svc) && able(i, a.Kind) {
+			s := s
+			chosen = &s
+			break
+		}
+	}
+	if chosen == nil {
+		code := map[string]string{"react": "message.cannot_react", "edit": "message.cannot_edit",
+			"delete": "message.cannot_delete"}[a.Kind]
+		return nil, errs.New(code, 409, nil)
+	}
+	i := chosen.p.Info()
+	window := map[string]time.Duration{"edit": i.EditWindow, "delete": i.DeleteWindow}[a.Kind]
+	if window > 0 && time.Since(time.UnixMilli(ts)) > window {
+		return nil, errs.New("message.too_late", 409, nil)
+	}
+	if a.Kind == "react" && !Allows(i, a.Emoji) {
+		return nil, errs.New("message.reaction_not_allowed", 409, nil)
+	}
+	pc, err := h.Ctx(chosen.iid)
+	if err != nil {
+		return nil, err
+	}
+	c := plugins.Conversation{ID: conv, Key: convKey.String, Service: svc}
+	ref := plugins.Ref{ID: messageID, Key: key.String, Outgoing: outgoing, TS: ts}
+	switch a.Kind {
+	case "react":
+		if r, ok := chosen.p.(plugins.Reactor); ok {
+			err = r.React(ctx, pc, c, ref, a.Emoji)
+		} else {
+			err = errs.New("message.cannot_react", 409, nil)
+		}
+	case "edit":
+		if r, ok := chosen.p.(plugins.Editor); ok {
+			err = r.Edit(ctx, pc, c, ref, a.Text)
+		} else {
+			err = errs.New("message.cannot_edit", 409, nil)
+		}
+	case "delete":
+		if r, ok := chosen.p.(plugins.Deleter); ok {
+			err = r.Delete(ctx, pc, c, ref)
+		} else {
+			err = errs.New("message.cannot_delete", 409, nil)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	h.Emit(M{"type": "changed"})
+	return M{"service": svc, "conversation_id": conv}, nil
+}
+
+// Reactable is {service: the emoji its source can put now (nil: any)}, for the services a source may
+// react on now; editable and deletable, {service: the seconds after sending it allows (0: always)}.
+func (h *Host) Reactable() (react map[string][]string, free map[string]bool, edit, del map[string]int64) {
+	react, free, edit, del = map[string][]string{}, map[string]bool{}, map[string]int64{}, map[string]int64{}
+	for _, s := range h.Senders() {
+		i := s.p.Info()
+		for _, svc := range i.Services {
+			if _, ok := react[svc]; i.CanReact && !ok {
+				react[svc] = i.Reactions
+				free[svc] = i.Reactions == nil || i.FreeReactions
+			}
+			if _, ok := edit[svc]; i.CanEdit && !ok {
+				edit[svc] = int64(i.EditWindow / time.Second)
+			}
+			if _, ok := del[svc]; i.CanDelete && !ok {
+				del[svc] = int64(i.DeleteWindow / time.Second)
+			}
+		}
+	}
+	return
+}
+
 // MarkRead: the user read the chat up to `until` (Unix ms) here: each of its conversations with
 // something newer from the others than the service last said was read is told so, through the
 // plugins that can and are connected (a live one only while its connection runs; each sends only
