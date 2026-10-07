@@ -63,10 +63,10 @@ func (Plugin) Info() *plugins.Info { return info }
 
 func (Plugin) Check(c *plugins.Context) (bool, string) {
 	if _, _, ok := credentials(); !ok {
-		return false, "missing: api_id and api_hash (scripts/telegram-sync.py --save-credentials)"
+		return false, "missing: api_id and api_hash (everysaid telegram-sync --save-credentials)"
 	}
 	if !hasSession() {
-		return false, "missing: a login (scripts/telegram-sync.py --login)"
+		return false, "missing: a login (everysaid telegram-sync --login)"
 	}
 	return true, "ready"
 }

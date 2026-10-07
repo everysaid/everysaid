@@ -22,6 +22,10 @@ func init() {
 		"{n} downloaded into {folder}":                                "{n} κατέβηκαν στο {folder}",
 		"[telegram] media = false in config: no media are downloaded": "[telegram] media = false στις ρυθμίσεις: δεν κατεβαίνουν αρχεία",
 		"Telegram live":                                               "Telegram ζωντανά",
+		"Not signed in to Telegram yet (everysaid telegram-sync --save-credentials, --login)": "Δεν έχει γίνει ακόμα σύνδεση στο Telegram (everysaid telegram-sync --save-credentials, --login)",
+		"The Telegram sign-in has expired: everysaid telegram-sync --login":                   "Η σύνδεση στο Telegram έληξε: everysaid telegram-sync --login",
+		"api_id and api_hash (everysaid telegram-sync --save-credentials)":                    "api_id και api_hash (everysaid telegram-sync --save-credentials)",
+		"a login (everysaid telegram-sync --login)":                                           "η σύνδεση (everysaid telegram-sync --login)",
 	} {
 		EL[k] = v
 	}

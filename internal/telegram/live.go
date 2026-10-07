@@ -40,8 +40,8 @@ import (
 var lives sync.Map // instance id -> *conn of its live connection (Python's CLIENTS)
 
 const (
-	notSignedIn = "Not signed in to Telegram yet (scripts/telegram-sync.py --save-credentials, --login)"
-	expired     = "The Telegram sign-in has expired: scripts/telegram-sync.py --login"
+	notSignedIn = "Not signed in to Telegram yet (everysaid telegram-sync --save-credentials, --login)"
+	expired     = "The Telegram sign-in has expired: everysaid telegram-sync --login"
 )
 
 // connect runs fn with a connected, signed-in client. handler: updates (nil: none).
