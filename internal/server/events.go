@@ -16,7 +16,8 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 403, detail("auth.foreign_origin"))
 		return
 	}
-	if _, _, ok := s.Auth.Session(cookieOf(r)); !ok {
+	_, hs, ok := s.Auth.Session(cookieOf(r))
+	if !ok {
 		writeJSON(w, 403, detail("auth.sign_in_needed"))
 		return
 	}
@@ -30,6 +31,10 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	events := s.Host.Listen()
 	defer s.Host.Unlisten(events)
 	send := func(v any) bool {
+		if !s.Auth.alive(hs) { // the session ended (signed out, or ended from another device): so do its events
+			c.Close(websocket.StatusPolicyViolation, "session ended")
+			return false
+		}
 		wctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		return wsjson.Write(wctx, c, v) == nil

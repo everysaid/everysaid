@@ -42,20 +42,21 @@ func (u *waUser) WebAuthnName() string                       { return u.name }
 func (u *waUser) WebAuthnDisplayName() string                { return u.name }
 func (u *waUser) WebAuthnCredentials() []webauthn.Credential { return u.creds }
 
-// changer is the user a change to the ways in is for: a valid setup link's (nil: a new user), else
-// a session that signed in within the last minutes.
-func (s *Server) changer(r *http.Request, token string) (*int64, error) {
+// changer is the user a change to the ways in is for: a valid setup link's (nil: a new user; link
+// true: the link is what allows it, and is used up by the change), else a session that signed in
+// within the last minutes.
+func (s *Server) changer(r *http.Request, token string) (uid *int64, link bool, err error) {
 	if ok, uid := s.Auth.TakeSetup(token, false); ok {
-		return uid, nil
+		return uid, true, nil
 	}
 	c := cookieOf(r)
 	if uid, _, ok := s.Auth.Session(c); ok {
 		if s.Auth.Recent(c, 15) {
-			return &uid, nil
+			return &uid, false, nil
 		}
-		return nil, errs.New("auth.recent_sign_in", 403, nil)
+		return nil, false, errs.New("auth.recent_sign_in", 403, nil)
 	}
-	return nil, errs.New("auth.bad_link", 403, nil)
+	return nil, false, errs.New("auth.bad_link", 403, nil)
 }
 
 func (s *Server) rpID() string { return s.rp }
@@ -89,9 +90,13 @@ func (s *Server) authRoutes() {
 			return nil, errs.New("too_many", 429, nil)
 		}
 		token := q.text("token")
-		uid, err := s.changer(q.r, token)
+		uid, link, err := s.changer(q.r, token)
 		if err != nil {
 			return nil, err
+		}
+		var byLink any // the link that allows it, used up when the passkey is made
+		if link {
+			byLink = token
 		}
 		var user *User
 		if uid != nil {
@@ -132,7 +137,7 @@ func (s *Server) authRoutes() {
 			u = *uid
 		}
 		nonce := s.Auth.Challenge(session, "register", M{"uid": u, "name": name, "handle": hex.EncodeToString(handle),
-			"token": q.get("token")}, 0)
+			"token": byLink}, 0)
 		return M{"nonce": nonce, "options": creation.Response}, nil
 	})
 
@@ -156,17 +161,17 @@ func (s *Server) authRoutes() {
 		token, _ := info["token"].(string)
 		var uid int64
 		var codes any
-		if u, ok := info["uid"].(int64); ok {
+		// a link is used once: of two passkeys made with one at once, one is kept; and a new user
+		// is made only through one
+		u, known := info["uid"].(int64)
+		if token != "" || !known {
+			if ok, _ := s.Auth.TakeSetup(token, true); !ok {
+				return nil, errs.New("auth.bad_link", 403, nil)
+			}
+		}
+		if known {
 			uid = u
-			if token != "" {
-				s.Auth.TakeSetup(token, true)
-			}
 		} else {
-			if token != "" {
-				if ok, _ := s.Auth.TakeSetup(token, true); !ok {
-					return nil, errs.New("auth.bad_link", 403, nil)
-				}
-			}
 			uid = s.Auth.CreateUser(info["name"].(string), s.Store.Path)
 			s.Auth.setHandle(uid, handle)
 			codes = s.Auth.NewRecoveryCodes(uid)
@@ -255,7 +260,7 @@ func (s *Server) authRoutes() {
 			return nil, errs.New("too_many", 429, nil)
 		}
 		token := q.text("token")
-		uid, err := s.changer(q.r, token)
+		uid, link, err := s.changer(q.r, token)
 		if err != nil {
 			return nil, err
 		}
@@ -276,7 +281,7 @@ func (s *Server) authRoutes() {
 		left := s.Auth.SetupLeft(token)
 		ttl := float64(1800)
 		var keepToken any
-		if left > 0 {
+		if link && left > 0 {
 			ttl = float64(min(1800, left))
 			keepToken = token
 		}
@@ -312,15 +317,15 @@ func (s *Server) authRoutes() {
 		}
 		var uid int64
 		var codes any
-		if u, ok := info["uid"].(int64); ok {
-			uid = u
-			if token != "" {
-				s.Auth.TakeSetup(token, true)
-			}
-		} else {
+		u, known := info["uid"].(int64)
+		if token != "" || !known { // used once, as a passkey's
 			if ok, _ := s.Auth.TakeSetup(token, true); !ok {
 				return nil, errs.New("auth.bad_link", 403, nil)
 			}
+		}
+		if known {
+			uid = u
+		} else {
 			uid = s.Auth.CreateUser(info["name"].(string), s.Store.Path)
 			codes = s.Auth.NewRecoveryCodes(uid)
 		}
@@ -348,7 +353,7 @@ func (s *Server) authRoutes() {
 	})
 
 	h("DELETE /api/auth/password", bodyNone, func(q *req) (any, error) {
-		if _, err := s.changer(q.r, ""); err != nil {
+		if _, _, err := s.changer(q.r, ""); err != nil {
 			return nil, err
 		}
 		if err := s.Auth.ClearPassword(q.uid); err != nil {
@@ -396,7 +401,7 @@ func (s *Server) authRoutes() {
 	})
 
 	h("DELETE /api/auth/passkeys/{pid}", bodyNone, func(q *req) (any, error) {
-		if _, err := s.changer(q.r, ""); err != nil {
+		if _, _, err := s.changer(q.r, ""); err != nil {
 			return nil, err
 		}
 		err := s.Auth.RemovePasskey(q.uid, q.r.PathValue("pid"))
@@ -414,14 +419,14 @@ func (s *Server) authRoutes() {
 	})
 
 	h("POST /api/auth/recovery-codes", bodyNone, func(q *req) (any, error) {
-		if _, err := s.changer(q.r, ""); err != nil { // codes are a way in
+		if _, _, err := s.changer(q.r, ""); err != nil { // codes are a way in
 			return nil, err
 		}
 		return M{"codes": s.Auth.NewRecoveryCodes(q.uid)}, nil
 	})
 
 	h("POST /api/auth/mcp-token", bodyRequired, func(q *req) (any, error) {
-		if _, err := s.changer(q.r, ""); err != nil { // a lasting key to the archive
+		if _, _, err := s.changer(q.r, ""); err != nil { // a lasting key to the archive
 			return nil, err
 		}
 		label := q.text("label")

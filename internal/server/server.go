@@ -77,7 +77,8 @@ type Options struct {
 	// Logger: what goes wrong (default: the console and <state>/logs/server.log).
 	Logger *slog.Logger
 	// TrustedProxies: the addresses whose X-Forwarded-For and X-Forwarded-Proto are believed
-	// (default: 127.0.0.1, as uvicorn's forwarded_allow_ips).
+	// (default: this machine, 127.0.0.1 as uvicorn's forwarded_allow_ips, and ::1: a proxy here may
+	// come over IPv6, and then every client would be one address, sharing one budget of attempts).
 	TrustedProxies []string
 }
 
@@ -141,7 +142,7 @@ func New(o Options) (*Server, error) {
 		o.Out = os.Stdout
 	}
 	if o.TrustedProxies == nil {
-		o.TrustedProxies = []string{"127.0.0.1"}
+		o.TrustedProxies = []string{"127.0.0.1", "::1"}
 	}
 	s := &Server{opts: o}
 	s.log = o.Logger
@@ -317,10 +318,14 @@ func (s *Server) guard(next http.Handler) http.Handler {
 				}
 			}
 			if !open[p] {
-				uid, hs, ok := s.Auth.Session(cookieOf(r))
+				token := cookieOf(r)
+				uid, hs, renewed, ok := s.Auth.session(token)
 				if !ok {
 					writeJSON(w, 401, detail("auth.sign_in_needed"))
 					return
+				}
+				if renewed { // in use: the cookie lasts as long as the session does
+					s.setCookie(w, token)
 				}
 				r = r.WithContext(context.WithValue(r.Context(), authKey{}, &authInfo{uid, hs}))
 			}
@@ -518,11 +523,31 @@ func serveFile(w http.ResponseWriter, r *http.Request, p, typ, cache string) err
 	if typ != "" {
 		w.Header().Set("Content-Type", typ)
 	}
+	inert(w.Header(), typ)
 	if cache != "" {
 		w.Header().Set("Cache-Control", cache)
 	}
 	http.ServeContent(w, r, filepath.Base(p), st.ModTime(), f)
 	return nil
+}
+
+// fileCSP is the policy of a file served from the archive or the server's folders: what other people
+// sent comes from this origin, and must never be a page that runs anything (an HTML or SVG file
+// loading another file as its script would act as the user). No scripts, no plugins, an origin of
+// its own (sandbox).
+const fileCSP = "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; " +
+	"frame-ancestors 'none'; sandbox"
+
+// inert makes a file's answer harmless as a page: fileCSP, and a download unless it is a picture,
+// a video, a sound or plain text (shown by the browser as such, never as a document of its own).
+func inert(h http.Header, typ string) {
+	h.Set("Content-Security-Policy", fileCSP)
+	t := strings.ToLower(strings.TrimSpace(strings.Split(typ, ";")[0]))
+	shown := t != "image/svg+xml" && (strings.HasPrefix(t, "image/") || strings.HasPrefix(t, "video/") ||
+		strings.HasPrefix(t, "audio/") || t == "text/plain")
+	if !shown {
+		h.Set("Content-Disposition", "attachment")
+	}
 }
 
 // mcpEnv is the archive of an MCP token's user (this server's, the only one it serves).
