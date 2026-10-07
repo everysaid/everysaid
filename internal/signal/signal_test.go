@@ -1035,3 +1035,129 @@ func TestReactionsAcrossEdits(t *testing.T) {
 		t.Fatalf("the reaction taken back stays (%d)", n)
 	}
 }
+
+// A number the owner wrote to from the phone, someone Signal knows only by it: the chat is kept
+// under their PNI, and once Signal tells the number (the phone's copy of what it sent carries it)
+// the chat is theirs, with their messages on other services; earlier messages of that PNI too. When
+// they answer from their ACI (with a signature of the PNI), that chat is theirs as well. Sending
+// into the PNI's chat goes to the PNI.
+func TestNumberWrittenTo(t *testing.T) {
+	const (
+		pni   = "PNI:55555555-5555-5555-5555-555555555555"
+		carl  = "66666666-6666-6666-6666-666666666666"
+		phone = "+306900000002"
+	)
+	c, _, path := newPlugin(t, nil)
+	p := Plugin{}
+	if err := p.Action(c, "link"); err != nil {
+		t.Fatal(err)
+	}
+	// the person's SMS, already in the archive
+	a, err := archive.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := a.Source("phone/sms", "", "sms", "")
+	sms := a.Conversation("sms", []archive.Handle{archive.H("phone", phone)}, "", "")
+	a.AddMessage(src, "1", archive.Message{Service: "sms", ConversationID: sms, TS: 500, Kind: "text", Text: "sms"})
+	a.Commit()
+	a.Close()
+
+	sent := func(ts int64, text string) map[string]any {
+		return map[string]any{"event": "message", "chat": contact(pni), "sender": fakeOwn, "outgoing": true,
+			"ts": ts, "server_ts": ts, "text": text}
+	}
+	chatOf := func(key string) string {
+		ix := core.Index(c.Store())
+		cid := db.Int(c.Store().Read(), "SELECT id FROM conversation WHERE key = ?", key)
+		return ix.ConvChat[cid]
+	}
+	smsChat := func() string { return core.Index(c.Store()).ConvChat[sms] }
+	members := func(key string) string {
+		return strings.Join(db.Strs(c.Store().Read(), "SELECT a.value FROM conversation_member cm JOIN conversation c "+
+			"ON c.id = cm.conversation_id JOIN address a ON a.id = cm.address_id WHERE c.key = ? ORDER BY a.value", key), ",")
+	}
+	// first without the number (as an older helper kept it): a chat of its own
+	writeScript(t, c, []map[string]any{sent(1000, "first")})
+	if err := p.RunImport(c); err != nil {
+		t.Fatal(err)
+	}
+	if members(pni) != pni || chatOf(pni) == smsChat() {
+		t.Fatalf("before the number: %s %s %s", members(pni), chatOf(pni), smsChat())
+	}
+	// then the phone's copy of the next one says the number: both messages join the person
+	writeScript(t, c, []map[string]any{
+		{"event": "ids", "aci": nil, "pni": pni, "phone": phone},
+		sent(2000, "second"),
+	})
+	if err := p.RunImport(c); err != nil {
+		t.Fatal(err)
+	}
+	if members(pni) != phone {
+		t.Fatalf("members %s", members(pni))
+	}
+	if chatOf(pni) == "" || chatOf(pni) != smsChat() {
+		t.Fatalf("the PNI's chat %q, the SMS %q", chatOf(pni), smsChat())
+	}
+	num := func(q string, args ...any) int64 { return db.Int(c.Store().Read(), q, args...) }
+	if num("SELECT count(*) FROM message m JOIN conversation c ON c.id = m.conversation_id WHERE c.key = ?", pni) != 2 {
+		t.Fatal("both messages in the PNI's conversation")
+	}
+	// they answer from their ACI, signed with the PNI: the same person's chat
+	writeScript(t, c, []map[string]any{
+		{"event": "message", "chat": contact(carl), "sender": carl, "outgoing": false, "ts": 3000, "server_ts": 3000,
+			"text": "who is this?"},
+		{"event": "ids", "aci": carl, "pni": pni, "phone": nil},
+	})
+	if err := p.RunImport(c); err != nil {
+		t.Fatal(err)
+	}
+	if members(carl) != phone || chatOf(carl) != smsChat() {
+		t.Fatalf("the ACI's chat: %s %q, the SMS %q", members(carl), chatOf(carl), smsChat())
+	}
+	if num("SELECT count(DISTINCT pa.person_id) FROM address a JOIN person_address pa ON pa.address_id = a.id "+
+		"WHERE a.value IN (?, ?)", carl, phone) != 1 {
+		t.Fatal("the ACI is the number's person")
+	}
+	// sending into the PNI's chat: to the PNI
+	var conv plugins.Conversation
+	db.Row(c.Store().Read(), "SELECT id, key FROM conversation WHERE key = ?", []any{pni}, &conv.ID, &conv.Key)
+	if _, err := p.Send(context.Background(), c, conv, "hello", nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	req := lines(t, filepath.Join(StoreDir(c), "sent.jsonl"))[0]
+	if ch := req["chat"].(map[string]any); ch["kind"] != "contact" || ch["id"] != pni {
+		t.Fatalf("sent to %v", ch)
+	}
+}
+
+// What signal.db keeps of ids: a PNI's number and ACI, each kept when the other comes; an ACI's
+// number; and the PNIs the helper's history is to read.
+func TestIDs(t *testing.T) {
+	dir := folders(t)
+	s, err := OpenStore(filepath.Join(dir, "signal.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	const pni = "PNI:55555555-5555-5555-5555-555555555555"
+	if got := s.PNIs(); got == nil || len(got) != 0 {
+		t.Fatalf("no PNIs: %#v", got)
+	}
+	apply(t, s,
+		map[string]any{"event": "ids", "aci": nil, "pni": pni, "phone": "+306900000002"},
+		map[string]any{"event": "ids", "aci": anna, "pni": pni, "phone": nil},
+		map[string]any{"event": "ids", "aci": bob, "pni": nil, "phone": "+306900000003"},
+		map[string]any{"event": "message", "chat": contact("PNI:77777777-7777-7777-7777-777777777777"),
+			"sender": fakeOwn, "outgoing": true, "ts": 1, "text": "x"})
+	got := db.Strs(s.DB, "SELECT pni || '|' || coalesce(phone, '') || '|' || coalesce(aci, '') FROM pni")
+	if strings.Join(got, ",") != pni+"|+306900000002|"+anna {
+		t.Fatalf("pni %v", got)
+	}
+	if db.Str(s.DB, "SELECT phone FROM contact WHERE aci = ?", bob) != "+306900000003" {
+		t.Fatal("an ACI's number")
+	}
+	if strings.Join(s.PNIs(), ",") != pni+",PNI:77777777-7777-7777-7777-777777777777" {
+		t.Fatalf("PNIs %v", s.PNIs())
+	}
+}

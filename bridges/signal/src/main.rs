@@ -290,7 +290,7 @@ async fn handle(state: &Shared, out: &Out, cmd: Command) -> Result<Value, Fail> 
         Command::Delete { chat, target_ts } => delete(state, out, chat, target_ts).await,
         Command::MarkRead { messages, receipts } => mark_read(state, messages, receipts).await,
         Command::Fetch { messages } => fetch_again(state, out, messages).await,
-        Command::History { since } => history(state, since).await,
+        Command::History { since, chats } => history(state, since, chats).await,
         Command::Open { .. } | Command::Quit => Err(fail_with("bad_request", "not here")),
     }
 }
@@ -385,6 +385,7 @@ fn meta_of(m: &Metadata) -> Meta {
     Meta {
         sender: m.sender.service_id_string(),
         destination: m.destination.service_id_string(),
+        pni: m.pni_verified.map(|p| p.service_id_string()),
         sender_device: u32::from(m.sender_device),
         ts: m.client_timestamp.timestamp_millis().max(0) as u64,
         server_ts: m.server_timestamp.timestamp_millis().max(0) as u64,
@@ -786,7 +787,9 @@ async fn mark_read(state: &Shared, messages: Vec<protocol::MessageRef>, receipts
 }
 
 /// The events of what the store holds, sent after `since` (attachments as files already fetched).
-async fn history(state: &Shared, since: u64) -> Result<Value, Fail> {
+/// The store cannot list its chats: those of its contacts and groups are read, and `chats`, the
+/// people's ids Everysaid knows besides (PNIs: a number written to, which is no contact).
+async fn history(state: &Shared, since: u64, chats: Vec<String>) -> Result<Value, Fail> {
     let m = manager_of(state)?;
     let own = own_aci(&m);
     let store = m.store();
@@ -794,6 +797,14 @@ async fn history(state: &Shared, since: u64) -> Result<Value, Fail> {
     for c in store.contacts().await.map_err(failed)?.filter_map(Result::ok) {
         if c.uuid != Uuid::nil() {
             threads.push(Thread::Contact(ServiceId::Aci(c.uuid.into())));
+        }
+    }
+    for id in &chats {
+        if let Some(sid) = ServiceId::parse_from_service_id_string(id) {
+            let t = Thread::Contact(sid);
+            if !threads.contains(&t) {
+                threads.push(t);
+            }
         }
     }
     for (key, _) in store.groups().await.map_err(failed)?.filter_map(Result::ok) {

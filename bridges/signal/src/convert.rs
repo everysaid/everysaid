@@ -14,10 +14,12 @@ use serde_json::{json, Map, Value};
 
 use crate::protocol::event;
 
-/// Who sent a message (to whom), from which device, and when (Unix ms).
+/// Who sent a message (to whom), from which device, and when (Unix ms). `pni`: the sender's PNI,
+/// where the message carried a signature of it that their keys proved.
 pub struct Meta {
     pub sender: String,
     pub destination: String,
+    pub pni: Option<String>,
     pub sender_device: u32,
     pub ts: u64,
     pub server_ts: u64,
@@ -77,12 +79,19 @@ fn group_chat(key: &[u8; 32]) -> Value {
     json!({"kind": "group", "id": group_id(key)})
 }
 
+/// What Signal told of one person's ids: a PNI (the id of a phone number) with the number, or with
+/// the ACI it belongs to; an ACI with its number. A chat with someone known only by number is kept
+/// under their PNI, and this is what ties it to the person.
+fn ids_event(aci: Option<&str>, pni: Option<&str>, phone: Option<&str>) -> Converted {
+    Converted::plain(event("ids", json!({"aci": aci, "pni": pni, "phone": phone})))
+}
+
 /// The events of one received content. `own` is the account's ACI.
 pub fn convert(meta: &Meta, body: &ContentBody, own: &str) -> Vec<Converted> {
     // a person's chat is the other person's: the sender's, or (what this device sent, as the store
     // keeps it) the destination's
     let peer = if meta.sender == own && !meta.destination.is_empty() { &meta.destination } else { &meta.sender };
-    match body {
+    let mut out = match body {
         ContentBody::DataMessage(dm) => {
             let (chat, group) = match master_key(&dm.group_v2) {
                 Some(k) => (group_chat(&k), Some(k)),
@@ -103,7 +112,13 @@ pub fn convert(meta: &Meta, body: &ContentBody, own: &str) -> Vec<Converted> {
         ContentBody::ReceiptMessage(rm) => receipt_event(meta, rm),
         // typing, stories, null messages (padding, or a session reset) and failures: nothing to keep
         _ => vec![],
+    };
+    // someone the owner wrote to by number answers from their ACI with a signature of that number's
+    // PNI (Signal's apps add it until they hear back): the two chats are one person's
+    if let Some(pni) = meta.pni.as_deref().filter(|_| meta.sender != own) {
+        out.push(ids_event(Some(&meta.sender), Some(pni), None));
     }
+    out
 }
 
 fn base(meta: &Meta, sender: &str, outgoing: bool, chat: Value, ts: u64) -> Map<String, Value> {
@@ -320,6 +335,15 @@ fn sync_events(meta: &Meta, sm: &SyncMessage, own: &str) -> Vec<Converted> {
     let mut out = vec![];
     if let Some(sync_message::Content::Sent(sent)) = &sm.content {
         let dest = service_id(sent.destination_service_id.as_ref(), sent.destination_service_id_binary.as_ref());
+        // the phone says the number it wrote to: for someone it knows only by number, the destination
+        // is their PNI, and the number is all that ties that chat to them
+        if let (Some(d), Some(phone)) = (&dest, sent.destination_e164.as_deref().map(str::trim).filter(|p| !p.is_empty())) {
+            if d.starts_with("PNI:") {
+                out.push(ids_event(None, Some(d), Some(phone)));
+            } else if d != own {
+                out.push(ids_event(Some(d), None, Some(phone)));
+            }
+        }
         if let Some(dm) = &sent.message {
             let ts = dm.timestamp.or(sent.timestamp).unwrap_or(meta.ts);
             match (master_key(&dm.group_v2), dest) {
@@ -432,7 +456,7 @@ fn receipt_event(meta: &Meta, rm: &ReceiptMessage) -> Vec<Converted> {
 
 /// A message this helper sent, as the event the others' messages are.
 pub fn sent_event(own: &str, device: u32, chat: Value, dm: &DataMessage, ts: u64) -> Converted {
-    let meta = Meta { sender: own.to_string(), destination: String::new(), sender_device: device, ts, server_ts: ts };
+    let meta = Meta { sender: own.to_string(), destination: String::new(), pni: None, sender_device: device, ts, server_ts: ts };
     let mut m = base(&meta, own, true, chat, ts);
     let attachments = message_fields(&mut m, dm);
     Converted { event: event("message", Value::Object(m)), attachments, group: None }
@@ -441,7 +465,8 @@ pub fn sent_event(own: &str, device: u32, chat: Value, dm: &DataMessage, ts: u64
 /// What this helper sent (a reaction, an edit, a deletion), as the events the others' are: to
 /// `destination` (a person's ACI; for a group, its context in the message says where).
 pub fn sent_events(own: &str, device: u32, destination: &str, body: &ContentBody, ts: u64) -> Vec<Converted> {
-    let meta = Meta { sender: own.to_string(), destination: destination.to_string(), sender_device: device, ts, server_ts: ts };
+    let meta =
+        Meta { sender: own.to_string(), destination: destination.to_string(), pni: None, sender_device: device, ts, server_ts: ts };
     convert(&meta, body, own)
 }
 
@@ -531,7 +556,7 @@ mod tests {
     const BOB: &str = "33333333-3333-3333-3333-333333333333";
 
     fn meta(sender: &str) -> Meta {
-        Meta { sender: sender.into(), destination: ME.into(), sender_device: 1, ts: 1000, server_ts: 1001 }
+        Meta { sender: sender.into(), destination: ME.into(), pni: None, sender_device: 1, ts: 1000, server_ts: 1001 }
     }
 
     fn one(meta: &Meta, body: ContentBody) -> Value {
@@ -642,6 +667,64 @@ mod tests {
         assert_eq!(e["sender"], ME);
         assert_eq!(e["chat"], json!({"kind": "contact", "id": ANNA}));
         assert_eq!(e["ts"], 3000);
+    }
+
+    #[test]
+    fn sent_from_the_phone_to_a_number() {
+        // someone the phone knows only by number: the destination is their PNI, the number beside it
+        const PNI: &str = "PNI:44444444-4444-4444-4444-444444444444";
+        let pni = ServiceId::parse_from_service_id_string(PNI).unwrap();
+        let sent = Sent {
+            destination_service_id_binary: Some(pni.service_id_binary()),
+            destination_e164: Some("+306900000002".into()),
+            timestamp: Some(3000),
+            message: Some(DataMessage { body: Some("to a number".into()), timestamp: Some(3000), ..Default::default() }),
+            ..Default::default()
+        };
+        let sm = SyncMessage { content: Some(sync_message::Content::Sent(sent)), ..Default::default() };
+        let out: Vec<Value> = convert(&meta(ME), &ContentBody::SynchronizeMessage(sm), ME).into_iter().map(|c| c.event).collect();
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert_eq!(out[0], json!({"event": "ids", "aci": null, "pni": PNI, "phone": "+306900000002"}));
+        assert_eq!((out[1]["event"].as_str(), out[1]["text"].as_str()), (Some("message"), Some("to a number")));
+        assert_eq!(out[1]["chat"], json!({"kind": "contact", "id": PNI}));
+
+        // to an ACI, its number too; without a number, nothing more than the message
+        let sent = Sent {
+            destination_service_id: Some(ANNA.into()),
+            destination_e164: Some("+306900000001".into()),
+            message: Some(DataMessage { body: Some("hi".into()), timestamp: Some(3100), ..Default::default() }),
+            ..Default::default()
+        };
+        let sm = SyncMessage { content: Some(sync_message::Content::Sent(sent)), ..Default::default() };
+        let out = convert(&meta(ME), &ContentBody::SynchronizeMessage(sm), ME);
+        assert_eq!(out[0].event, json!({"event": "ids", "aci": ANNA, "pni": null, "phone": "+306900000001"}));
+        let sent = Sent {
+            destination_service_id: Some(PNI.into()),
+            destination_e164: Some(" ".into()),
+            message: Some(DataMessage { body: Some("hi".into()), timestamp: Some(3200), ..Default::default() }),
+            ..Default::default()
+        };
+        let sm = SyncMessage { content: Some(sync_message::Content::Sent(sent)), ..Default::default() };
+        let e = one(&meta(ME), ContentBody::SynchronizeMessage(sm));
+        assert_eq!((e["event"].as_str(), e["chat"]["id"].as_str()), (Some("message"), Some(PNI)));
+    }
+
+    #[test]
+    fn an_answer_signed_by_the_number() {
+        // the answer of someone written to by number comes from their ACI with their PNI proved
+        const PNI: &str = "PNI:44444444-4444-4444-4444-444444444444";
+        let dm = DataMessage { body: Some("who is this?".into()), timestamp: Some(1000), ..Default::default() };
+        let m = Meta { pni: Some(PNI.into()), ..meta(ANNA) };
+        let out = convert(&m, &ContentBody::DataMessage(dm), ME);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].event["chat"], json!({"kind": "contact", "id": ANNA}));
+        assert_eq!(out[1].event, json!({"event": "ids", "aci": ANNA, "pni": PNI, "phone": null}));
+        // a receipt carries it as well; the owner's own never
+        let rm = ReceiptMessage { r#type: Some(receipt_message::Type::Read as i32), timestamp: vec![1] };
+        assert_eq!(convert(&m, &ContentBody::ReceiptMessage(rm), ME).len(), 2);
+        let own = Meta { pni: Some(PNI.into()), ..meta(ME) };
+        let sm = SyncMessage { read: vec![Read { sender_aci: Some(ANNA.into()), timestamp: Some(5), ..Default::default() }], ..Default::default() };
+        assert_eq!(convert(&own, &ContentBody::SynchronizeMessage(sm), ME).len(), 1);
     }
 
     #[test]

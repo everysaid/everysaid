@@ -77,10 +77,13 @@ pub enum Command {
     Fetch {
         messages: Vec<MessageRef>,
     },
-    /// What the store holds (what this device received since it was linked), sent after `since`.
+    /// What the store holds (what this device received since it was linked), sent after `since`;
+    /// `chats`: people's ids whose chats are read too (the store lists only its contacts').
     History {
         #[serde(default)]
         since: u64,
+        #[serde(default)]
+        chats: Vec<String>,
     },
     Quit,
 }
@@ -188,7 +191,9 @@ mod tests {
         let r = parse(r#"{"id":2,"cmd":"link"}"#).unwrap();
         assert_eq!(r.cmd, Command::Link { device_name: "Everysaid".into() });
         assert_eq!(parse(r#"{"id":3,"cmd":"receive"}"#).unwrap().cmd, Command::Receive { download: true });
-        assert_eq!(parse(r#"{"id":4,"cmd":"history"}"#).unwrap().cmd, Command::History { since: 0 });
+        assert_eq!(parse(r#"{"id":4,"cmd":"history"}"#).unwrap().cmd, Command::History { since: 0, chats: vec![] });
+        let r = parse(r#"{"id":5,"cmd":"history","since":7,"chats":["PNI:x"]}"#).unwrap();
+        assert_eq!(r.cmd, Command::History { since: 7, chats: vec!["PNI:x".into()] });
     }
 
     #[test]

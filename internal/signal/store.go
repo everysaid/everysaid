@@ -26,6 +26,12 @@ CREATE TABLE IF NOT EXISTS contact (
     profile_name TEXT,                  -- as they named themselves
     seen_at INTEGER NOT NULL            -- Unix s
 );
+CREATE TABLE IF NOT EXISTS pni (       -- someone's PNI (the id of their number), as Signal told it
+    pni TEXT PRIMARY KEY,               -- "PNI:<uuid>"
+    phone TEXT,                         -- E.164: the phone said it, writing to them
+    aci TEXT,                           -- their ACI: they signed with the PNI, writing from it
+    seen_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS grp (
     id TEXT PRIMARY KEY,                -- the group's id (base64), not its master key
     title TEXT,
@@ -248,6 +254,11 @@ type event struct {
 	Result    string  `json:"result"`
 	Video     bool    `json:"video"`
 
+	// one person's ids (and a person seen, a contact)
+	ACI   string  `json:"aci"`
+	PNI   string  `json:"pni"`
+	Phone *string `json:"phone"`
+
 	// contacts, a group
 	ContactList []contactEv `json:"-"`
 	Title       *string     `json:"title"`
@@ -342,6 +353,27 @@ func (s *Store) Apply(raw []byte) (kept bool, err error) {
 				"phone = coalesce(excluded.phone, contact.phone), name = coalesce(excluded.name, contact.name), "+
 				"profile_name = coalesce(excluded.profile_name, contact.profile_name), seen_at = excluded.seen_at",
 				c.ACI, ptr(c.Phone), ptr(c.Name), ptr(c.ProfileName), now)
+		}
+	case "ids":
+		// a number written to, from the phone, is kept under its PNI: what ties it to the person
+		phone := ptr(e.Phone)
+		if deref(e.Phone) == "" {
+			phone = nil
+		}
+		var aci any
+		if e.ACI != "" {
+			aci = e.ACI
+		}
+		switch {
+		case e.PNI != "":
+			db.Exec(s.DB, "INSERT INTO pni VALUES (?, ?, ?, ?) ON CONFLICT (pni) DO UPDATE SET "+
+				"phone = coalesce(excluded.phone, pni.phone), aci = coalesce(excluded.aci, pni.aci), seen_at = excluded.seen_at",
+				e.PNI, phone, aci, now)
+		case e.ACI != "" && phone != nil:
+			db.Exec(s.DB, "INSERT INTO contact (aci, phone, seen_at) VALUES (?, ?, ?) ON CONFLICT (aci) DO UPDATE SET "+
+				"phone = excluded.phone, seen_at = excluded.seen_at", e.ACI, phone, now)
+		default:
+			return false, nil
 		}
 	case "group":
 		if e.ID == nil {
@@ -460,6 +492,13 @@ func (s *Store) FailedFiles(since int64) []ref {
 		db.Exec(s.DB, "INSERT INTO fetch_try VALUES (?, ?, 1) ON CONFLICT DO UPDATE SET tries = tries + 1", r.Author, r.TS)
 	}
 	return out
+}
+
+// PNIs are the PNIs of the people signal.db has a chat with or was told of: chats with numbers the
+// phone wrote to, which the helper's store does not list among its contacts.
+func (s *Store) PNIs() []string {
+	return append([]string{}, db.Strs(s.DB, "SELECT chat FROM message WHERE chat_kind = 'contact' AND chat LIKE 'PNI:%' UNION "+
+		"SELECT pni FROM pni ORDER BY 1")...) // a list, never null
 }
 
 // Newest is the newest message's time (Unix ms), 0 for none.
