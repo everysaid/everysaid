@@ -267,6 +267,74 @@ func readAndroidSMS(path string, own map[archive.Handle]bool, device string) []*
 
 func isStr(v any) bool { _, ok := v.(string); return ok }
 
+// takeTapbacksBack removes the tapbacks taken back: an iMessage reaction (associated_message_type
+// 2000-2006) is taken back by one of the same sender, on the same message, 1000 higher; the last
+// of them says whether it stands. The tapbacks themselves come in as reactions through
+// Archive.Resolve.
+func takeTapbacksBack(a *archive.Archive, iphone []*smsRec) {
+	type tapback struct {
+		target, sender string
+		kind           int64
+		emoji          string
+	}
+	removed := map[tapback]bool{}
+	var order []tapback
+	for _, r := range iphone {
+		kind, _ := pyInt(r.raw["associated_message_type"])
+		g := str(r.raw["associated_message_guid"])
+		if kind < 2000 || kind >= 4000 || g == "" {
+			continue
+		}
+		if i := strings.Index(g, "/"); i >= 0 {
+			g = g[i+1:]
+		}
+		sender := "me"
+		if !r.outgoing && r.sender != nil {
+			sender = r.sender.Kind + ":" + r.sender.Value
+		}
+		k := tapback{g, sender, 2000 + kind%1000, ""}
+		if k.kind == 2006 { // its own emoji: each one apart
+			k.emoji = str(r.raw["associated_message_emoji"])
+		}
+		if _, seen := removed[k]; !seen {
+			order = append(order, k)
+		}
+		removed[k] = kind >= 3000
+	}
+	imessage := a.Service.ID("imessage")
+	for _, k := range order {
+		if !removed[k] {
+			continue
+		}
+		target, ok := a.IntOK("SELECT id FROM message WHERE service_id = ? AND key = ?", imessage, k.target)
+		if !ok {
+			continue
+		}
+		q, args := "DELETE FROM reaction WHERE message_id = ? AND code = ? AND outgoing = 1",
+			[]any{target, fmt.Sprintf("imessage:%d", k.kind)}
+		if k.sender != "me" {
+			kind, value, _ := strings.Cut(k.sender, ":")
+			q, args = "DELETE FROM reaction WHERE message_id = ? AND code = ? AND address_id = ?",
+				append(args, a.Address(archive.H(kind, value)))
+		}
+		if k.emoji != "" {
+			q, args = q+" AND emoji = ?", append(args, k.emoji)
+		}
+		a.Exec(q, args...)
+	}
+}
+
+// bothWays is each pair (kept, other) and also (other, kept): Archive.RecordPairs records the
+// second copy where the first is in the archive, and the copy in the archive is the one kept on
+// this import, or the other one where that came in on an earlier import.
+func bothWays(pairs [][2]archive.Origin) [][2]archive.Origin {
+	out := append([][2]archive.Origin(nil), pairs...)
+	for _, p := range pairs {
+		out = append(out, [2]archive.Origin{p[1], p[0]})
+	}
+	return out
+}
+
 // collapse drops exact repeats within one source; it gives (kept, dropped).
 func collapse(recs []*smsRec) ([]*smsRec, int) {
 	type k struct {
@@ -375,11 +443,16 @@ func SMS(a *archive.Archive, out func(string), opt SMSOptions) (err error) {
 	}
 
 	var chosen []*smsRec
+	other := map[*smsRec]*smsRec{} // the copy chosen -> the other phone's copy
 	for _, i := range iphone {
 		if h := pairs[i]; h != nil && fromAndroid(h) {
 			chosen = append(chosen, h)
+			other[h] = i
 		} else {
 			chosen = append(chosen, i)
+			if h != nil {
+				other[i] = h
+			}
 		}
 	}
 	for _, h := range android {
@@ -405,6 +478,11 @@ func SMS(a *archive.Archive, out func(string), opt SMSOptions) (err error) {
 	for _, r := range chosen {
 		sid := sources[r.source]
 		if a.HasOrigin(sid, r.rowKey, "") {
+			continue
+		}
+		// the other phone's copy came in on an earlier import (this phone's rows were not read
+		// then): that one stays, and this row becomes its second origin below
+		if o := other[r]; o != nil && a.HasOrigin(sources[o.source], o.rowKey, "") {
 			continue
 		}
 		service := r.service
@@ -437,8 +515,9 @@ func SMS(a *archive.Archive, out func(string), opt SMSOptions) (err error) {
 			}
 		}
 	}
-	a.RecordPairs(sources, pairList, "")
+	a.RecordPairs(sources, bothWays(pairList), "")
 	a.Resolve()
+	takeTapbacksBack(a, iphone)
 	for _, s := range order {
 		a.Imported(sources[s])
 	}

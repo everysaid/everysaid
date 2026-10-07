@@ -58,3 +58,44 @@ func msgType(a interface {
 	a.Row("SELECT mime FROM media", nil, &mime)
 	return mime
 }
+
+// TestTelegramChangesToMessagesThere: the live connection writes an edited message (and its
+// reactions as they are now) over its row in telegram.db and imports it at once; a message already
+// in the archive is marked edited, its text kept as the archive first had it (as with WhatsApp),
+// and its reactions follow what Telegram says now, also once they are taken back.
+func TestTelegramChangesToMessagesThere(t *testing.T) {
+	a, _ := newArchive(t)
+	path := filepath.Join(t.TempDir(), "telegram.db")
+	d := telegramDB(t, path)
+	set := func(m M) { db.Exec(d, "UPDATE message SET json = ? WHERE chat_id = ? AND id = 11", js(m), tgMaria) }
+	only := map[[2]int64]bool{{tgMaria, 11}: true}
+	must(t, Telegram(a, nil, TelegramOptions{DBPath: path}))
+	reactions := func() []string {
+		return db.Strs(a.Tx(), "SELECT coalesce(r.emoji, '') || ' ' || coalesce(ad.value, '') || ' ' || coalesce(r.outgoing, 0) "+
+			"FROM reaction r JOIN message m ON m.id = r.message_id LEFT JOIN address ad ON ad.id = r.address_id "+
+			"WHERE m.key = '11' ORDER BY 1")
+	}
+	edited := func() int64 { return a.Int("SELECT edited FROM message WHERE key = '11'") }
+
+	set(M{"_": "Message", "id": 11, "message": "theirs, changed", "from_id": M{"user_id": tgMaria}, "edit_date": 1_790_000_500,
+		"reactions": M{"_": "MessageReactions", "results": []M{{"reaction": M{"_": "ReactionEmoji", "emoticon": "👍"}, "count": 1,
+			"chosen_order": 0}}, "recent_reactions": []M{{"peer_id": M{"user_id": tgMe}, "reaction": M{"_": "ReactionEmoji",
+			"emoticon": "👍"}, "my": true}}}})
+	must(t, Telegram(a, nil, TelegramOptions{DBPath: path, Only: only}))
+	eq(t, "edited", edited(), int64(1))
+	eq(t, "text kept", msgRow(a, "11", "text")[0], "theirs")
+	eq(t, "reactions", reactions(), []string{"👍  1"})
+	must(t, Telegram(a, nil, TelegramOptions{DBPath: path})) // again: nothing changes
+	eq(t, "reactions again", reactions(), []string{"👍  1"})
+
+	set(M{"_": "Message", "id": 11, "message": "theirs, changed", "from_id": M{"user_id": tgMaria}, "edit_date": 1_790_000_500,
+		"reactions": M{"_": "MessageReactions", "results": []M{}}})
+	must(t, Telegram(a, nil, TelegramOptions{DBPath: path, Only: only}))
+	eq(t, "taken back", len(reactions()), 0)
+
+	// an edit Telegram hides (a bot's buttons changed, a link preview fetched) is not the sender's edit
+	db.Exec(d, "UPDATE message SET json = ? WHERE chat_id = ? AND id = 10", js(M{"_": "Message", "id": 10, "message": "mine 1",
+		"out": true, "edit_date": 1_790_000_600, "edit_hide": true}), tgMaria)
+	must(t, Telegram(a, nil, TelegramOptions{DBPath: path}))
+	eq(t, "hidden edit", a.Int("SELECT edited FROM message WHERE key = '10' AND outgoing"), int64(0))
+}

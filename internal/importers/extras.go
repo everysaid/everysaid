@@ -24,7 +24,7 @@
 // Found by reading every field of every source (October 2026); left out on purpose: read and
 // delivery times, the names apps show, link previews (the link is in the text), the sender's time
 // zone, language guesses, and iMessage's reply_to_guid, which iOS sets on ordinary messages too
-// (the previous one in the chat), so it is not a reply.
+// (the previous one in the chat), so it is not a reply (its thread_originator_guid is).
 package importers
 
 import (
@@ -417,6 +417,16 @@ func imessageExtras(raw row) *archive.Extras {
 			out.ReplyKey = guid // kept even where it cannot be resolved (SMS have no key)
 			out.Subtype, out.SubtypeCode = "tapback", code
 		}
+	}
+	// an inline reply (iOS 14 on) names the message its thread began with; edits and unsending
+	// (iOS 16 on) leave their times (older databases have none of these columns)
+	if g := str(raw["thread_originator_guid"]); g != "" && out.ReplyKey == "" {
+		out.ReplyKey = g
+	}
+	if truthy(raw["date_retracted"]) {
+		out.Deleted = true
+	} else if truthy(raw["date_edited"]) {
+		out.Edited = true
 	}
 	return out
 }

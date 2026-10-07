@@ -1052,15 +1052,22 @@ type imAlias struct {
 }
 
 type imImporter struct {
-	a        *archive.Archive
-	stats    *ImlogsStats
-	media    bool
-	sources  map[ImlogsKey]int64
-	order    []ImlogsKey // the sources in the order they were made
-	aliases  map[imAliasKey]imAlias
-	aliasOrd []imAliasKey // the latest display name seen of each, in the order first seen
-	store    *Store
-	out      func(string)
+	a         *archive.Archive
+	stats     *ImlogsStats
+	media     bool
+	sources   map[ImlogsKey]int64
+	order     []ImlogsKey // the sources in the order they were made
+	aliases   map[imAliasKey]imAlias
+	aliasOrd  []imAliasKey // the latest display name seen of each, in the order first seen
+	store     *Store
+	out       func(string)
+	moved     map[int64]bool // addresses this run's groupings moved to another person
+	groupings []imGrouping   // the owner's groupings of each program, applied at the end
+}
+
+type imGrouping struct {
+	device string
+	groups [][]archive.Handle
 }
 
 func (imp *imImporter) source(device, service, root string) int64 {
@@ -1190,7 +1197,9 @@ func movedPerson(a *archive.Archive, into, other int64) {
 }
 
 // merge: each group of handles the owner had grouped as one person, the people of those handles
-// the archive has become one (the lowest id), the owner's own handles left out.
+// the archive has become one (the lowest id), the owner's own handles left out, and those placed by
+// hand before this run (how 'manual': merged by an earlier import, or split off by the owner
+// since): a later import does not undo the owner's decisions in the app.
 func (imp *imImporter) merge(device string, groups [][]archive.Handle) {
 	a := imp.a
 	own := a.Own()
@@ -1200,7 +1209,13 @@ func (imp *imImporter) merge(device string, groups [][]archive.Handle) {
 			if own[h] || !a.Known(h) {
 				continue
 			}
-			set[a.Int("SELECT person_id FROM person_address WHERE address_id = ?", a.Address(h))] = true
+			aid := a.Address(h)
+			var pid int64
+			var how string
+			a.Row("SELECT person_id, how FROM person_address WHERE address_id = ?", []any{aid}, &pid, &how)
+			if how != "manual" || imp.moved[aid] {
+				set[pid] = true
+			}
 		}
 		people := make([]int64, 0, len(set))
 		for p := range set {
@@ -1208,6 +1223,9 @@ func (imp *imImporter) merge(device string, groups [][]archive.Handle) {
 		}
 		sort.Slice(people, func(i, j int) bool { return people[i] < people[j] })
 		for _, other := range people[min(1, len(people)):] {
+			for _, aid := range a.Ints("SELECT address_id FROM person_address WHERE person_id = ?", other) {
+				imp.moved[aid] = true
+			}
 			a.Exec("UPDATE person_address SET person_id = ?, how = 'manual' WHERE person_id = ?", people[0], other)
 			movedPerson(a, people[0], other)
 			a.Exec("DELETE FROM person WHERE id = ?", other)
@@ -1270,7 +1288,7 @@ func (imp *imImporter) adium(root string) {
 		a.Commit()
 	}
 	imp.finishNames(device)
-	imp.merge(device, adiumMetacontacts(logs))
+	imp.groupings = append(imp.groupings, imGrouping{device, adiumMetacontacts(logs)})
 	imp.imported(device)
 	a.Commit()
 }
@@ -1323,7 +1341,7 @@ func (imp *imImporter) pidgin(root string) {
 			imp.stats.Names[[2]string{device, "book"}]++
 		}
 	}
-	imp.merge(device, pidginContacts(purple))
+	imp.groupings = append(imp.groupings, imGrouping{device, pidginContacts(purple)})
 	imp.imported(device)
 	a.Commit()
 }
@@ -1353,12 +1371,17 @@ func Imlogs(a *archive.Archive, out func(string), opt ImlogsOptions) (stats *Iml
 	}
 	stats = newImlogsStats()
 	imp := &imImporter{a: a, stats: stats, media: !opt.NoMedia, sources: map[ImlogsKey]int64{},
-		aliases: map[imAliasKey]imAlias{}, out: out}
+		aliases: map[imAliasKey]imAlias{}, out: out, moved: map[int64]bool{}}
 	if adium != "" {
 		imp.adium(config.ExpandUser(adium))
 	}
 	if pidgin != "" {
 		imp.pidgin(config.ExpandUser(pidgin))
+	}
+	// the groupings once both programs' handles are in: one of Adium's may name a handle only
+	// Pidgin's logs know (applied before them, it waited for the next run)
+	for _, g := range imp.groupings {
+		imp.merge(g.device, g.groups)
 	}
 	a.Resolve()
 	a.Commit()
@@ -1392,11 +1415,12 @@ func ImlogsImport(dbPath, adium, pidgin string, dryRun bool, out func(string)) (
 	defer os.RemoveAll(tmp)
 	path := filepath.Join(tmp, "archive.db")
 	if exists(dbPath) {
-		data, err := os.ReadFile(dbPath)
+		// copied by SQLite, not as a file: what is committed but still in its write-ahead log is in
+		// the copy too, and the archive is never held in memory whole
+		d := ro(dbPath)
+		_, err := d.Exec("VACUUM INTO ?", path)
+		d.Close()
 		if err != nil {
-			return false, err
-		}
-		if err := os.WriteFile(path, data, 0o600); err != nil {
 			return false, err
 		}
 	}

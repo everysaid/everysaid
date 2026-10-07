@@ -43,9 +43,11 @@ const (
 	tokenEpochMS = 292057776050
 )
 
+// tokenTime is a message's time: its date, else (none, or 0: no Viber message is from 2001) the
+// time its token carries.
 func tokenTime(date any, token int64) int64 {
 	var ts int64
-	if date != nil {
+	if date != nil && toFloat(date) != 0 {
 		ts = appleMS(toFloat(date))
 	}
 	if ts > 0 || token == 0 {
