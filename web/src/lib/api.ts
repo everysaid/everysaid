@@ -117,6 +117,43 @@ export interface Person {
   avatar: boolean;
   stats: { messages: number; calls: number; first: number | null; last: number | null; by_service: Record<string, number> };
   groups: { chat_id: string; title: string | null }[];
+  labels?: PersonLabel[];                         // the user's, and the models' where the user shows them
+  guess?: Guess | null;                           // a name found for someone without one
+  analysed?: { at: number; messages: number } | null;     // when the local models read their chat
+}
+
+export type LabelKind = "tone" | "relation";
+
+/** A label of the user's lists: one the app brings has a key (its words by key) until renamed. */
+export interface Label {
+  id: number;
+  kind: LabelKind;
+  key: string | null;
+  name: string | null;
+  meaning: string | null;               // what the models read; null: the app's own (default_meaning); "": never the models'
+  default_meaning: string | null;
+  sensitive: boolean;
+  uses: { yes: number; suggested: number };
+}
+
+export interface PersonLabel {
+  id: number;
+  kind: LabelKind;
+  key: string | null;
+  name: string | null;
+  sensitive: boolean;
+  state: "yes" | "suggested";
+  votes: number | null;
+  models: number | null;
+  evidence: string | null;
+}
+
+export interface Guess {
+  name: string;
+  how: "models" | "handle";
+  votes: number | null;
+  models: number | null;
+  evidence: string | null;
 }
 
 export type StateField = "archived" | "muted" | "pinned" | "read_until";

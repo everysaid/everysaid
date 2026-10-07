@@ -1,13 +1,13 @@
 """What every plugin is: a manifest (what it is, what it needs, what it can do) and a few methods.
 
 Kinds: `source` (brings messages, calls, people, media), `library` (where kept pictures and videos
-go), `contacts` (an address book). A plugin is code; a `plugin_instance` row is one use of it (one
+go), `contacts` (an address book), `analysis` (local models that suggest what no source says). A plugin is code; a `plugin_instance` row is one use of it (one
 phone, one account, one folder), with its own settings, secrets and state.
 
 Source plugins implement `run_import(ctx)` (bring what is new, then stop) and, where the service
 can be reached live, `live(ctx)` (an async task that stays connected) and `send(ctx, ...)`.
 Library plugins: `find(ctx, sha256, path)`, `store(ctx, path, meta)`, `fetch(ctx, ref, size)`.
-Contacts plugins: `sync(ctx)`.
+Contacts plugins: `sync(ctx)`. Analysis plugins: `live(ctx)`, reading in the background while on.
 """
 from contextlib import contextmanager
 from dataclasses import dataclass, field

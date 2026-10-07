@@ -45,6 +45,8 @@ history); nothing in the tracked documentation depends on it.
 | The MCP server | working (`everysaid mcp`) |
 | A demo archive of invented people | working (`everysaid demo`) |
 | The logs of Adium and Pidgin (Gaim): MSN, ICQ, AIM, Yahoo, Jabber/Google Talk, Skype, IRC, Facebook chat | working (`everysaid/imlogs.py`, `scripts/imlogs-import.py`) |
+| Labels (the tone of a chat, who someone is), the user's own lists; names read from emails and user names | working (`everysaid/core/labels.py`) |
+| Local analysis: models on this computer (Ollama) suggest names and labels for people without a name | working (`everysaid/plugins/analysis.py`) |
 
 ## Folders and configuration
 
@@ -412,7 +414,7 @@ origin recorded; where the sources differ, the copy of the device in use at the 
   (`ZWAMEDIAITEM.ZMEDIALOCALPATH`), iPhone Viber by token (`ZATTACHMENT.ZNAME`), Android Viber by
   event id, Android MMS by MMS id, Telegram by message.
 - Channels are never imported: Viber chats of type 3 (`ZCONVERSATION.ZSUBTYPE`, desktop
-  `ChatInfo.PGType`), WhatsApp `...@newsletter` and `status@broadcast`, Telegram channels; Telegram
+  `ChatInfo.PGType`), WhatsApp `...@newsletter`, `status@broadcast` and each contact's status (`...@status`, `...@lid.status`), Telegram channels; Telegram
   bots neither. A service's notes-to-self chat (Viber's, Telegram's Saved Messages) is imported like
   any other.
 
@@ -544,3 +546,6 @@ mobile). Next:
    iPhone are wanted.
 5. **Several users** on one server: the auth database and the core already take the archive per
    user; what is left is the UI to add a user and the per-user plugin host.
+6. **Names written back to the address book**: from the people without a name, a new contact, or a
+   handle added to an existing one, in the user's CardDAV address book (today contacts are only
+   read), so that a name lives there and not only in the app.

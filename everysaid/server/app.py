@@ -28,7 +28,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from .. import config, plugins
 from ..errors import UserError
 from ..plugins.i18n import tr
-from ..core import Store, changes, queries
+from ..core import Store, changes, labels, queries
 from ..core.names import name_order, name_sources_present, people
 from .auth import COOKIE, Auth, totp_check, totp_secret, totp_uri
 from .host import Host
@@ -374,7 +374,8 @@ def create_app(archive_path=None, auth_path=None):
     @app.get("/api/chats")
     def chats(kind: str | None = None, q: str | None = None, archived: bool = False, limit: int | None = None,
               offset: int = 0):
-        return {"items": queries.chats(store, include_archived=archived, kind=kind, q=q, limit=limit, offset=offset)}
+        return {"items": queries.chats(store, include_archived=archived, kind=kind, q=q, limit=limit, offset=offset,
+                                       unnamed=bool(store.setting("show_unnamed", False)))}
 
     @app.get("/api/chats/{chat_id}")
     def chat(chat_id: str, request: Request):
@@ -519,11 +520,44 @@ def create_app(archive_path=None, auth_path=None):
     # ---- people ----------------------------------------------------------------------------------
     @app.get("/api/people")
     def people_list(q: str | None = None, limit: int = 100, offset: int = 0):
-        return queries.people_list(store, q, min(limit, 500), offset)
+        return queries.people_list(store, q, min(limit, 5000), offset, unnamed=bool(store.setting("show_unnamed", False)))
 
     @app.get("/api/people/suggestions")
-    def suggestions():
-        return {"items": queries.merge_suggestions(store)}
+    def suggestions(limit: int = 50, recent: bool = False):
+        return {"items": queries.merge_suggestions(store, limit=min(limit, 2000), recent=recent)}
+
+    def described(p):
+        """A person with their labels (the models' only when the user shows them) and a name found for them."""
+        if p:
+            p["labels"] = labels.person_labels(store, p["id"], suggested=bool(store.setting("show_tone", False)))
+            p["guess"] = labels.guess(store, p["id"])
+            p["analysed"] = labels.analysed(store, p["id"])
+        return p
+
+    @app.get("/api/people/unnamed")
+    def people_unnamed(limit: int = 50, offset: int = 0, guessed: bool = False):
+        out = queries.unnamed_people(store, min(limit, 200), offset, first=labels.guessed(store) if guessed else None)
+        for p in out["items"]:
+            described(p)
+        return out
+
+    @app.get("/api/people/apart")
+    def apart():
+        return {"items": queries.merges_dismissed(store)}
+
+    @app.post("/api/people/apart/undo")
+    def apart_undo(body: dict = Body(...)):
+        changes.undismiss_merge(store, body["a"], body["b"])
+        return {"ok": True}
+
+    @app.post("/api/people/suggestions/apply")
+    def suggestions_apply(body: dict = Body(...)):
+        """merge: [[person ids], ...]; apart: [[a, b], ...]"""
+        try:
+            merged, apart = changes.apply_merges(store, body.get("merge") or [], body.get("apart") or [])
+        except (KeyError, ValueError, TypeError) as e:
+            raise UserError("failed", 400, reason=str(e))
+        return {"merged": merged, "apart": apart}
 
     @app.post("/api/people/suggestions/dismiss")
     def merge_dismiss(body: dict = Body(...)):
@@ -532,7 +566,72 @@ def create_app(archive_path=None, auth_path=None):
 
     @app.get("/api/people/{pid}")
     def person(pid: int):
-        return nf(queries.person(store, pid))
+        return described(nf(queries.person(store, pid)))
+
+    @app.put("/api/people/{pid}/labels/{lid}")
+    def person_label(pid: int, lid: int, body: dict = Body(...)):
+        """state: yes, no, or null (the user's word taken back)"""
+        try:
+            labels.set_person_label(store, pid, lid, body.get("state"))
+        except KeyError:
+            raise UserError("not_found", 404)
+        except ValueError as e:
+            raise UserError("failed", 400, reason=str(e))
+        return described(queries.person(store, pid))
+
+    @app.post("/api/people/{pid}/guess")
+    def person_guess(pid: int, body: dict = Body(...)):
+        """how: models or handle; accept: true (their name) or false (wrong, not suggested again)"""
+        labels.decide_guess(store, pid, body.get("how"), bool(body.get("accept")))
+        return described(queries.person(store, pid))
+
+    @app.post("/api/people/{pid}/analyse")
+    def person_analyse(pid: int):
+        labels.analyse_again(store, pid)
+        return described(nf(queries.person(store, pid)))
+
+    # ---- labels: the user's lists ------------------------------------------------------------------
+    @app.get("/api/labels")
+    def labels_list():
+        return {"items": labels.labels(store), "stale": labels.stale(store)}
+
+    @app.post("/api/labels")
+    def labels_add(body: dict = Body(...)):
+        if body.get("kind") not in labels.KINDS:
+            raise UserError("failed", 400, reason="kind")
+        lid = labels.add_label(store, body["kind"], body.get("name"), body.get("meaning") or "", bool(body.get("sensitive")))
+        return {"id": lid, "items": labels.labels(store)}
+
+    @app.patch("/api/labels/{lid}")
+    def labels_edit(lid: int, body: dict = Body(...)):
+        kw = {k: body[k] for k in ("name", "meaning", "sensitive") if k in body}
+        try:
+            labels.edit_label(store, lid, **kw)
+        except KeyError:
+            raise UserError("not_found", 404)
+        return {"items": labels.labels(store)}
+
+    @app.put("/api/labels/order")
+    def labels_order(body: dict = Body(...)):
+        labels.order_labels(store, body.get("ids") or [])
+        return {"items": labels.labels(store)}
+
+    @app.delete("/api/labels/{lid}")
+    def labels_remove(lid: int):
+        try:
+            labels.remove_label(store, lid)
+        except KeyError:
+            raise UserError("not_found", 404)
+        return {"items": labels.labels(store)}
+
+    @app.post("/api/labels/{lid}/merge")
+    def labels_merge(lid: int, body: dict = Body(...)):
+        """This label becomes `into`."""
+        try:
+            labels.merge_labels(store, int(body["into"]), lid)
+        except (KeyError, ValueError) as e:
+            raise UserError("failed", 400, reason=str(e))
+        return {"items": labels.labels(store)}
 
     @app.patch("/api/people/{pid}")
     def person_edit(pid: int, body: dict = Body(...)):
@@ -543,7 +642,7 @@ def create_app(archive_path=None, auth_path=None):
             raise UserError("not_found", 404)
         except ValueError as e:
             raise UserError("failed", 400, reason=str(e))
-        return queries.person(store, pid)
+        return described(queries.person(store, pid))
 
     @app.post("/api/people/{pid}/merge")
     def merge(pid: int, body: dict = Body(...)):
@@ -551,7 +650,7 @@ def create_app(archive_path=None, auth_path=None):
             changes.merge_people(store, pid, int(body["other"]))
         except (KeyError, ValueError) as e:
             raise UserError("failed", 400, reason=str(e))
-        return queries.person(store, pid)
+        return described(queries.person(store, pid))
 
     @app.post("/api/addresses/{aid}/split")
     def split(aid: int):
@@ -572,7 +671,8 @@ def create_app(archive_path=None, auth_path=None):
     @app.get("/api/calls")
     def calls(chat: str | None = None, missed: bool = False, service: str | None = None, before: int | None = None,
               limit: int = 60):
-        return queries.calls(store, chat_id=chat, missed=missed, service=service, before=before, limit=min(limit, 200))
+        return queries.calls(store, chat_id=chat, missed=missed, service=service, before=before, limit=min(limit, 200),
+                             unnamed=bool(store.setting("show_unnamed", False)))
 
     @app.get("/api/media")
     def media(chat: str | None = None, kind: str = "all", before: int | None = None, limit: int = 60,
@@ -783,7 +883,8 @@ def create_app(archive_path=None, auth_path=None):
     @app.put("/api/settings")
     def settings_put(body: dict = Body(...)):
         for k, v in body.items():
-            if k in ("theme", "language", "push_preview", "density", "send_enter", "unread_since"):
+            if k in ("theme", "language", "push_preview", "density", "send_enter", "unread_since", "show_unnamed",
+                     "show_tone", "mcp_labels"):
                 changes.set_setting(store, k, v)
             elif k == "name_order" and (v is None or isinstance(v, list) and all(isinstance(x, str) for x in v)
                                         and len(set(v)) == len(v) and set(v) <= set(plugins.name_weights())):

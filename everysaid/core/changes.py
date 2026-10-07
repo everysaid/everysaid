@@ -6,6 +6,7 @@ stay as they are.
 import json
 import time
 
+from . import labels
 from .queries import _chat_index
 from ..errors import UserError
 
@@ -37,29 +38,34 @@ def merge_people(store, into, other):
     if into == other:
         raise UserError("people.same")
     with store.write() as db:
-        rows = {pid: r for pid, *r in db.execute(
-            "SELECT id, name, note, contact_uid, contact_url, name_source FROM person WHERE id IN (?, ?)", (into, other))}
-        if into not in rows or other not in rows:
-            raise KeyError(other if into in rows else into)
-        db.execute("UPDATE person_address SET person_id = ?, how = 'manual' WHERE person_id = ?", (into, other))
-        name, note, uid, url, source = rows[into]
-        oname, onote, ouid, ourl, osource = rows[other]
-        db.execute("UPDATE person SET name = ?, note = ?, contact_uid = ?, contact_url = ?, name_source = ? WHERE id = ?",
-                   (name or oname, "\n\n".join(n for n in (note, onote) if n) or None, uid or ouid, url or ourl,
-                    source or osource, into))
-        # archived only if both were: one of them in view keeps the whole person in view
-        both_archived = len({c for (c,) in db.execute(
-            "SELECT chat FROM chat_state WHERE field = 'archived' AND value = 1 AND chat IN (?, ?)", (f"p{into}", f"p{other}"))}) == 2
-        # the user's choices for the other's chat: kept where theirs for `into` are older or missing
-        db.execute("INSERT INTO chat_state SELECT ?, field, value, set_at, always FROM chat_state WHERE chat = ? "
-                   "ON CONFLICT (chat, field) DO UPDATE SET value = excluded.value, set_at = excluded.set_at, "
-                   "always = excluded.always WHERE excluded.set_at > chat_state.set_at", (f"p{into}", f"p{other}"))
-        if not both_archived:
-            db.execute("UPDATE chat_state SET value = 0 WHERE chat = ? AND field = 'archived'", (f"p{into}",))
-        db.execute("DELETE FROM chat_state WHERE chat = ?", (f"p{other}",))
-        db.execute("DELETE FROM merge_dismissed WHERE a = ? OR b = ?", (other, other))
-        db.execute("DELETE FROM person WHERE id = ?", (other,))
+        _merge(db, into, other)
     return into
+
+
+def _merge(db, into, other):
+    rows = {pid: r for pid, *r in db.execute(
+        "SELECT id, name, note, contact_uid, contact_url, name_source FROM person WHERE id IN (?, ?)", (into, other))}
+    if into not in rows or other not in rows:
+        raise KeyError(other if into in rows else into)
+    db.execute("UPDATE person_address SET person_id = ?, how = 'manual' WHERE person_id = ?", (into, other))
+    name, note, uid, url, source = rows[into]
+    oname, onote, ouid, ourl, osource = rows[other]
+    db.execute("UPDATE person SET name = ?, note = ?, contact_uid = ?, contact_url = ?, name_source = ? WHERE id = ?",
+               (name or oname, "\n\n".join(n for n in (note, onote) if n) or None, uid or ouid, url or ourl,
+                source or osource, into))
+    # archived only if both were: one of them in view keeps the whole person in view
+    both_archived = len({c for (c,) in db.execute(
+        "SELECT chat FROM chat_state WHERE field = 'archived' AND value = 1 AND chat IN (?, ?)", (f"p{into}", f"p{other}"))}) == 2
+    # the user's choices for the other's chat: kept where theirs for `into` are older or missing
+    db.execute("INSERT INTO chat_state SELECT ?, field, value, set_at, always FROM chat_state WHERE chat = ? "
+               "ON CONFLICT (chat, field) DO UPDATE SET value = excluded.value, set_at = excluded.set_at, "
+               "always = excluded.always WHERE excluded.set_at > chat_state.set_at", (f"p{into}", f"p{other}"))
+    if not both_archived:
+        db.execute("UPDATE chat_state SET value = 0 WHERE chat = ? AND field = 'archived'", (f"p{into}",))
+    db.execute("DELETE FROM chat_state WHERE chat = ?", (f"p{other}",))
+    db.execute("DELETE FROM merge_dismissed WHERE a = ? OR b = ?", (other, other))
+    labels.moved_person(db, into, other)
+    db.execute("DELETE FROM person WHERE id = ?", (other,))
 
 
 def split_address(store, address_id):
@@ -72,6 +78,7 @@ def split_address(store, address_id):
             return row[0]
         pid = db.execute("INSERT INTO person DEFAULT VALUES").lastrowid
         db.execute("UPDATE person_address SET person_id = ?, how = 'manual' WHERE address_id = ?", (pid, address_id))
+        db.execute("DELETE FROM analysis WHERE person_id = ?", (row[0],))     # read again, without it
         # its chat is new, but not newly seen: archived as the chat it left
         db.execute("INSERT INTO chat_state SELECT ?, field, value, set_at, always FROM chat_state "
                    "WHERE chat = ? AND field = 'archived'", (f"p{pid}", f"p{row[0]}"))
@@ -175,6 +182,43 @@ def dismiss_merge(store, person_ids):
     with store.write() as db:
         db.executemany("INSERT OR REPLACE INTO merge_dismissed VALUES (?, ?, ?)",
                        [(a, b, int(time.time())) for i, a in enumerate(ids) for b in ids[i + 1:]])
+
+
+def undismiss_merge(store, a, b):
+    """A pair turned down by mistake: they may be suggested again."""
+    a, b = sorted((int(a), int(b)))
+    with store.write() as db:
+        db.execute("DELETE FROM merge_dismissed WHERE a = ? AND b = ?", (a, b))
+
+
+def apply_merges(store, merges, apart):
+    """Many decisions on suggested merges at once, in one transaction: each group of `merges` becomes
+    one person (the first of it), and each pair in `apart` is recorded as not one. A person may be in
+    several of them: one already merged counts as the one it went into. Returns (merged, apart) counts."""
+    went = {}
+
+    def now_(pid):
+        while pid in went:
+            pid = went[pid]
+        return pid
+
+    merged = kept_apart = 0
+    with store.write() as db:
+        known = {r[0] for r in db.execute("SELECT id FROM person")}
+        for group in merges:
+            ids = list(dict.fromkeys(now_(int(p)) for p in group))
+            if any(p not in known for p in ids):
+                raise KeyError(next(p for p in ids if p not in known))
+            for other in ids[1:]:
+                _merge(db, ids[0], other)
+                went[other] = ids[0]
+                merged += 1
+        for a, b in apart:
+            a, b = sorted((now_(int(a)), now_(int(b))))
+            if a != b:
+                db.execute("INSERT OR REPLACE INTO merge_dismissed VALUES (?, ?, ?)", (a, b, int(time.time())))
+                kept_apart += 1
+    return merged, kept_apart
 
 
 def set_setting(store, key, value):

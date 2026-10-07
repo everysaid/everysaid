@@ -84,3 +84,25 @@ export function listPlace(): ListPlace | null {
 export function keepListPlace(p: ListPlace) {
   sessionStorage.setItem(LIST, JSON.stringify(p));
 }
+
+/** The people list as it was left (this tab): its search, how many rows were loaded, and the first
+ * row in view. */
+export interface PeoplePlace {
+  q: string;
+  loaded: number;
+  top?: { id: number; index: number; offset: number };
+}
+
+const PEOPLE = "people-list";
+
+export function peoplePlace(): PeoplePlace | null {
+  try {
+    return JSON.parse(sessionStorage.getItem(PEOPLE) ?? "null");
+  } catch {
+    return null;
+  }
+}
+
+export function keepPeoplePlace(p: PeoplePlace) {
+  sessionStorage.setItem(PEOPLE, JSON.stringify(p));
+}

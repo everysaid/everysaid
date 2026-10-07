@@ -178,6 +178,41 @@ EL = {
     "the folder": "ο φάκελος",
     "the address": "η διεύθυνση",
     "the API key": "το API key",
+    # the local analysis
+    "Local analysis (Ollama)": "Τοπική ανάλυση (Ollama)",
+    "Local models read the chats of people without a name and suggest who they are, and the chats' tone. "
+    "Nothing leaves this computer and its network; nothing is applied without you.":
+        "Τοπικά μοντέλα διαβάζουν τις συνομιλίες όσων δεν έχουν όνομα και προτείνουν ποιοι είναι, και το ύφος "
+        "των συνομιλιών. Τίποτα δεν βγαίνει από αυτόν τον υπολογιστή και το δίκτυό του· τίποτα δεν εφαρμόζεται χωρίς εσένα.",
+    "Ollama, with a model": "Ollama, με ένα μοντέλο",
+    "Ollama's address": "Διεύθυνση του Ollama",
+    "Only on this computer or its own network": "Μόνο σε αυτόν τον υπολογιστή ή στο δίκτυό του",
+    "Models": "Μοντέλα",
+    "One, or two or three separated by commas, to vote: e.g. qwen3:14b, gemma3:12b":
+        "Ένα, ή δύο-τρία χωρισμένα με κόμμα, για να ψηφίζουν: π.χ. qwen3:14b, gemma3:12b",
+    "What they look for": "Τι ψάχνουν",
+    "A name and the tone": "Όνομα και ύφος",
+    "A name": "Όνομα",
+    "The tone": "Ύφος",
+    "Whose chats": "Ποιων οι συνομιλίες",
+    "Those without a name": "Όσων δεν έχουν όνομα",
+    "Everyone's": "Όλων",
+    "Messages at least": "Μηνύματα τουλάχιστον",
+    "Judge again by today's labels": "Ξανά κρίση με τις σημερινές ετικέτες",
+    "Forget all the analysis": "Σβήσε όλη την ανάλυση",
+    "Ollama's address is not on this computer or its network": "Η διεύθυνση του Ollama δεν είναι σε αυτόν τον υπολογιστή ή στο δίκτυό του",
+    "Read": "Διαβάστηκαν",
+    "To read": "Μένουν",
+    "Names found": "Ονόματα που βρέθηκαν",
+    "Read by an older list of labels": "Διαβάστηκαν με παλιότερη λίστα ετικετών",
+    "all read": "διαβάστηκαν όλα",
+    "reading {name} ({n} messages), {left} to go": "διαβάζω: {name} ({n} μηνύματα), μένουν {left}",
+    "{model}: {e}": "{model}: {e}",
+    "the analysis is forgotten: {n} suggestions; your own labels stay":
+        "η ανάλυση σβήστηκε: {n} προτάσεις· οι δικές σου ετικέτες μένουν",
+    "{n} people to read again": "{n} πρόσωπα θα διαβαστούν ξανά",
+    "again": "ξανά κρίση",
+    "forget": "σβήσιμο της ανάλυσης",
 }
 TABLES = {"el": EL}
 

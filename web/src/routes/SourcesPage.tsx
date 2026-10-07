@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { BookUser, ChevronDown, Images, ListChecks, Play, Plus, Radio, Settings2, Smartphone, Trash2 } from "lucide-react";
+import { BookUser, ChevronDown, Images, ListChecks, Play, Plus, Radio, Settings2, Smartphone, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api, type PluginChat, type PluginInstance, type PluginManifest, type SettingField } from "@/lib/api";
 import { bytes, dateOnly, isoDay, number, relative } from "@/lib/format";
@@ -16,6 +16,7 @@ const KINDS = [
   { kind: "source", icon: Smartphone },
   { kind: "library", icon: Images },
   { kind: "contacts", icon: BookUser },
+  { kind: "analysis", icon: Sparkles },
 ] as const;
 
 export function SourcesPage() {
@@ -108,7 +109,7 @@ function InstanceCard({ i, manifest }: { i: PluginInstance; manifest?: PluginMan
         <Switch checked={i.enabled} onChange={(v) => patch.mutate({ enabled: v })} label={t("sources.enabled")} />
       </div>
       <div className="flex flex-wrap items-center gap-2 border-t border-line bg-panel-2/50 px-4 py-2.5">
-        {i.kind !== "library" && (
+        {i.kind !== "library" && manifest?.modes.includes("import") && (
           <Button size="sm" variant="primary" onClick={() => start(undefined)} loading={!!i.running || run.isPending} disabled={!i.enabled}>
             {!i.running && <Play className="size-3.5" />}{i.running ? t("sources.running") : t("sources.run")}
           </Button>

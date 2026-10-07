@@ -76,6 +76,11 @@ def _chat_index(store):
             chat["services"].add(lk["service"][sid])
             chat["last_ts"] = max(chat["last_ts"], last.get(cid) or 0)
             conv_chat[cid] = key
+        for cid, ts in db.execute("SELECT conversation_id, max(ts) FROM call WHERE conversation_id IS NOT NULL "
+                                  "GROUP BY conversation_id"):     # a group's calls
+            if cid in conv_chat:
+                chat = chats[conv_chat[cid]]
+                chat["last_ts"] = max(chat["last_ts"], ts or 0)
         for aid, sid, ts in db.execute(
                 "SELECT address_id, service_id, max(ts) FROM call WHERE conversation_id IS NULL "
                 "AND address_id IS NOT NULL GROUP BY address_id, service_id"):
@@ -228,21 +233,40 @@ def _named(words, *texts):
     return all(any(w in f for f in folded) for w in words)
 
 
-def chats(store, include_archived=False, kind=None, q=None, limit=None, offset=0):
+def _unnamed(store):
+    """(people, their addresses): the people no source gives a name, only their handle."""
+    def build():
+        ppl = people(store)
+        pids = {pid for pid in ppl.handles if pid not in ppl.me and ppl.info(pid)[1] == "handle"}
+        return pids, {a for pid in pids for a in ppl.addresses(pid)}
+    return store.cached("unnamed", build)
+
+
+def chats(store, include_archived=False, kind=None, q=None, limit=None, offset=0, unnamed=True):
     """The chat list, newest first, pinned ones on top: [{id, type, title, services, last, unread,
-    pinned, muted, avatar}]. kind: person, group or conversation; q: parts of the title (each word)."""
+    pinned, muted, avatar}]: the chats with something in them (a message or a call). kind: person,
+    group or conversation; q: parts of the title (each word).
+    unnamed False: without the people who have no name, unless they wrote something unread or q
+    asks for them."""
     index, _ = _chat_index(store)
     states = _states(store)
     base = unread_since(store)
     ppl = people(store)
     items = []
     qf = text_mod.fold(q).split() if q else None
+    hidden = set() if unnamed or qf else _unnamed(store)[0]
     for chat in index.values():
+        if not chat["last_ts"]:         # nothing in it (a source's empty chat)
+            continue
         pinned, muted, archived, read, _ = states.get(chat["id"], (0, 0, 0, None, {}))
         if archived and not include_archived:
             continue
         if kind and chat["type"] != kind:
             continue
+        if chat.get("person_id") in hidden:
+            since = max(read or 0, base)
+            if chat["last_ts"] <= since or not _unread(store, chat, since):
+                continue
         title = chat_title(store, chat)
         if qf and not _named(qf, title):
             continue
@@ -809,12 +833,28 @@ def person(store, person_id):
             "avatar": bool(ppl.avatar(person_id)), "stats": stats, "groups": groups}
 
 
-def people_list(store, q=None, limit=100, offset=0):
+def _active(store):
+    """The people the archive has something of: a message, a call, a chat, a reaction, a mention."""
+    def build():
+        ppl = people(store)
+        used = {r[0] for r in store.read().execute(
+            "SELECT DISTINCT sender_id FROM message UNION SELECT address_id FROM call UNION "
+            "SELECT address_id FROM call_member UNION SELECT address_id FROM conversation_member UNION "
+            "SELECT address_id FROM reaction UNION SELECT address_id FROM mention UNION SELECT address_id FROM receipt")}
+        return {ppl.person_of[a] for a in used if a in ppl.person_of}
+    return store.cached("active", build)
+
+
+def people_list(store, q=None, limit=100, offset=0, unnamed=True):
+    """The people the archive has something of. unnamed False: without those who have no name,
+    unless q asks for them."""
     ppl = people(store)
     qf = text_mod.fold(q).split() if q else None
+    hidden = set() if unnamed or qf else _unnamed(store)[0]
+    active = _active(store)
     out = []
     for pid in ppl.handles:
-        if pid in ppl.me:
+        if pid in ppl.me or pid in hidden or pid not in active:
             continue
         name = ppl.name(pid)
         if qf and not _named(qf, name, *(h[1] for h in ppl.handles[pid])):
@@ -824,24 +864,49 @@ def people_list(store, q=None, limit=100, offset=0):
     return {"items": out[offset:offset + limit], "total": len(out)}
 
 
-def merge_suggestions(store, limit=50):
+# Greek letters (folded: lower case, no accents, final sigma as sigma) as Latin ones, by sound
+GREEKLISH = str.maketrans(dict(zip(
+    (chr(c) for c in range(0x3b1, 0x3ca) if c != 0x3c2),    # alpha to omega, without the final sigma
+    ["a", "v", "g", "d", "e", "z", "i", "th", "i", "k", "l", "m",
+     "n", "x", "o", "p", "r", "s", "t", "y", "f", "h", "ps", "o"])))
+SOUNDS = (("oy", "u"), ("ou", "u"), ("ey", "ev"), ("ay", "av"), ("eu", "ev"), ("au", "av"), ("ng", "g"), ("ei", "i"), ("oi", "i"), ("ai", "e"), ("y", "i"), ("ch", "h"), ("kh", "h"),
+          ("ph", "f"), ("w", "o"), ("c", "k"), ("mp", "b"), ("nt", "d"), ("gk", "g"), ("gg", "g"))
+
+
+def _skeleton(name):
+    """A name as it sounds, in Latin letters, its words in order: the same name in Greek letters,
+    the words in either order, y or i for the same sound, are one."""
+    words = []
+    for w in text_mod.fold(name).translate(GREEKLISH).split():
+        w = re.sub(r"[^a-z]", "", w)
+        for a, b in SOUNDS:
+            w = w.replace(a, b)
+        w = re.sub(r"(.)\1+", r"\1", w)
+        if w:
+            words.append(w)
+    return " ".join(sorted(words))
+
+
+def merge_suggestions(store, limit=50, recent=False):
     """People who are likely one, with why, the strongest first; shown, never applied:
     - contact: one address-book contact lists handles of each (the user's own word);
     - book: a service's copy of the user's address book gives them the same name;
     - name: the same name they chose or a chat shows, only when it is rare here (no more than 3
-      people) and has at least two words.
-    Groups the user turned down (every pair of them) are left out."""
+      people) and has at least two words;
+    - similar: names that sound the same (_skeleton: accents, word order, Greek or Latin letters),
+      by the same rule of rare names of two words.
+    Pairs the user turned down are left out of a group, which is shown if two people remain.
+    recent: each person with their latest messages, a little of their history to tell them apart."""
     ppl = people(store)
     db = store.read()
     dismissed = {(a, b) for a, b in db.execute("SELECT a, b FROM merge_dismissed")}
     groups = {}                     # frozenset of people -> {"why": [...], "name": ...}
 
     def add(pids, why, name):
-        pids = frozenset(p for p in pids if p not in ppl.me)
+        pids = {p for p in pids if p not in ppl.me}
+        # those turned down with every other one of them leave the group
+        pids = frozenset(p for p in pids if any((min(p, o), max(p, o)) not in dismissed for o in pids if o != p))
         if len(pids) < 2:
-            return
-        pairs = {(a, b) for a in pids for b in pids if a < b}
-        if pairs <= dismissed:
             return
         g = groups.setdefault(pids, {"why": [], "name": name})
         if why not in g["why"]:
@@ -866,10 +931,78 @@ def merge_suggestions(store, limit=50):
     for fold, pids in by_name["name"].items():
         if len(pids) <= 3 and len(fold.split()) >= 2:
             add(pids, "name", spelled[fold])
-    strength = {"contact": 0, "book": 1, "name": 2}
+    by_sound, sounded = defaultdict(set), {}
+    for pid in ppl.handles:
+        if ppl.info(pid)[1] == "handle":
+            continue
+        for name in {ppl.name(pid), *(n for _, n, _, _, _, cur in ppl.seen.get(pid, ()) if cur),
+                     *(n for _, n, *_ in ppl.contacts.get(pid, ()) if n)}:
+            sk = _skeleton(name)
+            if len(sk.split()) >= 2:
+                by_sound[sk].add(pid)
+                sounded.setdefault(sk, name)
+    for sk, pids in by_sound.items():
+        if 2 <= len(pids) <= 3 and not any(pids <= set(g) for g in groups):
+            add(pids, "similar", sounded[sk])
+    strength = {"contact": 0, "book": 1, "name": 2, "similar": 3}
     ranked = sorted(groups.items(), key=lambda g: (min(strength[w] for w in g[1]["why"]), -len(g[1]["why"])))
-    return [{"name": g["name"], "why": g["why"], "people": [person(store, p) for p in sorted(pids)[:5]]}
+    def one(pid):
+        p = person(store, pid)
+        if recent:
+            p["recent"] = _recent(store, pid)
+        return p
+    return [{"name": g["name"], "why": g["why"], "people": [one(p) for p in sorted(pids)[:5]]}
             for pids, g in ranked[:limit]]
+
+
+def unnamed_people(store, limit=50, offset=0, first=None):
+    """The people no source names who have something in the archive, those with the most first, to
+    name or to merge: {items: [person, with messages and recent], total}. first: people to put
+    before the rest (those a name was found for)."""
+    index, _ = _chat_index(store)
+    per_conv = store.cached("conversation_sizes", lambda: dict(store.read().execute(
+        "SELECT conversation_id, count(*) FROM message GROUP BY conversation_id")))
+    calls = store.cached("person_calls", lambda: _calls_per_person(store))
+    active = _active(store)
+    sized = []
+    for pid in _unnamed(store)[0] & active:
+        c = index.get(f"p{pid}")
+        n = sum(per_conv.get(cid, 0) for cid in c["conversations"]) if c else 0
+        sized.append((bool(first and pid in first), n, calls.get(pid, 0), pid))
+    sized.sort(reverse=True)
+    items = []
+    for _, n, _, pid in sized[offset:offset + limit]:
+        p = person(store, pid)
+        p["recent"] = _recent(store, pid, 3)
+        items.append(p)
+    return {"items": items, "total": len(sized)}
+
+
+def _calls_per_person(store):
+    ppl = people(store)
+    out = defaultdict(int)
+    for aid, n in store.read().execute("SELECT address_id, count(*) FROM call WHERE address_id IS NOT NULL GROUP BY 1"):
+        if aid in ppl.person_of:
+            out[ppl.person_of[aid]] += n
+    return out
+
+
+def merges_dismissed(store):
+    """The pairs the user said are not one, the latest first: [{a, b: {id, name}, at}]."""
+    ppl = people(store)
+    return [{"a": {"id": a, "name": ppl.name(a)}, "b": {"id": b, "name": ppl.name(b)}, "at": at}
+            for a, b, at in store.read().execute("SELECT a, b, at FROM merge_dismissed ORDER BY at DESC, a, b")]
+
+
+def _recent(store, person_id, n=2):
+    """A person's latest messages with text: [{ts, outgoing, text}]."""
+    c = _chat_index(store)[0].get(f"p{person_id}")
+    if not c or not c["conversations"]:
+        return []
+    q = ",".join("?" * len(c["conversations"]))
+    return [{"ts": ts, "outgoing": bool(o), "text": t[:160]} for ts, o, t in store.read().execute(
+        f"SELECT ts, outgoing, text FROM message WHERE conversation_id IN ({q}) AND text IS NOT NULL AND text != '' "
+        f"ORDER BY ts DESC LIMIT ?", (*c["conversations"], n))]
 
 
 def group_suggestions(store, chat_id=None, limit=50):
@@ -920,13 +1053,18 @@ def group_suggestions(store, chat_id=None, limit=50):
 
 # --- calls, media, timeline, statistics ----------------------------------------------------------
 
-def calls(store, chat_id=None, missed=None, service=None, before=None, limit=PAGE):
+def calls(store, chat_id=None, missed=None, service=None, before=None, limit=PAGE, unnamed=True):
+    """unnamed False: without the calls of people who have no name, and of hidden numbers (not in
+    one chat's calls)."""
     db = store.read()
     where, args = ["1"], []
     if chat_id:
         _, _, addrs = _stream_sources(store, chat_id)
         where.append(f"address_id IN ({','.join('?' * len(addrs))})")
         args += addrs
+    elif not unnamed:
+        nameless = ",".join(str(int(a)) for a in _unnamed(store)[1])
+        where.append(f"(conversation_id IS NOT NULL OR (address_id IS NOT NULL AND address_id NOT IN ({nameless})))")
     if missed:
         where.append("outgoing = 0 AND answered = 0")
     if service:

@@ -8,7 +8,7 @@ from everysaid.archive import Archive
 ADIUM_XML = """<?xml version="1.0" encoding="UTF-8" ?>
 <chat xmlns="http://purl.org/net/ulf/ns/0.4-02" account="me@hotmail.com" service="MSN">
 <event type="windowOpened" sender="me@hotmail.com" time="2008-06-16T13:58:55+03:00"/>
-<message sender="friend@hotmail.com" time="2008-06-16T13:58:55+03:00" alias="Ο Φίλος"><div>hello &amp; welcome<br/>second line</div></message>
+<message sender="friend@hotmail.com" time="2008-06-16T13:58:55+03:00" alias="Ο &quot;Φίλος&quot; &amp; co"><div>hello &amp; welcome<br/>second line</div></message>
 <message sender="me@hotmail.com" time="2008-06-16T13:59:01+03:00" alias="me"><div><span>hi</span></div></message>
 <status type="away" sender="friend@hotmail.com" time="2008-06-16T14:00:00+03:00"/>
 <message sender="friend@hotmail.com" time="2008-06-16T14:01:02+0300"><div><img src="pic.png" alt=""/></div></message>
@@ -98,7 +98,7 @@ def test_adium_and_pidgin_logs(tmp_path):
     assert [r[1] for r in aim] == [0, 1] and aim[1][0] - aim[0][0] == 14000
     # names: Adium's alias (chat), Pidgin's buddy list (book)
     names = dict(db.execute("SELECT kind, name FROM handle_name").fetchall())
-    assert names == {"chat": "Ο Φίλος", "book": "Φίλιππος"}
+    assert names == {"chat": 'Ο "Φίλος" & co', "book": "Φίλιππος"}     # entities read
     # the owner's old groupings: the friend and the AIM pal are one person, as are "other" and "third"
     def person_of(kind, value, service=None):
         return db.execute("SELECT pa.person_id FROM person_address pa JOIN address a ON a.id = pa.address_id "
@@ -138,3 +138,23 @@ def test_folders_are_found(tmp_path):
     assert imlogs.adium_logs(str(tmp_path / "nowhere")) is None
     assert imlogs.pidgin_root(purple) == (purple, os.path.join(purple, "logs"))
     assert imlogs.pidgin_root(os.path.join(purple, "logs")) == (None, os.path.join(purple, "logs"))
+
+
+def test_a_log_with_no_messages_makes_no_chat(tmp_path):
+    adium, purple = build(tmp_path)
+    quiet = os.path.join(adium, "Users", "Default", "Logs", "MSN.me@hotmail.com", "quiet@hotmail.com",
+                         "quiet@hotmail.com (2008-06-17T10.00.00+0300).chatlog")
+    os.makedirs(quiet)
+    with open(os.path.join(quiet, "quiet@hotmail.com (2008-06-17T10.00.00+0300).xml"), "w", encoding="utf-8") as f:
+        f.write('<?xml version="1.0" encoding="UTF-8" ?>\n<chat xmlns="http://purl.org/net/ulf/ns/0.4-02" '
+                'account="me@hotmail.com" service="MSN"><event type="windowOpened" sender="me@hotmail.com" '
+                'time="2008-06-17T10:00:00+03:00"/></chat>\n')
+    a = Archive(str(tmp_path / "archive.db"))
+    imlogs.run(a, adium, purple, media=False, out=lambda *x: None)
+    read = {c: f for _, _, c, f in imlogs.adium_conversations(imlogs.adium_logs(adium))}
+    assert read["quiet@hotmail.com"]                    # read, with nothing in it
+    assert not a.db.execute("SELECT 1 FROM conversation_member cm JOIN address ad ON ad.id = cm.address_id "
+                            "WHERE ad.value = 'quiet@hotmail.com'").fetchone()
+    assert a.db.execute("SELECT count(*) FROM conversation c WHERE NOT EXISTS "
+                        "(SELECT 1 FROM message m WHERE m.conversation_id = c.id)").fetchone()[0] == 0
+    a.db.close()

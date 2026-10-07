@@ -323,8 +323,42 @@ Everything above is built, with these differences from the draft:
   user's address book, a chat's name, a name people chose); the plugins weigh them, the user orders
   them (Settings → Names) or pins one source or handle for a person; every name seen is kept, with
   when ("also known as"). Names shared across people are suggested merges (a contact listing both,
-  the same name in a service's address book copy, the same rare name), never applied; the user can
-  turn one down. Self-chosen names are marked (~) in groups.
+  the same name in a service's address book copy, the same rare name, or names that sound the same
+  whatever the accents, word order or alphabet), never applied: the user sees them side by side
+  with a little of each one's history and ticks who is one, one suggestion at a time or all of them
+  on a page of their own (ticked, but for names that only sound alike; applied together); who is
+  left out, or a suggestion turned down, is not suggested with them again. Those pairs are listed
+  there too, each can be suggested again. The people no source names have a page of their own,
+  those with the most messages first, with a little of each one's history: a name for them, or
+  the person they are. Self-chosen names are marked (~) in groups. People no source names (only a
+  number or handle) and calls from hidden numbers stay out of the chat list, the calls and the people unless
+  the user asks for them (Settings → Names, `show_unnamed`, off by default); a search still finds
+  them, and a chat of theirs with an unread message still shows.
+- **Labels** describe people: the tone of their chats (friendly, professional, romantic…, many to
+  a person) and who they are to the user (friend, relative, client…, one). The lists are the
+  user's (Settings → Labels): the app starts them with a few, in its languages by key, and the user
+  renames, adds, orders, merges ("sexual" into "romantic") and removes them. Each label has a
+  meaning, which is what the local models read to judge by (none: given only by the user), and may
+  be sensitive. A person's label is the user's (yes; or no: never suggested again) or the models'
+  (suggested, with their votes and a line of the chat), and the models' never touch the user's. On a
+  merge the labels go over and the person is read again; on a split, too. The models' labels show
+  only when the user asks (`show_tone`), the assistant sees labels only when allowed (`mcp_labels`);
+  "forget the analysis" takes away all the models said and keeps the user's.
+- **Names found** for people without one: from their handles (an email's or a user name's words,
+  where one is a first name the archive knows: `first.last@…` is "First Last"), and
+  from the local analysis. Shown on the page of those without a name and on the person's page,
+  accepted with a click or turned down for good; never applied by themselves.
+- **Local analysis** is a plugin of its own kind (`analysis`): Ollama on this computer or its own
+  network (another address is refused), one model or two or three that vote. It reads a little of
+  each chat (the first lines, lines spread over all of it, lines that name someone), largest chats
+  first, in the background while turned on, and again when a chat grows by half. A name counts
+  only where its words are in what it read (a name in any case, with or without a surname, as one),
+  never an email, a handle or the owner's; a tone needs most of the models, a sensitive one two of
+  them each with a line copied from the chat. The prompt is built from the user's lists, so a new
+  label is judged by its meaning; those read by another list are read again when the user asks.
+- **Nothing empty is shown**: the chat list leaves out chats with no message and no call, and the
+  people list people with nothing in the archive (a source may leave such: a chat it lists with
+  nothing in it, a handle no message came from), so a stray row of an import never reaches the user.
 - **A chat's state**: muted, pinned and read up to come from what the sources report
   (`state_report`: the iPhone's WhatsApp, the bridge's store, Telegram live as it changes) and what
   the user chose (`chat_state`). Between services the plugins' weights decide; between the user

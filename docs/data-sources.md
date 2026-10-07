@@ -713,7 +713,9 @@ decoded yet, so these receipts are not read (looked at on 6 October 2026).
 
 ### 6.4 Import order (`everysaid/whatsapp.py`)
 
-Channels (`...@newsletter`) and status (`status@broadcast`) are skipped (`CHANNELS`).
+Channels (`...@newsletter`) and status (`status@broadcast`, and each contact's own, `...@status` and
+`...@lid.status`) are skipped (`CHANNELS`). A bare id longer than 15 digits is no phone number (a
+channel's id without its domain) and makes no handle.
 
 1. iPhone first. Each row is skipped if `(source, Z_PK)` is present, or if its stanza id is already
    a WhatsApp `message.key`.
@@ -941,11 +943,15 @@ migrations.
 | `account` | the user's own handles: `address_id`, `service_id` (NULL: every service), `label`; seeded from `[owner] numbers` |
 | `device` | `name` (iphone, an Android device's name, whatsapp-bridge...), `kind`, `used_from`, `used_until` (Unix ms) |
 | `source` | `name` (`<device>/sms`...), `path`, `imported_at`, `device_id`, `media_root` (the folder `attachment.source_path` is relative to; `{cache}` and `{data}` stand for those folders), `instance_id` (the plugin instance that reads it) |
-| `plugin_instance` | `plugin` (its id), `kind` (source, library, contacts), `label`, `settings` and `state` (JSON), `enabled`, `device_id`, `is_default` (the library kept files go to), `created_at`, `last_run`, `last_status` |
+| `plugin_instance` | `plugin` (its id), `kind` (source, library, contacts, analysis), `label`, `settings` and `state` (JSON), `enabled`, `device_id`, `is_default` (the library kept files go to), `created_at`, `last_run`, `last_status` |
 | `contact`, `contact_address` | an address book's contacts (`instance_id`, `uid`, `url`, `name`, `organization`, `photo` in `<cache>/avatars/`) and the addresses they list, joined only to addresses the archive has |
 | `state_report` | what a source says about a conversation: `conversation_id`, `instance_id`, `field` (`archived`, which only starts the app's own in `chat_state`; `muted`, `pinned`, `read_until`), `value` (muted: until, Unix ms, -1 for ever), `observed_at` (when the source's data was so), `changed_at` (when it became so) |
 | `chat_state` | what the user chose in the app per chat (`p<person>`, `c<conversation>`): `field`, `value`, `set_at`, `always`; `core/queries.py` combines it with the reports (see `docs/design.md`) |
 | `setting` | the user's settings shared by every device (JSON values), e.g. `unread_since`, `push_preview` |
+| `label` | the words people are described by: `kind` (`tone`, many to a person; `relation`, one), `key` (one the app brings, its words in the app's languages; NULL: the user's), `name` (the user's), `meaning` (what the local models read; NULL: the app's own; '': never theirs), `sensitive`, `position`; the app's are put in once (`archive.LABELS`, setting `labels_seeded`) |
+| `person_label` | a person's labels: `state` (`yes`, `no`: the user's; `suggested`: the models'), `votes` of `models`, `evidence` (a line of the chat), `at` |
+| `name_guess` | a name found for someone without one: `how` (`models`, `handle`), `name`, `votes` of `models`, `evidence`, `dismissed` (the user said it is wrong) |
+| `analysis` | the people the local analysis read: `messages` then, `labels` (a digest of the lists it judged by), `models`, `at` |
 
 A number is one `address` whatever the service, so its SMS, calls, Viber and WhatsApp meet in one
 person; the migration made one person per address, which is how the archive behaved before.
