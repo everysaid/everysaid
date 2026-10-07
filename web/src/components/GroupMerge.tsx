@@ -103,7 +103,8 @@ export function GroupParts({ chat }: { chat: ChatDetail }) {
                   <span className="block text-[11px] text-muted">{s.why.map((w) => t(WHY[w] ?? w)).join(" · ")} · {t("chat.sharedMembers", { count: s.shared })}</span>
                 </span>
                 {other.services.map((x) => <ServiceBadge key={x} id={x} />)}
-                <Button size="sm" variant="primary" onClick={() => merge.mutate({ into: chat.id, other: other.chat_id })} loading={merge.isPending}>{t("chat.mergeConfirm")}</Button>
+                <Button size="sm" variant="primary" onClick={() => merge.mutate({ into: chat.id, other: other.chat_id })}
+                  loading={merge.isPending && merge.variables?.other === other.chat_id} disabled={merge.isPending}>{t("chat.mergeConfirm")}</Button>
                 <button className="rounded-full p-1 text-muted hover:bg-panel-2 hover:text-fg" title={t("chat.notSameGroup")} aria-label={t("chat.notSameGroup")}
                   onClick={() => dismiss.mutate([chat.id, other.chat_id])}><X className="size-4" /></button>
               </div>
@@ -133,7 +134,7 @@ function MergeGroupDialog({ open, onOpenChange, chat }: { open: boolean; onOpenC
             <span className="min-w-0 flex-1 truncate">{x.title}</span>
             {x.services.map((s) => <ServiceBadge key={s} id={s} />)}
             <Button size="sm" variant="primary" onClick={() => merge.mutate({ into: chat.id, other: x.id }, { onSuccess: () => onOpenChange(false) })}
-              loading={merge.isPending}>{t("chat.mergeConfirm")}</Button>
+              loading={merge.isPending && merge.variables?.other === x.id} disabled={merge.isPending}>{t("chat.mergeConfirm")}</Button>
           </div>
         ))}
       </div>
