@@ -146,8 +146,18 @@ type Info struct {
 	CanMention     bool // can name people of a group in what it sends (@)
 	CanMarkRead    bool // can tell the service a chat was read (read receipts), where the user allows
 	CanSendFiles   bool // can send a file with a caption
-	Actions        []Action
-	ServiceInfo    map[string]ServiceInfo
+	CanReact       bool // can put the user's reaction on a message, change it and take it back
+	// Reactions: the emoji it can put, the service's own first (its quick ones); nil with CanReact,
+	// any emoji. FreeReactions: any emoji besides these.
+	Reactions     []string
+	FreeReactions bool
+	CanEdit       bool // can change the text of the user's own message
+	CanDelete     bool // can delete the user's own message for everyone
+	// EditWindow, DeleteWindow: how long after it was sent the service lets a message be edited,
+	// deleted for everyone (0: no limit).
+	EditWindow, DeleteWindow time.Duration
+	Actions                  []Action
+	ServiceInfo              map[string]ServiceInfo
 	// The names it brings for people, and how much they are trusted by default: "<service>/<kind>"
 	// (kind: book, chat, profile), or "contacts" for an address book. A list: between equal weights,
 	// the order they are declared in decides.
@@ -233,15 +243,37 @@ type File struct {
 	MimeType string
 }
 
-// Reply is the message answered.
-type Reply struct {
-	ID  int64
-	Key string
+// Ref is a message of the archive as a plugin is given it: its id, its key on the service, whether
+// it is the user's own, and its time (Unix ms).
+type Ref struct {
+	ID       int64
+	Key      string
+	Outgoing bool
+	TS       int64
 }
+
+// Reply is the message answered.
+type Reply = Ref
 
 // Sender sends into a conversation; it returns what it said.
 type Sender interface {
 	Send(ctx context.Context, c *Context, conv Conversation, text string, reply *Reply, mentions []Mention, file *File) (any, error)
+}
+
+// Reactor puts the user's reaction on a message (emoji), in place of the one there was; "" takes it
+// back. Only emoji its Info allows are given.
+type Reactor interface {
+	React(ctx context.Context, c *Context, conv Conversation, msg Ref, emoji string) error
+}
+
+// Editor changes the text of the user's own message (a caption, for a file).
+type Editor interface {
+	Edit(ctx context.Context, c *Context, conv Conversation, msg Ref, text string) error
+}
+
+// Deleter deletes the user's own message for everyone in the conversation.
+type Deleter interface {
+	Delete(ctx context.Context, c *Context, conv Conversation, msg Ref) error
 }
 
 // SendingChecker says why the instance may not send now ("" when it may); without it, it may when
@@ -365,7 +397,9 @@ func Manifest(p Plugin, lang string) M {
 		"description": i18n.Tr(i.Description, lang), "modes": modes, "platforms": platforms,
 		"available": i.Available(), "needs": needs, "settings": settings, "can_send": i.CanSend,
 		"can_reply": i.CanReply, "can_mention": i.CanMention, "can_mark_read": i.CanMarkRead,
-		"can_send_files": i.CanSendFiles, "actions": actions, "has_chats": hasChats,
+		"can_send_files": i.CanSendFiles, "can_react": i.CanReact, "reactions": i.Reactions,
+		"free_reactions": i.FreeReactions, "can_edit": i.CanEdit, "can_delete": i.CanDelete,
+		"actions": actions, "has_chats": hasChats,
 		"live_default": i.LiveDefault, "name_weights": nw, "state_weights": sw}
 }
 

@@ -168,6 +168,10 @@ export interface ChatDetail {
   mentionable: string[];    // those where people of a group can be named with @
   fileable: string[];       // those where a file can be sent
   unsendable: Record<string, string>;   // those a source reaches but may not send to now: what it says is missing
+  reactions?: Record<string, string[] | null>;   // where a reaction can be put now: the emoji (null: any)
+  free_reactions?: Record<string, boolean>;      // where any other emoji can be put too
+  editable?: Record<string, number>;             // where the user's message can be edited: for how many seconds (0: always)
+  deletable?: Record<string, number>;            // where it can be deleted for everyone: for how many seconds (0: always)
   last_service: string | null;   // where the chat was last active: the way to answer by default
   person_id?: number | null;
   conversation_id?: number | null;

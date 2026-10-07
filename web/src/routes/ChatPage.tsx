@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import * as Popover from "@radix-ui/react-popover";
-import { ArrowDown, ArrowLeft, BellOff, CalendarDays, Check, ChevronDown, CornerUpLeft, Archive, ArchiveRestore, FileText, Info, Lock, MoreVertical, Paperclip, Pin, PinOff, Search, SendHorizontal, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, BellOff, CalendarDays, Check, ChevronDown, CornerUpLeft, Archive, ArchiveRestore, FileText, Info, Lock, MoreVertical, Paperclip, Pencil, Pin, PinOff, Search, SendHorizontal, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, qs, type Attachment, type ChatDetail, type Member, type MessageItem, type StreamItem, type StreamPage } from "@/lib/api";
 import { useBack } from "@/lib/back";
@@ -76,9 +76,36 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   useEffect(() => keepLastChat({ chatId, hide }), [chatId, hide]);
   useEffect(() => { if (ready) remember(); }, [ready, atBottom, hasNewer, remember]);
   const answer = useCallback((m: MessageItem) => {
+    setEditing(null);
     setReplyTo(m);
     requestAnimationFrame(() => (document.querySelector("[data-composer-body] textarea") as HTMLElement | null)?.focus());
   }, []);
+
+  // what is done to a message shows at once; the service's answer then comes in its place (or it
+  // goes back as it was, said why)
+  const [editing, setEditing] = useState<MessageItem | null>(null);
+  const [deleting, setDeleting] = useState<MessageItem | null>(null);
+  const patch = (id: number, f: (m: MessageItem) => MessageItem) =>
+    setItems((prev) => prev.map((i) => (i.type === "message" && i.id === id ? f(i) : i)));
+  const act = useCallback(async (m: MessageItem, call: () => Promise<unknown>, shown: (m: MessageItem) => MessageItem) => {
+    patch(m.id, shown);
+    try {
+      await call();
+    } catch (e) {
+      patch(m.id, () => m);
+      toast.error(`${t("chat.actionFailed")}: ${(e as Error).message}`);
+    }
+  }, [t]);
+  const react = useCallback((m: MessageItem, emoji: string) => act(m, () => api.post(`/api/messages/${m.id}/reaction`, { emoji }), (i) => ({
+    ...i, reactions: [...i.reactions.filter((r) => !r.mine), ...(emoji ? [{ emoji, code: null, count: 1, mine: true, who: null }] : [])],
+  })), [act]);
+  const startEdit = useCallback((m: MessageItem) => {
+    setReplyTo(null);
+    setEditing(m);
+    requestAnimationFrame(() => (document.querySelector("[data-composer-body] textarea") as HTMLElement | null)?.focus());
+  }, []);
+  const edit = useCallback((m: MessageItem, text: string) => act(m, () => api.post(`/api/messages/${m.id}/edit`, { text }), (i) => ({ ...i, text, edited: true })), [act]);
+  const remove = useCallback((m: MessageItem) => act(m, () => api.post(`/api/messages/${m.id}/delete`, {}), (i) => ({ ...i, deleted: true })), [act]);
 
   // groups merged into this chat or split off it: its stream is another, loaded again
   const made = detail.data?.conversations.join();
@@ -283,7 +310,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   const media = useMemo(() => {
     const out: (LightboxItem & { key: string })[] = [];
     for (const i of items) {
-      if (i.type !== "message") continue;
+      if (i.type !== "message" || i.deleted) continue;     // deleted for everyone: not offered
       for (const a of i.attachments) {
         if (a.mime?.startsWith("image/") || a.mime?.startsWith("video/")) {
           out.push({ key: `${i.id}:${a.sha256}`, sha256: a.sha256, mime: a.mime, ts: i.ts, available: a.available, chat_id: chatId, message_id: i.id });
@@ -309,6 +336,8 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   }, [chatId, navigate]);
 
   const isGroup = detail.data?.type === "group";
+  const reactable = detail.data?.reactions, freeReactions = detail.data?.free_reactions;
+  const editable = detail.data?.editable, deletable = detail.data?.deletable;
   const title = detail.data?.title ?? "";
   // a time asked for: the item nearest to it (the day may have nothing: then the nearest day's)
   const nearest = useMemo(() => {
@@ -374,6 +403,11 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
     if (item.type === "call") body = <CallLine c={item} />;
     else if (item.kind === "system") body = <SystemLine m={item} />;
     else {
+      const svc = item.service;
+      const within = (secs: number | undefined) => secs !== undefined && (secs === 0 || Date.now() - item.ts < secs * 1000);
+      const own = item.outgoing && item.keyed && !item.deleted;
+      const r = item.keyed && reactable && svc in reactable ? reactable[svc] : undefined;
+      const reactWith = r !== undefined ? { quick: r ?? ["👍", "❤️", "😂", "😮", "😢", "🙏"], all: r, free: !!freeReactions?.[svc], on: react } : undefined;
       const same = (a: StreamItem | null) => a && a.type === "message" && a.kind !== "system" && a.outgoing === item.outgoing &&
         a.sender_id === item.sender_id && Math.abs(a.ts - item.ts) < 5 * 60_000 && sameDay(a.ts, item.ts);
       const firstOfRun = !same(prev);
@@ -382,10 +416,13 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       body = <Bubble m={item} group={isGroup} first={firstOfRun} last={lastOfRun} showService={showService}
         highlight={highlight === item.id} onOpen={openMedia} onJump={jump}
         onReply={item.keyed && replyable.includes(item.service) ? answer : undefined}
-        onInfo={item.outgoing && item.receipts ? setInfoOf : undefined} />;
+        onInfo={item.outgoing && item.receipts ? setInfoOf : undefined}
+        react={reactWith}
+        onEdit={own && item.text && within(editable?.[svc]) ? startEdit : undefined}
+        onDelete={own && within(deletable?.[svc]) ? setDeleting : undefined} />;
     }
     return <div data-cursor={item.cursor} className={cn(next ? "" : "pb-3")}>{sep}{body}</div>;
-  }, [first, items, isGroup, highlight, openMedia, jump, replyable.join(), answer]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [first, items, isGroup, highlight, openMedia, jump, replyable.join(), answer, detail.data, react, startEdit]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (error) return <Center><div className="space-y-2"><div className="font-semibold">{t("common.error")}</div><div className="text-sm text-muted">{error}</div></div></Center>;
 
@@ -442,6 +479,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
           <Composer services={detail.data.services.filter((s) => service(s).messages)} sendable={sendable} replyable={detail.data.replyable} missing={detail.data.unsendable}
             mentionable={isGroup ? detail.data.mentionable ?? [] : []} fileable={detail.data.fileable ?? []} members={detail.data.members ?? []}
             chatId={chatId} onSend={send} replyTo={replyTo} onCancelReply={() => setReplyTo(null)}
+            editing={editing} onEdit={edit} onCancelEdit={() => setEditing(null)}
             preferred={(!hasNewer && [...items].reverse().find((i) => i.type === "message")?.service) || detail.data.last_service} />
         )}
       </div>
@@ -457,6 +495,13 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       )}
       <Lightbox items={media} index={lightbox} onIndex={setLightbox} onClose={() => setLightbox(null)} />
       <MessageInfo m={infoOf} onClose={() => setInfoOf(null)} />
+      <Dialog open={!!deleting} onOpenChange={(o) => { if (!o) setDeleting(null); }} title={t("chat.deleteForAll")}
+        description={t("chat.deleteConfirm", { service: deleting ? service(deleting.service).name : "" })}>
+        <div className="flex justify-end gap-2 pt-2">
+          <Button variant="ghost" onClick={() => setDeleting(null)}>{t("common.cancel")}</Button>
+          <Button data-confirm-delete variant="danger" onClick={() => { const m = deleting; setDeleting(null); if (m) remove(m); }}>{t("chat.deleteConfirmButton")}</Button>
+        </div>
+      </Dialog>
     </div>
   );
 }
@@ -584,19 +629,20 @@ export function placeMentions(text: string, members: { label: string; address_id
  * with @ / a file sent; missing: why a source cannot send to one now. preferred: where the chat was last
  * active, the way to answer until the user picks another. One it cannot send through still shows,
  * closed, with a lock for Send. */
-function Composer({ chatId, services, sendable, replyable, mentionable, fileable, members, missing, preferred, onSend, replyTo, onCancelReply }: {
+function Composer({ chatId, services, sendable, replyable, mentionable, fileable, members, missing, preferred, onSend, replyTo, onCancelReply, editing, onEdit, onCancelEdit }: {
   chatId: string; services: string[]; sendable: string[]; replyable: string[]; mentionable: string[]; fileable: string[];
   members: Member[]; missing: Record<string, string>;
   preferred?: string | null;
   onSend: (text: string, service: string | null, replyTo: MessageItem | null, mentions: Mentioned[], file: File | null) => void;
   replyTo: MessageItem | null; onCancelReply: () => void;
+  editing: MessageItem | null; onEdit: (m: MessageItem, text: string) => void; onCancelEdit: () => void;
 }) {
   const { t } = useTranslation();
   const settings = useSettings();
   const wide = useWide();
   const navigate = useNavigate();
   const [text, setText] = useState(() => draft(chatId));       // what was left unsent here, kept
-  useEffect(() => keepDraft(chatId, text), [chatId, text]);
+  useEffect(() => { if (!editing) keepDraft(chatId, text); }, [chatId, text, editing]);
   const [svc, setSvc] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -606,13 +652,25 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   const [noList, setNoList] = useState(false);       // the @ list closed with Esc, until the text changes
   const enterSends = (settings.data?.send_enter as boolean | undefined) ?? wide;
   const picked = useRef(false);
-  // Esc lets go of the message being answered, wherever the focus is (unless it closed the @ list)
+  // Esc lets go of the message being answered or edited, wherever the focus is (unless it closed the @ list)
   useEffect(() => {
-    if (!replyTo) return;
-    const off = (e: KeyboardEvent) => { if (e.key === "Escape" && !e.defaultPrevented) onCancelReply(); };
+    if (!replyTo && !editing) return;
+    const off = (e: KeyboardEvent) => { if (e.key === "Escape" && !e.defaultPrevented) { onCancelReply(); onCancelEdit(); } };
     window.addEventListener("keydown", off);
     return () => window.removeEventListener("keydown", off);
-  }, [replyTo, onCancelReply]);
+  }, [replyTo, editing, onCancelReply, onCancelEdit]);
+  // an edit takes the field with the message's text; what was being written comes back after it
+  const before = useRef<string | null>(null);
+  useEffect(() => {
+    if (editing) {
+      if (before.current === null) before.current = text;
+      setText(editing.text ?? "");
+      setFile(null);
+    } else if (before.current !== null) {
+      setText(before.current);
+      before.current = null;
+    }
+  }, [editing?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     setSvc((cur) => (picked.current && cur && services.includes(cur) ? cur
       : preferred && services.includes(preferred) ? preferred : services[0] ?? null));
@@ -623,7 +681,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 180)}px`;
   }, [text]);
-  const via = replyTo?.service ?? svc ?? "";          // an answer goes where the message came from
+  const via = editing?.service ?? replyTo?.service ?? svc ?? "";          // an answer goes where the message came from
   // "@" and what follows it, up to the caret: whom to name
   const asked = useMemo(() => {
     if (!mentionable.includes(via) || noList) return null;
@@ -638,7 +696,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   }, [asked, members, via]);
   useEffect(() => setPick(0), [asked?.query]);
   if (!services.length || !svc) return null;          // calls only: nothing to write
-  const can = (replyTo ? replyable : sendable).includes(via);
+  const can = !!editing || (replyTo ? replyable : sendable).includes(via);
   const canFile = can && fileable.includes(via);
   const why = () => toast(t("chat.cannotSend", { service: service(via).name }), {
     description: missing[via] ?? t("chat.cannotSendHint"), action: { label: t("nav.sources"), onClick: () => navigate({ to: "/sources" }) },
@@ -654,6 +712,12 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   };
   const go = () => {
     const body = text.trim();
+    if (editing) {
+      if (body && body !== (editing.text ?? "").trim()) onEdit(editing, body);
+      onCancelEdit();
+      ref.current?.focus();
+      return;
+    }
     if ((!body && !file) || !can || (file && !canFile)) return;
     setText("");                        // free for the next one at once
     setFile(null);
@@ -689,6 +753,16 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
           <Button variant="ghost" size="iconSm" className="rounded-full" onClick={onCancelReply} aria-label={t("chat.cancelReply")}><X className="size-4" /></Button>
         </div>
       )}
+      {editing && (
+        <div data-editing className="mb-2 flex items-center gap-2 rounded-xl border-l-[3px] border-accent bg-accent/8 py-1.5 pl-3 pr-1 text-sm">
+          <Pencil className="size-4 shrink-0 text-accent" />
+          <div className="min-w-0 flex-1">
+            <div className="text-xs font-semibold text-accent">{t("chat.editing")}</div>
+            <div className="truncate text-muted">{editing.text}</div>
+          </div>
+          <Button variant="ghost" size="iconSm" className="rounded-full" onClick={onCancelEdit} aria-label={t("chat.cancelEdit")}><X className="size-4" /></Button>
+        </div>
+      )}
       {file && (
         <div data-file className="mb-2 flex items-center gap-2 rounded-xl bg-panel-2 py-1.5 pl-3 pr-1 text-sm">
           <FileText className="size-4 shrink-0 text-accent" />
@@ -702,11 +776,11 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
       <div className="flex items-end gap-2">
         <div data-composer-body className="flex min-w-0 flex-1 items-end rounded-3xl bg-panel-2 pr-1">
           <Menu>
-            <MenuTrigger asChild disabled={!!replyTo}>
+            <MenuTrigger asChild disabled={!!replyTo || !!editing}>
               <button data-via={via} aria-label={t("chat.sendVia")} title={`${t("chat.sendVia")} ${service(via).name}`}
                 className="mb-1 ml-1 flex h-9 shrink-0 items-center gap-0.5 rounded-full pl-2 pr-1 hover:bg-panel disabled:hover:bg-transparent data-[state=open]:bg-panel">
                 <ServiceIcon id={via} className="size-5" />
-                {!replyTo && services.length > 1 && <ChevronDown className="size-3.5 text-muted" />}
+                {!replyTo && !editing && services.length > 1 && <ChevronDown className="size-3.5 text-muted" />}
               </button>
             </MenuTrigger>
             <MenuContent align="start" className="w-60">
@@ -757,7 +831,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
             placeholder={!can ? t("chat.cannotSend", { service: service(via).name }) : file ? t("chat.caption") : t("chat.messageVia", { service: service(via).name })}
             className="max-h-44 border-0 bg-transparent py-2.5 pl-2 focus:ring-0 focus-visible:outline-none disabled:cursor-not-allowed"
           />
-          {canFile && (
+          {canFile && !editing && (
             <>
               <input ref={fileInput} type="file" hidden data-file-input
                 onChange={(e) => { setFile(e.target.files?.[0] ?? null); e.target.value = ""; ref.current?.focus(); }} />

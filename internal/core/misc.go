@@ -130,7 +130,7 @@ func Media(s *Store, o MediaOptions) (M, error) {
 		}
 	}
 	sort.Slice(kinds, func(i, j int) bool { return kinds[i] < kinds[j] })
-	where := []string{"m.kind_id IN (" + db.Marks(len(kinds)) + ")", shown(s, "m.service_id", "")}
+	where := []string{"m.kind_id IN (" + db.Marks(len(kinds)) + ")", shown(s, "m.service_id", ""), "NOT m.deleted"}
 	args := db.Args(kinds)
 	if o.ChatID != "" {
 		_, convs, _, err := streamSources(s, o.ChatID)

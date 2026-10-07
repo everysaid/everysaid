@@ -168,9 +168,68 @@ var senderInfo = &plugins.Info{
 	CanMention:   true,
 	CanMarkRead:  true,
 	CanSendFiles: true,
+	CanReact:     true, // any emoji
+	CanEdit:      true,
+	CanDelete:    true,
 }
 
 func (Sender) Info() *plugins.Info { return senderInfo }
+
+// change writes what the user did to a message into the demo archive, as a source's import brings it.
+func change(c *plugins.Context, fn func(a *archive.Archive)) (err error) {
+	h := c.Host()
+	func() {
+		defer lock(h)()
+		var a *archive.Archive
+		a, err = archive.Open(h.Store().Path)
+		if err != nil {
+			return
+		}
+		defer a.Close()
+		defer archive.Recover(&err)
+		fn(a)
+		a.Commit()
+	}()
+	return err
+}
+
+// React puts the user's reaction in place of theirs ("" takes it back); the others' stay.
+func (Sender) React(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref, emoji string) error {
+	return change(c, func(a *archive.Archive) {
+		var keep []archive.Reaction
+		a.Each("SELECT emoji, code, count, address_id FROM reaction WHERE message_id = ? AND NOT coalesce(outgoing, 0)",
+			[]any{msg.ID}, func(scan func(...any)) {
+				var r archive.Reaction
+				var e, code *string
+				var who *int64
+				scan(&e, &code, &r.Count, &who)
+				if e != nil {
+					r.Emoji = *e
+				}
+				if code != nil {
+					r.Code = *code
+				}
+				if who != nil {
+					r.Who = *who
+				}
+				keep = append(keep, r)
+			})
+		if emoji != "" {
+			keep = append(keep, archive.Reaction{Emoji: emoji, Count: 1, Outgoing: true})
+		}
+		importers.ReplaceReactions(a, msg.ID, keep)
+	})
+}
+
+func (Sender) Edit(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref, text string) error {
+	return change(c, func(a *archive.Archive) {
+		importers.ApplyChange(a, msg.ID, importers.Change{Text: &text, Edited: true})
+	})
+}
+
+func (Sender) Delete(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref) error {
+	return change(c, func(a *archive.Archive) { importers.ApplyChange(a, msg.ID, importers.Change{Deleted: true}) })
+}
 
 func (Sender) Check(c *plugins.Context) (bool, string) { return true, "ready" }
 
