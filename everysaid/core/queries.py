@@ -50,10 +50,35 @@ def _hidden_services(store):
     return {i for i, n in _lookups(store)["service"].items() if n in names}
 
 
-def _shown(store, column="service_id"):
-    """SQL: the rows of services not hidden."""
+def _hidden_conversations(store):
+    """The conversations held only by the owner's accounts the user hid (setting `hidden_accounts`,
+    address ids): a chat on one of the owner's MSN accounts, say. One also held by an account shown
+    stays (a chat with someone may have been on several of the owner's accounts)."""
+    hidden = set(store.setting("hidden_accounts", []) or [])
+    if not hidden:
+        return set()
+
+    def build():
+        own = defaultdict(set)
+        for cid, aid in store.read().execute("SELECT conversation_id, address_id FROM conversation_member "
+                                             "WHERE address_id IN (SELECT address_id FROM account)"):
+            own[cid].add(aid)
+        return {cid for cid, aids in own.items() if aids <= hidden}
+    return store.cached(("hidden_conversations", tuple(sorted(hidden))), build)
+
+
+def _shown(store, column="service_id", conversation=None):
+    """SQL: the rows of services not hidden, and not of conversations of hidden accounts (their
+    conversation column: by the service column's table, or `conversation`)."""
+    out = []
     ids = _hidden_services(store)
-    return f"{column} NOT IN ({','.join(str(int(i)) for i in ids)})" if ids else "1"
+    if ids:
+        out.append(f"{column} NOT IN ({','.join(str(int(i)) for i in ids)})")
+    convs = _hidden_conversations(store)
+    if convs:
+        col = conversation or column.replace("service_id", "conversation_id")
+        out.append(f"({col} IS NULL OR {col} NOT IN ({','.join(str(int(c)) for c in convs)}))")
+    return " AND ".join(out) or "1"
 
 
 def _chat_index(store):
@@ -69,7 +94,7 @@ def _chat_index(store):
         links = dict(db.execute("SELECT conversation_id, into_id FROM group_link"))     # merged groups
         chats = {}              # chat id -> dict
         conv_chat = {}
-        rows = db.execute(f"SELECT id, service_id, is_group, title FROM conversation WHERE {_shown(store)}").fetchall()
+        rows = db.execute(f"SELECT id, service_id, is_group, title FROM conversation WHERE {_shown(store, conversation='id')}").fetchall()
 
         def others_of(cid):
             out = {ppl.person_of.get(a) for a in members[cid] if a not in ppl.own_addresses}
@@ -100,9 +125,11 @@ def _chat_index(store):
                                               "conversations": [], "services": set(), "last_ts": 0})
                 if title and (last.get(cid) or 0) > chat["title_ts"]:     # merged: the latest one's name
                     chat["title"], chat["title_ts"] = title, last.get(cid) or 0
+                chat.setdefault("others", set()).update(others)      # its people, but the owner
             chat["conversations"].append(cid)
             chat["services"].add(lk["service"][sid])
             chat["last_ts"] = max(chat["last_ts"], last.get(cid) or 0)
+            chat["last_message"] = max(chat.get("last_message", 0), last.get(cid) or 0)     # the list's order
             conv_chat[cid] = key
         for cid, ts in db.execute(f"SELECT conversation_id, max(ts) FROM call WHERE conversation_id IS NOT NULL "
                                   f"AND {_shown(store)} GROUP BY conversation_id"):     # a group's calls
@@ -220,7 +247,7 @@ def chat_title(store, chat):
     return ", ".join(n for n in names if n) or f"#{chat['conversation_id']}"
 
 
-def _last_item(store, chat):
+def _last_item(store, chat, calls=True):
     db = store.read()
     convs = chat["conversations"]
     row = None
@@ -229,7 +256,7 @@ def _last_item(store, chat):
         row = db.execute(f"SELECT id, ts, outgoing, kind_id, text, service_id, sender_id, subtype, deleted FROM message "
                          f"WHERE conversation_id IN ({q}) ORDER BY ts DESC, id DESC LIMIT 1", convs).fetchone()
     call = None
-    if chat.get("has_calls"):
+    if calls and chat.get("has_calls"):
         addrs = people(store).addresses(chat["person_id"])
         q = ",".join("?" * len(addrs))
         call = db.execute(f"SELECT id, ts, outgoing, answered, video, service_id, detail FROM call "
@@ -272,15 +299,19 @@ def _unnamed(store):
 
 
 def chats(store, include_archived=False, kind=None, q=None, limit=None, offset=0, unnamed=True,
-          min_messages=0, max_messages=None, with_services=(), without_services=(), people_only=None):
+          min_messages=0, max_messages=None, with_services=(), without_services=(), people_only=None,
+          empty_groups=True):
     """The chat list, newest first, pinned ones on top: [{id, type, title, services, last, unread,
-    pinned, muted, avatar}]: the chats with something in them (a message or a call). kind: person,
+    pinned, muted, avatar}]: the chats with a message in them (calls have a page of their own), by
+    their latest message. kind: person,
     group or conversation; q: parts of the title (each word).
     unnamed False: without the people who have no name, unless they wrote something unread or q
     asks for them.
     min_messages, max_messages: only chats with at least, or at most, so many messages; with_services,
     without_services: only chats that have each of these services, and none of those; people_only:
-    only the chats of these people (a set of person ids)."""
+    only the chats of these people (a set of person ids).
+    empty_groups False: without the groups with no one in them but the owner (everyone left, or the
+    source listed no one), unless they have something unread or q asks for them."""
     index, _ = _chat_index(store)
     states = _states(store)
     sizes = store.cached("conversation_sizes", lambda: dict(store.read().execute(
@@ -292,7 +323,8 @@ def chats(store, include_archived=False, kind=None, q=None, limit=None, offset=0
     qf = text_mod.fold(q).split() if q else None
     hidden = set() if unnamed or qf else _unnamed(store)[0]
     for chat in index.values():
-        if not chat["last_ts"]:         # nothing in it (a source's empty chat)
+        last_ts = chat.get("last_message", 0)
+        if not last_ts:                 # no message in it: calls only (they have their own page), or a source's empty chat
             continue
         pinned, muted, archived, read, _ = states.get(chat["id"], (0, 0, 0, None, {}))
         if archived and not include_archived:
@@ -307,14 +339,14 @@ def chats(store, include_archived=False, kind=None, q=None, limit=None, offset=0
             n = sum(sizes.get(c, 0) for c in chat["conversations"])
             if n < min_messages or (max_messages is not None and n > max_messages):
                 continue
-        if chat.get("person_id") in hidden:
+        if chat.get("person_id") in hidden or (not empty_groups and not qf and chat["type"] == "group" and not chat.get("others")):
             since = max(read or 0, base)
-            if chat["last_ts"] <= since or not _unread(store, chat, since):
+            if last_ts <= since or not _unread(store, chat, since):
                 continue
         title = chat_title(store, chat)
         if qf and not _named(qf, title):
             continue
-        items.append((bool(pinned), chat["last_ts"], chat, title, muted, archived, read))
+        items.append((bool(pinned), last_ts, chat, title, muted, archived, read))
     items.sort(key=lambda x: (x[0], x[1]), reverse=True)
     if limit:
         items = items[offset:offset + limit]
@@ -325,7 +357,7 @@ def chats(store, include_archived=False, kind=None, q=None, limit=None, offset=0
             "id": chat["id"], "type": chat["type"], "title": title,
             "person_id": chat.get("person_id"), "conversation_id": chat.get("conversation_id"),
             "services": sorted(chat["services"]), "last_ts": last_ts,
-            "last": _last_item(store, chat) if last_ts else None,
+            "last": _last_item(store, chat, calls=False) if last_ts else None,
             "unread": _unread(store, chat, since) if last_ts > since else 0,
             "pinned": pinned, "muted": bool(muted), "archived": bool(archived),
             "avatar": bool(ppl.avatar(chat["person_id"])) if chat["type"] == "person" else False,

@@ -336,6 +336,15 @@ def to_analyse(store, only_unnamed=True, min_messages=20):
     return out
 
 
+def messages_of(store, person_id):
+    """How many messages a person's chat has."""
+    c = _chat_index(store)[0].get(f"p{person_id}")
+    if not c or not c["conversations"]:
+        return 0
+    q = ",".join("?" * len(c["conversations"]))
+    return store.read().execute(f"SELECT count(*) FROM message WHERE conversation_id IN ({q})", c["conversations"]).fetchone()[0]
+
+
 def save_analysis(store, person_id, messages, models, name=None, tones=(), relation=None):
     """What the models made of a person's chat: name (name, votes, of, evidence) or None; tones and
     relation [(label id, votes, of, evidence)]. Their earlier suggestions for the person go; the

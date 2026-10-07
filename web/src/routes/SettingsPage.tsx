@@ -50,21 +50,34 @@ const TABS = [
 function HiddenServices() {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const used = useQuery({ queryKey: ["services-used"], queryFn: () => api.get<{ items: { id: string; messages: number; calls: number; hidden: boolean }[] }>("/api/services/used") });
+  const used = useQuery({ queryKey: ["services-used"], queryFn: () => api.get<{ items: { id: string; messages: number; calls: number; hidden: boolean;
+    accounts: { id: number; label: string; chats: number; hidden: boolean }[] }[] }>("/api/services/used") });
   const items = used.data?.items ?? [];
   const toggle = (id: string, hide: boolean) => {
     const hidden = items.filter((s) => (s.id === id ? hide : s.hidden)).map((s) => s.id);
     api.put("/api/settings", { hidden_services: hidden }).then(() => qc.invalidateQueries(), (e) => toast.error(e.message));
+  };
+  const toggleAccount = (id: number, hide: boolean) => {
+    const hidden = items.flatMap((s) => s.accounts).filter((x) => (x.id === id ? hide : x.hidden)).map((x) => x.id);
+    api.put("/api/settings", { hidden_accounts: [...new Set(hidden)] }).then(() => qc.invalidateQueries(), (e) => toast.error(e.message));
   };
   return (
     <Section title={<span className="flex items-center gap-2"><EyeOff className="size-4" />{t("settings.services")}</span>}>
       <p className="-mt-1 px-1 text-xs text-muted">{t("settings.servicesHint")}</p>
       <Card className="divide-y divide-line">
         {items.map((s) => (
-          <Line key={s.id} label={<span className="flex items-center gap-2"><ServiceDot id={s.id} />{service(s.id).name}</span>}
-            hint={[s.messages && t("settings.nMessages", { count: s.messages, n: number(s.messages) }), s.calls && t("settings.nCalls", { count: s.calls, n: number(s.calls) })].filter(Boolean).join(" · ")}>
-            <span data-service-shown={s.id}><Switch checked={!s.hidden} onChange={(v) => toggle(s.id, !v)} label={service(s.id).name} /></span>
-          </Line>
+          <div key={s.id}>
+            <Line label={<span className="flex items-center gap-2"><ServiceDot id={s.id} />{service(s.id).name}</span>}
+              hint={[s.messages && t("settings.nMessages", { count: s.messages, n: number(s.messages) }), s.calls && t("settings.nCalls", { count: s.calls, n: number(s.calls) })].filter(Boolean).join(" · ")}>
+              <span data-service-shown={s.id}><Switch checked={!s.hidden} onChange={(v) => toggle(s.id, !v)} label={service(s.id).name} /></span>
+            </Line>
+            {!s.hidden && s.accounts.length > 1 && s.accounts.map((x) => (
+              <div key={x.id} className="flex items-center gap-3 py-2 pl-10 pr-4 text-sm" data-account={x.label}>
+                <span className="min-w-0 flex-1 truncate">{x.label}<span className="ml-2 text-xs text-muted">{t("settings.nChats", { count: x.chats, n: number(x.chats) })}</span></span>
+                <Switch checked={!x.hidden} onChange={(v) => toggleAccount(x.id, !v)} label={x.label} />
+              </div>
+            ))}
+          </div>
         ))}
       </Card>
     </Section>
@@ -165,10 +178,14 @@ export function SettingsPage() {
                 </Line>
               ))}
             </Card>
-            <Card>
+            <Card className="divide-y divide-line">
               <Line label={t("settings.showUnnamed")} hint={t("settings.showUnnamedHint")}>
                 <Switch checked={(settings.data?.show_unnamed as boolean | undefined) ?? false} label={t("settings.showUnnamed")}
                   onChange={(v) => api.put("/api/settings", { show_unnamed: v }).then(() => qc.invalidateQueries(), (e) => toast.error(e.message))} />
+              </Line>
+              <Line label={t("settings.hideEmptyGroups")} hint={t("settings.hideEmptyGroupsHint")}>
+                <Switch checked={(settings.data?.hide_empty_groups as boolean | undefined) ?? true} label={t("settings.hideEmptyGroups")}
+                  onChange={(v) => api.put("/api/settings", { hide_empty_groups: v }).then(() => qc.invalidateQueries(), (e) => toast.error(e.message))} />
               </Line>
             </Card>
           </Section>

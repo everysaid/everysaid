@@ -296,9 +296,10 @@ def test_people_without_a_name_only_when_asked(app):
     app, c = app
     login(app, c)
     titles = lambda: {x["title"] for x in c.get("/api/chats").json()["items"]}       # noqa: E731
-    assert "+1 555-010-0000" not in titles()
+    assert "+1 555-010-0010" not in titles()
     assert c.put("/api/settings", json={"show_unnamed": True}, headers=H).status_code == 200
-    assert "+1 555-010-0000" in titles()
+    assert "+1 555-010-0010" in titles()
+    assert "+1 555-010-0000" not in titles()          # calls only: on the calls' page, not a chat
 
 
 def test_labels_and_names_found(app):
@@ -370,3 +371,35 @@ def test_people_by_label(app):
     assert [p["id"] for p in c.get("/api/people", params={"label": friend}).json()["items"]] == [first["id"]]
     c.put("/api/settings", json={"show_tone": True}, headers=H)
     assert {p["id"] for p in c.get("/api/people", params={"label": friend}).json()["items"]} == {first["id"], second["id"]}
+
+
+def test_one_person_analysed_now(app, monkeypatch):
+    import time
+    from everysaid import plugins
+    from everysaid.core import labels
+    app, c = app
+    login(app, c)
+    store = app.state.store
+    pid = next(p["id"] for p in c.get("/api/people/unnamed").json()["items"]
+               if any(h["value"] == "katerina.oikonomou@example.com" for h in p["handles"]))
+    assert c.post(f"/api/people/{pid}/analyse/now", headers=H).json()["detail"]["code"] == "analysis.none"
+    plugins.create(store, "ollama", "Local", {"models": "m"})
+    monkeypatch.setattr(plugins.get("ollama"), "ask", lambda ctx, model, prompt, schema: {
+        "name": "Κατερίνα", "evidence": "Κατερίνα, τα λέμε αύριο", "tone": ["professional"], "sensitive_evidence": None,
+        "relationship": "colleague"})
+    assert c.get("/api/analysis").json()["instance"]
+    assert c.post(f"/api/people/{pid}/analyse/now", headers=H).status_code == 200
+    for _ in range(50):
+        if labels.analysed(store, pid):
+            break
+        time.sleep(0.1)
+    assert labels.guess(store, pid)["name"] == "Κατερίνα"
+
+
+def test_accounts_in_settings(app):
+    app, c = app
+    login(app, c)
+    items = {s["id"]: s for s in c.get("/api/services/used").json()["items"]}
+    assert "whatsapp" in items and "accounts" in items["whatsapp"]
+    assert c.put("/api/settings", json={"hidden_accounts": [1, 2]}, headers=H).json()["hidden_accounts"] == [1, 2]
+    assert c.put("/api/settings", json={"hidden_accounts": ["x"]}, headers=H).json()["hidden_accounts"] == [1, 2]   # not ids: kept as it was

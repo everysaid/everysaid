@@ -231,6 +231,11 @@ class Ollama(Plugin):
         if name == "forget":
             n = labels_mod.forget_analysis(ctx.store)
             ctx.log("the analysis is forgotten: {n} suggestions; your own labels stay", n=n)
+        elif name.startswith("person:"):            # one person, now (asked from their chat)
+            pid = int(name.split(":", 1)[1])
+            n = labels_mod.messages_of(ctx.store, pid)
+            ctx.log("reading {name} ({n} messages), {left} to go", name=people(ctx.store).name(pid), n=n, left=0)
+            self.analyse(ctx, pid, n)
         elif name == "again":
             n = labels_mod.judge_again(ctx.store)
             ctx.log("{n} people to read again; they are read while the analysis runs", n=n)

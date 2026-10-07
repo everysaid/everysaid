@@ -58,3 +58,19 @@ test("settings: tabs, and a service hidden everywhere", async ({ page }, info) =
   await shown.click();
   await expect(shown).toHaveAttribute("aria-checked", "true");
 });
+
+// A chat's state from its info: archived there, then back.
+test("chat info: archived and back", async ({ page }, info) => {
+  await signedIn(page, info.project.name);
+  const chat = await page.evaluate(async () =>
+    (await (await fetch("/api/chats", { headers: { "X-Everysaid": "1" } })).json()).items.find((c: any) => c.type === "person").id);
+  await page.goto(`/chat/${chat}`);
+  await page.locator("[data-chat-info]").click();
+  const archived = page.locator("[data-state-field=archived]");
+  await archived.getByRole("tab", { name: /^(Ναι|Yes)$/ }).click();
+  await expect.poll(async () => page.evaluate(async (id) =>
+    (await (await fetch(`/api/chats/${id}`, { headers: { "X-Everysaid": "1" } })).json()).archived, chat)).toBe(true);
+  await archived.getByRole("tab", { name: /^(Όχι|No)$/ }).click();
+  await expect.poll(async () => page.evaluate(async (id) =>
+    (await (await fetch(`/api/chats/${id}`, { headers: { "X-Everysaid": "1" } })).json()).archived, chat)).toBe(false);
+});

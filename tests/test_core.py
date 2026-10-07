@@ -381,17 +381,18 @@ def test_groups_alike_are_suggested_until_turned_down(store):
 def test_people_without_a_name(store):
     every = {c["title"] for c in queries.chats(store)}
     named = {c["title"] for c in queries.chats(store, unnamed=False)}
-    # the numbers no source names: gone, but for the one with an unread message
-    assert every - named == {"+1 555-010-0000", "+1 555-010-0001", "+1 555-010-0002", "+1 555-010-0003",
-                             "+1 555-010-0010", "katerina.oikonomou@example.com"}
+    # the numbers no source names: gone, but for the one with an unread message; those with calls
+    # only are no chats at all (the calls have their page)
+    assert every - named == {"+1 555-010-0010", "katerina.oikonomou@example.com"}
+    assert not {"+1 555-010-0000", "+1 555-010-0002"} & every
     assert "+1 555-010-0011" in named
     assert [c["title"] for c in queries.chats(store, q="555-010-0010", unnamed=False)] == ["+1 555-010-0010"]
     all_calls = queries.calls(store, limit=10000)["items"]
     calls = queries.calls(store, limit=10000, unnamed=False)["items"]
     assert len(all_calls) - len(calls) == 6                 # five of theirs and the hidden number's
     assert all(c["chat_id"] for c in calls)
-    chat = next(c for c in queries.chats(store) if c["title"] == "+1 555-010-0002")
-    assert len(queries.calls(store, chat_id=chat["id"], unnamed=False)["items"]) == 2     # one chat's: all
+    pid = queries.people_list(store, q="555-010-0002")["items"][0]["id"]
+    assert len(queries.calls(store, chat_id=f"p{pid}", unnamed=False)["items"]) == 2     # one chat's: all
     names = {p["name"] for p in queries.people_list(store, limit=1000, unnamed=False)["items"]}
     assert not any(n.startswith("+1 555-010-") for n in names)
     assert queries.people_list(store, q="555-010-0003", unnamed=False)["total"] == 1
@@ -505,3 +506,38 @@ def test_notes_to_self_are_one_chat_across_services(store):
     assert {"viber", "telegram"} <= one["services"]
     assert queries.chat_title(store, one) in ("Notes", "Σημειώσεις")
     assert any(i.get("text") == "a note" for i in queries.stream(store, notes["id"], limit=200)["items"])
+
+
+def test_hidden_accounts_hide_the_chats_only_on_them(store):
+    from everysaid.core import changes
+    with store.write() as db:
+        mine = db.execute("SELECT address_id FROM account LIMIT 1").fetchone()[0]
+        other = db.execute("INSERT INTO address (kind_id, value) VALUES ((SELECT id FROM address_kind WHERE name = 'email'), "
+                           "'me2@example.com')").lastrowid
+        db.execute("INSERT INTO account (address_id) VALUES (?)", (other,))
+    groups = [c for c in queries.chats(store, unnamed=True) if c["type"] == "group"]
+    only, both = groups[0]["conversation_id"], groups[1]["conversation_id"]
+    with store.write() as db:
+        db.execute("INSERT OR IGNORE INTO conversation_member VALUES (?, ?)", (only, other))
+        db.executemany("INSERT OR IGNORE INTO conversation_member VALUES (?, ?)", [(both, other), (both, mine)])
+        db.execute("DELETE FROM conversation_member WHERE conversation_id = ? AND address_id = ?", (only, mine))
+    changes.set_setting(store, "hidden_accounts", [other])
+    ids = {c["id"] for c in queries.chats(store, unnamed=True)}
+    assert groups[0]["id"] not in ids and groups[1]["id"] in ids
+    assert queries.search(store, "καλημερα", chat_id=groups[1]["id"])["total"] >= 0
+    changes.set_setting(store, "hidden_accounts", [])
+    assert groups[0]["id"] in {c["id"] for c in queries.chats(store, unnamed=True)}
+
+
+def test_groups_with_no_one_else_hidden_when_asked(store):
+    groups = [c for c in queries.chats(store, unnamed=True) if c["type"] == "group"]
+    g = groups[0]
+    with store.write() as db:
+        db.execute("DELETE FROM conversation_member WHERE conversation_id = ? AND address_id NOT IN "
+                   "(SELECT address_id FROM account)", (g["conversation_id"],))
+        db.execute("INSERT OR REPLACE INTO chat_state VALUES (?, 'read_until', ?, 0, 1)", (g["id"], 2 ** 50))
+    assert g["id"] in {c["id"] for c in queries.chats(store, unnamed=True)}
+    assert g["id"] not in {c["id"] for c in queries.chats(store, unnamed=True, empty_groups=False)}
+    assert all(c["id"] in {x["id"] for x in queries.chats(store, unnamed=True, empty_groups=False)} for c in groups[1:])
+    if g["title"]:
+        assert g["id"] in {c["id"] for c in queries.chats(store, q=g["title"], empty_groups=False)}

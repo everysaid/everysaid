@@ -474,7 +474,18 @@ class Importer:
                 else:
                     made.append(a.conversation(service, [peer]))
             return made[0]
+        conv.made, conv.key = made, key if group else peer[1]
         return conv
+
+    def account_in(self, service, conv, own):
+        """The owner's account the logs were written by is a member of the conversation: which of the
+        owner's accounts a chat was on (one with a person may have been on several). Also on a later
+        run, when every message is already there."""
+        a = self.archive
+        cid = conv.made[0] if conv.made else (a.db.execute(
+            "SELECT id FROM conversation WHERE service_id = ? AND key = ?", (a.service[service], conv.key)).fetchone() or [None])[0]
+        if cid is not None:
+            a.db.execute("INSERT OR IGNORE INTO conversation_member VALUES (?, ?)", (cid, a.address(*own)))
 
     def add(self, device, service, src, chat, rec, sender_handle):
         """One message into the archive, unless its origin or its fingerprint is already there."""
@@ -552,6 +563,7 @@ class Importer:
                     mid = self.add(device, service, src, conv, rec, sender)
                     for rel in rec.images:
                         self.picture(device, service, src, logs, rel, mid)
+            self.account_in(service, conv, own)
             a.db.commit()
         self.finish_names(device)
         self.merge(device, adium_metacontacts(logs))
@@ -589,6 +601,7 @@ class Importer:
                         who = own if outgoing else peer
                     rec = Record(row_key, ts, outgoing, sender, text)
                     self.add(device, service, src, conv, rec, who)
+            self.account_in(service, conv, own)
             a.db.commit()
         for service, name, alias in pidgin_buddies(purple):
             h = handle(service, name)
