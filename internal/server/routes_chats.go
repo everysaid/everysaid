@@ -93,7 +93,7 @@ func (s *Server) chatRoutes() {
 		if unnamed != nil {
 			o.Unnamed = *unnamed
 		} else {
-			o.Unnamed = s.setting("show_unnamed", true)
+			o.Unnamed = true
 		}
 		if maxMsgs != nil {
 			o.MaxMessages, o.HasMax = *maxMsgs, true

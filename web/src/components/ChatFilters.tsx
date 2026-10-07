@@ -3,16 +3,14 @@ import * as Popover from "@radix-ui/react-popover";
 import { useTranslation } from "react-i18next";
 import { Check, ListFilter, Minus } from "lucide-react";
 import { number } from "@/lib/format";
-import { useSettings } from "@/lib/hooks";
 import { service } from "@/lib/services";
 import { cn } from "@/lib/utils";
 import { labelName, useLabels } from "./Labels";
 import { Button, Segmented, ServiceDot, Switch } from "./ui";
 
-/** What the chat list is narrowed to, kept on this device. unnamed: undefined follows the setting. */
+/** What the chat list is narrowed to, kept on this device. */
 export interface ChatFilters {
   archived: boolean;
-  unnamed?: boolean;
   minMessages: number;          // the number of messages the slider is at
   fewer?: boolean;              // at most that many, not at least
   services: Record<string, "with" | "without">;
@@ -36,13 +34,13 @@ export function keepFilters(f: ChatFilters) {
 
 /** How many filters narrow the list (the archived view is a view, not counted). */
 export function activeFilters(f: ChatFilters) {
-  return (f.unnamed !== undefined ? 1 : 0) + (f.minMessages > 0 || f.fewer ? 1 : 0) + Object.keys(f.services).length + (f.label ? 1 : 0);
+  return (f.minMessages > 0 || f.fewer ? 1 : 0) + Object.keys(f.services).length + (f.label ? 1 : 0);
 }
 
 /** The server's words for them. */
 export function filterParams(f: ChatFilters) {
   const pick = (w: "with" | "without") => Object.entries(f.services).filter(([, v]) => v === w).map(([s]) => s).join(",") || undefined;
-  return { archived: f.archived || undefined, unnamed: f.unnamed, min_messages: f.minMessages || undefined,
+  return { archived: f.archived || undefined, min_messages: f.minMessages || undefined,
     max_messages: f.fewer ? f.minMessages : undefined, ...(f.fewer ? { min_messages: undefined } : {}),
     services: pick("with"), no_services: pick("without"), label: f.label };
 }
@@ -52,13 +50,11 @@ const STEPS = [0, 1, 2, 3, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
 
 export function ChatFiltersButton({ value, onChange, seen }: { value: ChatFilters; onChange: (f: ChatFilters) => void; seen: string[] }) {
   const { t } = useTranslation();
-  const settings = useSettings();
   const labels = useLabels();
   const [open, setOpen] = useState(false);
   const n = activeFilters(value);
   const set = (part: Partial<ChatFilters>) => onChange({ ...value, ...part });
   const step = Math.max(0, STEPS.findIndex((s) => s >= value.minMessages));
-  const unnamed = value.unnamed ?? ((settings.data?.show_unnamed as boolean | undefined) ?? true);
   const services = [...new Set([...seen, ...Object.keys(value.services)])].filter((s) => service(s).messages !== false || value.services[s]).sort();
   const used = (labels.data?.items ?? []).filter((l) => l.uses.yes + l.uses.suggested > 0 || l.id === value.label);
   const cycle = (s: string) => {
@@ -85,10 +81,6 @@ export function ChatFiltersButton({ value, onChange, seen }: { value: ChatFilter
           <label className="flex items-center justify-between gap-3 text-sm">
             {t("chats.showArchived")}
             <Switch checked={value.archived} onChange={(v) => set({ archived: v })} label={t("chats.showArchived")} />
-          </label>
-          <label className="flex items-center justify-between gap-3 text-sm">
-            <span>{t("chats.withUnnamed")}{value.unnamed === undefined && <span className="block text-xs text-muted">{t("chats.asSettings")}</span>}</span>
-            <Switch checked={unnamed} onChange={(v) => set({ unnamed: v })} label={t("chats.withUnnamed")} />
           </label>
           <div className="space-y-1.5">
             <div className="flex items-center justify-between gap-2 text-sm">
