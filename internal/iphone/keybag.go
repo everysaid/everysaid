@@ -125,6 +125,12 @@ func (k *keybag) deriveKey(password []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// without its salts the key would be derived with none, and every password said wrong
+	for _, name := range []string{"DPSL", "SALT"} {
+		if len(k.attrs[name].raw) == 0 {
+			return nil, fmt.Errorf("BackupKeyBag has no %s", name)
+		}
+	}
 	round1, err := pbkdf2.Key(sha256.New, string(password), k.attrs["DPSL"].raw, dpic, 32)
 	if err != nil {
 		return nil, err

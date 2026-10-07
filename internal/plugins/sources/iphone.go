@@ -171,6 +171,7 @@ func (IphoneBackup) RunImport(c *plugins.Context) error {
 		BackupRoot: backupRoot(c),
 		UDID:       c.Str("udid"),
 		NoBackup:   !c.Bool("backup"),
+		Archive:    c.Store().Path,
 		Password:   []byte(password),
 		Say:        sourcekit.Say(c),
 		Raw:        raw,

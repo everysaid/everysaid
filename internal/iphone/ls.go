@@ -76,6 +76,7 @@ func backupDir() (string, error) {
 // The password comes from where iphone-sync keeps it (keyring, else file), or is asked for; it is
 // never printed.
 func LsMain(args []string, out io.Writer) error {
+	defer onSignal()()
 	ap := phones.NewArgs("iphone-ls", "List the iPhone backup's files by folder.")
 	domain := ap.Pos("domain", "", "SQL LIKE pattern for the domain", false)
 	path := ap.Pos("path", "%", "SQL LIKE pattern for the relative path", true)
@@ -96,7 +97,7 @@ func LsMain(args []string, out io.Writer) error {
 			return err
 		}
 	}
-	b, err := Open(dir, pw)
+	b, err := openBackup(dir, pw)
 	if errors.Is(err, ErrWrongPassword) {
 		return phones.Fail("Wrong password.", nil)
 	} else if err != nil {

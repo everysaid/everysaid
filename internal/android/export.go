@@ -33,19 +33,27 @@ import (
 	"everysaid/internal/text"
 )
 
-// providers: table, content URI, in the order they are exported.
-var providers = [][2]string{
-	{"calls", "content://call_log/calls"},
-	{"sms", "content://sms"},
-	{"mms", "content://mms"},
-	{"mms_part", "content://mms/part"},
-	{"blocked", "content://com.android.blockednumber/blocked"},
+// providers: table, content URI, in the order they are exported; optional ones may refuse the
+// shell (blocked numbers are the default dialer's on many phones), and are then left for a later
+// run.
+var providers = []struct {
+	table, uri string
+	optional   bool
+}{
+	{"calls", "content://call_log/calls", false},
+	{"sms", "content://sms", false},
+	{"mms", "content://mms", false},
+	{"mms_part", "content://mms/part", false},
+	{"blocked", "content://com.android.blockednumber/blocked", true},
 }
 
 // ExportOptions are what the app gives an export.
 type ExportOptions struct {
 	Serial string     // the phone's serial (adb devices), when adb sees more than one
 	Say    phones.Say // the run's lines (Context.Log); nil: none
+	// Archive is the archive whose MMS parts are not fetched again (default: <data>/archive.db);
+	// the app gives the one it serves, which may be another.
+	Archive string
 }
 
 type exporter struct {
@@ -85,12 +93,17 @@ func (e *exporter) device() (string, error) {
 		if err != nil {
 			return "", err
 		}
-		var listed []string
+		var listed, unauthorized []string
 		lines := strings.Split(strings.ReplaceAll(string(out), "\r\n", "\n"), "\n")
 		for _, l := range lines[min(1, len(lines)):] {
 			if strings.HasSuffix(strings.TrimSpace(l), "device") {
 				listed = append(listed, strings.Fields(l)[0])
+			} else if strings.HasSuffix(strings.TrimSpace(l), "unauthorized") {
+				unauthorized = append(unauthorized, strings.Fields(l)[0])
 			}
+		}
+		if len(listed) == 0 && len(unauthorized) > 0 {
+			return "", phones.Fail("The phone has not allowed USB debugging from this computer: unlock it and accept the question it shows.", nil)
 		}
 		if len(listed) == 0 {
 			return "", phones.Fail("adb sees no device: choose one with -s.", nil)
@@ -131,6 +144,32 @@ func (e *exporter) query(uri string, projection []string) (string, error) {
 	return string(out), err
 }
 
+// refused is what the phone said instead of rows ("" when it gave rows, or said it has none):
+// exec-out does not carry the command's exit code, so a provider's error ("Error while accessing
+// provider", a SecurityException) comes as its output.
+func refused(out string) string {
+	if strings.HasPrefix(out, "Row: 0 ") {
+		return ""
+	}
+	if t := strings.TrimSpace(out); t == "" || t == "No result found." {
+		return ""
+	}
+	first, _, _ := strings.Cut(strings.TrimSpace(out), "\n")
+	return strings.TrimSpace(first)
+}
+
+// readError is what the phone said instead of a part's bytes ("" for bytes).
+func readError(data []byte) string {
+	if !bytes.HasPrefix(data, []byte("Error while accessing provider")) {
+		return ""
+	}
+	first, _, _ := strings.Cut(decode(data), "\n")
+	return strings.TrimSpace(first)
+}
+
+// number: the ids that go into a content URI and a file name (the provider's integer _id).
+var number = regexp.MustCompile(`^[0-9]+$`)
+
 var columnName = regexp.MustCompile(`(?:^Row: 0 |, )([A-Za-z0-9_]+)=`)
 
 // columns are the column names, read from the first row of an unrestricted query.
@@ -138,6 +177,9 @@ func (e *exporter) columns(uri string) ([]string, error) {
 	out, err := e.query(uri, nil)
 	if err != nil {
 		return nil, err
+	}
+	if why := refused(out); why != "" {
+		return nil, phones.Fail("{uri}: the phone said: {error}", map[string]any{"uri": uri, "error": why})
 	}
 	if !strings.HasPrefix(out, "Row: 0 ") { // no rows ("No result found."): no columns to read
 		return nil, nil
@@ -287,12 +329,17 @@ func Export(o ExportOptions) (err error) {
 	d.SetMaxOpenConns(1)
 
 	for _, p := range providers {
-		table, uri := p[0], p[1]
+		table, uri := p.table, p.uri
 		if exists(d, table) {
 			e.Say("-- {table}: already there", map[string]any{"table": table})
 			continue
 		}
 		cols, err := e.columns(uri)
+		var f *phones.Failure
+		if p.optional && errors.As(err, &f) {
+			e.Say("-- {table}: not readable now ({error})", map[string]any{"table": table, "error": f.Error()})
+			continue
+		}
 		if err != nil {
 			return err
 		}
@@ -303,6 +350,9 @@ func Export(o ExportOptions) (err error) {
 		text, err := e.query(uri, cols)
 		if err != nil {
 			return err
+		}
+		if why := refused(text); why != "" {
+			return phones.Fail("{uri}: the phone said: {error}", map[string]any{"uri": uri, "error": why})
 		}
 		if err := writeGzip(filepath.Join(out, table+".txt.gz"), text); err != nil {
 			return err
@@ -340,10 +390,16 @@ func Export(o ExportOptions) (err error) {
 		var cols []string
 		var rows [][]*string
 		for _, mid := range db.Strs(d, "SELECT _id FROM mms") {
+			if !number.MatchString(mid) {
+				return phones.Fail("{table}: an _id that is not a number: {id}", map[string]any{"table": "mms", "id": mid})
+			}
 			uri := "content://mms/" + mid + "/addr"
 			text, err := e.query(uri, nil)
 			if err != nil {
 				return err
+			}
+			if why := refused(text); why != "" {
+				return phones.Fail("{uri}: the phone said: {error}", map[string]any{"uri": uri, "error": why})
 			}
 			if !strings.HasPrefix(text, "Row: 0 ") {
 				continue
@@ -376,7 +432,11 @@ func Export(o ExportOptions) (err error) {
 	// parts the archive has already taken (`attachment.source_path`, kept after the file went to
 	// the photo library or was removed) are not fetched again
 	taken := map[string]bool{}
-	if archive := filepath.Join(config.Data, "archive.db"); fileExists(archive) {
+	archive := o.Archive
+	if archive == "" {
+		archive = filepath.Join(config.Data, "archive.db")
+	}
+	if fileExists(archive) {
 		a, err := db.ReadOnly(archive)
 		if err != nil {
 			return err
@@ -387,7 +447,7 @@ func Export(o ExportOptions) (err error) {
 		}
 		a.Close()
 	}
-	saved := 0
+	saved, unread := 0, 0
 	type part struct{ id, ct string }
 	var todo []part
 	if exists(d, "mms_part") {
@@ -398,6 +458,9 @@ func Export(o ExportOptions) (err error) {
 		})
 	}
 	for _, p := range todo {
+		if !number.MatchString(p.id) {
+			return phones.Fail("{table}: an _id that is not a number: {id}", map[string]any{"table": "mms_part", "id": p.id})
+		}
 		path := filepath.Join(parts, p.id)
 		if fileExists(path) || taken["mms-parts/"+p.id] {
 			continue
@@ -405,6 +468,11 @@ func Export(o ExportOptions) (err error) {
 		data, err := e.adb("exec-out", "content", "read", "--uri", "content://mms/part/"+p.id)
 		if err != nil {
 			return err
+		}
+		if why := readError(data); why != "" { // not kept as the part's file; a later run tries again
+			e.Say("-- mms-parts/{id}: not readable ({error})", map[string]any{"id": p.id, "error": why})
+			unread++
+			continue
 		}
 		if err := os.WriteFile(path+".part", data, 0o600); err != nil {
 			return err
@@ -415,6 +483,9 @@ func Export(o ExportOptions) (err error) {
 		saved++
 	}
 	e.Say("OK mms-parts: {n} new files", map[string]any{"n": saved})
+	if unread > 0 {
+		e.Say("mms-parts: {n} could not be read; a later run tries them again", map[string]any{"n": unread})
+	}
 	e.Say("Done: {out}", map[string]any{"out": dbPath})
 	return nil
 }

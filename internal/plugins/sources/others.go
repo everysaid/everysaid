@@ -31,7 +31,8 @@ func (AndroidAdb) Info() *plugins.Info {
 }
 
 func (AndroidAdb) RunImport(c *plugins.Context) error {
-	if err := android.Export(android.ExportOptions{Serial: c.Str("serial"), Say: sourcekit.Say(c)}); err != nil {
+	if err := android.Export(android.ExportOptions{Serial: c.Str("serial"), Say: sourcekit.Say(c),
+		Archive: c.Store().Path}); err != nil {
 		return sourcekit.UserError(err)
 	}
 	_, _, err := sourcekit.RunImporters(c, []sourcekit.Step{

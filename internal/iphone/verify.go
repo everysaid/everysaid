@@ -77,6 +77,7 @@ func Verify(b *Backup, progress func(i, n int)) (v Verified, err error) {
 // VerifyMain is iphone-verify.py's command line. The password comes from where iphone-sync keeps
 // it (keyring, else file), or is asked for; it is never printed.
 func VerifyMain(args []string, out io.Writer) error {
+	defer onSignal()()
 	ap := phones.NewArgs("iphone-verify", "Decrypt every file of the iPhone backup and check it (read only).")
 	if err := ap.Parse(args, out); err != nil {
 		return err
@@ -105,7 +106,7 @@ func VerifyMain(args []string, out io.Writer) error {
 				return &phones.Failure{Code: 1}
 			}
 		}
-		b, err = Open(dir, pw)
+		b, err = openBackup(dir, pw)
 		if errors.Is(err, ErrWrongPassword) {
 			say("Wrong password.", nil)
 			pw = nil

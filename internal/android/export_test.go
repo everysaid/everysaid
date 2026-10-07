@@ -141,3 +141,103 @@ func TestDeviceCount(t *testing.T) {
 		t.Errorf("%v", err)
 	}
 }
+
+// fakePhone puts an adb answering as fakeADB, with some answers replaced, first in PATH, and the
+// folders in the test's own.
+func fakePhone(t *testing.T, replace ...string) string {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	os.MkdirAll(bin, 0o700)
+	script := strings.NewReplacer(replace...).Replace(fakeADB)
+	if err := os.WriteFile(filepath.Join(bin, "adb"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	for _, v := range []string{"DATA", "CACHE", "CONFIG", "STATE"} {
+		t.Setenv("EVERYSAID_"+v, filepath.Join(dir, strings.ToLower(v)))
+	}
+	config.Load()
+	t.Cleanup(config.Load)
+	return filepath.Join(config.AndroidExport, "acme-phone1-abcd")
+}
+
+// exec-out does not carry the exit code of `content`: what the phone says instead of rows is a
+// refusal, not "nothing on the phone".
+const refusal = `echo 'Error while accessing provider:x'; echo 'java.lang.SecurityException: Permission Denial'`
+
+// TestRefusalsAreNotEmpty: a provider that refuses the shell is said; an optional one (blocked
+// numbers) is left for a later run, the others stop the export.
+func TestRefusalsAreNotEmpty(t *testing.T) {
+	out := fakePhone(t, `printf 'Row: 0 _id=1, original_number=+309\n'`, refusal)
+	var lines []string
+	say := func(text string, params map[string]any) { lines = append(lines, text) }
+	if err := Export(ExportOptions{Say: say}); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "-- {table}: not readable now ({error})") || strings.Contains(joined, "nothing on the phone") {
+		t.Errorf("lines: %s", joined)
+	}
+	d, _ := db.ReadOnly(filepath.Join(out, "android.db"))
+	defer d.Close()
+	if exists(d, "blocked") {
+		t.Error("a refused provider became an empty table, never asked again")
+	}
+
+	fakePhone(t, `printf 'Row: 0 _id=7, address=+302, body=hi, there\nsecond line\n'`, refusal)
+	err := Export(ExportOptions{})
+	if err == nil || !strings.Contains(err.Error(), "the phone said: Error while accessing provider:x") {
+		t.Errorf("sms refused: %v", err)
+	}
+}
+
+// TestPartsReadSafely: an MMS part the phone cannot read is not kept as its file, and an _id that
+// is not a number never reaches a path or a URI.
+func TestPartsReadSafely(t *testing.T) {
+	out := fakePhone(t, `printf 'JPEGDATA'`, refusal)
+	var lines []string
+	say := func(text string, params map[string]any) { lines = append(lines, text) }
+	if err := Export(ExportOptions{Say: say}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "mms-parts", "9")); err == nil {
+		t.Error("the phone's error was kept as the part")
+	}
+	if !strings.Contains(strings.Join(lines, "\n"), "-- mms-parts/{id}: not readable ({error})") {
+		t.Errorf("lines: %q", lines)
+	}
+
+	fakePhone(t, `_id=9, ct=image/jpeg`, `_id=../../evil, ct=image/jpeg`, `_id=9\nRow: 1 _id=10`, `_id=../../evil\nRow: 1 _id=10`)
+	if err := Export(ExportOptions{}); err == nil || !strings.Contains(err.Error(), "not a number") {
+		t.Errorf("a bad _id: %v", err)
+	}
+}
+
+// TestPartsTakenByTheGivenArchive: the parts not fetched again are those of the archive the app
+// serves, not of the default one.
+func TestPartsTakenByTheGivenArchive(t *testing.T) {
+	out := fakePhone(t)
+	other := filepath.Join(t.TempDir(), "other.db")
+	a, _ := db.Open(other)
+	db.Exec(a, "CREATE TABLE source (id INTEGER PRIMARY KEY, name TEXT)")
+	db.Exec(a, "CREATE TABLE attachment (source_id INTEGER, source_path TEXT)")
+	db.Exec(a, "INSERT INTO source VALUES (1, 'acme-phone1-abcd/mms')")
+	db.Exec(a, "INSERT INTO attachment VALUES (1, 'mms-parts/9')")
+	a.Close()
+	if err := Export(ExportOptions{Archive: other}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "mms-parts", "9")); err == nil {
+		t.Error("a part the given archive has was fetched again")
+	}
+}
+
+func TestUnauthorized(t *testing.T) {
+	dir := t.TempDir()
+	script := "#!/bin/sh\nprintf 'List of devices attached\\nC3\\tunauthorized\\n'\n"
+	os.WriteFile(filepath.Join(dir, "adb"), []byte(script), 0o700)
+	e := &exporter{adbPath: filepath.Join(dir, "adb")}
+	if _, err := e.device(); err == nil || !strings.Contains(err.Error(), "has not allowed USB debugging") {
+		t.Errorf("%v", err)
+	}
+}

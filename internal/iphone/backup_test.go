@@ -15,6 +15,7 @@ import (
 
 	"everysaid/internal/config"
 	"everysaid/internal/db"
+	"everysaid/internal/phones"
 )
 
 const testPassword = "correct horse"
@@ -456,5 +457,108 @@ func TestBackupStep(t *testing.T) {
 		Password: []byte(testPassword), Only: []string{"sms.db"}})
 	if err == nil || err.Error() != "The backup failed: no iPhone found. Connect it with a cable, unlock it and tap Trust." {
 		t.Errorf("a failed backup: %v", err)
+	}
+}
+
+// TestExtractEmptyFile: iOS keeps an empty file without a key; it comes out empty, not as an error.
+func TestExtractEmptyFile(t *testing.T) {
+	isolate(t)
+	bk := makeBackup(t, t.TempDir(), []testFile{{domain: "D", path: "empty", noKey: true, mtime: 1700000000}})
+	b, err := Open(bk, []byte(testPassword))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	out := filepath.Join(t.TempDir(), "x", "empty")
+	if err := b.ExtractFile("empty", "", out, nil); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := os.Stat(out); err != nil || st.Size() != 0 || st.Mode().Perm() != 0o600 || st.ModTime().Unix() != 1700000000 {
+		t.Errorf("%v %v", st, err)
+	}
+}
+
+// TestKeybagWithoutSalt: a keybag missing a salt is said so, not taken as a wrong password.
+func TestKeybagWithoutSalt(t *testing.T) {
+	for _, missing := range []string{"DPSL", "SALT"} {
+		var bag []byte
+		for _, tag := range []string{"DPSL", "SALT"} {
+			if tag != missing {
+				bag = append(bag, tlv(tag, fill(20, 1))...)
+			}
+		}
+		bag = append(bag, tlv("DPIC", u32(1))...)
+		bag = append(bag, tlv("ITER", u32(1))...)
+		k, err := parseKeybag(bag)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := k.deriveKey([]byte("x")); err == nil || !strings.Contains(err.Error(), missing) {
+			t.Errorf("without %s: %v", missing, err)
+		}
+	}
+}
+
+// TestNotEncryptedSaid: a backup made without a password is said in the user's words, with what to do.
+func TestNotEncryptedSaid(t *testing.T) {
+	isolate(t)
+	root := t.TempDir()
+	dir := filepath.Join(root, "00008000-PLAIN")
+	os.MkdirAll(dir, 0o700)
+	mp, _ := plist.Marshal(map[string]any{"IsEncrypted": false}, plist.XMLFormat)
+	os.WriteFile(filepath.Join(dir, "Manifest.plist"), mp, 0o600)
+	os.WriteFile(filepath.Join(dir, "Manifest.db"), nil, 0o600)
+	err := Sync(SyncOptions{Out: t.TempDir(), BackupRoot: root, UDID: "00008000-PLAIN", NoBackup: true, Password: []byte("x")})
+	var f *phones.Failure
+	if !errors.As(err, &f) || !strings.HasPrefix(f.Text, "The backup is not encrypted") {
+		t.Errorf("%v", err)
+	}
+}
+
+// TestSyncSkipsWhatTheGivenArchiveHas: the files not copied again are those of the archive the
+// app serves, not of the default one.
+func TestSyncSkipsWhatTheGivenArchiveHas(t *testing.T) {
+	base := isolate(t)
+	root := filepath.Join(base, "backups")
+	wa := sqliteFile(t, "CREATE TABLE ZWAMEDIAITEM (ZMEDIALOCALPATH TEXT)",
+		"INSERT INTO ZWAMEDIAITEM VALUES ('Media/one.jpg'), ('Media/two.jpg')")
+	vb := sqliteFile(t, "CREATE TABLE ZATTACHMENT (ZNAME TEXT)")
+	const waDomain = "AppDomainGroup-group.net.whatsapp.WhatsApp.shared"
+	files := []testFile{{domain: waDomain, path: "Message/Media/one.jpg", data: []byte("one")},
+		{domain: waDomain, path: "Message/Media/two.jpg", data: []byte("two")},
+		{domain: "AppDomainGroup-group.viber.share.container", path: "com.viber/database/Contacts.data", data: vb},
+		{domain: waDomain, path: "ChatStorage.sqlite", data: wa}}
+	for _, f := range []struct{ rel, domain string }{{"Library/SMS/sms.db", "HomeDomain"},
+		{"Library/CallHistoryDB/CallHistory.storedata", "HomeDomain"}, {"ContactsV2.sqlite", waDomain}, {"CallHistory.sqlite", waDomain}} {
+		files = append(files, testFile{domain: f.domain, path: f.rel, data: []byte("x")})
+	}
+	bk := makeBackup(t, root, files)
+	other := filepath.Join(base, "other.db")
+	a, _ := db.Open(other)
+	db.Exec(a, "CREATE TABLE source (id INTEGER PRIMARY KEY, name TEXT)")
+	db.Exec(a, "CREATE TABLE attachment (source_id INTEGER, source_path TEXT)")
+	db.Exec(a, "INSERT INTO source VALUES (1, 'iphone/whatsapp')")
+	db.Exec(a, "INSERT INTO attachment VALUES (1, 'two.jpg')")
+	a.Close()
+	out := filepath.Join(base, "out")
+	if err := Sync(SyncOptions{Out: out, BackupRoot: root, UDID: filepath.Base(bk), NoBackup: true,
+		Password: []byte(testPassword), Archive: other}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "whatsapp-media", "one.jpg")); err != nil {
+		t.Error(err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "whatsapp-media", "two.jpg")); err == nil {
+		t.Error("two.jpg, which the given archive has, was copied")
+	}
+}
+
+// TestOnlyUnknown: --only with a name that is not one of the databases says so, before anything.
+func TestOnlyUnknown(t *testing.T) {
+	isolate(t)
+	err := Sync(SyncOptions{Out: t.TempDir(), BackupRoot: t.TempDir(), UDID: "x", NoBackup: true,
+		Password: []byte("x"), Only: []string{"whatsapp-call.sqlite"}})
+	if err == nil || !strings.HasPrefix(err.Error(), "Not one of the databases: whatsapp-call.sqlite (sms.db, ") {
+		t.Errorf("%v", err)
 	}
 }
