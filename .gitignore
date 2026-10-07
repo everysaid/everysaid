@@ -1,13 +1,6 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
-
-# Virtual environments
-.venv
+# The binary, built in the repository's folder (docs/go.md)
+/everysaid
+/everysaid.exe
 
 # Notes about one installation (devices, paths, history): not shared
 LOCAL.md
@@ -18,7 +11,6 @@ web/dist/
 web/test-results/
 web/playwright-report/
 /demo/
-.coverage
 
 # The WhatsApp bridge's build, and a store made by running it from its folder
 bridges/whatsapp/whatsapp-bridge

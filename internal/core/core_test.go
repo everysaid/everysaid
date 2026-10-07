@@ -1,4 +1,4 @@
-// Ports tests/test_core.py (the Host's part is in internal/server's tests).
+// The core's queries and changes on the demo archive (the Host's part is in internal/server's tests).
 package core_test
 
 import (
@@ -24,7 +24,7 @@ import (
 
 var _ = all.Loaded
 
-// pristine is the demo archive every test copies (built once, as tests/conftest.py does).
+// pristine is the demo archive every test copies (built once).
 var pristine string
 
 func TestMain(m *testing.M) {

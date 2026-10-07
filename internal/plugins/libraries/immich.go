@@ -30,7 +30,7 @@ func (Immich) Info() *plugins.Info {
 			"asset.download (originals) and asset.upload.",
 		Settings: []plugins.Setting{
 			{Key: "url", Label: "Address", Type: "url", Required: true, Default: nilIfEmpty(config.ImmichURL)},
-			{Key: "key", Label: "API key", Type: "secret", Help: "If empty, the scripts' immich-key is used"},
+			{Key: "key", Label: "API key", Type: "secret", Help: "If empty, the stored secret immich-key is used"},
 			{Key: "make", Label: "Camera make (where missing)", Type: "text", Default: config.ImmichMake},
 		},
 	}

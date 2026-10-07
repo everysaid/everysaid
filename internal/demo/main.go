@@ -100,10 +100,10 @@ func Main(args []string) error {
 	return nil
 }
 
-// Build makes a fresh demo archive (seed 7) in a temporary folder of the test, as
-// tests/conftest.py does, with the environment and the settings pointing there for the rest of
-// the test (the user's archive and secrets are never seen); it gives the folder and the
-// archive's path. Tests that want one archive for many can copy the file.
+// Build makes a fresh demo archive (seed 7) in a temporary folder of the test, with the environment
+// and the settings pointing there for the rest of the test (the user's archive and secrets are never
+// seen); it gives the folder and the archive's path. Tests that want one archive for many can copy
+// the file.
 func Build(t testing.TB) (dir, path string) {
 	t.Helper()
 	dir = t.TempDir()

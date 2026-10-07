@@ -82,7 +82,8 @@ func value(v any) string {
 }
 
 // The demo archive is the Python's, table by table and row by row, and so are its files: checked
-// against testdata/digest.json, made by testdata/digest.py from the Python at the same fixed hour.
+// against testdata/digest.json, made from the Python demo at the same fixed hour (its generator left
+// with the Python; a deliberate change to the demo makes this file again from the Go demo).
 func TestSameArchiveAsPython(t *testing.T) {
 	data, err := os.ReadFile("testdata/digest.json")
 	if err != nil {

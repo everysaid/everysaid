@@ -34,7 +34,7 @@ const el = {
     removeReaction: "Αφαίρεση της αντίδρασής σου", edit: "Επεξεργασία", editing: "Επεξεργασία μηνύματος", cancelEdit: "Ακύρωση επεξεργασίας",
     deleteForAll: "Διαγραφή για όλους", deleteConfirm: "Το μήνυμα θα διαγραφεί για όλους στη συνομιλία, μέσω {{service}}. Αυτό δεν αναιρείται.",
     deleteConfirmButton: "Διαγραφή", actionFailed: "Δεν έγινε", showDeleted: "Εμφάνιση του τι ήταν", },
-  // one per kind of message the archive knows (archive.MESSAGE_KINDS; tests/test_i18n.py checks)
+  // one per kind of message the archive knows (archive.MessageKinds; internal/checks checks)
   kind: { text: "Μήνυμα", image: "Φωτογραφία", video: "Βίντεο", voice: "Φωνητικό μήνυμα", file: "Αρχείο",
     sticker: "Αυτοκόλλητο", location: "Τοποθεσία", contact: "Επαφή", call: "Κλήση", system: "Ειδοποίηση",
     reaction: "Αντίδραση" },
@@ -113,7 +113,7 @@ const el = {
     needsLink: "Για νέα συσκευή: συνδέσου πρώτα σε μια άλλη και πρόσθεσε passkey από τις Ρυθμίσεις, ή πάρε σύνδεσμο με `everysaid user link`." },
   overview: { title: "Επισκόπηση", messages: "Μηνύματα", calls: "Κλήσεις", people: "Πρόσωπα", groups: "Ομάδες",
     byService: "Ανά υπηρεσία", byYear: "Ανά έτος", top: "Με ποιους μιλάς περισσότερο", archived: "Αρχειοθετημένες" },
-  // what the server's codes say (everysaid/errors.py; tests/test_i18n.py checks each code is here)
+  // what the server's codes say (internal/errs; internal/checks checks each code is here)
   labels: { title: "Ετικέτες", add: "Ετικέτα", none: "Καμία ετικέτα ακόμα", tones: "Ύφος", relations: "Σχέση", tone: "Ύφος", relation: "Σχέση",
     relationShort: "σχέση", votes: "Το λένε {{votes}} από {{models}} μοντέλα", sure: "σίγουρο", unsure: "αβέβαιο",
     fromHandle: "από το email ή το όνομα χρήστη", accept: "Αποδοχή", wrong: "Λάθος: να μην ξαναπροταθεί", guessPick: "Στο πεδίο, για διόρθωση πριν την αποθήκευση",
