@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-
-	"github.com/zalando/go-keyring"
 )
 
 // Secrets (the backup password, the immich key, a source's session) are kept in the system's
@@ -31,7 +29,7 @@ func Exposed(path string) bool {
 
 // Secret is a secret by name: from the keyring, else from its file in Config; "" if neither has it.
 func Secret(name string) (string, error) {
-	if v, err := keyring.Get(Keyring, name); err == nil && v != "" {
+	if v, err := keyringGet(Keyring, name); err == nil && v != "" {
 		return v, nil
 	}
 	path := SecretFile(name)
@@ -56,8 +54,8 @@ func SecretOrEmpty(name string) string {
 
 // SaveSecret puts a secret into the keyring, else into its file (600); it returns where it went.
 func SaveSecret(name, value string) (string, error) {
-	if err := keyring.Set(Keyring, name, value); err == nil {
-		if back, err := keyring.Get(Keyring, name); err == nil && back == value {
+	if err := keyringSet(Keyring, name, value); err == nil {
+		if back, err := keyringGet(Keyring, name); err == nil && back == value {
 			return "keyring", nil
 		}
 	}
@@ -83,7 +81,7 @@ func SaveSecret(name, value string) (string, error) {
 
 // DeleteSecret takes a secret away: from the keyring, and its file if there is one.
 func DeleteSecret(name string) error {
-	_ = keyring.Delete(Keyring, name)
+	_ = keyringDelete(Keyring, name)
 	err := os.Remove(SecretFile(name))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -103,10 +101,10 @@ func MoveToKeyring(name string) error {
 		return ErrExposed
 	}
 	value := strings.TrimRight(string(b), "\r\n")
-	if err := keyring.Set(Keyring, name, value); err != nil {
+	if err := keyringSet(Keyring, name, value); err != nil {
 		return err
 	}
-	if back, err := keyring.Get(Keyring, name); err != nil || back != value {
+	if back, err := keyringGet(Keyring, name); err != nil || back != value {
 		return errors.New("the keyring did not give the secret back")
 	}
 	return nil

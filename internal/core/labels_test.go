@@ -320,7 +320,9 @@ func TestWhatTheAnalysisReads(t *testing.T) {
 	if !in() {
 		t.Fatal("grown, not read again")
 	}
-	write(t, s, func(tx *sql.Tx) { db.Exec(tx, "UPDATE analysis SET messages = 24, labels = 'old' WHERE person_id = ?", k) })
+	write(t, s, func(tx *sql.Tx) {
+		db.Exec(tx, "UPDATE analysis SET messages = 24, labels = 'old' WHERE person_id = ?", k)
+	})
 	if core.Stale(s) != 1 {
 		t.Fatal(core.Stale(s))
 	}

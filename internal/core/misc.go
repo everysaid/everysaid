@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"everysaid/internal/config"
 	"everysaid/internal/db"
 )
 
@@ -58,22 +59,26 @@ func Calls(s *Store, o CallsOptions) (M, error) {
 		where = append(where, "ts < ?")
 		args = append(args, o.Before)
 	}
-	var rows []Item
-	db.Each(q, "SELECT id, ts FROM call WHERE "+strings.Join(where, " AND ")+" ORDER BY ts DESC LIMIT ?",
-		append(args, limit+1), func(scan func(...any)) {
-			r := Item{Type: "c"}
-			scan(&r.ID, &r.TS)
-			rows = append(rows, r)
-		})
-	page := rows
-	if len(page) > limit {
-		page = page[:limit]
+	// a page ends between two instants: the next one starts before the last time it has, so the
+	// calls of that time all go in this one (a page may be a little longer than asked)
+	var page []Item
+	more := false
+	rows := db.Query(q, "SELECT id, ts FROM call WHERE "+strings.Join(where, " AND ")+" ORDER BY ts DESC, id DESC", args...)
+	for rows.Next() {
+		r := Item{Type: "c"}
+		rows.Scan(&r.ID, &r.TS)
+		if len(page) >= limit && r.TS != page[len(page)-1].TS {
+			more = true
+			break
+		}
+		page = append(page, r)
 	}
+	rows.Close()
 	items := Hydrate(s, page, nil)
 	ppl := PeopleOf(s)
 	for i, it := range items {
 		var aid sql.NullInt64
-		db.Row(q, "SELECT address_id FROM call WHERE id = ?", []any{rows[i].ID}, &aid)
+		db.Row(q, "SELECT address_id FROM call WHERE id = ?", []any{page[i].ID}, &aid)
 		it["chat_id"] = nil
 		if aid.Valid {
 			if pid, ok := ppl.PersonOf[aid.Int64]; ok {
@@ -81,7 +86,7 @@ func Calls(s *Store, o CallsOptions) (M, error) {
 			}
 		}
 	}
-	return M{"items": items, "has_more": len(rows) > limit}, nil
+	return M{"items": items, "has_more": more}, nil
 }
 
 // MediaKinds are the kinds of message each media view shows.
@@ -136,34 +141,39 @@ func Media(s *Store, o MediaOptions) (M, error) {
 	ix := Index(s)
 	out := []M{}
 	seen := map[string]bool{}
-	db.Each(q, "SELECT m.id, m.ts, m.conversation_id, md.sha256, md.mime, md.size, md.path, "+
+	// read on until the page is full, however many files are left out on the way (seen already, or
+	// gone when only those there are asked for), and to the end of the last instant it has: the
+	// next page starts before that time
+	more := false
+	rows := db.Query(q, "SELECT m.id, m.ts, m.conversation_id, md.sha256, md.mime, md.size, md.path, "+
 		"(SELECT count(*) FROM library_link l WHERE l.sha256 = md.sha256), d.decision "+
 		"FROM message m JOIN attachment a ON a.message_id = m.id JOIN media md ON md.sha256 = a.sha256 "+
 		"LEFT JOIN media_decision d ON d.sha256 = md.sha256 "+
-		"WHERE "+strings.Join(where, " AND ")+" ORDER BY m.ts DESC LIMIT ?", append(args, (limit+1)*3),
-		func(scan func(...any)) {
-			var mid, ts, conv, size, linked int64
-			var sha, path string
-			var mime, decision sql.NullString
-			scan(&mid, &ts, &conv, &sha, &mime, &size, &path, &linked, &decision)
-			if seen[sha] || len(out) > limit {
-				return
-			}
-			seen[sha] = true
-			available := availability(path, linked)
-			if o.AvailableOnly && available == "gone" {
-				return
-			}
-			var chat any
-			if c, ok := ix.ConvChat[conv]; ok {
-				chat = c
-			}
-			out = append(out, M{"sha256": sha, "mime": nullString(mime), "size": size, "available": available,
-				"message_id": mid, "ts": ts, "chat_id": chat, "decision": nullString(decision)})
-		})
-	more := len(out) > limit
-	if more {
-		out = out[:limit]
+		"WHERE "+strings.Join(where, " AND ")+" ORDER BY m.ts DESC, m.id DESC, a.id", args...)
+	defer rows.Close()
+	for rows.Next() {
+		var mid, ts, conv, size, linked int64
+		var sha, path string
+		var mime, decision sql.NullString
+		rows.Scan(&mid, &ts, &conv, &sha, &mime, &size, &path, &linked, &decision)
+		if seen[sha] {
+			continue
+		}
+		seen[sha] = true
+		available := availability(path, linked)
+		if o.AvailableOnly && available == "gone" {
+			continue
+		}
+		if len(out) >= limit && ts != out[len(out)-1]["ts"].(int64) {
+			more = true
+			break
+		}
+		var chat any
+		if c, ok := ix.ConvChat[conv]; ok {
+			chat = c
+		}
+		out = append(out, M{"sha256": sha, "mime": nullString(mime), "size": size, "available": available,
+			"message_id": mid, "ts": ts, "chat_id": chat, "decision": nullString(decision)})
 	}
 	return M{"items": out, "has_more": more}, nil
 }
@@ -231,7 +241,7 @@ func Stats(s *Store, includeArchived bool) M {
 		// the first and last instant; summed below over the chats in view
 		c := Cached(s, "stats-counted", func() counted {
 			var out counted
-			db.Each(s.Read(), "SELECT conversation_id, service_id, strftime('%Y', ts / 1000, 'unixepoch'), count(*), "+
+			db.Each(s.Read(), "SELECT conversation_id, service_id, "+yearOf(s, "ts")+", count(*), "+
 				"min(ts), max(ts) FROM message GROUP BY 1, 2, 3", nil, func(scan func(...any)) {
 				var r statRow
 				var year sql.NullString
@@ -335,6 +345,31 @@ func Stats(s *Store, includeArchived bool) M {
 			"first": first, "last": last, "top_people": top("person"), "top_groups": top("group"),
 		}
 	})
+}
+
+// yearOf is SQL: the year of a time (Unix ms) in the owner's time zone, as text. SQLite knows only
+// UTC and the process's zone, so the years' first instants are written into it.
+func yearOf(s *Store, column string) string {
+	lo, ok := db.IntOK(s.Read(), "SELECT min(ts) FROM message")
+	hi, _ := db.IntOK(s.Read(), "SELECT max(ts) FROM message")
+	if !ok {
+		return "NULL"
+	}
+	tz := config.Timezone
+	if tz == nil {
+		tz = time.Local
+	}
+	first, last := time.UnixMilli(lo).In(tz).Year(), time.UnixMilli(hi).In(tz).Year()
+	if first == last {
+		return fmt.Sprintf("'%04d'", last)
+	}
+	var b strings.Builder
+	b.WriteString("CASE")
+	for y := first; y < last; y++ {
+		fmt.Fprintf(&b, " WHEN %s < %d THEN '%04d'", column, time.Date(y+1, 1, 1, 0, 0, 0, 0, tz).UnixMilli(), y)
+	}
+	fmt.Fprintf(&b, " ELSE '%04d' END", last)
+	return b.String()
 }
 
 // Now is the time in Unix ms (a variable, for tests).

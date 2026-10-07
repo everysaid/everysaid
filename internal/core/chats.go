@@ -301,23 +301,11 @@ func buildIndex(s *Store) *ChatIndex {
 			mine[a] = true
 		}
 	}
-	// (a service's own notice, "messages are end-to-end encrypted", is no one's)
-	heard := map[int64]bool{}
-	db.Each(q, "SELECT DISTINCT conversation_id, sender_id FROM message WHERE outgoing = 0 "+
-		"AND kind_id != (SELECT id FROM message_kind WHERE name = 'system')", nil, func(scan func(...any)) {
-		var c int64
-		var sender sql.NullInt64
-		scan(&c, &sender)
-		if !sender.Valid || !mine[sender.Int64] {
-			heard[c] = true
-		}
-	})
 	// and the owner a member of it (their own number or account, or the source said so): not a chat
 	// whose source listed no one
-	alone := map[int64]bool{}
-	notes := int64(0)
+	var mineOnly []int64
 	for _, r := range rows {
-		if r.group || heard[r.id] || len(members[r.id]) == 0 {
+		if r.group || len(members[r.id]) == 0 {
 			continue
 		}
 		all := true
@@ -327,9 +315,31 @@ func buildIndex(s *Store) *ChatIndex {
 			}
 		}
 		if all {
-			alone[r.id] = true
-			if notes == 0 || r.id < notes {
-				notes = r.id
+			mineOnly = append(mineOnly, r.id)
+		}
+	}
+	// of those, the ones where no one else wrote (a service's own notice, "messages are end-to-end
+	// encrypted", is no one's); asked of them alone, not of every message in the archive
+	heard := map[int64]bool{}
+	if len(mineOnly) > 0 {
+		db.Each(q, "SELECT DISTINCT conversation_id, sender_id FROM message WHERE conversation_id IN ("+
+			db.Marks(len(mineOnly))+") AND outgoing = 0 AND kind_id != (SELECT id FROM message_kind WHERE name = 'system')",
+			db.Args(mineOnly), func(scan func(...any)) {
+				var c int64
+				var sender sql.NullInt64
+				scan(&c, &sender)
+				if !sender.Valid || !mine[sender.Int64] {
+					heard[c] = true
+				}
+			})
+	}
+	alone := map[int64]bool{}
+	notes := int64(0)
+	for _, id := range mineOnly {
+		if !heard[id] {
+			alone[id] = true
+			if notes == 0 || id < notes {
+				notes = id
 			}
 		}
 	}
