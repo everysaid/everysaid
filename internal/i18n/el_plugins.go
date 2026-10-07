@@ -4,6 +4,7 @@ package i18n
 // el.go does not have. Names of services and tools stay as they are.
 func init() {
 	for k, v := range map[string]string{
+		"contacts changed: {n}, gone: {gone}, addresses found in the archive: {linked}": "επαφές που άλλαξαν: {n}, που αφαιρέθηκαν: {gone}, διευθύνσεις που βρέθηκαν στο αρχείο: {linked}",
 		"Backup":                            "Backup",
 		"UDID":                              "UDID",
 		"SMS, iMessage":                     "SMS, iMessage",

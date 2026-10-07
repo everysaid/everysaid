@@ -10,6 +10,9 @@ import (
 	"mime"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -51,7 +54,7 @@ func findMedia(s *core.Store, chat, kind string, since, until *int64, limit int)
 	return out, nil
 }
 
-// inlineMost is the largest file download_media also gives itself (over HTTP).
+// inlineMost is how much of its files one answer of download_media also gives itself (over HTTP).
 const inlineMost = 8 << 20
 
 type file struct {
@@ -92,18 +95,21 @@ func download(ctx context.Context, env Env, messageID int64, sha string) (any, e
 	}
 	out := []core.M{}
 	var extra []sdk.Content
+	left := int64(inlineMost) // for the whole answer: a message of many files gives the first ones
 	give := func(m core.M, p, mt string) {
 		if !env.Inline || p == "" {
 			return
 		}
-		if st, err := os.Stat(p); err != nil || st.Size() > inlineMost {
+		if st, err := os.Stat(p); err != nil || st.Size() > left {
 			m["inline"] = false
 			return
 		}
 		data, err := os.ReadFile(p)
-		if err != nil {
+		if err != nil || int64(len(data)) > left {
+			m["inline"] = false
 			return
 		}
+		left -= int64(len(data))
 		m["inline"] = true
 		switch {
 		case len(mt) > 6 && mt[:6] == "image/":
@@ -166,9 +172,14 @@ func fetch(ctx context.Context, env Env, messageID int64) (string, string) {
 }
 
 // fromLibrary is a file from the library that holds it (its original), as a path on this computer
-// (bytes a library sends go into the cache); "" when none can.
+// (what a library sends goes into the cache, kept for the next time); "" when none can.
 func fromLibrary(s *core.Store, sha, mt string) string {
-	var out string
+	if !hexSHA.MatchString(sha) {
+		return ""
+	}
+	if p := cached(sha); p != "" {
+		return p
+	}
 	type link struct {
 		iid int64
 		ref string
@@ -189,7 +200,14 @@ func fromLibrary(s *core.Store, sha, mt string) string {
 		if !ok {
 			continue
 		}
-		got, err := lib.Fetch(plugins.NewContext(host{s}, *row), l.ref, "original")
+		ctx := plugins.NewContext(host{s}, *row)
+		if ff, ok := lib.(plugins.FileFetcher); ok { // streamed into the cache, not held in memory
+			if p := intoCache(sha, mt, func(dest string) (string, error) { return ff.FetchTo(ctx, l.ref, "original", dest) }); p != "" {
+				return p
+			}
+			continue
+		}
+		got, err := lib.Fetch(ctx, l.ref, "original")
 		if err != nil || got == nil {
 			continue
 		}
@@ -197,21 +215,110 @@ func fromLibrary(s *core.Store, sha, mt string) string {
 			return got.Path
 		}
 		if len(got.Data) > 0 {
-			ext := ""
-			if exts, _ := mime.ExtensionsByType(firstOf(got.Type, mt)); len(exts) > 0 {
-				ext = exts[0]
-			}
-			dir := filepath.Join(config.Cache, "mcp")
-			if os.MkdirAll(dir, 0o700) != nil {
-				continue
-			}
-			p := filepath.Join(dir, sha+ext)
-			if os.WriteFile(p, got.Data, 0o600) == nil {
+			if p := intoCache(sha, mt, func(dest string) (string, error) { return got.Type, os.WriteFile(dest, got.Data, 0o600) }); p != "" {
 				return p
 			}
 		}
 	}
-	return out
+	return ""
+}
+
+// The files brought from libraries are kept in the cache (cache/mcp, named by their sha256) for
+// the next time: within cacheMost bytes, the least recently given going first, and none kept after
+// cacheAge without being given.
+var (
+	cacheMost int64 = 2 << 30
+	cacheAge        = 7 * 24 * time.Hour
+	hexSHA          = regexp.MustCompile(`^[0-9a-f]{64}$`)
+)
+
+func libraryCache() string { return filepath.Join(config.Cache, "mcp") }
+
+// cached is a file brought before, marked as given now; "" when there is none.
+func cached(sha string) string {
+	matches, _ := filepath.Glob(filepath.Join(libraryCache(), sha+"*"))
+	for _, p := range matches {
+		if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() && st.Size() > 0 && !strings.HasSuffix(p, ".part") {
+			now := time.Now()
+			os.Chtimes(p, now, now)
+			return p
+		}
+	}
+	return ""
+}
+
+// intoCache is a file written by write (which gives its type) into the cache: a part file first,
+// named as the file only once it is whole.
+func intoCache(sha, mt string, write func(dest string) (string, error)) string {
+	dir := libraryCache()
+	if os.MkdirAll(dir, 0o700) != nil {
+		return ""
+	}
+	f, err := os.CreateTemp(dir, sha+".*.part")
+	if err != nil {
+		return ""
+	}
+	tmp := f.Name()
+	f.Close()
+	typ, err := write(tmp)
+	if err != nil {
+		os.Remove(tmp)
+		return ""
+	}
+	ext := ""
+	if exts, _ := mime.ExtensionsByType(firstOf(typ, mt)); len(exts) > 0 {
+		ext = exts[0]
+	}
+	p := filepath.Join(dir, sha+ext)
+	if os.Rename(tmp, p) != nil {
+		os.Remove(tmp)
+		return ""
+	}
+	prune(p)
+	return p
+}
+
+// prune takes away what the cache keeps beyond its age and size; keep (just given) stays. A part
+// file goes only by its age (another answer may be writing it).
+func prune(keep string) {
+	dir := libraryCache()
+	entries, _ := os.ReadDir(dir)
+	type file struct {
+		path string
+		size int64
+		at   time.Time
+	}
+	var files []file
+	var total int64
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		p := filepath.Join(dir, e.Name())
+		if p == keep {
+			total += info.Size()
+			continue
+		}
+		if time.Since(info.ModTime()) > cacheAge {
+			os.Remove(p)
+			continue
+		}
+		if strings.HasSuffix(p, ".part") {
+			continue
+		}
+		files = append(files, file{p, info.Size(), info.ModTime()})
+		total += info.Size()
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].at.Before(files[j].at) })
+	for _, f := range files {
+		if total <= cacheMost {
+			break
+		}
+		if os.Remove(f.path) == nil {
+			total -= f.size
+		}
+	}
 }
 
 // localLibrary stores files in the default library through the library plugins (host.to_library).

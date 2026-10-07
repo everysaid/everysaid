@@ -16,13 +16,17 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"everysaid/internal/config"
 	"everysaid/internal/core"
@@ -58,9 +62,43 @@ func (s Setting) typ() string {
 	return s.Type
 }
 
-// Valid says whether a value fits the setting's pattern.
+// Valid says whether a value is of the setting's type (a number, an http(s) address, true or
+// false) and fits its pattern; nothing given is for Required to judge.
 func (s Setting) Valid(value any) bool {
-	if s.Pattern == "" || value == nil || value == "" {
+	if value == nil || value == "" {
+		return true
+	}
+	switch s.typ() {
+	case "number":
+		switch v := value.(type) {
+		case float64:
+			if math.IsNaN(v) || math.IsInf(v, 0) {
+				return false
+			}
+		case int, int64:
+		case string:
+			f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+			if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+				return false
+			}
+		default:
+			return false
+		}
+	case "bool":
+		if _, ok := value.(bool); !ok {
+			return false
+		}
+	case "url":
+		v, ok := value.(string)
+		if !ok {
+			return false
+		}
+		u, err := url.Parse(strings.TrimSpace(v))
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return false
+		}
+	}
+	if s.Pattern == "" {
 		return true
 	}
 	ok, _ := regexp.MatchString("^(?:"+s.Pattern+")$", fmt.Sprint(value))
@@ -81,7 +119,10 @@ func (s Setting) Manifest(lang string) M {
 }
 
 // Action is an extra button of a plugin.
-type Action struct{ ID, Label string }
+type Action struct {
+	ID, Label string
+	Confirm   string // what the UI asks before running it (an action not to be undone), else ""
+}
 
 // ServiceInfo is how a service looks: its name, colour, short name, icon (an SVG path on a 24x24
 // view, drawn in the colour), and whether it has messages (false for a service of calls only).
@@ -215,6 +256,13 @@ type ReadMarker interface {
 	MarkRead(ctx context.Context, c *Context, conv Conversation, until int64) (int, error)
 }
 
+// MediaFetcher brings a message's file from its service now, where it can (a live connection
+// downloading what it never did): the file's path on this machine; "" and nil when it cannot (not
+// connected, not a message it knows).
+type MediaFetcher interface {
+	FetchMedia(ctx context.Context, c *Context, messageID int64) (string, error)
+}
+
 // ChatLister gives the chats it can see, for the user's choice of what to import.
 type ChatLister interface {
 	Chats(c *Context) ([]M, error)
@@ -268,6 +316,12 @@ type Library interface {
 	Fetch(c *Context, ref, size string) (*Fetched, error)
 }
 
+// FileFetcher is a library that writes a stored file into a file of this computer itself (dest),
+// a large original streamed rather than held in memory; it gives the file's type.
+type FileFetcher interface {
+	FetchTo(c *Context, ref, size, dest string) (string, error)
+}
+
 // Manifest is the plugin's manifest for the UI.
 func Manifest(p Plugin, lang string) M {
 	i := p.Info()
@@ -281,7 +335,11 @@ func Manifest(p Plugin, lang string) M {
 	}
 	actions := []M{}
 	for _, a := range i.Actions {
-		actions = append(actions, M{"id": a.ID, "label": i18n.Tr(a.Label, lang)})
+		x := M{"id": a.ID, "label": i18n.Tr(a.Label, lang)}
+		if a.Confirm != "" {
+			x["confirm"] = i18n.Tr(a.Confirm, lang)
+		}
+		actions = append(actions, x)
 	}
 	modes := i.Modes
 	if len(modes) == 0 {
@@ -490,9 +548,8 @@ func (c *Context) log(text string, params map[string]any, redrawn bool) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
 		if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
 			stamp := time.Now().Format("2006-01-02 15:04:05")
-			parts := strings.Split(line, "\n")
 			var b strings.Builder
-			for _, p := range parts {
+			for _, p := range splitLines(line) {
 				b.WriteString(stamp + " " + p + "\n")
 			}
 			f.WriteString(b.String())
@@ -510,6 +567,32 @@ func (c *Context) log(text string, params map[string]any, redrawn bool) {
 	}
 	c.mu.Unlock()
 	c.host.Emit(M{"type": "plugin_log", "instance": c.ID, "line": line})
+}
+
+// splitLines is Python's str.splitlines (at \n, \r, \r\n and Unicode's other line ends; none
+// after the last), and [""] for nothing: each a line of the log file.
+func splitLines(s string) []string {
+	var out []string
+	start := 0
+	for i := 0; i < len(s); {
+		r, n := utf8.DecodeRuneInString(s[i:])
+		switch r {
+		case '\n', '\r', '\v', '\f', 0x1c, 0x1d, 0x1e, 0x85, 0x2028, 0x2029:
+			out = append(out, s[start:i])
+			if r == '\r' && strings.HasPrefix(s[i+n:], "\n") {
+				n++
+			}
+			start = i + n
+		}
+		i += n
+	}
+	if start < len(s) {
+		out = append(out, s[start:])
+	}
+	if len(out) == 0 {
+		return []string{""}
+	}
+	return out
 }
 
 // Progress is a line being drawn again (a progress bar): shown in place as it changes, not in the log.

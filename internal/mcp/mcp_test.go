@@ -3,8 +3,12 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
+	"everysaid/internal/db"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -482,5 +486,125 @@ func TestHTTP(t *testing.T) {
 	}
 	if n := core.Person(f.store, f.nikos)["note"]; n != "only in a" {
 		t.Fatalf("note: %v", n)
+	}
+}
+
+// One answer of download_media gives files itself up to inlineMost in all: a message of many large
+// files gives the first ones, and says of the others that they are not inline.
+func TestInlinePerAnswer(t *testing.T) {
+	f := build(t)
+	big := bytes.Repeat([]byte{0xff}, 5<<20)
+	for i, sha := range []string{strings.Repeat("c1", 32), strings.Repeat("c2", 32)} {
+		rel := filepath.Join("media", "c"+fmt.Sprint(i), sha+".jpg")
+		os.MkdirAll(filepath.Join(archive.MediaRoot(), filepath.Dir(rel)), 0o700)
+		os.WriteFile(filepath.Join(archive.MediaRoot(), rel), big, 0o600)
+		f.store.MustWrite(func(tx *sql.Tx) {
+			db.Exec(tx, "INSERT INTO media (sha256, size, mime, path) VALUES (?, ?, 'image/jpeg', ?)", sha, len(big), rel)
+			db.Exec(tx, "INSERT INTO attachment (message_id, sha256, source_id, source_path) "+
+				"SELECT message_id, ?, source_id, ? FROM attachment WHERE message_id = ? LIMIT 1", sha, sha+".jpg", f.picture)
+		})
+	}
+	cs := connect(t, Env{Store: f.store, Inline: true})
+	res := callRaw(t, cs, "download_media", map[string]any{"message_id": f.picture})
+	var d map[string]any
+	json.Unmarshal([]byte(res.Content[0].(*sdk.TextContent).Text), &d)
+	var inline []any
+	for _, x := range list(d["files"]) {
+		inline = append(inline, obj(x)["inline"])
+	}
+	if len(res.Content) != 3 || fmt.Sprint(inline) != "[true true false]" {
+		t.Fatalf("%d contents, inline %v", len(res.Content), inline)
+	}
+}
+
+// bytesLib gives a file's bytes (as immich's Fetch), streamLib writes it into a file (FetchTo).
+type bytesLib struct{ fetched *int }
+
+func (bytesLib) Info() *plugins.Info {
+	return &plugins.Info{ID: "test-bytes", Name: "Test bytes", Kind: "library"}
+}
+func (bytesLib) Find(*plugins.Context, string, string) (string, error)     { return "", nil }
+func (bytesLib) Store(*plugins.Context, string, plugins.M) (string, error) { return "", nil }
+func (l bytesLib) Fetch(c *plugins.Context, ref, size string) (*plugins.Fetched, error) {
+	*l.fetched++
+	return &plugins.Fetched{Data: []byte("\xff\xd8\xff\xe0 from the library " + ref), Type: "image/png"}, nil
+}
+
+type streamLib struct{ bytesLib }
+
+func (streamLib) Info() *plugins.Info {
+	return &plugins.Info{ID: "test-stream", Name: "Test stream", Kind: "library"}
+}
+func (streamLib) Fetch(*plugins.Context, string, string) (*plugins.Fetched, error) {
+	return nil, fmt.Errorf("held in memory")
+}
+func (l streamLib) FetchTo(c *plugins.Context, ref, size, dest string) (string, error) {
+	*l.fetched++
+	return "image/png", os.WriteFile(dest, []byte("streamed "+ref), 0o600)
+}
+
+// A file a library gives is kept in the cache and given again from there; the cache keeps no old
+// file, nor more than its size.
+func TestLibraryCache(t *testing.T) {
+	os.RemoveAll(libraryCache())
+	t.Cleanup(func() { os.RemoveAll(libraryCache()) })
+	n := 0
+	plugins.Register(bytesLib{&n})
+	plugins.Register(streamLib{bytesLib{&n}})
+	for _, plugin := range []string{"test-bytes", "test-stream"} {
+		os.RemoveAll(libraryCache())
+		n = 0
+		f := build(t)
+		iid, err := plugins.Create(f.store, plugin, plugin, plugins.M{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.store.MustWrite(func(tx *sql.Tx) {
+			db.Exec(tx, "INSERT INTO library_link (sha256, library, asset_id, method, linked_at, instance_id) "+
+				"VALUES (?, ?, 'asset-1', 'upload', 0, ?)", f.sha, plugin, iid)
+		})
+		os.Remove(filepath.Join(archive.MediaRoot(), "media", "ab", f.sha+".jpg"))
+		cs := connect(t, Env{Store: f.store})
+		var paths []string
+		for range 2 {
+			d := obj(call(t, cs, "download_media", map[string]any{"sha256": f.sha}))
+			file := obj(list(d["files"])[0])
+			if file["from"] != "library" {
+				t.Fatalf("%s: %v", plugin, d)
+			}
+			paths = append(paths, file["path"].(string))
+		}
+		if n != 1 || paths[0] != paths[1] || filepath.Dir(paths[0]) != libraryCache() || filepath.Ext(paths[0]) != ".png" {
+			t.Fatalf("%s: fetched %d times, %v", plugin, n, paths)
+		}
+		if b, _ := os.ReadFile(paths[0]); !strings.Contains(string(b), "asset-1") {
+			t.Fatalf("%s: %q", plugin, b)
+		}
+	}
+
+	// the cache's age and size
+	dir := libraryCache()
+	put := func(name string, size int, age time.Duration) string {
+		p := filepath.Join(dir, name)
+		os.WriteFile(p, make([]byte, size), 0o600)
+		at := time.Now().Add(-age)
+		os.Chtimes(p, at, at)
+		return p
+	}
+	os.RemoveAll(dir)
+	os.MkdirAll(dir, 0o700)
+	old := put(strings.Repeat("01", 32)+".jpg", 10, 8*24*time.Hour)
+	older := put(strings.Repeat("02", 32)+".jpg", 600, 2*time.Hour)
+	newer := put(strings.Repeat("03", 32)+".jpg", 600, time.Hour)
+	part := put(strings.Repeat("04", 32)+".123.part", 600, 3*time.Hour)
+	keep := put(strings.Repeat("05", 32)+".jpg", 600, 5*time.Hour)
+	most := cacheMost
+	cacheMost = 1500
+	defer func() { cacheMost = most }()
+	prune(keep)
+	for p, want := range map[string]bool{old: false, older: false, newer: true, part: true, keep: true} {
+		if exists(p) != want {
+			t.Errorf("%s: there %v", filepath.Base(p), !want)
+		}
 	}
 }

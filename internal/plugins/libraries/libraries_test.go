@@ -1,6 +1,7 @@
 package libraries
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -348,3 +349,32 @@ func TestDatesWritten(t *testing.T) {
 		t.Fatalf("the picture's own date changed: %q", d)
 	}
 }
+
+// An original is written into a file as it comes, not held in memory; one that fails leaves nothing.
+func TestImmichFetchTo(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("x-api-key") != "the-key" || r.URL.Path != "/api/assets/asset-2/original" {
+			w.WriteHeader(404)
+			return
+		}
+		w.Header().Set("Content-Type", "video/mp4")
+		w.Write(bytes.Repeat([]byte("v"), 3<<20))
+	}))
+	defer srv.Close()
+	_, c := instance(t, "immich", M{"url": srv.URL})
+	if _, err := c.SaveSecret("key", "the-key"); err != nil {
+		t.Skip("no place for a secret:", err)
+	}
+	defer c.DeleteSecret("key")
+	var lib plugins.FileFetcher = Immich{}
+	dest := filepath.Join(t.TempDir(), "x.part")
+	typ, err := lib.FetchTo(c, "asset-2", "original", dest)
+	if st, _ := os.Stat(dest); err != nil || typ != "video/mp4" || st == nil || st.Size() != 3<<20 {
+		t.Fatal(typ, err, st)
+	}
+	if _, err := lib.FetchTo(c, "asset-9", "original", dest); err == nil || exists(dest) {
+		t.Fatal("a failed fetch left its file:", err)
+	}
+}
+
+func exists(p string) bool { _, err := os.Stat(p); return err == nil }

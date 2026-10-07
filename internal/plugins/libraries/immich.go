@@ -79,11 +79,24 @@ var client = &http.Client{CheckRedirect: func(r *http.Request, via []*http.Reque
 
 // request asks immich's API; the answer's body and type.
 func request(c *plugins.Context, method, path string, body io.Reader, size int64, ctype string, timeout time.Duration) ([]byte, string, error) {
+	var data []byte
+	var typ string
+	err := answer(c, method, path, body, size, ctype, timeout, func(r *http.Response) (err error) {
+		data, err = io.ReadAll(r.Body)
+		typ = r.Header.Get("Content-Type")
+		return err
+	})
+	return data, typ, err
+}
+
+// answer asks immich's API and gives a successful answer to read, within the timeout.
+func answer(c *plugins.Context, method, path string, body io.Reader, size int64, ctype string, timeout time.Duration,
+	read func(*http.Response) error) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(immichURL(c), "/")+"/api"+path, body)
 	if err != nil {
-		return nil, "", err
+		return err
 	}
 	if size >= 0 {
 		req.ContentLength = size
@@ -95,14 +108,13 @@ func request(c *plugins.Context, method, path string, body io.Reader, size int64
 	}
 	r, err := client.Do(req)
 	if err != nil {
-		return nil, "", err
+		return err
 	}
 	defer r.Body.Close()
 	if r.StatusCode >= 400 {
-		return nil, "", &HTTPError{r.StatusCode, http.StatusText(r.StatusCode)}
+		return &HTTPError{r.StatusCode, http.StatusText(r.StatusCode)}
 	}
-	data, err := io.ReadAll(r.Body)
-	return data, r.Header.Get("Content-Type"), err
+	return read(r)
 }
 
 // call asks immich's API with a JSON body (or none), its JSON answer into out (unless nil).
@@ -239,19 +251,45 @@ func (Immich) Store(c *plugins.Context, path string, meta M) (string, error) {
 	return r.ID, nil
 }
 
-func (Immich) Fetch(c *plugins.Context, ref, size string) (*plugins.Fetched, error) {
+// assetPath is the API's path of an asset's file of a size (original, preview, thumbnail).
+func assetPath(ref, size string) string {
 	asset := "/assets/" + url.PathEscape(ref)
-	path := asset + "/original"
 	switch size {
 	case "original":
+		return asset + "/original"
 	case "preview", "":
-		path = asset + "/thumbnail?size=preview"
-	default:
-		path = asset + "/thumbnail?size=thumbnail"
+		return asset + "/thumbnail?size=preview"
 	}
-	data, ctype, err := request(c, "GET", path, nil, -1, "", 60*time.Second)
+	return asset + "/thumbnail?size=thumbnail"
+}
+
+func (Immich) Fetch(c *plugins.Context, ref, size string) (*plugins.Fetched, error) {
+	data, ctype, err := request(c, "GET", assetPath(ref, size), nil, -1, "", 60*time.Second)
 	if err != nil {
 		return nil, err
 	}
 	return &plugins.Fetched{Data: data, Type: ctype}, nil
+}
+
+// FetchTo writes an asset's file into dest as it comes (an original may be a long video): its type.
+// A file cut short is not left behind.
+func (Immich) FetchTo(c *plugins.Context, ref, size, dest string) (string, error) {
+	var typ string
+	err := answer(c, "GET", assetPath(ref, size), nil, -1, "", 600*time.Second, func(r *http.Response) error {
+		typ = r.Header.Get("Content-Type")
+		f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(f, r.Body)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		return err
+	})
+	if err != nil {
+		os.Remove(dest)
+		return "", err
+	}
+	return typ, nil
 }
