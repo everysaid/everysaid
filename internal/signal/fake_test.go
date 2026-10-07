@@ -2,12 +2,15 @@ package signal
 
 // A fake helper, speaking the helper's protocol without Signal: the test binary itself, started with
 // EVERYSAID_FAKE_SIGNAL=1. In the store folder it is given it keeps `linked` (once linked), and reads
-// `script.jsonl` (the events a receive brings); it writes `sent.jsonl` and `read.jsonl` (the sends
-// and read receipts asked of it), for the tests to look at. It never touches the network.
+// `script.jsonl` (the events a receive brings; a fetch again gives their files); it writes
+// `sent.jsonl`, `read.jsonl` and `fetch.jsonl` (the sends, marks read and fetches asked of it), for
+// the tests to look at. `unlinked` there: Signal refuses the device (it was removed from the phone);
+// `link-fails`: a link fails. It never touches the network.
 
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,7 +32,7 @@ func fakeHelper() {
 		out.Write(append(b, '\n'))
 		out.Flush()
 	}
-	store := ""
+	store, attachments := "", ""
 	linked := func() bool {
 		_, err := os.Stat(filepath.Join(store, "linked"))
 		return store != "" && err == nil
@@ -78,7 +81,8 @@ func fakeHelper() {
 				continue
 			}
 			os.MkdirAll(store, 0o700)
-			os.MkdirAll(req["attachments"].(string), 0o700)
+			attachments, _ = req["attachments"].(string)
+			os.MkdirAll(attachments, 0o700)
 			ok(status())
 		case "status":
 			ok(status())
@@ -88,6 +92,10 @@ func fakeHelper() {
 				continue
 			}
 			write(map[string]any{"event": "link_url", "url": "sgnl://linkdevice?uuid=fake&pub_key=fake"})
+			if _, err := os.Stat(filepath.Join(store, "link-fails")); err == nil {
+				fail("failed", "provisioning socket closed")
+				continue
+			}
 			if _, err := os.Stat(filepath.Join(store, "no-scan")); err == nil {
 				continue // the phone never scans it: no answer
 			}
@@ -98,6 +106,10 @@ func fakeHelper() {
 			ok(map[string]any{"requested": true})
 		case "receive":
 			ok(map[string]any{"started": true})
+			if _, err := os.Stat(filepath.Join(store, "unlinked")); err == nil {
+				write(map[string]any{"event": "receive_ended", "error": "Websocket error: websocket upgrade failed: unexpected status code: 403 Forbidden", "code": "unlinked"})
+				continue
+			}
 			if b, err := os.ReadFile(filepath.Join(store, "script.jsonl")); err == nil {
 				for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
 					if strings.TrimSpace(line) != "" {
@@ -133,12 +145,31 @@ func fakeHelper() {
 			write(ev)
 			ok(map[string]any{"ts": ts})
 		case "mark_read":
-			appendTo("read.jsonl", req["messages"])
+			appendTo("read.jsonl", map[string]any{"messages": req["messages"], "receipts": req["receipts"]})
 			n := 0
 			if ms, has := req["messages"].([]any); has {
 				n = len(ms)
 			}
 			ok(map[string]any{"marked": n})
+		case "fetch":
+			appendTo("fetch.jsonl", req["messages"])
+			b, _ := os.ReadFile(filepath.Join(store, "script.jsonl"))
+			for _, ref := range req["messages"].([]any) {
+				r := ref.(map[string]any)
+				for _, line := range strings.Split(string(b), "\n") {
+					var ev map[string]any
+					if json.Unmarshal([]byte(line), &ev) != nil || ev["event"] != "message" || ev["sender"] != r["author"] || ev["ts"] != r["ts"] {
+						continue
+					}
+					if _, err := os.Stat(filepath.Join(store, "fetch-fails")); err != nil {
+						name := fmt.Sprintf("%.0f-%s-0.jpg", r["ts"], r["author"].(string)[:8])
+						os.WriteFile(filepath.Join(attachments, name), []byte("fetched"), 0o600)
+						ev["attachments"] = []any{map[string]any{"content_type": "image/jpeg", "file": name}}
+					}
+					write(ev)
+				}
+			}
+			ok(map[string]any{"found": len(req["messages"].([]any))})
 		case "history":
 			ok(map[string]any{"events": []any{}})
 		case "contacts", "groups":

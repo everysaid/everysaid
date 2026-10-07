@@ -81,6 +81,17 @@ CREATE TABLE IF NOT EXISTS read (       -- the others' messages the owner read, 
     at INTEGER NOT NULL,                -- Unix ms
     PRIMARY KEY (author, ts)
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS late_file (  -- messages whose files came after the message (fetched again)
+    author TEXT NOT NULL,
+    ts INTEGER NOT NULL,
+    PRIMARY KEY (author, ts)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS fetch_try (  -- files that failed, asked again this many times
+    author TEXT NOT NULL,
+    ts INTEGER NOT NULL,
+    tries INTEGER NOT NULL,
+    PRIMARY KEY (author, ts)
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS call (
     id TEXT PRIMARY KEY,                -- Signal's call id
     chat_kind TEXT,
@@ -280,7 +291,11 @@ func (s *Store) Apply(raw []byte) (kept bool, err error) {
 		if e.Chat == nil {
 			return false, nil
 		}
-		// a copy seen again (history) may have its files now; what was kept of it stays otherwise
+		// a copy seen again (history, a fetch again) may have its files now; what was kept of it
+		// stays otherwise
+		if hasFile(e) && db.Int(s.DB, "SELECT count(*) FROM message WHERE author = ? AND ts = ?", e.Sender, e.TS) > 0 {
+			db.Exec(s.DB, "INSERT OR IGNORE INTO late_file VALUES (?, ?)", e.Sender, e.TS)
+		}
 		db.Exec(s.DB, "INSERT INTO message (author, ts, chat_kind, chat, outgoing, server_ts, json) VALUES (?, ?, ?, ?, ?, ?, ?) "+
 			"ON CONFLICT (author, ts) DO UPDATE SET json = excluded.json", e.Sender, e.TS, e.Chat.Kind, e.Chat.ID,
 			db.B(e.Outgoing), e.ServerTS, string(raw))
@@ -401,6 +416,49 @@ func (s *Store) call(e event) bool {
 		return false
 	}
 	return true
+}
+
+func hasFile(e event) bool {
+	for _, a := range e.Attachments {
+		if deref(a.File) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// fetchTries is how many times the files of a message are asked again; fetchDays, for how long
+// after it was sent (Signal's server keeps them for a while, then they are gone).
+const (
+	fetchTries = 3
+	fetchDays  = 30
+)
+
+// FailedFiles are the messages (sent after since, Unix ms) with a file that failed to come and is
+// still to be asked again; each is counted as asked once more.
+func (s *Store) FailedFiles(since int64) []ref {
+	var out []ref
+	db.Each(s.DB, "SELECT m.author, m.ts, m.json FROM message m LEFT JOIN fetch_try f ON f.author = m.author AND f.ts = m.ts "+
+		"WHERE m.ts >= ? AND m.json LIKE '%\"error\":%' AND coalesce(f.tries, 0) < ? ORDER BY m.ts",
+		[]any{since, fetchTries}, func(scan func(...any)) {
+			var r ref
+			var js string
+			scan(&r.Author, &r.TS, &js)
+			var e event
+			if json.Unmarshal([]byte(js), &e) != nil {
+				return
+			}
+			for _, a := range e.Attachments {
+				if a.Error != "" && deref(a.File) == "" {
+					out = append(out, r)
+					return
+				}
+			}
+		})
+	for _, r := range out {
+		db.Exec(s.DB, "INSERT INTO fetch_try VALUES (?, ?, 1) ON CONFLICT DO UPDATE SET tries = tries + 1", r.Author, r.TS)
+	}
+	return out
 }
 
 // Newest is the newest message's time (Unix ms), 0 for none.

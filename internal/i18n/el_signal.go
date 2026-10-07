@@ -37,7 +37,15 @@ func init() {
 		"Asked the phone for its contacts": "Ζητήθηκαν από το κινητό οι επαφές του",
 		"the connection to Signal ended":   "η σύνδεση με το Signal τερματίστηκε",
 		"the Signal helper stopped":        "το βοηθητικό πρόγραμμα του Signal σταμάτησε",
-		"unknown action":                   "άγνωστη ενέργεια",
+		"Unlink this computer":             "Αποσύνδεση αυτού του υπολογιστή",
+		"Unlink this computer from Signal? The link goes, and so does whatever waits unread on Signal's server for this computer; the archive keeps everything already brought in. If the phone still lists this computer, remove it there too.": "Να αποσυνδεθεί αυτός ο υπολογιστής από το Signal; Η σύνδεση χάνεται, και μαζί ό,τι περιμένει αδιάβαστο στον server του Signal για αυτόν τον υπολογιστή· το αρχείο κρατά ό,τι έχει ήδη φερθεί. Αν το κινητό εξακολουθεί να δείχνει αυτόν τον υπολογιστή, αφαίρεσέ τον κι από εκεί.",
+		"When a chat is opened here, the others see it read (it is marked read on the phone in any case)":                                                                                                                                        "Όταν ανοίγει μια συνομιλία εδώ, οι άλλοι τη βλέπουν διαβασμένη (στο κινητό σημειώνεται διαβασμένη σε κάθε περίπτωση)",
+		"removed from the phone's linked devices: Unlink this computer, then link it again":                                                                                                                                                      "αφαιρέθηκε από τις συνδεδεμένες συσκευές του κινητού: Αποσύνδεση αυτού του υπολογιστή, και μετά ξανά σύνδεση",
+		"This computer was removed from Signal's linked devices on the phone: use “Unlink this computer”, then link it again":                                                                                                                    "Αυτός ο υπολογιστής αφαιρέθηκε από τις συνδεδεμένες συσκευές του Signal στο κινητό: πάτα «Αποσύνδεση αυτού του υπολογιστή» και μετά σύνδεσέ τον ξανά",
+		"Unlinked from Signal: if the phone still lists this computer, remove it there (Settings, Linked devices)":                                                                                                                               "Αποσυνδέθηκε από το Signal: αν το κινητό εξακολουθεί να δείχνει αυτόν τον υπολογιστή, αφαίρεσέ τον από εκεί (Ρυθμίσεις, Συνδεδεμένες συσκευές)",
+		"Linking to Signal failed: try “Link this computer” again":                                                                                                                                                                               "Η σύνδεση στο Signal απέτυχε: δοκίμασε ξανά «Σύνδεση αυτού του υπολογιστή»",
+		"Files that had not come, asked again: {n}": "Αρχεία που δεν είχαν έρθει, ζητήθηκαν ξανά: {n}",
+		"unknown action": "άγνωστη ενέργεια",
 	} {
 		EL[k] = v
 	}

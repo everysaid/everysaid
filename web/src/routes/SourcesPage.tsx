@@ -132,7 +132,7 @@ function InstanceCard({ i, manifest }: { i: PluginInstance; manifest?: PluginMan
           </Button>
         )}
         {manifest?.actions.filter((a) => !i.idle_actions?.includes(a.id)).map((a) => (
-          <Button key={a.id} size="sm" variant="outline" onClick={() => start(a.id)} disabled={!!i.running || !i.enabled}>{a.label}</Button>
+          <Button key={a.id} size="sm" variant="outline" onClick={() => (!a.confirm || confirm(a.confirm)) && start(a.id)} disabled={!!i.running || !i.enabled}>{a.label}</Button>
         ))}
         {i.live_capable && i.kind !== "analysis" && (
           <label className="flex items-center gap-2 px-2 text-sm">

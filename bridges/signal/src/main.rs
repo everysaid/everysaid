@@ -17,7 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use futures::{channel::oneshot, future, pin_mut, FutureExt, StreamExt};
 use presage::libsignal_service::configuration::SignalServers;
 use presage::libsignal_service::content::{Content, ContentBody, Metadata};
-use presage::libsignal_service::prelude::{phonenumber, AttachmentPointer, Uuid};
+use presage::libsignal_service::prelude::{phonenumber, AttachmentPointer, ServiceError, Uuid};
 use presage::libsignal_service::protocol::ServiceId;
 use presage::libsignal_service::sender::AttachmentSpec;
 use presage::manager::Registered;
@@ -35,7 +35,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 use tokio::task::{spawn_local, LocalSet};
 
-use convert::{attachment_name, contact_names, convert, group_id, Converted, Meta};
+use convert::{admin_delete_allowed, attachment_name, contact_names, convert, group_id, Converted, Meta};
 use protocol::{event, fail, ok, Command, Request};
 
 type Signal = Manager<SqliteStore, Registered>;
@@ -283,7 +283,8 @@ async fn handle(state: &Shared, out: &Out, cmd: Command) -> Result<Value, Fail> 
             Ok(json!({"started": true}))
         }
         Command::Send(req) => send(state, out, req).await,
-        Command::MarkRead { messages } => mark_read(state, messages).await,
+        Command::MarkRead { messages, receipts } => mark_read(state, messages, receipts).await,
+        Command::Fetch { messages } => fetch_again(state, out, messages).await,
         Command::History { since } => history(state, since).await,
         Command::Open { .. } | Command::Quit => Err(fail_with("bad_request", "not here")),
     }
@@ -385,6 +386,33 @@ fn meta_of(m: &Metadata) -> Meta {
     }
 }
 
+/// A presage error as text, with what a websocket error hides (the HTTP status of a refused
+/// connection is only in its sources).
+fn error_text<E: std::error::Error>(e: &presage::Error<E>) -> String {
+    let mut text = e.to_string();
+    if let presage::Error::ServiceError(ServiceError::WsError(b)) = e {
+        text.push_str(&sources_text(b.as_ref()));
+    }
+    text
+}
+
+fn sources_text(e: &dyn std::error::Error) -> String {
+    let mut text = String::new();
+    let mut at = e.source();
+    while let Some(s) = at {
+        text.push_str(": ");
+        text.push_str(&s.to_string());
+        at = s.source();
+    }
+    text
+}
+
+/// Whether Signal's server refused this device's own connection: it was removed from the phone's
+/// linked devices (or its account is gone), and only a new link brings it back.
+fn is_unlinked(text: &str) -> bool {
+    ["Authorization failed", "unexpected status code: 401", "unexpected status code: 403"].iter().any(|p| text.contains(p))
+}
+
 async fn receive(state: Shared, out: Out, download: bool) {
     let ended = |state: &Shared, out: &Out, error: Option<String>| {
         state.borrow_mut().receiving = false;
@@ -396,7 +424,12 @@ async fn receive(state: Shared, out: Out, download: bool) {
     let own = own_aci(&manager);
     let messages = match manager.receive_messages().await {
         Ok(s) => s,
-        Err(e) => return ended(&state, &out, Some(e.to_string())),
+        Err(e) => {
+            let text = error_text(&e);
+            let code = is_unlinked(&text).then_some("unlinked");
+            state.borrow_mut().receiving = false;
+            return out.send(event("receive_ended", json!({"error": text, "code": code})));
+        }
     };
     pin_mut!(messages);
     while let Some(item) = messages.next().await {
@@ -430,6 +463,25 @@ async fn receive(state: Shared, out: Out, download: bool) {
 
 /// An event out, its group described first where that changed, its attachments fetched where wanted.
 async fn deliver(state: &Shared, out: &Out, manager: &Signal, mut c: Converted, download: bool) {
+    if c.event["event"] == "delete" && c.event["admin"] == true {
+        let sender = c.event["sender"].as_str().unwrap_or("").to_string();
+        let mut admins = None;
+        if let Some(key) = c.group {
+            if let Ok(Some(g)) = manager.store().group(key).await {
+                admins = Some(
+                    g.members
+                        .iter()
+                        .filter(|m| m.role == presage::libsignal_service::groups_v2::Role::Administrator)
+                        .map(|m| m.aci.service_id_string())
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }
+        if !admin_delete_allowed(&sender, c.event["target_author"].as_str().unwrap_or(""), admins.as_deref()) {
+            tracing::warn!(sender, "a deletion of another's message by someone not an admin of the group: ignored");
+            return;
+        }
+    }
     if let Some(key) = c.group {
         if let Ok(Some(g)) = manager.store().group(key).await {
             let known = state.borrow().revisions.get(&key).copied();
@@ -463,6 +515,27 @@ async fn fetch(manager: &Signal, ptr: &AttachmentPointer, path: &Path) -> Result
     let part = path.with_extension("part");
     tokio::fs::write(&part, &data).await.map_err(|e| e.to_string())?;
     tokio::fs::rename(&part, path).await.map_err(|e| e.to_string())
+}
+
+/// The files of messages the store holds fetched again (those that failed before): each message comes
+/// again as its event, its files in it where they came now.
+async fn fetch_again(state: &Shared, out: &Out, refs: Vec<protocol::MessageRef>) -> Result<Value, Fail> {
+    let m = manager_of(state)?;
+    let own = own_aci(&m);
+    let store = m.store().clone();
+    let mut found = 0;
+    for r in refs {
+        let Ok(sid) = parse_sid(&r.author) else { continue };
+        let Ok(Some(thread)) = store.thread_for_sender_and_timestamp(&sid, r.ts).await else { continue };
+        let Ok(Some(content)) = store.message(&thread, r.ts).await else { continue };
+        for c in convert(&meta_of(&content.metadata), &content.body, &own) {
+            if c.event["event"] == "message" && c.event["ts"].as_u64() == Some(r.ts) && !c.attachments.is_empty() {
+                deliver(state, out, &m, c, true).await;
+                found += 1;
+            }
+        }
+    }
+    Ok(json!({"found": found}))
 }
 
 fn parse_sid(s: &str) -> Result<ServiceId, Fail> {
@@ -564,8 +637,9 @@ async fn send(state: &Shared, out: &Out, req: protocol::SendRequest) -> Result<V
     Ok(json!({"ts": ts}))
 }
 
-/// Read receipts to each author, and the same news to the account's other devices (the phone).
-async fn mark_read(state: &Shared, messages: Vec<protocol::MessageRef>) -> Result<Value, Fail> {
+/// The others' messages read: said to the account's other devices (the phone) always, as Signal
+/// Desktop does, and to each author with a read receipt where `receipts` (the user's choice).
+async fn mark_read(state: &Shared, messages: Vec<protocol::MessageRef>, receipts: bool) -> Result<Value, Fail> {
     let mut m = manager_of(state)?;
     let own = own_aci(&m);
     let mut by_author: BTreeMap<String, Vec<u64>> = BTreeMap::new();
@@ -577,8 +651,10 @@ async fn mark_read(state: &Shared, messages: Vec<protocol::MessageRef>) -> Resul
     let mut reads = vec![];
     for (author, stamps) in &by_author {
         let to = parse_sid(author)?;
-        let receipt = ReceiptMessage { r#type: Some(receipt_message::Type::Read as i32), timestamp: stamps.clone() };
-        m.send_message(to, receipt, ts).await.map_err(failed)?;
+        if receipts {
+            let receipt = ReceiptMessage { r#type: Some(receipt_message::Type::Read as i32), timestamp: stamps.clone() };
+            m.send_message(to, receipt, ts).await.map_err(failed)?;
+        }
         marked += stamps.len();
         for t in stamps {
             reads.push(sync_message::Read { sender_aci: Some(author.clone()), timestamp: Some(*t), ..Default::default() });
@@ -633,6 +709,29 @@ async fn history(state: &Shared, since: u64) -> Result<Value, Fail> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug)]
+    struct E(&'static str, Option<Box<E>>);
+    impl std::fmt::Display for E {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+    impl std::error::Error for E {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.1.as_deref().map(|e| e as _)
+        }
+    }
+
+    #[test]
+    fn a_device_removed_from_the_phone() {
+        // the websocket's refusal says its status only in its sources
+        let ws = E("websocket upgrade failed", Some(Box::new(E("unexpected status code: 403 Forbidden", None))));
+        let text = format!("Websocket error: {ws}{}", sources_text(&ws));
+        assert!(is_unlinked(&text), "{text}");
+        assert!(is_unlinked("Authorization failed"));
+        assert!(!is_unlinked("Websocket error: websocket upgrade failed: error sending request"));
+    }
 
     #[tokio::test]
     async fn a_panic_is_an_answer() {

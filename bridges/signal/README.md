@@ -69,7 +69,8 @@ most).
 | `groups` | | `{groups: [{id, title, description, revision, members, pending}]}` |
 | `receive` | `download` (default true: fetch attachments) | `{started}`; then events until the helper ends |
 | `send` | `chat`, `text`, `quote`, `mentions`, `attachments` | `{ts}`; and a `message` event of what was sent |
-| `mark_read` | `messages: [{author, ts}]` | read receipts to each author and a read sync to the phone: `{marked}` |
+| `mark_read` | `messages: [{author, ts}]`, `receipts` (default true) | a read sync to the phone always, read receipts to each author where `receipts`: `{marked}` |
+| `fetch` | `messages: [{author, ts}]` | the files of these messages (in the store) fetched again: each comes again as its `message` event; `{found}` |
 | `history` | `since` (Unix ms) | `{events: [...]}`: what the store holds, as events (files already fetched only) |
 | `quit` | | `{}`, then it ends |
 
@@ -94,13 +95,13 @@ Signal's name for a message) and `server_ts`.
 | `group` | as one of `groups`, before the first message of a group at a new revision |
 | `message` | `text`, `mentions`, `quote`, `attachments` (`content_type, filename, size, width, height, caption, voice, gif, borderless, sticker, file` or `error`), `contacts` (shared), `previews`, `poll`, `group_change`, `group_revision`, `group_call`, `expire_timer_update`, `expire_timer`, `forwarded`, `view_once`, `pin`, `unpin`, `payment`, `gift`, `story_reply` |
 | `edit` | `target_ts` and the message's new fields |
-| `delete` | `target_author`, `target_ts` (deleted for everyone) |
+| `delete` | `target_author`, `target_ts` (deleted for everyone); `admin` for a group admin's deletion, passed on only when the sender is an admin of the group (else only of their own message) |
 | `reaction` | `emoji`, `remove`, `target_author`, `target_ts` |
 | `receipt` | `sender` (who), `kind` (`delivery`, `read`, `viewed`), `timestamps` (the owner's messages) |
 | `read` | `messages: [{author, ts}]`: the owner read them on another device |
 | `call` | `id`; from a call message: `action` (`offer`, `answer`, `busy`, `hangup`), `video`, `hangup` (how); from the phone's call log (`source: "sync"`): `type`, `direction`, `result` (`accepted`, `not_accepted`, ...) |
 | `decryption_error` | `sender`: a message that could not be read |
-| `receive_ended` | `error` (null when it ended by itself) |
+| `receive_ended` | `error` (null when it ended by itself), `code`: `unlinked` when Signal refused this device (it was removed from the phone's linked devices) |
 
 Typing, stories and Signal's own housekeeping messages are not passed on.
 
