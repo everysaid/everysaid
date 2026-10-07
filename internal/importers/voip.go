@@ -222,7 +222,9 @@ func whatsappCalls(a *archive.Archive, calls *CallSet) {
 			if len(m) > 0 {
 				v = asBytes(m[0])
 			}
-			members = append(members, decodeStrict(v))
+			if utf8.Valid(v) { // a member that is not text is no one known: left out, the call kept
+				members = append(members, string(v))
+			}
 		}
 		b := &bubble{pk: pyStr(r["Z_PK"]), ts: appleMS(toFloat(r["ZMESSAGEDATE"])), outgoing: truthy(r["ZISFROMME"]),
 			jid: str(r["ZCONTACTJID"]), isGroup: toInt(r["ZSESSIONTYPE"]) == 1, members: members}
@@ -345,14 +347,6 @@ func whatsappCalls(a *archive.Archive, calls *CallSet) {
 			}
 		}
 	}
-}
-
-// decodeStrict is bytes as UTF-8 (Python's .decode(), which stops on bad UTF-8).
-func decodeStrict(b []byte) string {
-	if !utf8.Valid(b) {
-		panic(fmt.Errorf("UnicodeDecodeError: invalid utf-8 in a call's member"))
-	}
-	return string(b)
 }
 
 // The bridge's call-log outcomes (whatsmeow's CallLogMessage.CallOutcome) as our call.detail.

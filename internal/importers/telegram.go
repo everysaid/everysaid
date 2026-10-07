@@ -483,7 +483,7 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 			a.Alias(h, person.of(pid, true))
 		}
 	}
-	added, calls := map[string]int{}, 0
+	added, calls, updated := map[string]int{}, 0, map[string]int{}
 	type chat struct {
 		id          int64
 		kind, title any
@@ -555,6 +555,7 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 				}
 			}
 			if a.HasOrigin(src, rowKey, "") {
+				telegramChanges(a, src, rowKey, m, person, own, updated)
 				return
 			}
 			k := telegramKindOf(m)
@@ -633,7 +634,75 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 		say(out, "new:     {n} {kind}", map[string]any{"n": fmt.Sprintf("%7d", added[k]), "kind": k})
 	}
 	say(out, "calls: {n}", map[string]any{"n": fmt.Sprintf("%7d", calls)})
+	if len(updated) > 0 {
+		var parts []string
+		for _, k := range []string{"edited", "reactions"} {
+			if updated[k] > 0 {
+				parts = append(parts, fmt.Sprintf("%s %d", k, updated[k]))
+			}
+		}
+		say(out, "changes to what was there: {list}", map[string]any{"list": strings.Join(parts, ", ")})
+	}
 	return nil
+}
+
+// telegramChanges: what Telegram says now of a message the archive already has (the live
+// connection writes an edited message over its row and imports it again): marked edited, the text
+// kept as the archive first had it (as with WhatsApp's), and its reactions as they are now.
+func telegramChanges(a *archive.Archive, src int64, rowKey string, m map[string]any, person *tgPeople,
+	own map[archive.Handle]bool, updated map[string]int) {
+	mid, ok := a.IntOK("SELECT message_id FROM message_origin WHERE source_id = ? AND row_key = ?", src, rowKey)
+	if !ok {
+		return
+	}
+	if truthy(m["edit_date"]) && !truthy(m["edit_hide"]) {
+		if n, _ := a.Exec("UPDATE message SET edited = 1 WHERE id = ? AND NOT edited", mid).RowsAffected(); n > 0 {
+			updated["edited"]++
+		}
+	}
+	var want []archive.Reaction
+	if truthy(m["reactions"]) {
+		want = tgReactions(m, person, own)
+	}
+	row := func(emoji, code any, count int64, who any, outgoing bool) string {
+		return fmt.Sprint(emoji, "\x00", code, "\x00", count, "\x00", who, "\x00", outgoing)
+	}
+	var wantRows []string
+	for _, r := range want {
+		var who any
+		if h, ok := r.Who.(archive.Handle); ok {
+			who = a.Address(h)
+		}
+		count := int64(max(r.Count, 1))
+		wantRows = append(wantRows, row(archive.NullStr(r.Emoji), archive.NullStr(r.Code), count, who, r.Outgoing))
+	}
+	var have []string
+	a.Each("SELECT emoji, code, count, address_id, outgoing FROM reaction WHERE message_id = ?", []any{mid},
+		func(scan func(...any)) {
+			var emoji, code sql.NullString
+			var count int64
+			var who, outgoing sql.NullInt64
+			scan(&emoji, &code, &count, &who, &outgoing)
+			var e, c, w any
+			if emoji.Valid {
+				e = emoji.String
+			}
+			if code.Valid {
+				c = code.String
+			}
+			if who.Valid {
+				w = who.Int64
+			}
+			have = append(have, row(e, c, count, w, outgoing.Valid && outgoing.Int64 != 0))
+		})
+	sort.Strings(wantRows)
+	sort.Strings(have)
+	if strings.Join(wantRows, "\n") == strings.Join(have, "\n") {
+		return
+	}
+	a.Exec("DELETE FROM reaction WHERE message_id = ?", mid)
+	a.AddReactions(mid, want)
+	updated["reactions"]++
 }
 
 // TelegramMedia: the downloaded files (telegram-sync --media), each to its message (a media step).

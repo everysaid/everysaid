@@ -206,11 +206,16 @@ func Calls(a *archive.Archive, out func(string), opt CallsOptions) (err error) {
 	fromAndroid := func(h *callRec) bool { return a.Keeper([]string{iph, h.source}, h.ts) == h.source }
 
 	var chosen []*callRec
+	other := map[*callRec]*callRec{} // the copy chosen -> the other phone's copy
 	for _, i := range iphone {
 		if h := pairs[i]; h != nil && fromAndroid(h) {
 			chosen = append(chosen, h)
+			other[h] = i
 		} else {
 			chosen = append(chosen, i)
+			if h != nil {
+				other[i] = h
+			}
 		}
 	}
 	for _, h := range android {
@@ -235,6 +240,10 @@ func Calls(a *archive.Archive, out func(string), opt CallsOptions) (err error) {
 		if a.HasOrigin(sid, r.rowKey, "call_origin") {
 			continue
 		}
+		// the other phone's copy came in on an earlier import: that one stays (a second origin below)
+		if o := other[r]; o != nil && a.HasOrigin(sources[o.source], o.rowKey, "call_origin") {
+			continue
+		}
 		detail, code, video := callExtras(r.raw)
 		var aid int64
 		if r.address != nil {
@@ -257,7 +266,7 @@ func Calls(a *archive.Archive, out func(string), opt CallsOptions) (err error) {
 			}
 		}
 	}
-	a.RecordPairs(sources, pairList, "call_origin")
+	a.RecordPairs(sources, bothWays(pairList), "call_origin")
 	for _, s := range order {
 		a.Imported(sources[s])
 	}

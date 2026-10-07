@@ -383,3 +383,116 @@ func TestImlogsPythonSemantics(t *testing.T) {
 		t.Error("img without a boundary")
 	}
 }
+
+// TestImlogsGroupingsKeepTheOwnersSplits: the old programs' groupings of handles into one person are
+// the owner's decision of then; a handle the owner has placed since (split off in the app, how
+// 'manual') stays where the owner put it when the logs are imported again.
+func TestImlogsGroupingsKeepTheOwnersSplits(t *testing.T) {
+	tmp := imSetup(t)
+	adium, purple := imBuild(t, tmp)
+	a := imOpen(t, filepath.Join(tmp, "archive.db"))
+	opt := ImlogsOptions{Adium: adium, Pidgin: purple, NoMedia: true}
+	if _, err := Imlogs(a, nil, opt); err != nil {
+		t.Fatal(err)
+	}
+	third := a.Address(archive.H("email", "third@hotmail.com"))
+	other := a.Address(archive.H("email", "other@hotmail.com"))
+	person := func(aid int64) int64 { return a.Int("SELECT person_id FROM person_address WHERE address_id = ?", aid) }
+	if person(third) != person(other) {
+		t.Fatal("other and third not merged")
+	}
+	// the owner splits third off, as core.SplitAddress does
+	a.Exec("INSERT INTO person DEFAULT VALUES")
+	split := a.Int("SELECT max(id) FROM person")
+	a.Exec("UPDATE person_address SET person_id = ?, how = 'manual' WHERE address_id = ?", split, third)
+	a.Commit()
+	again, err := Imlogs(a, nil, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if person(third) != split || person(other) == split {
+		t.Errorf("the owner's split undone: third in %d, other in %d, split %d", person(third), person(other), split)
+	}
+	if len(again.Merged) != 0 {
+		t.Errorf("merged again %v", again.Merged)
+	}
+}
+
+// TestImlogsDryRunSeesTheWholeArchive: the dry run's copy of the archive holds what is committed
+// and still in its write-ahead log (the server keeps it open), so what it says "new" is what a
+// real run would add.
+func TestImlogsDryRunSeesTheWholeArchive(t *testing.T) {
+	tmp := imSetup(t)
+	adium, purple := imBuild(t, tmp)
+	path := filepath.Join(tmp, "archive.db")
+	a := imOpen(t, path) // kept open: what it committed is in archive.db-wal
+	if _, err := Imlogs(a, nil, ImlogsOptions{Adium: adium, Pidgin: purple, NoMedia: true}); err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	ok, err := ImlogsImport(path, adium, purple, true, func(s string) { lines = append(lines, s) })
+	if err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	total := ""
+	for _, l := range lines {
+		if strings.HasPrefix(l, "total") || strings.HasPrefix(l, "σύνολο") {
+			total = l
+		}
+	}
+	if f := strings.Fields(total); len(f) < 4 || f[1] != "0" || f[3] != "11" {
+		t.Errorf("dry run after a full import: %q, want 0 new, 11 already there", total)
+	}
+}
+
+// TestImlogsGroupingsChain: groupings that share a handle make one person, in one run, also where
+// the shared handle was moved by an earlier grouping of the same run (Adium's, then Pidgin's).
+func TestImlogsGroupingsChain(t *testing.T) {
+	tmp := imSetup(t)
+	adium, purple := imBuild(t, tmp)
+	imWrite(t, filepath.Join(purple, "blist.xml"), `<?xml version='1.0' encoding='UTF-8' ?>
+<purple version='1.0'><blist><group name='Buddies'><contact>
+<buddy account='me@hotmail.com' proto='prpl-msn'><name>other@hotmail.com</name></buddy>
+<buddy account='me@hotmail.com' proto='prpl-msn'><name>friend@hotmail.com</name></buddy>
+</contact></group></blist></purple>
+`)
+	a := imOpen(t, filepath.Join(tmp, "archive.db"))
+	if _, err := Imlogs(a, nil, ImlogsOptions{Adium: adium, Pidgin: purple, NoMedia: true}); err != nil {
+		t.Fatal(err)
+	}
+	person := func(h archive.Handle) int64 {
+		return a.Int("SELECT person_id FROM person_address WHERE address_id = ?", a.Address(h))
+	}
+	friend, pal, other := person(archive.H("email", "friend@hotmail.com")), person(archive.H("id", "pal", "aim")),
+		person(archive.H("email", "other@hotmail.com"))
+	if friend != pal || pal != other {
+		t.Errorf("friend %d, pal %d, other %d: want one person", friend, pal, other)
+	}
+}
+
+// TestImlogsGroupingsAfterBothPrograms: an Adium grouping that names a handle only Pidgin's logs
+// know is applied on the first run, not only on the next one: the groupings are applied once both
+// programs' logs are in.
+func TestImlogsGroupingsAfterBothPrograms(t *testing.T) {
+	tmp := imSetup(t)
+	adium, purple := imBuild(t, tmp)
+	data, err := plist.Marshal(map[string]any{"MetaContact Ownership": map[string]any{
+		"MetaContact-1": []any{map[string]any{"UID": "pal", "ServiceID": "AIM"},
+			map[string]any{"UID": "third@hotmail.com", "ServiceID": "MSN"}}}}, plist.XMLFormat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imWrite(t, filepath.Join(adium, "Users", "Default", "Contact List.plist"), string(data))
+	a := imOpen(t, filepath.Join(tmp, "archive.db"))
+	if _, err := Imlogs(a, nil, ImlogsOptions{Adium: adium, Pidgin: purple, NoMedia: true}); err != nil {
+		t.Fatal(err)
+	}
+	person := func(h archive.Handle) int64 {
+		return a.Int("SELECT person_id FROM person_address WHERE address_id = ?", a.Address(h))
+	}
+	pal, third, other := person(archive.H("id", "pal", "aim")), person(archive.H("email", "third@hotmail.com")),
+		person(archive.H("email", "other@hotmail.com"))
+	if pal != third || third != other { // Adium's grouping, and Pidgin's of other and third
+		t.Errorf("pal %d, third %d, other %d: want one person", pal, third, other)
+	}
+}
