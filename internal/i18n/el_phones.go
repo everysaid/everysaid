@@ -1,0 +1,80 @@
+package i18n
+
+// The extraction from phones (internal/phones, internal/iphone, internal/android): its lines, its
+// failures and its command line.
+func init() {
+	for k, v := range map[string]string{
+		// internal/phones
+		"{name} ({package}) is needed and was not found in PATH.": "Χρειάζεται το {name} ({package}) και δεν βρέθηκε στο PATH.",
+		"positional arguments:":                                   "ορίσματα θέσης:",
+		"options:":                                                "επιλογές:",
+		"show this help message and exit":                         "εμφανίζει αυτή τη βοήθεια και τερματίζει",
+
+		// iphone-sync, iphone-ls, iphone-verify
+		"{path} can be read by others: chmod 600 and again.":                             "Το {path} διαβάζεται και από άλλους· chmod 600 και ξανά.",
+		"{path} does not exist.":                                                         "Δεν υπάρχει το {path}.",
+		"There is no keyring on this system (or it refused): the file stays as it is.":   "Δεν υπάρχει keyring σε αυτό το σύστημα (ή αρνήθηκε): το αρχείο μένει όπως είναι.",
+		"{name} is in the keyring ({app}/{name}) and reads back correctly.":              "Το {name} είναι στο keyring ({app}/{name}) και διαβάζεται σωστά.",
+		"Remove {path}? [y/N] ":                                                          "Να σβηστεί το {path}; [y/N] ",
+		"Removed.":                                                                       "Σβήστηκε.",
+		"The file stays; the keyring comes first, so it is no longer used.":              "Το αρχείο έμεινε· το keyring προηγείται, οπότε δεν χρησιμοποιείται πια.",
+		`No single iPhone found ({n}): write its UDID in {file}, [iphone] udid = "...".`: `Δεν βρέθηκε ένα μόνο iPhone ({n}): γράψε το UDID του στο {file}, [iphone] udid = "...".`,
+		"INFO: decrypted {n} bytes to '{path}', iOS claimed {size} bytes.":               "INFO: αποκρυπτογραφήθηκαν {n} bytes στο '{path}', το iOS δήλωνε {size} bytes.",
+		"Not in the backup: {name}":                                                      "Δεν υπάρχει στο backup: {name}",
+		"OK {name}":                                                                      "OK {name}",
+		"OK {folder}: {new} new, {skipped} already in the archive, {total} in all":       "OK {folder}: {new} νέα, {skipped} ήδη στο αρχείο, {total} συνολικά",
+		"Done: {out}":                               "Έτοιμο: {out}",
+		"Backup: {cmd}":                             "Backup: {cmd}",
+		"Backup password (empty to quit): ":         "Κωδικός backup (κενό για έξοδο): ",
+		"Backup password: ":                         "Κωδικός backup: ",
+		"Wrong password.":                           "Λάθος κωδικός.",
+		"Another error (not a wrong password): {e}": "Άλλο σφάλμα (όχι λάθος κωδικός): {e}",
+		"The stored backup password is wrong: store it again with --save-password.": "Ο αποθηκευμένος κωδικός του backup είναι λάθος: αποθήκευσέ τον ξανά με --save-password.",
+		"Stored in the {where}.": "Αποθηκεύτηκε στο {where}.",
+		"total":                  "σύνολο",
+		"No complete backup was found (its Manifest.plist is missing).": "Δεν βρέθηκε ολοκληρωμένο backup (λείπει το Manifest.plist).",
+		"missing: {name}":                    "λείπει: {name}",
+		"error ({e}): {name}":                "σφάλμα ({e}): {name}",
+		"size {n} instead of {size}: {name}": "μέγεθος {n} αντί {size}: {name}",
+		"Files in the manifest: {n}":         "Αρχεία στον κατάλογο: {n}",
+		"Decrypted correctly: {n}":           "Αποκρυπτογραφήθηκαν σωστά: {n}",
+		"Empty files (no key): {n}":          "Κενά αρχεία (χωρίς κλειδί): {n}",
+		"Databases that changed during the backup (decrypted normally): {n}": "Βάσεις που άλλαξαν κατά τη λήψη (αποκρυπτογραφήθηκαν κανονικά): {n}",
+		"Real problems: {n}": "Πραγματικά προβλήματα: {n}",
+		"Backup does not look like an encrypted iOS backup!":                                 "Το backup δεν μοιάζει με κρυπτογραφημένο backup iOS!",
+		"Backup folder does not contain expected Manifest files!":                            "Ο φάκελος του backup δεν έχει τα αναμενόμενα αρχεία Manifest!",
+		"Back up the iPhone and decrypt its databases.":                                      "Backup του iPhone και αποκρυπτογράφηση των βάσεών του.",
+		"folder for the decrypted files (default {default})":                                 "φάκελος για τα αποκρυπτογραφημένα αρχεία (προεπιλογή {default})",
+		"only decrypt the existing backup":                                                   "μόνο αποκρυπτογράφηση του backup που υπάρχει",
+		"the folder the backups are in (default: [iphone] backup_root)":                      "ο φάκελος όπου βρίσκονται τα backup (προεπιλογή: [iphone] backup_root)",
+		"which iPhone (default: [iphone] udid, else the only one)":                           "ποιο iPhone (προεπιλογή: [iphone] udid, αλλιώς το μόνο που υπάρχει)",
+		"read the backup password from the standard input":                                   "διαβάζει τον κωδικό του backup από την τυπική είσοδο",
+		"force a full backup instead of an incremental one":                                  "πλήρες backup αντί για αυξητικό",
+		"decrypt only these databases (e.g. whatsapp-calls.sqlite), no media":                "αποκρυπτογράφηση μόνο αυτών των βάσεων (π.χ. whatsapp-calls.sqlite), χωρίς αρχεία πολυμέσων",
+		"ask for the password, check it and store it in the keyring (else a file, mode 600)": "ζητά τον κωδικό, τον ελέγχει και τον αποθηκεύει στο keyring (αλλιώς σε αρχείο, mode 600)",
+		"move the password from {file} into the keyring":                                     "μεταφέρει τον κωδικό από το {file} στο keyring",
+		"List the iPhone backup's files by folder.":                                          "Τα αρχεία του backup του iPhone ανά φάκελο.",
+		"SQL LIKE pattern for the domain":                                                    "μοτίβο SQL LIKE για το domain",
+		"SQL LIKE pattern for the relative path":                                             "μοτίβο SQL LIKE για τη σχετική διαδρομή",
+		"path components to group by (default 3)":                                            "πόσα τμήματα της διαδρομής ομαδοποιούνται (προεπιλογή 3)",
+		"Decrypt every file of the iPhone backup and check it (read only).":                  "Αποκρυπτογραφεί κάθε αρχείο του backup του iPhone και το ελέγχει (μόνο ανάγνωση).",
+
+		// android-export
+		"adb {cmd}: {error}":                                                      "adb {cmd}: {error}",
+		"adb sees no device: choose one with -s.":                                 "adb βλέπει 0 συσκευές: διάλεξε μία με -s (καμία).",
+		"adb sees {n} devices: choose one with -s ({list}).":                      "adb βλέπει {n} συσκευές: διάλεξε μία με -s ({list}).",
+		"The columns of {uri} were not found correctly":                           "Δεν βρέθηκαν σωστά οι στήλες του {uri}",
+		"Row {n}: expected the column {col}":                                      "Γραμμή {n}: περίμενα τη στήλη {col}",
+		"Row {n}: the column {col} was not found":                                 "Γραμμή {n}: δεν βρέθηκε η στήλη {col}",
+		"OK {table}: {n} rows, {cols} columns":                                    "OK {table}: {n} γραμμές, {cols} στήλες",
+		"-- {table}: already there":                                               "-- {table}: υπάρχει ήδη",
+		"{table}: {n} rows, {expected} expected ({ids} unique _id)":               "{table}: {n} γραμμές, αναμένονταν {expected} ({ids} μοναδικά _id)",
+		"-- {table}: nothing on the phone":                                        "-- {table}: τίποτα στο κινητό",
+		"{table}: no _id column":                                                  "{table}: δεν υπάρχει στήλη _id",
+		"OK mms-parts: {n} new files":                                             "OK mms-parts: {n} νέα αρχεία",
+		"Export an Android phone's calls, SMS, MMS and blocked numbers over adb.": "Εξαγωγή κλήσεων, SMS, MMS και αποκλεισμένων αριθμών ενός κινητού Android μέσω adb.",
+		"the phone's serial (adb devices), when adb sees more than one":           "ο σειριακός αριθμός του κινητού (adb devices), όταν το adb βλέπει πάνω από ένα",
+	} {
+		EL[k] = v
+	}
+}
