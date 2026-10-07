@@ -37,12 +37,28 @@ func Get(id string) Plugin {
 	return registry[id]
 }
 
-// All is every plugin, in the order they were registered.
+// Order is the order plugins are listed in (the sources, the libraries, the address books, the
+// analysis); one not in it comes after them, in the order it was registered. Between equal name
+// weights, this order decides.
+var Order = []string{"iphone-backup", "android-adb", "viber-desktop", "whatsapp-bridge", "telegram", "signal",
+	"carrier-notices", "im-logs", "folder", "immich", "carddav", "vcard-file", "ollama"}
+
+// All is every plugin, in their Order.
 func All() []Plugin {
 	regMu.RLock()
 	defer regMu.RUnlock()
-	out := make([]Plugin, 0, len(order))
-	for _, id := range order {
+	rank := func(id string) int {
+		for i, x := range Order {
+			if x == id {
+				return i
+			}
+		}
+		return len(Order)
+	}
+	ids := append([]string(nil), order...)
+	sort.SliceStable(ids, func(i, j int) bool { return rank(ids[i]) < rank(ids[j]) })
+	out := make([]Plugin, 0, len(ids))
+	for _, id := range ids {
 		out = append(out, registry[id])
 	}
 	return out

@@ -76,7 +76,7 @@ func flag(a map[string]any, k string, def bool) bool {
 	}
 	return def
 }
-func ptr(a map[string]any, k string) *int64 {
+func argPtr(a map[string]any, k string) *int64 {
 	if v, ok := a[k].(float64); ok {
 		x := int64(v)
 		return &x
@@ -102,7 +102,7 @@ func call(s *core.Store, fn string, a map[string]any) (any, error) {
 		o.Limit, o.Offset = int(num(a, "limit")), int(num(a, "offset"))
 		o.Unnamed, o.EmptyGroups, o.Short = flag(a, "unnamed", true), flag(a, "empty_groups", true), flag(a, "short", true)
 		o.MinMessages = num(a, "min_messages")
-		if p := ptr(a, "max_messages"); p != nil {
+		if p := argPtr(a, "max_messages"); p != nil {
 			o.MaxMessages, o.HasMax = *p, true
 		}
 		o.WithServices, o.WithoutServices = strs(a, "with_services"), strs(a, "without_services")
@@ -111,7 +111,7 @@ func call(s *core.Store, fn string, a map[string]any) (any, error) {
 		return core.GetChat(s, str(a, "chat_id")), nil
 	case "stream":
 		return core.Stream(s, str(a, "chat_id"), core.StreamOptions{Before: str(a, "before"), After: str(a, "after"),
-			Around: ptr(a, "around"), Limit: int(num(a, "limit")), Hidden: strs(a, "hidden")})
+			Around: argPtr(a, "around"), Limit: int(num(a, "limit")), Hidden: strs(a, "hidden")})
 	case "message":
 		return core.GetMessage(s, num(a, "message_id")), nil
 	case "receipts":
@@ -120,7 +120,7 @@ func call(s *core.Store, fn string, a map[string]any) (any, error) {
 		return core.Context(s, num(a, "message_id"), int(num(a, "n")))
 	case "search", "between":
 		o := core.SearchOptions{ChatID: str(a, "chat_id"), Service: str(a, "service"), Kind: str(a, "kind"),
-			Since: ptr(a, "since"), Until: ptr(a, "until"), Limit: int(num(a, "limit")), Offset: int(num(a, "offset")),
+			Since: argPtr(a, "since"), Until: argPtr(a, "until"), Limit: int(num(a, "limit")), Offset: int(num(a, "offset")),
 			Case: flag(a, "case", false), Whole: flag(a, "whole", false)}
 		if v, ok := a["outgoing"].(bool); ok {
 			o.Outgoing = &v
