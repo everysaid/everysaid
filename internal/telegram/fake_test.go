@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"testing"
@@ -43,6 +44,9 @@ type fakeChat struct {
 	readIn   int
 	readOut  int
 	mute     int
+	members  []int64 // a group's members, as getFullChat and getParticipants give them
+	shown    int     // a supergroup's members given at most (hidden members), 0 for all
+	refuse   string  // their refusal (CHAT_ADMIN_REQUIRED), "" for none
 }
 
 type fake struct {
@@ -55,6 +59,7 @@ type fake struct {
 	files    map[int64][]byte // document id -> its bytes
 	nextID   int
 	noPhotos bool                    // sendMedia refuses photos (PHOTO_INVALID_DIMENSIONS)
+	refused  string                  // a reaction sendReaction refuses (REACTION_INVALID)
 	asked    func(input bin.Encoder) // called at each request, before its answer
 }
 
@@ -65,6 +70,27 @@ func (f *fake) chat(peer tg.PeerClass) *fakeChat {
 		}
 	}
 	return nil
+}
+
+// message is the chat's message of that id, nil if none.
+func (c *fakeChat) message(id int) *tg.Message {
+	for _, m := range c.messages {
+		if x, ok := m.(*tg.Message); ok && x.ID == id {
+			return x
+		}
+	}
+	return nil
+}
+
+// drop deletes the chat's messages of those ids.
+func (c *fakeChat) drop(ids []int) {
+	var keep []tg.MessageClass
+	for _, m := range c.messages {
+		if !slices.Contains(ids, m.GetID()) {
+			keep = append(keep, m)
+		}
+	}
+	c.messages = keep
 }
 
 func inputToPeer(p tg.InputPeerClass, self int64) tg.PeerClass {
@@ -227,6 +253,94 @@ func (f *fake) answer(input bin.Encoder) (bin.Encoder, error) {
 	case *tg.MessagesReadHistoryRequest:
 		f.calls = append(f.calls, "readHistory")
 		f.requests = append(f.requests, r)
+		return &tg.MessagesAffectedMessages{}, nil
+	case *tg.ChannelsGetMessagesRequest:
+		f.calls = append(f.calls, "channels.getMessages")
+		c := f.chat(&tg.PeerChannel{ChannelID: r.Channel.(*tg.InputChannel).ChannelID})
+		var out []tg.MessageClass
+		for _, in := range r.ID {
+			if m := c.message(in.(*tg.InputMessageID).ID); m != nil {
+				out = append(out, m)
+			}
+		}
+		return &tg.MessagesMessagesBox{Messages: &tg.MessagesChannelMessages{Messages: out, Users: f.users, Chats: f.chatsList()}}, nil
+	case *tg.MessagesSendReactionRequest:
+		f.calls = append(f.calls, "sendReaction")
+		f.requests = append(f.requests, r)
+		peer := inputToPeer(r.Peer, f.self.ID)
+		m := f.chat(peer).message(r.MsgID)
+		if m == nil {
+			return nil, &tgerr.Error{Code: 400, Type: "MESSAGE_ID_INVALID"}
+		}
+		var mr tg.MessageReactions
+		if len(r.Reaction) > 0 {
+			if e := r.Reaction[0].(*tg.ReactionEmoji); e.Emoticon == f.refused {
+				return nil, &tgerr.Error{Code: 400, Type: "REACTION_INVALID"}
+			}
+			count := tg.ReactionCount{Reaction: r.Reaction[0], Count: 1}
+			count.SetChosenOrder(0)
+			mr.Results = []tg.ReactionCount{count}
+			mine := tg.MessagePeerReaction{PeerID: &tg.PeerUser{UserID: f.self.ID}, Reaction: r.Reaction[0], My: true}
+			mr.SetRecentReactions([]tg.MessagePeerReaction{mine})
+		}
+		m.SetReactions(mr)
+		return &tg.UpdatesBox{Updates: &tg.Updates{Updates: []tg.UpdateClass{
+			&tg.UpdateMessageReactions{Peer: peer, MsgID: r.MsgID, Reactions: mr}}}}, nil
+	case *tg.MessagesEditMessageRequest:
+		f.calls = append(f.calls, "editMessage")
+		f.requests = append(f.requests, r)
+		m := f.chat(inputToPeer(r.Peer, f.self.ID)).message(r.ID)
+		if m == nil {
+			return nil, &tgerr.Error{Code: 400, Type: "MESSAGE_ID_INVALID"}
+		}
+		if m.Message == r.Message {
+			return nil, &tgerr.Error{Code: 400, Type: "MESSAGE_NOT_MODIFIED"}
+		}
+		m.Message = r.Message
+		m.SetEditDate(1700000100)
+		return &tg.UpdatesBox{Updates: &tg.Updates{Updates: []tg.UpdateClass{&tg.UpdateEditMessage{Message: m}}}}, nil
+	case *tg.MessagesDeleteMessagesRequest:
+		f.calls = append(f.calls, "deleteMessages")
+		f.requests = append(f.requests, r)
+		for _, c := range f.chats {
+			if _, ch := c.peer.(*tg.PeerChannel); !ch {
+				c.drop(r.ID)
+			}
+		}
+		return &tg.MessagesAffectedMessages{}, nil
+	case *tg.MessagesGetFullChatRequest:
+		f.calls = append(f.calls, "getFullChat")
+		c := f.chat(&tg.PeerChat{ChatID: r.ChatID})
+		if c == nil {
+			return nil, &tgerr.Error{Code: 400, Type: "CHAT_ID_INVALID"}
+		}
+		if c.refuse != "" {
+			return nil, &tgerr.Error{Code: 400, Type: c.refuse}
+		}
+		ps := &tg.ChatParticipants{ChatID: r.ChatID}
+		for _, id := range c.members {
+			ps.Participants = append(ps.Participants, &tg.ChatParticipant{UserID: id})
+		}
+		return &tg.MessagesChatFull{FullChat: &tg.ChatFull{ID: r.ChatID, Participants: ps}, Users: f.users, Chats: f.chatsList()}, nil
+	case *tg.ChannelsGetParticipantsRequest:
+		f.calls = append(f.calls, "getParticipants")
+		c := f.chat(&tg.PeerChannel{ChannelID: r.Channel.(*tg.InputChannel).ChannelID})
+		if c.refuse != "" {
+			return nil, &tgerr.Error{Code: 400, Type: c.refuse}
+		}
+		list := c.members
+		if c.shown > 0 {
+			list = list[:c.shown]
+		}
+		out := &tg.ChannelsChannelParticipants{Count: len(c.members), Users: f.users, Chats: f.chatsList()}
+		for _, id := range list[min(r.Offset, len(list)):min(r.Offset+r.Limit, len(list))] {
+			out.Participants = append(out.Participants, &tg.ChannelParticipant{UserID: id})
+		}
+		return out, nil
+	case *tg.ChannelsDeleteMessagesRequest:
+		f.calls = append(f.calls, "channels.deleteMessages")
+		f.requests = append(f.requests, r)
+		f.chat(&tg.PeerChannel{ChannelID: r.Channel.(*tg.InputChannel).ChannelID}).drop(r.ID)
 		return &tg.MessagesAffectedMessages{}, nil
 	}
 	return nil, fmt.Errorf("the fake does not answer %T", input)

@@ -24,7 +24,8 @@
 // no_media` lists (their ids, as the survey gives them), and not at all with `[telegram] media =
 // false`; --dry-run says only how many and how big.
 //
-// How far each chat was read, by the owner and by the others, is kept too (`chat_read`).
+// How far each chat was read, by the owner and by the others, is kept too (`chat_read`), and the
+// members of each group (`chat_member`, members.go).
 //
 // Read only: nothing is sent, nothing is marked read. Nothing secret is ever printed. Secret chats
 // live only on the devices and are not reachable through the API.
@@ -460,6 +461,13 @@ func syncRun(ctx context.Context, c *conn, out *printer) (err error) {
 		}
 		total += n
 		fmt.Fprintf(out, "\r%-10s %7d %s  %s\n", k, n, out.say("new", nil), label)
+		if asksMembers(d.Entity) {
+			if _, err := askMembers(ctx, c, store, d.Entity, label, func(text string, params map[string]any) {
+				fmt.Fprintln(out, out.say(text, params))
+			}); err != nil {
+				return err
+			}
+		}
 	}
 	fmt.Fprintln(out, out.say("{n} new messages in {db}", map[string]any{"n": total, "db": DBPath()}))
 	return nil

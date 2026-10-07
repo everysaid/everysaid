@@ -47,6 +47,17 @@ CREATE TABLE IF NOT EXISTS deleted (       -- messages deleted on Telegram, as t
     at INTEGER NOT NULL,                -- when it was seen, Unix s
     PRIMARY KEY (chat_id, id)
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS chat_member (   -- the members of each group, as Telegram last gave them (people in entity)
+    chat_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    PRIMARY KEY (chat_id, user_id)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS chat_member_list ( -- when each group's members were last asked for
+    chat_id INTEGER PRIMARY KEY,
+    complete INTEGER NOT NULL,          -- Telegram gave all of them (else only some: hidden members, refused)
+    count INTEGER,                      -- how many Telegram says the group has
+    fetched_at INTEGER NOT NULL         -- Unix s
+);
 `
 
 // DB is the store's path; Media the folder of its downloaded files.
@@ -94,4 +105,21 @@ func NoteRead(q db.Querier, chatID int64, inbox, outbox *int64, seenNow bool) (m
 			*outbox, db.B(seenNow), now, *outbox, now, chatID)
 	}
 	return moved, nil
+}
+
+// NoteMembers records the members Telegram gave for a group (user ids; their entities are the
+// caller's). complete: all of them, which replace the list kept (those who left go away); else they
+// are added to it, since the others may well still be there.
+func NoteMembers(q db.Querier, chatID int64, users []int64, complete bool, count int) (err error) {
+	defer db.Recover(&err)
+	if complete {
+		db.Exec(q, "DELETE FROM chat_member WHERE chat_id = ?", chatID)
+	}
+	for _, u := range users {
+		db.Exec(q, "INSERT OR IGNORE INTO chat_member (chat_id, user_id) VALUES (?, ?)", chatID, u)
+	}
+	db.Exec(q, "INSERT INTO chat_member_list (chat_id, complete, count, fetched_at) VALUES (?, ?, ?, ?) "+
+		"ON CONFLICT (chat_id) DO UPDATE SET complete = excluded.complete, count = excluded.count, fetched_at = excluded.fetched_at",
+		chatID, db.B(complete), count, time.Now().Unix())
+	return nil
 }

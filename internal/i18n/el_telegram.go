@@ -29,6 +29,12 @@ func init() {
 		"The Telegram sign-in has expired: everysaid telegram-sync --login":                   "Η σύνδεση στο Telegram έληξε: everysaid telegram-sync --login",
 		"api_id and api_hash (everysaid telegram-sync --save-credentials)":                    "api_id και api_hash (everysaid telegram-sync --save-credentials)",
 		"a login (everysaid telegram-sync --login)":                                           "η σύνδεση (everysaid telegram-sync --login)",
+		"Telegram does not allow this reaction in this chat":                                  "Το Telegram δεν επιτρέπει αυτή την αντίδραση σε αυτή τη συνομιλία",
+		"Telegram no longer allows this message to be edited":                                 "Το Telegram δεν επιτρέπει πια την επεξεργασία αυτού του μηνύματος",
+		"Telegram does not allow this message to be deleted for everyone":                     "Το Telegram δεν επιτρέπει να διαγραφεί αυτό το μήνυμα για όλους",
+		"The message is no longer on Telegram":                                                "Το μήνυμα δεν υπάρχει πια στο Telegram",
+		"{chat}: Telegram did not give its members ({e})":                                     "{chat}: το Telegram δεν έδωσε τα μέλη της ομάδας ({e})",
+		"{chat}: Telegram gave {n} of its {count} members":                                    "{chat}: το Telegram έδωσε {n} από τα {count} μέλη της ομάδας",
 	} {
 		EL[k] = v
 	}
