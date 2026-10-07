@@ -1,22 +1,21 @@
-// Ports the Telegram plugin of everysaid/plugins/sources.py (its class, and privately what it
-// needs of the module: run_importers, run_script's reading of a script's lines, LOOKS and ICONS
-// for Telegram; the shared helpers of the source plugins are another part of the port).
+// Ports the Telegram plugin of everysaid/plugins/sources.py; what the source plugins share
+// (run_importers, the import lock, LOOKS and ICONS, run_script's reading of a script's lines) is
+// internal/plugins/sourcekit.
 package telegram
 
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
 
 	"everysaid/internal/archive"
 	"everysaid/internal/db"
-	"everysaid/internal/i18n"
 	"everysaid/internal/importers"
 	"everysaid/internal/plugins"
+	"everysaid/internal/plugins/sourcekit"
 )
 
 type M = plugins.M
@@ -37,11 +36,6 @@ var (
 	}
 )
 
-var looks = map[string]plugins.ServiceInfo{
-	"telegram": {Name: "Telegram", Color: "#2aabee", Short: "Tg",
-		Icon: "M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"},
-}
-
 // Plugin is Telegram with the user's own account.
 type Plugin struct{}
 
@@ -49,7 +43,7 @@ func init() { plugins.Register(Plugin{}) }
 
 var info = &plugins.Info{
 	ID: "telegram", Name: "Telegram", Kind: "source", Services: []string{"telegram"},
-	ServiceInfo:  looks,
+	ServiceInfo:  sourcekit.Looks("telegram"),
 	NameWeights:  []plugins.Weight{{Key: "telegram/profile", Weight: 40}}, // chosen by each person
 	StateWeights: map[string]int{"muted": 60, "pinned": 0},
 	Description: "Every chat but channels and bots, through Telegram's API with the user's own account " +
@@ -105,7 +99,7 @@ func (Plugin) RunImport(c *plugins.Context) error {
 		return err
 	}
 	skip := idSet(c.Settings["skip_chats"])
-	steps := []step{{"Telegram", func(a *archive.Archive, out func(string)) error {
+	steps := []sourcekit.Step{{Label: "Telegram", Run: func(a *archive.Archive, out func(string)) error {
 		return importTelegram(a, out, nil, skip)
 	}}}
 	mediaChats := ids(c.Settings["media_chats"])
@@ -113,20 +107,22 @@ func (Plugin) RunImport(c *plugins.Context) error {
 		if err := runSync(ctx, c, SyncOptions{Media: true, Chats: mediaChats}); err != nil {
 			return err
 		}
-		steps = append(steps, step{"files", importMedia})
+		steps = append(steps, sourcekit.Step{Label: "files", Run: importMedia})
 	}
-	_, _, err := runImporters(c, steps)
+	_, _, err := sourcekit.RunImporters(c, steps)
 	return err
 }
 
 // runSync is the sync (telegram-sync.py, which Python ran as a script), its lines into the log.
 func runSync(ctx context.Context, c *plugins.Context, o SyncOptions) error {
-	w := &logWriter{c: c}
+	last := ""
+	t := sourcekit.Terminal(c)
+	w := lastLine{t, &last}
 	o.Lang = c.Lang()
 	err := Sync(ctx, o, w)
-	w.Close()
-	if err != nil && w.last != "" {
-		return fmt.Errorf("%s: %w", w.last, err)
+	t.Close()
+	if err != nil && last != "" && last != err.Error() { // its own last words say what it was doing
+		return fmt.Errorf("%s: %w", last, err)
 	}
 	return err
 }
@@ -183,28 +179,11 @@ func (Plugin) MarkRead(ctx context.Context, c *plugins.Context, conv plugins.Con
 	return markRead(ctx, c, conv, until)
 }
 
-// --- run_importers, privately --------------------------------------------------------------------
-
-// step is one importer: its label, and the function that runs it on the archive.
-type step struct {
-	label string
-	run   func(a *archive.Archive, out func(string)) error
-}
-
-// importLock: one import at a time. Python's host has one (host.import_lock), shared by every
-// plugin; a host that offers it (ImportLock) is used, else this package's own.
-var importLock sync.Mutex
-
-func lockOf(c *plugins.Context) sync.Locker {
-	if h, ok := c.Host().(interface{ ImportLock() sync.Locker }); ok {
-		return h.ImportLock()
-	}
-	return &importLock
-}
+// --- the archive -----------------------------------------------------------------------------------
 
 // withArchive runs fn on the archive under the import lock, committing at the end.
 func withArchive(c *plugins.Context, fn func(a *archive.Archive) error) (err error) {
-	l := lockOf(c)
+	l := sourcekit.ImportLock(c)
 	l.Lock()
 	defer l.Unlock()
 	a, err := archive.Open(c.Store().Path)
@@ -220,40 +199,6 @@ func withArchive(c *plugins.Context, fn func(a *archive.Archive) error) (err err
 	return nil
 }
 
-// runImporters runs the steps; the sources they bring are then tied to this instance. It returns
-// the ids of the new messages and calls ([before, after]).
-func runImporters(c *plugins.Context, steps []step) (msgs, calls [2]int64, err error) {
-	err = withArchive(c, func(a *archive.Archive) error {
-		msgs[0] = a.Int("SELECT ifnull(max(id), 0) FROM message")
-		calls[0] = a.Int("SELECT ifnull(max(id), 0) FROM call")
-		t0 := time.Now().Unix() - 1
-		out := func(line string) { // an importer's lines, already in the user's language
-			if strings.TrimSpace(line) != "" {
-				c.Logf("%s", line)
-			}
-		}
-		for _, s := range steps {
-			c.Log("== {label}", map[string]any{"label": i18n.Tr(s.label, c.Lang())})
-			if err := s.run(a, out); err != nil {
-				return err
-			}
-		}
-		a.Exec("UPDATE source SET instance_id = ? WHERE instance_id IS NULL AND imported_at >= ?", c.ID, t0)
-		a.Commit()
-		msgs[1] = a.Int("SELECT ifnull(max(id), 0) FROM message")
-		calls[1] = a.Int("SELECT ifnull(max(id), 0) FROM call")
-		return nil
-	})
-	if err != nil {
-		return
-	}
-	if msgs[1] > msgs[0] || calls[1] > calls[0] {
-		c.Emit(M{"type": "new", "messages": []int64{msgs[0], msgs[1]}, "calls": []int64{calls[0], calls[1]}})
-	}
-	c.Log("new messages: {m}, new calls: {c}", map[string]any{"m": msgs[1] - msgs[0], "c": calls[1] - calls[0]})
-	return
-}
-
 // source is telegram.db's source in the archive, tied to this instance where it is no one's yet.
 func source(a *archive.Archive, iid int64) int64 {
 	src := a.Source(Source, DBPath(), "telegram", MediaPath())
@@ -261,68 +206,17 @@ func source(a *archive.Archive, iid int64) int64 {
 	return src
 }
 
-// logWriter is run_script's reading of a script's output, for the sync run in process: a line
-// ends with \n; a \r draws the line again (a progress bar), shown in place as it changes (at most
-// every 0.2 s) and in the log as each drawing ends. The lines are already in the user's language.
-type logWriter struct {
-	c       *plugins.Context
-	pending string
-	shown   string
-	sent    string
-	drawn   time.Time
-	last    string
+// lastLine passes what the sync says on, keeping its last line (to say why, when it fails).
+type lastLine struct {
+	w    io.Writer
+	last *string
 }
 
-func (w *logWriter) Write(p []byte) (int, error) {
-	w.pending += string(p)
-	for {
-		i := strings.IndexByte(w.pending, '\n')
-		if i < 0 {
-			break
-		}
-		text := strings.TrimRight(w.pending[:i], "\r")
-		w.pending = w.pending[i+1:]
-		parts := strings.Split(text, "\r")
-		line := parts[len(parts)-1]
-		if line == "" {
-			line = w.shown
-		}
-		line = strings.TrimRight(line, " \t")
-		redrawn := w.shown != "" || strings.Contains(text, "\r")
-		w.shown, w.sent = "", ""
+func (l lastLine) Write(p []byte) (int, error) {
+	for _, line := range strings.Split(strings.ReplaceAll(string(p), "\r", "\n"), "\n") {
 		if strings.TrimSpace(line) != "" {
-			if redrawn {
-				w.c.Redrawn(line)
-			} else {
-				w.c.Logf("%s", line)
-			}
-			w.last = strings.TrimSpace(line)
+			*l.last = strings.TrimSpace(line)
 		}
 	}
-	if strings.Contains(w.pending, "\r") {
-		parts := strings.Split(w.pending, "\r")
-		for i := len(parts) - 1; i >= 0; i-- {
-			if strings.TrimSpace(parts[i]) != "" {
-				w.shown = parts[i]
-				break
-			}
-		}
-		w.pending = parts[len(parts)-1]
-	}
-	if w.shown != "" && w.shown != w.sent && time.Since(w.drawn) >= 200*time.Millisecond {
-		w.c.Progress(w.shown)
-		w.sent, w.drawn = w.shown, time.Now()
-	}
-	return len(p), nil
-}
-
-// Close logs what is left without an end of line.
-func (w *logWriter) Close() {
-	if strings.TrimSpace(w.pending) != "" {
-		parts := strings.Split(w.pending, "\r")
-		line := strings.TrimRight(parts[len(parts)-1], " \t")
-		w.c.Logf("%s", line)
-		w.last = strings.TrimSpace(line)
-	}
-	w.pending = ""
+	return l.w.Write(p)
 }
