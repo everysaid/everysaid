@@ -10,6 +10,7 @@ import { useDebounced } from "@/lib/hooks";
 import { personRoute } from "@/router";
 import { Avatar, Button, Card, Center, Dialog, Field, Input, ServiceBadge, Spinner, Textarea } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
+import { GuessLine, PersonLabels } from "@/components/Labels";
 
 export function PersonPage() {
   const { t } = useTranslation();
@@ -66,11 +67,13 @@ export function PersonPage() {
                 <Input value={name} placeholder={p.name} onChange={(e) => setName(e.target.value)} />
                 <Button onClick={() => save.mutate({ name })} disabled={name === (p.given_name ?? "")}>{t("common.save")}</Button>
               </div>
+              {p.guess && <GuessLine personId={p.id} guess={p.guess} onPick={setName} onDone={refresh} />}
             </Field>
             <Field label={t("people.note")}>
               <Textarea rows={4} value={note} onChange={(e) => setNote(e.target.value)} onBlur={() => note !== (p.note ?? "") && save.mutate({ note })} />
             </Field>
           </Card>
+          <PersonLabels p={p} onChanged={refresh} />
           <Card>
             <div className="flex items-center justify-between px-5 pt-4">
               <div className="text-sm font-semibold">{t("people.handles")}</div>

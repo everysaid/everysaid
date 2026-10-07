@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ArrowDown, ArrowUp, Bell, Download, Fingerprint, KeyRound, LogOut, Monitor, Moon, Palette, Shield, Sun, Trash2, UserRound } from "lucide-react";
+import { ArrowDown, ArrowUp, Bell, Download, Fingerprint, KeyRound, LogOut, Monitor, Moon, Palette, Shield, Sun, Tags, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import { api, type Account, type NameSources } from "@/lib/api";
 import { fullDate, relative } from "@/lib/format";
@@ -14,6 +14,7 @@ import { Button, Card, Dialog, Section, Segmented, Switch } from "@/components/u
 import { PageHeader } from "@/components/PageHeader";
 import { passkeyFailed, RecoveryCodes } from "./Auth";
 import { PasswordSetup } from "@/components/PasswordSetup";
+import { LabelLists } from "@/components/Labels";
 
 let installEvent: any = null;
 window.addEventListener("beforeinstallprompt", (e) => {
@@ -117,6 +118,27 @@ export function SettingsPage() {
                 </Line>
               ))}
             </Card>
+            <Card>
+              <Line label={t("settings.showUnnamed")} hint={t("settings.showUnnamedHint")}>
+                <Switch checked={(settings.data?.show_unnamed as boolean | undefined) ?? false} label={t("settings.showUnnamed")}
+                  onChange={(v) => api.put("/api/settings", { show_unnamed: v }).then(() => qc.invalidateQueries(), (e) => toast.error(e.message))} />
+              </Line>
+            </Card>
+          </Section>
+
+          <Section title={<span className="flex items-center gap-2"><Tags className="size-4" />{t("settings.labels")}</span>}>
+            <p className="-mt-1 px-1 text-xs text-muted">{t("settings.labelsHint")}</p>
+            <Card className="divide-y divide-line">
+              <Line label={t("settings.showTone")} hint={t("settings.showToneHint")}>
+                <Switch checked={(settings.data?.show_tone as boolean | undefined) ?? false} label={t("settings.showTone")}
+                  onChange={(v) => api.put("/api/settings", { show_tone: v }).then(() => qc.invalidateQueries(), (e) => toast.error(e.message))} />
+              </Line>
+              <Line label={t("settings.mcpLabels")} hint={t("settings.mcpLabelsHint")}>
+                <Switch checked={(settings.data?.mcp_labels as boolean | undefined) ?? false} label={t("settings.mcpLabels")}
+                  onChange={(v) => put.mutate({ mcp_labels: v })} />
+              </Line>
+            </Card>
+            <LabelLists />
           </Section>
 
           <Section title={<span className="flex items-center gap-2"><Bell className="size-4" />{t("settings.notifications")}</span>}>

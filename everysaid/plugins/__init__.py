@@ -9,10 +9,10 @@ import json
 import os
 import time
 
-from . import contacts, libraries, sources
+from . import analysis, contacts, libraries, sources
 from .i18n import tr
 
-REGISTRY = {p.id: p() for p in (*sources.PLUGINS, *libraries.PLUGINS, *contacts.PLUGINS)}
+REGISTRY = {p.id: p() for p in (*sources.PLUGINS, *libraries.PLUGINS, *contacts.PLUGINS, *analysis.PLUGINS)}
 if os.environ.get("EVERYSAID_DEMO"):            # the demo's own source, which "sends" into the demo archive
     from ..demo import DemoSender
     REGISTRY["demo-sender"] = DemoSender.plugin()

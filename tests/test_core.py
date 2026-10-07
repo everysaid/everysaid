@@ -376,3 +376,75 @@ def test_groups_alike_are_suggested_until_turned_down(store):
     assert any({x["chat_id"] for x in s["chats"]} == {a["id"], b["id"]} and "members" in s["why"] for s in found)
     changes.dismiss_group_merge(store, [a["id"], b["id"]])
     assert not any({x["chat_id"] for x in s["chats"]} == {a["id"], b["id"]} for s in queries.group_suggestions(store))
+
+
+def test_people_without_a_name(store):
+    every = {c["title"] for c in queries.chats(store)}
+    named = {c["title"] for c in queries.chats(store, unnamed=False)}
+    # the numbers no source names: gone, but for the one with an unread message
+    assert every - named == {"+1 555-010-0000", "+1 555-010-0001", "+1 555-010-0002", "+1 555-010-0003",
+                             "+1 555-010-0010", "katerina.oikonomou@example.com"}
+    assert "+1 555-010-0011" in named
+    assert [c["title"] for c in queries.chats(store, q="555-010-0010", unnamed=False)] == ["+1 555-010-0010"]
+    all_calls = queries.calls(store, limit=10000)["items"]
+    calls = queries.calls(store, limit=10000, unnamed=False)["items"]
+    assert len(all_calls) - len(calls) == 6                 # five of theirs and the hidden number's
+    assert all(c["chat_id"] for c in calls)
+    chat = next(c for c in queries.chats(store) if c["title"] == "+1 555-010-0002")
+    assert len(queries.calls(store, chat_id=chat["id"], unnamed=False)["items"]) == 2     # one chat's: all
+    names = {p["name"] for p in queries.people_list(store, limit=1000, unnamed=False)["items"]}
+    assert not any(n.startswith("+1 555-010-") for n in names)
+    assert queries.people_list(store, q="555-010-0003", unnamed=False)["total"] == 1
+
+
+def test_names_that_sound_the_same():
+    same = [("Ελένη Ιωάννου", "Eleni Ioannou"), ("Θανάσης Σπύρος", "Spyros Thanasis"),
+            ("Ευάγγελος Φίλιππος", "evangelos filippos"), ("Ντίνος Μπάμπης", "Dinos Babis")]
+    assert all(queries._skeleton(a) == queries._skeleton(b) for a, b in same)
+    assert queries._skeleton("Ελένη Ιωάννου") != queries._skeleton("Olivia Ιωάννου")
+
+
+def test_merge_suggestions_and_not_the_same(store):
+    found = {tuple(sorted(p["name"] for p in s["people"])): s["why"] for s in queries.merge_suggestions(store)}
+    assert found[("Eleni Ioannou", "Ελένη Ιωάννου")] == ["similar"]
+    assert found[("Νίκος Γεωργίου", "Νίκος Γεωργίου")] == ["book"]
+    s = next(s for s in queries.merge_suggestions(store) if s["why"] == ["similar"])
+    changes.dismiss_merge(store, [p["id"] for p in s["people"]])
+    assert not any(x["why"] == ["similar"] for x in queries.merge_suggestions(store))
+
+
+def test_many_merge_decisions_at_once(store):
+    found = {s["why"][0]: [p["id"] for p in s["people"]] for s in queries.merge_suggestions(store)}
+    book, similar = found["book"], found["similar"]
+    # the book pair merged; the similar pair apart, one of them named through the merged person
+    assert changes.apply_merges(store, [book], [[similar[0], similar[1]], [book[1], similar[0]]]) == (1, 2)
+    assert queries.person(store, book[1]) is None
+    assert not queries.merge_suggestions(store)
+    apart = queries.merges_dismissed(store)
+    assert {(x["a"]["id"], x["b"]["id"]) for x in apart} == {tuple(sorted(similar)), tuple(sorted((book[0], similar[0])))}
+    changes.undismiss_merge(store, *similar)                        # turned down by mistake
+    assert [s["why"] for s in queries.merge_suggestions(store)] == [["similar"]]
+    assert queries.merge_suggestions(store, recent=True)[0]["people"][0]["recent"]
+
+
+def test_nothing_in_it_is_not_listed(store):
+    with store.write() as db:              # what a source may leave: an empty chat, a handle of no one
+        sid = db.execute("SELECT id FROM service WHERE name = 'whatsapp'").fetchone()[0]
+        kid = db.execute("SELECT id FROM address_kind WHERE name = 'id'").fetchone()[0]
+        db.execute("INSERT INTO conversation (service_id, key, title, is_group) VALUES (?, 'empty', 'Empty chat', 1)", (sid,))
+        aid = db.execute("INSERT INTO address (kind_id, value, service_id) VALUES (?, 'nobody', ?)", (kid, sid)).lastrowid
+        pid = db.execute("INSERT INTO person DEFAULT VALUES").lastrowid
+        db.execute("INSERT INTO person_address (address_id, person_id) VALUES (?, ?)", (aid, pid))
+    assert "Empty chat" not in {c["title"] for c in queries.chats(store)}
+    assert pid not in {p["id"] for p in queries.people_list(store, limit=1000, q="nobody")["items"]}
+
+
+def test_people_without_a_name_to_name(store):
+    r = queries.unnamed_people(store, limit=100)
+    names = [p["name"] for p in r["items"]]
+    assert r["total"] == len(names) and "+1 555-010-0010" in names
+    sizes = [p["stats"]["messages"] for p in r["items"]]
+    assert sizes == sorted(sizes, reverse=True) and all("recent" in p for p in r["items"])
+    first = r["items"][0]
+    changes.set_person(store, first["id"], name="The courier")
+    assert first["id"] not in {p["id"] for p in queries.unnamed_people(store, limit=100)["items"]}

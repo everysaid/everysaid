@@ -36,13 +36,15 @@ export const callsRoute = createRoute({ getParentRoute: () => rootRoute, path: "
 export const mediaRoute = createRoute({ getParentRoute: () => rootRoute, path: "/media", validateSearch: chatFilter,
   component: lazyRouteComponent(() => import("./routes/MediaPage"), "MediaPage") });
 const people = createRoute({ getParentRoute: () => rootRoute, path: "/people", component: lazyRouteComponent(() => import("./routes/PeoplePage"), "PeoplePage") });
+const unnamed = createRoute({ getParentRoute: () => rootRoute, path: "/people/unnamed", component: lazyRouteComponent(() => import("./routes/UnnamedPage"), "UnnamedPage") });
+const mergeReview = createRoute({ getParentRoute: () => rootRoute, path: "/people/merge", component: lazyRouteComponent(() => import("./routes/MergeReviewPage"), "MergeReviewPage") });
 export const personRoute = createRoute({ getParentRoute: () => rootRoute, path: "/people/$personId", component: lazyRouteComponent(() => import("./routes/PersonPage"), "PersonPage") });
 const sources = createRoute({ getParentRoute: () => rootRoute, path: "/sources", component: lazyRouteComponent(() => import("./routes/SourcesPage"), "SourcesPage") });
 const settings = createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: lazyRouteComponent(() => import("./routes/SettingsPage"), "SettingsPage") });
 const overview = createRoute({ getParentRoute: () => rootRoute, path: "/overview", component: OverviewPage });
 const setup = createRoute({ getParentRoute: () => rootRoute, path: "/setup", component: () => <Outlet /> });
 
-const routeTree = rootRoute.addChildren([index, chatRoute, searchRoute, callsRoute, mediaRoute, people, personRoute, sources,
+const routeTree = rootRoute.addChildren([index, chatRoute, searchRoute, callsRoute, mediaRoute, people, mergeReview, unnamed, personRoute, sources,
   settings, overview, setup]);
 
 export const router = createRouter({ routeTree, context: { queryClient: undefined! }, defaultPreload: "intent", scrollRestoration: true });

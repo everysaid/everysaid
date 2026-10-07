@@ -421,3 +421,8 @@ def test_read_receipts_only_where_the_user_turned_them_on(bridge_instance, store
     assert asyncio.run(p.mark_read(host.ctx(iid), conv, 1_790_000_000_500)) == 2
     assert sent == [("http://127.0.0.1:8080/api/read", {"recipient": "15551234567", "until": 1_790_000_000})]
     assert p.manifest()["can_mark_read"]
+
+
+def test_status_and_channels_are_not_chats():
+    for jid in ("306900000001@status", "10000000000001@lid.status", "status@broadcast", "120363000000000001@newsletter"):
+        assert whatsapp.conversation(None, None, jid, "x", []) is None

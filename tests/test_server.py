@@ -290,3 +290,66 @@ def test_mentions_files_receipts_and_read_receipts(app, monkeypatch):
             break
         time.sleep(0.05)
     assert asked and asked[0][0] == "read" and asked[0][1] == "whatsapp"
+
+
+def test_people_without_a_name_only_when_asked(app):
+    app, c = app
+    login(app, c)
+    titles = lambda: {x["title"] for x in c.get("/api/chats").json()["items"]}       # noqa: E731
+    assert "+1 555-010-0000" not in titles()
+    assert c.put("/api/settings", json={"show_unnamed": True}, headers=H).status_code == 200
+    assert "+1 555-010-0000" in titles()
+
+
+def test_labels_and_names_found(app):
+    app, c = app
+    login(app, c)
+    from everysaid.core import labels
+    store = app.state.store
+    items = c.get("/api/labels").json()["items"]
+    keys = {x["key"]: x for x in items if x["key"]}
+    assert "romantic" in keys and "sexual" not in keys
+    r = c.post("/api/labels", json={"kind": "tone", "name": "Acme", "meaning": "work at Acme"}, headers=H)
+    acme = r.json()["id"]
+    assert c.post("/api/labels", json={"kind": "tone", "name": "acme"}, headers=H).json()["detail"]["code"] == "labels.exists"
+    c.patch(f"/api/labels/{acme}", json={"name": "Acme SA"}, headers=H)
+    assert any(x["name"] == "Acme SA" for x in c.get("/api/labels").json()["items"])
+    # the person with the email that says who they are
+    un = c.get("/api/people/unnamed", params={"guessed": True}).json()["items"]
+    k = un[0]
+    assert k["guess"]["name"] == "Κατερίνα Οικονόμου" and k["guess"]["how"] == "handle"
+    pid = k["id"]
+    labels.save_analysis(store, pid, 24, ["m"], tones=[(keys["professional"]["id"], 1, 1, None)])
+    c.put(f"/api/people/{pid}/labels/{acme}", json={"state": "yes"}, headers=H)
+    # the models' labels only when the user shows them; their own always
+    assert [x["name"] for x in c.get(f"/api/people/{pid}").json()["labels"]] == ["Acme SA"]
+    c.put("/api/settings", json={"show_tone": True}, headers=H)
+    got = c.get(f"/api/people/{pid}").json()
+    assert {x["key"] or x["name"] for x in got["labels"]} == {"professional", "Acme SA"}
+    assert got["analysed"]["messages"] == 24
+    assert c.post(f"/api/labels/{acme}/merge", json={"into": keys["professional"]["id"]}, headers=H).status_code == 200
+    got = c.get(f"/api/people/{pid}").json()["labels"]
+    assert [(x["key"], x["state"]) for x in got] == [("professional", "yes")]
+    assert c.post(f"/api/people/{pid}/analyse", headers=H).json()["analysed"] is None
+    p = c.post(f"/api/people/{pid}/guess", json={"how": "handle", "accept": True}, headers=H).json()
+    assert p["name"] == "Κατερίνα Οικονόμου" and p["guess"] is None
+    assert c.post(f"/api/people/{pid}/guess", json={"how": "handle", "accept": True}, headers=H).json()["detail"]["code"] == "people.no_guess"
+    assert c.delete(f"/api/labels/{keys['formal']['id']}", headers=H).status_code == 200
+    assert "formal" not in {x["key"] for x in c.get("/api/labels").json()["items"]}
+
+
+def test_the_assistant_sees_labels_only_when_allowed(app):
+    app, c = app
+    from everysaid.core import labels
+    from everysaid.mcp_server import build
+    from tests.test_mcp import call
+    from everysaid.core import queries
+    store = app.state.store
+    friend = next(x["id"] for x in labels.labels(store) if x["key"] == "friend")
+    person = queries.people_list(store)["items"][0]
+    labels.set_person_label(store, person["id"], friend, "yes")
+    mcp = build(store.path)
+    assert "labels" not in call(mcp, "get_person", person_id=person["id"])
+    from everysaid.core import changes
+    changes.set_setting(store, "mcp_labels", True)
+    assert call(mcp, "get_person", person_id=person["id"])["labels"] == [{"kind": "relation", "label": "friend", "by": "user"}]

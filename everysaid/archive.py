@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS device (
 CREATE TABLE IF NOT EXISTS plugin_instance (
     id INTEGER PRIMARY KEY,
     plugin TEXT NOT NULL,               -- the plugin's id, e.g. 'iphone-backup', 'telegram', 'immich'
-    kind TEXT NOT NULL CHECK (kind IN ('source', 'library', 'contacts')),
+    kind TEXT NOT NULL CHECK (kind IN ('source', 'library', 'contacts', 'analysis')),
     label TEXT NOT NULL,                -- the user's name for it, e.g. 'iPhone', 'Old phone'
     settings TEXT NOT NULL DEFAULT '{}',    -- JSON, as the plugin's settings schema says
     state TEXT NOT NULL DEFAULT '{}',   -- JSON: the plugin's own cursors
@@ -384,6 +384,44 @@ CREATE TABLE IF NOT EXISTS setting (    -- the user's settings that every device
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS label (     -- the words people are described by: their chats' tone, who they are to the owner
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('tone', 'relation')),    -- tone: many to a person; relation: one
+    key TEXT UNIQUE,                    -- one the app brings (its words in the app's languages); NULL: the user's own
+    name TEXT,                          -- the user's name for it (their own, or one the app brings, renamed)
+    meaning TEXT,                       -- what it means, for the local models (one the app brings: NULL, its own);
+                                        -- '': never suggested by a model, only given by the user
+    sensitive INTEGER NOT NULL DEFAULT 0,   -- suggested only with a line of the chat that shows it and two models
+    position INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS person_label (
+    person_id INTEGER NOT NULL REFERENCES person,
+    label_id INTEGER NOT NULL REFERENCES label ON DELETE CASCADE,
+    state TEXT NOT NULL CHECK (state IN ('suggested', 'yes', 'no')),   -- suggested by the models; yes, no: the user's
+    votes INTEGER,                      -- suggested: how many of the models said so,
+    models INTEGER,                     -- of how many
+    evidence TEXT,                      -- a line of the chat that shows it
+    at INTEGER NOT NULL,                -- Unix seconds
+    PRIMARY KEY (person_id, label_id)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS name_guess (    -- a name for someone no source names, found in what they wrote or their handles
+    person_id INTEGER NOT NULL REFERENCES person,
+    how TEXT NOT NULL CHECK (how IN ('models', 'handle')),
+    name TEXT NOT NULL,
+    votes INTEGER,                      -- models: how many said so, of how many
+    models INTEGER,
+    evidence TEXT,                      -- the phrase that shows it
+    dismissed INTEGER NOT NULL DEFAULT 0,   -- the user said it is wrong
+    at INTEGER NOT NULL,
+    PRIMARY KEY (person_id, how)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS analysis (   -- the people the local analysis has read, and on what
+    person_id INTEGER PRIMARY KEY REFERENCES person,
+    messages INTEGER NOT NULL,          -- how many messages their chat had (read again when it has many more)
+    labels TEXT NOT NULL,               -- the labels it judged by (a digest): another list, judged again if asked
+    models TEXT NOT NULL,               -- which models read it
+    at INTEGER NOT NULL
+);
 CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
     text, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
 CREATE VIRTUAL TABLE IF NOT EXISTS message_tri USING fts5(     -- the same text in trigrams: parts of words
@@ -420,6 +458,29 @@ def statements(script):
     return out
 
 
+# The labels the app brings, as the archive starts with them (the user renames, adds, merges and
+# removes them; words in the app's languages, by key): (kind, key, what it means for the local models,
+# sensitive)
+LABELS = (
+    ("tone", "friendly", "friendly and casual: friends, company, jokes", 0),
+    ("tone", "family", "family matters between relatives", 0),
+    ("tone", "personal", "close and caring, personal matters, but not romantic", 0),
+    ("tone", "romantic", "flirting, a love affair or a partner, and explicit sexual talk", 1),
+    ("tone", "professional", "work: colleagues, partners, projects", 0),
+    ("tone", "transactional", "arranging a purchase or a service: shops, craftsmen, doctors, bookings", 0),
+    ("tone", "formal", "polite and distant", 0),
+    ("tone", "conflict", "quarrels, complaints, anger", 1),
+    ("tone", "automated", "mass or automatic messages: adverts, notifications, bots", 0),
+    ("relation", "friend", "a friend", 0),
+    ("relation", "relative", "a relative", 0),
+    ("relation", "partner", "a partner or lover, now or once", 0),
+    ("relation", "colleague", "a colleague or business partner", 0),
+    ("relation", "client", "a client or a supplier", 0),
+    ("relation", "acquaintance", "an acquaintance", 0),
+    ("relation", "service", "a company, a service or a bot", 0),
+)
+
+
 def seed(db):
     """The lookup tables' rows, and the owner's numbers from config as accounts."""
     for table, names in (("service", SERVICES), ("address_kind", ADDRESS_KINDS),
@@ -429,6 +490,10 @@ def seed(db):
                    [(n,) for n in KEY_PER_CONVERSATION])
     db.executemany("INSERT OR IGNORE INTO vocabulary VALUES (?, ?)",
                    [(f, n) for f, names in VOCABULARY.items() for n in names])
+    # the labels, once: what the user removed does not come back
+    if db.execute("INSERT OR IGNORE INTO setting VALUES ('labels_seeded', 'true')").rowcount:
+        db.executemany("INSERT OR IGNORE INTO label (kind, key, sensitive, position) VALUES (?, ?, ?, ?)",
+                       [(kind, key, sens, i) for i, (kind, key, _, sens) in enumerate(LABELS)])
 
 
 class Names(dict):

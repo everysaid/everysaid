@@ -41,6 +41,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import config
 from .archive import address, fingerprint
+from .core import labels
 
 TZ = config.TIMEZONE
 DEVICES = {"adium": "adium", "pidgin": "pidgin"}
@@ -259,7 +260,7 @@ def adium_file(path, logs, uid, stats):
         images = [os.path.relpath(os.path.join(folder, src), logs) for src in IMG.findall(body)
                   if os.path.isfile(os.path.join(folder, src))]
         yield Record(f"{rel}#{n}", ts, sender.lower() == me or sender.lower().startswith(me + "/"),
-                     sender, clean(body), attrs.get("alias") or None, images)
+                     sender, clean(body), html.unescape(attrs.get("alias", "")).strip() or None, images)
 
 
 # ---------------------------------------------------------------- Pidgin
@@ -460,7 +461,22 @@ class Importer:
             self.sources[k] = self.archive.source(f"{device}/{service}", root, device, root)
         return self.sources[k]
 
-    def add(self, device, service, src, conv, rec, sender_handle):
+    def chat(self, service, group, key, peer):
+        """The conversation, made when its first message is added: a log with none makes no chat."""
+        made = []
+
+        def conv():
+            if not made:
+                a = self.archive
+                if group:
+                    made.append(a.conversation(service, [], key=key, title=None))
+                    a.db.execute("UPDATE conversation SET is_group = 1 WHERE id = ?", (made[0],))
+                else:
+                    made.append(a.conversation(service, [peer]))
+            return made[0]
+        return conv
+
+    def add(self, device, service, src, chat, rec, sender_handle):
         """One message into the archive, unless its origin or its fingerprint is already there."""
         a, key = self.archive, (device, service)
         if a.has_origin(src, rec.row_key):
@@ -469,6 +485,7 @@ class Importer:
         kind = "image" if rec.images and not rec.text else "text"
         if not rec.text and not rec.images:
             return None
+        conv = chat()
         fp = fingerprint(rec.ts, rec.outgoing, kind, rec.text or None)
         if a.db.execute("SELECT 1 FROM message WHERE conversation_id = ? AND fingerprint = ?", (conv, fp)).fetchone():
             self.stats.dupes[key] += 1
@@ -504,6 +521,7 @@ class Importer:
                                           (a.address(*h),)).fetchone()[0] for h in handles})
             for other in people[1:]:
                 a.db.execute("UPDATE person_address SET person_id = ?, how = 'manual' WHERE person_id = ?", (people[0], other))
+                labels.moved_person(a.db, people[0], other)
                 a.db.execute("DELETE FROM person WHERE id = ?", (other,))
                 self.stats.merged[device] += 1
 
@@ -526,12 +544,8 @@ class Importer:
             a.account(own, service)
             src = self.source(device, service, logs)
             group = is_group(service, contact)
-            if group:
-                conv = a.conversation(service, [], key=urllib.parse.unquote(contact).lower(), title=None)
-                a.db.execute("UPDATE conversation SET is_group = 1 WHERE id = ?", (conv,))
-            else:
-                peer = handle(service, contact)
-                conv = a.conversation(service, [peer])
+            peer = None if group else handle(service, contact)
+            conv = self.chat(service, group, urllib.parse.unquote(contact).lower(), peer)
             for path in files:
                 for rec in adium_file(path, logs, uid, self.stats.problems):
                     sender = handle(service, rec.sender) if group else (own if rec.outgoing else peer)
@@ -563,13 +577,8 @@ class Importer:
                 owners[(proto, uid)] = pidgin_owner_names(logs, proto, uid, accounts.get((proto, uid.lower())))
             names = owners[(proto, uid)]
             group = is_group(service, contact)
-            if group:
-                key = urllib.parse.unquote(contact).lower().removesuffix(".chat")
-                conv = a.conversation(service, [], key=key, title=None)
-                a.db.execute("UPDATE conversation SET is_group = 1 WHERE id = ?", (conv,))
-            else:
-                peer = handle(service, contact)
-                conv = a.conversation(service, [peer])
+            peer = None if group else handle(service, contact)
+            conv = self.chat(service, group, urllib.parse.unquote(contact).lower().removesuffix(".chat"), peer)
             for path in files:
                 for row_key, ts, sender, text in pidgin_file(path, logs, self.stats.problems):
                     s = sender.lower()

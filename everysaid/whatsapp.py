@@ -299,12 +299,14 @@ class People:
         u = user(jid)
         if jid.endswith("@lid") or ("@" not in jid and u in self.lids):
             return address(self.lid_phone[u]) if u in self.lid_phone else ("id", f"{u}@lid", "whatsapp")
-        if jid.endswith("@s.whatsapp.net") or "@" not in jid:
+        if jid.endswith("@s.whatsapp.net") or ("@" not in jid and len(u) <= 15):    # longer: no phone (E.164)
             return address(u)
         return None
 
 
-CHANNELS = ("@newsletter", "status@broadcast")     # channels and status: not wanted, not imported
+# channels, and status (all of it, and each contact's own: "<number>@status", "<lid>@lid.status"):
+# not wanted, not imported
+CHANNELS = ("@newsletter", "status@broadcast", "@status", ".status")
 
 
 def conversation(archive, person, jid, title, members):

@@ -265,6 +265,45 @@ def build(seed=7):
     for i, txt in enumerate(["Λίστα: γάλα, αυγά, καφές", "Κωδικός Wi-Fi γραφείου στο συρτάρι", "Ιδέα για δώρο: βιβλίο μαγειρικής"]):
         row += 1
         add("viber", conv, int((now - timedelta(days=30 - i * 7)).timestamp() * 1000), True, None, "el", row, text=txt)
+    # numbers no source names: a few old calls, a hidden number, a courier's SMS read long ago, and
+    # one unread (shown even when people without a name are not)
+    for i, n_calls in enumerate((1, 1, 2, 1)):
+        aid = a.address("phone", f"+1555010{i:04d}")
+        for k in range(n_calls):
+            row += 1
+            a.add_call(source("sms"), f"call{row}", service="phone", address_id=aid,
+                       ts=int((now - timedelta(days=200 + 40 * i + k)).timestamp() * 1000), outgoing=k == 1,
+                       answered=i % 2 == 1, duration=95 if i % 2 == 1 else 0, detail=None if i % 2 == 1 else "missed")
+    row += 1
+    a.add_call(source("sms"), f"call{row}", service="phone", address_id=None,
+               ts=int((now - timedelta(days=150)).timestamp() * 1000), outgoing=False, answered=False, duration=0,
+               detail="missed")
+    for number, days, text in (("+15550100010", 180, "Your parcel will be delivered today between 10:00 and 14:00"),
+                               ("+15550100011", 1.6, "Hello, this is the clinic: your results are ready")):
+        conv = a.conversation("sms", [("phone", number)])
+        row += 1
+        add("sms", conv, int((now - timedelta(days=days)).timestamp() * 1000), False, a.address("phone", number),
+            "en", row, text=text)
+    # someone no source names, with a long chat: their email says who they are (a name found for them)
+    handle = ("email", "katerina.oikonomou@example.com")
+    conv = a.conversation("imessage", [handle])
+    for k in range(24):
+        row += 1
+        out = k % 2 == 0
+        text = ("Κατερίνα, τα λέμε αύριο στο γραφείο;" if k == 4 else
+                rnd.choice(LINES["el"]))
+        add("imessage", conv, int((now - timedelta(days=90 - k * 3)).timestamp() * 1000), out,
+            None if out else a.address(*handle), "el", row, text=text)
+    # people who are likely one: a second number with the same name in WhatsApp's contacts, and a
+    # Telegram account whose name sounds like someone's (merge suggestions)
+    for handle, service, name, kind in ((("phone", "+15550100020"), "whatsapp", "Νίκος Γεωργίου", "book"),
+                                        (("username", "eleni_i", "telegram"), "telegram", "Eleni Ioannou", "profile")):
+        conv = a.conversation(service, [handle])
+        a.handle_name(handle, service, name, kind)
+        for k, text in enumerate(("Hi, it's my new number", "Talk later?")):
+            row += 1
+            add(service, conv, int((now - timedelta(days=60 - k)).timestamp() * 1000), False, a.address(*handle),
+                "en", row, text=text)
     # a library: a folder
     lib = os.path.join(config.DATA, "library")
     os.makedirs(lib, exist_ok=True)

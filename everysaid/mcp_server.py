@@ -49,7 +49,7 @@ def slim(item):
 def build(archive_path=None):
     from mcp.server.mcpserver import MCPServer
     from .archive import DB
-    from .core import Store, changes, queries
+    from .core import Store, changes, labels, queries
     from .plugins import services
     store = Store(archive_path or DB)
     known = ", ".join(f"{v['name']} ({k})" for k, v in services().items())
@@ -113,10 +113,15 @@ def build(archive_path=None):
         if not p:
             return {"error": "no such person"}
         s = p["stats"]
-        return {"id": p["id"], "name": p["name"], "chat": f"p{p['id']}", "note": p["note"],
-                "handles": [{"kind": h["kind"], "value": h["label"], "service": h["service"]} for h in p["handles"]],
-                "messages": s["messages"], "messages_by_service": s["by_service"], "calls": s["calls"],
-                "first": when(s["first"]), "last": when(s["last"]), "groups": p["groups"]}
+        out = {"id": p["id"], "name": p["name"], "chat": f"p{p['id']}", "note": p["note"],
+               "handles": [{"kind": h["kind"], "value": h["label"], "service": h["service"]} for h in p["handles"]],
+               "messages": s["messages"], "messages_by_service": s["by_service"], "calls": s["calls"],
+               "first": when(s["first"]), "last": when(s["last"]), "groups": p["groups"]}
+        if store.setting("mcp_labels", False):          # only where the user allows it
+            out["labels"] = [{"kind": lb["kind"], "label": lb["name"] or lb["key"],
+                              "by": "user" if lb["state"] == "yes" else f"models ({lb['votes']}/{lb['models']})"}
+                             for lb in labels.person_labels(store, person_id)]
+        return out
 
     @mcp.tool()
     def list_calls(chat: str | None = None, missed_only: bool = False, limit: int = 50) -> list:

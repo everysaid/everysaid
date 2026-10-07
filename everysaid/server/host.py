@@ -206,7 +206,7 @@ class Host:
 
     async def startup(self):
         self.loop = asyncio.get_running_loop()
-        for row in plugins.instances(self.store, "source"):
+        for row in plugins.instances(self.store, "source") + plugins.instances(self.store, "analysis"):
             self.auto_live(row["id"])       # if the user turned it on, or by the plugin's default once set up
 
     async def shutdown(self):
@@ -217,7 +217,7 @@ class Host:
     def senders(self):
         """[(instance id, plugin)] of the sources that may send now, as each plugin says."""
         out = []
-        for row in plugins.instances(self.store, "source"):
+        for row in plugins.instances(self.store, "source") + plugins.instances(self.store, "analysis"):
             p = plugins.get(row["plugin"])
             if row["enabled"] and p and p.can_send and p.sending(self.ctx(row["id"])):
                 out.append((row["id"], p))
@@ -244,7 +244,7 @@ class Host:
         its source says is missing (English, as plugins word it)."""
         def why():
             out = {}
-            for row in plugins.instances(self.store, "source"):
+            for row in plugins.instances(self.store, "source") + plugins.instances(self.store, "analysis"):
                 p = plugins.get(row["plugin"])
                 if row["enabled"] and p and p.can_send:
                     reason = p.not_sending(self.ctx(row["id"]))
@@ -317,7 +317,7 @@ class Host:
         if not c:
             return
         db = self.store.read()
-        for row in plugins.instances(self.store, "source"):
+        for row in plugins.instances(self.store, "source") + plugins.instances(self.store, "analysis"):
             p = plugins.get(row["plugin"])
             if not (row["enabled"] and p and p.can_mark_read) or ("live" in p.modes and row["id"] not in self.live_tasks):
                 continue
