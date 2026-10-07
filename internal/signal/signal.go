@@ -1,0 +1,842 @@
+// Package signal is the `signal` source: Signal through a helper program linked to the account as a
+// secondary device (like Signal Desktop).
+//
+// New: the Python never had Signal. The helper (bridges/signal, everysaid-signal) is written in
+// Rust on presage and libsignal, which are AGPL-3.0; it is a program of its own, spoken to in JSON
+// lines over its stdin and stdout, so that Everysaid's binary links no AGPL code. Its state (the
+// device's keys, what it received) is kept, encrypted with a passphrase this plugin makes and keeps
+// in the keyring, in `<data>/signal/<instance>/`; what it says goes to `<cache>/signal/<instance>/
+// signal.db` and the files it fetches to `media/` beside it, and from there into the archive
+// (import.go).
+//
+// One helper runs per instance at a time (two connections of one device would share its
+// messages between them): the live connection's while it runs, else one started for the work at
+// hand (an import, a link, a message sent) and stopped after it.
+package signal
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+	"unicode/utf16"
+
+	"everysaid/internal/archive"
+	"everysaid/internal/config"
+	"everysaid/internal/db"
+	"everysaid/internal/errs"
+	"everysaid/internal/plugins"
+)
+
+type M = plugins.M
+
+// Plugin is the `signal` source.
+type Plugin struct{}
+
+func init() { plugins.Register(Plugin{}) }
+
+var looks = map[string]plugins.ServiceInfo{
+	// the icon: Simple Icons' (CC0)
+	"signal": {Name: "Signal", Color: "#3A76F0", Short: "Sg",
+		Icon: "M12 0q-.934 0-1.83.139l.17 1.111a11 11 0 0 1 3.32 0l.172-1.111A12 12 0 0 0 12 0M9.152.34A12 12 0 0 0 5.77 1.742l.584.961a10.8 10.8 0 0 1 3.066-1.27zm5.696 0-.268 1.094a10.8 10.8 0 0 1 3.066 1.27l.584-.962A12 12 0 0 0 14.848.34M12 2.25a9.75 9.75 0 0 0-8.539 14.459c.074.134.1.292.064.441l-1.013 4.338 4.338-1.013a.62.62 0 0 1 .441.064A9.7 9.7 0 0 0 12 21.75c5.385 0 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25m-7.092.068a12 12 0 0 0-2.59 2.59l.909.664a11 11 0 0 1 2.345-2.345zm14.184 0-.664.909a11 11 0 0 1 2.345 2.345l.909-.664a12 12 0 0 0-2.59-2.59M1.742 5.77A12 12 0 0 0 .34 9.152l1.094.268a10.8 10.8 0 0 1 1.269-3.066zm20.516 0-.961.584a10.8 10.8 0 0 1 1.27 3.066l1.093-.268a12 12 0 0 0-1.402-3.383M.138 10.168A12 12 0 0 0 0 12q0 .934.139 1.83l1.111-.17A11 11 0 0 1 1.125 12q0-.848.125-1.66zm23.723.002-1.111.17q.125.812.125 1.66c0 .848-.042 1.12-.125 1.66l1.111.172a12.1 12.1 0 0 0 0-3.662M1.434 14.58l-1.094.268a12 12 0 0 0 .96 2.591l-.265 1.14 1.096.255.36-1.539-.188-.365a10.8 10.8 0 0 1-.87-2.35m21.133 0a10.8 10.8 0 0 1-1.27 3.067l.962.584a12 12 0 0 0 1.402-3.383zm-1.793 3.848a11 11 0 0 1-2.345 2.345l.664.909a12 12 0 0 0 2.59-2.59zm-19.959 1.1L.357 21.48a1.8 1.8 0 0 0 2.162 2.161l1.954-.455-.256-1.095-1.953.455a.675.675 0 0 1-.81-.81l.454-1.954zm16.832 1.769a10.8 10.8 0 0 1-3.066 1.27l.268 1.093a12 12 0 0 0 3.382-1.402zm-10.94.213-1.54.36.256 1.095 1.139-.266c.814.415 1.683.74 2.591.961l.268-1.094a10.8 10.8 0 0 1-2.35-.869zm3.634 1.24-.172 1.111a12.1 12.1 0 0 0 3.662 0l-.17-1.111q-.812.125-1.66.125a11 11 0 0 1-1.66-.125"},
+}
+
+func (Plugin) Info() *plugins.Info {
+	return &plugins.Info{
+		ID: "signal", Name: "Signal", Kind: "source",
+		Services:    []string{Service},
+		ServiceInfo: looks,
+		NameWeights: []plugins.Weight{{Key: "signal/book", Weight: 80}, {Key: "signal/profile", Weight: 30}},
+		Description: "Signal as it arrives, through a helper linked to the account as a device (like Signal " +
+			"Desktop): what arrives from the moment it is linked, not the history before it.",
+		Modes:       []string{"import", "live"},
+		LiveDefault: true,
+		Needs:       []string{"the Signal helper (everysaid-signal)", "a link from the phone (a QR code)"},
+		Settings: []plugins.Setting{
+			{Key: "helper", Label: "The Signal helper (everysaid-signal)", Type: "path",
+				Help: "Empty: the one next to Everysaid, else the one on the PATH"},
+			{Key: "device_name", Label: "This device's name on the phone", Default: "Everysaid"},
+			{Key: "media", Label: "Download pictures, videos and files", Type: "bool", Default: true},
+			{Key: "read_receipts", Label: "Send read receipts", Type: "bool", Default: false,
+				Help: "When a chat is opened here, the others see it read, and it is read on the phone too"},
+		},
+		CanSend: true, CanReply: true, CanMention: true, CanMarkRead: true, CanSendFiles: true,
+		Actions: []plugins.Action{{ID: "link", Label: "Link this computer (QR code)"},
+			{ID: "sync", Label: "Ask the phone for its contacts"}},
+	}
+}
+
+// StoreDir holds the helper's state (the device's keys): <data>/signal/<instance>.
+func StoreDir(c *plugins.Context) string {
+	return filepath.Join(config.Data, "signal", fmt.Sprint(c.ID))
+}
+
+// CacheDir holds signal.db and the files: <cache>/signal/<instance>.
+func CacheDir(c *plugins.Context) string {
+	return filepath.Join(config.Cache, "signal", fmt.Sprint(c.ID))
+}
+
+func dbPath(c *plugins.Context) string   { return filepath.Join(CacheDir(c), "signal.db") }
+func mediaDir(c *plugins.Context) string { return filepath.Join(CacheDir(c), "media") }
+
+// passphrase is the helper's store's: made the first time, kept in the keyring (never shown).
+func passphrase(c *plugins.Context) (string, error) {
+	if p := c.Secret("passphrase"); p != "" {
+		return p, nil
+	}
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	p := hex.EncodeToString(b)
+	if _, err := c.SaveSecret("passphrase", p); err != nil {
+		return "", err
+	}
+	return p, nil
+}
+
+func (p Plugin) Check(c *plugins.Context) (bool, string) {
+	if FindHelper(c.Str("helper")) == "" {
+		return false, "missing: the Signal helper (everysaid-signal)"
+	}
+	return true, "ready"
+}
+
+func (p Plugin) InfoFacts(c *plugins.Context) []plugins.Fact {
+	k := instanceOf(c.ID)
+	k.mu.Lock()
+	status, url, phase := k.status, k.linkURL, k.phase
+	k.mu.Unlock()
+	aci, _ := c.State["aci"].(string)
+	connection := "not connected to Signal"
+	switch {
+	case url != "":
+		connection = "waiting for the phone to scan the code"
+	case aci == "" && !status.Linked:
+		connection = "not linked yet (Link this computer)"
+	case phase == "syncing":
+		connection = "linked: bringing what waited on Signal's server"
+	case phase == "ready":
+		connection = "connected to Signal"
+	}
+	facts := []plugins.Fact{{Label: "Connection", Value: connection}}
+	if url != "" {
+		facts = append(facts, plugins.Fact{Label: "Link code", Value: url})
+	}
+	if phone, _ := c.State["phone"].(string); phone != "" {
+		facts = append(facts, plugins.Fact{Label: "Account", Value: phone})
+	}
+	if contacts, groups, ok := counts(dbPath(c)); ok && aci != "" {
+		facts = append(facts, plugins.Fact{Label: "Contacts", Value: fmt.Sprint(contacts)},
+			plugins.Fact{Label: "Groups", Value: fmt.Sprint(groups)})
+	}
+	return facts
+}
+
+func (p Plugin) IdleActions(c *plugins.Context) []string {
+	if aci, _ := c.State["aci"].(string); aci != "" {
+		return []string{"link"}
+	}
+	return []string{"sync"}
+}
+
+// instance is what runs for a plugin instance: at most one helper at a time.
+type instance struct {
+	run sync.Mutex // held by whoever runs the helper (the live connection, or one piece of work)
+
+	mu      sync.Mutex
+	live    *conn  // the live connection's, while it runs
+	status  Status // the helper's last word on its account
+	linkURL string // a link waiting for the phone to scan it
+	phase   string // "", linking, syncing (receiving what waited on the server), ready
+	linked  chan struct{}
+}
+
+// setPhase moves the instance on, said to the user's devices (the card shows it).
+func (k *instance) setPhase(c *plugins.Context, phase string) {
+	k.mu.Lock()
+	changed := k.phase != phase
+	k.phase = phase
+	k.mu.Unlock()
+	if changed {
+		c.Emit(M{"type": "changed"})
+	}
+}
+
+// counts are how many contacts and groups signal.db has (false: none yet).
+func counts(path string) (int64, int64, bool) {
+	if _, err := os.Stat(path); err != nil {
+		return 0, 0, false
+	}
+	d, err := db.ReadOnly(path)
+	if err != nil {
+		return 0, 0, false
+	}
+	defer d.Close()
+	var contacts, groups int64
+	if d.QueryRow("SELECT (SELECT count(*) FROM contact), (SELECT count(*) FROM grp)").Scan(&contacts, &groups) != nil {
+		return 0, 0, false
+	}
+	return contacts, groups, true
+}
+
+var (
+	instMu    sync.Mutex
+	instances = map[int64]*instance{}
+)
+
+func instanceOf(id int64) *instance {
+	instMu.Lock()
+	defer instMu.Unlock()
+	k := instances[id]
+	if k == nil {
+		k = &instance{linked: make(chan struct{}, 1)}
+		instances[id] = k
+	}
+	return k
+}
+
+// conn is a running helper and what it feeds: signal.db, and the import after it.
+type conn struct {
+	h     *Helper
+	c     *plugins.Context
+	k     *instance
+	store *Store
+	own   string
+
+	synced     bool          // the phone's contacts came once (kept in the instance's state)
+	syncAsked  bool          // the phone was asked for its contacts (once, if they did not come by themselves)
+	dirty      chan struct{} // something new for the archive
+	queueEmpty chan struct{} // what waited on the server has all come
+	ended      chan string   // the receiving ended (why)
+}
+
+// open starts the helper, opens its store, and signal.db.
+func open(c *plugins.Context, k *instance) (*conn, error) {
+	path := FindHelper(c.Str("helper"))
+	if path == "" {
+		return nil, errs.Plugin("The Signal helper (everysaid-signal) is not installed: put it next to Everysaid or on the PATH", 0)
+	}
+	pass, err := passphrase(c)
+	if err != nil {
+		return nil, err
+	}
+	st, err := OpenStore(dbPath(c))
+	if err != nil {
+		return nil, err
+	}
+	n := &conn{c: c, k: k, store: st, dirty: make(chan struct{}, 1), queueEmpty: make(chan struct{}, 1),
+		ended: make(chan string, 1)}
+	n.synced, _ = c.State["contacts_synced"].(bool)
+	n.h, err = StartHelper(path, n.event, func(line string) { c.Logf("[signal] %s", line) })
+	if err != nil {
+		st.Close()
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	raw, err := n.h.Call(ctx, "open", map[string]any{"store": StoreDir(c), "attachments": mediaDir(c), "passphrase": pass})
+	if err != nil {
+		n.close()
+		var he *HelperError
+		if errors.As(err, &he) && he.Code == "locked" {
+			return nil, errs.Plugin("The Signal helper's store cannot be opened with the passphrase in the keyring", 0)
+		}
+		return nil, err
+	}
+	if err := n.setStatus(raw); err != nil {
+		n.close()
+		return nil, err
+	}
+	return n, nil
+}
+
+func (n *conn) close() {
+	n.k.setPhase(n.c, "")
+	n.h.Close()
+	n.store.Close()
+}
+
+// setStatus keeps the helper's word on its account: in the instance, signal.db and its state.
+func (n *conn) setStatus(raw json.RawMessage) error {
+	st, err := decodeStatus(raw)
+	if err != nil {
+		return err
+	}
+	n.k.mu.Lock()
+	n.k.status = st
+	n.k.mu.Unlock()
+	if st.Linked {
+		n.own = st.ACI
+		n.store.Account(st)
+		if was, _ := n.c.State["aci"].(string); was != st.ACI {
+			n.c.SaveState(M{"aci": st.ACI, "phone": st.Phone})
+		}
+	}
+	return nil
+}
+
+func signal(ch chan struct{}) {
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
+// event is one of the helper's events, as it comes.
+func (n *conn) event(name string, raw []byte) {
+	switch name {
+	case "link_url":
+		var e struct {
+			URL string `json:"url"`
+		}
+		json.Unmarshal(raw, &e)
+		n.k.mu.Lock()
+		n.k.linkURL = e.URL
+		n.k.mu.Unlock()
+		n.k.setPhase(n.c, "linking")
+		n.c.Log("Scan this code in Signal on the phone (Settings, Linked devices):", nil)
+		n.c.Logf("%s", e.URL)
+		n.c.Emit(M{"type": "plugin_qr", "instance": n.c.ID, "code": e.URL})
+		n.c.Emit(M{"type": "changed"})
+	case "queue_empty":
+		n.k.mu.Lock()
+		first := n.k.phase != "ready"
+		n.k.mu.Unlock()
+		if first {
+			n.c.Log("Up to date with Signal", nil)
+			n.k.setPhase(n.c, "ready")
+		}
+		// the phone sends its contacts by itself once linked; where they did not come, asked once
+		// (after the queue: Signal's apps send nothing before they have read what waited)
+		if !n.synced && !n.syncAsked {
+			n.syncAsked = true
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if _, err := n.h.Call(ctx, "sync", nil); err == nil {
+				n.c.Log("Asked the phone for its contacts", nil)
+			}
+			cancel()
+		}
+		signal(n.queueEmpty)
+		signal(n.dirty)
+	case "contacts":
+		kept, err := n.store.Apply(raw)
+		if err != nil {
+			n.c.Log("error: {e}", map[string]any{"e": err})
+			return
+		}
+		var e struct {
+			Contacts []any `json:"contacts"`
+		}
+		json.Unmarshal(raw, &e)
+		n.c.Log("Contacts from the phone: {n}", map[string]any{"n": len(e.Contacts)})
+		if !n.synced {
+			n.synced = true
+			n.c.SaveState(M{"contacts_synced": true})
+		}
+		if kept {
+			signal(n.dirty)
+		}
+	case "receive_ended":
+		var e struct {
+			Error *string `json:"error"`
+		}
+		json.Unmarshal(raw, &e)
+		select {
+		case n.ended <- deref(e.Error):
+		default:
+		}
+	case "decryption_error":
+		var e struct {
+			Sender string `json:"sender"`
+		}
+		json.Unmarshal(raw, &e)
+		n.c.Log("a message from {who} could not be read", map[string]any{"who": e.Sender})
+	default:
+		kept, err := n.store.Apply(raw)
+		if err != nil {
+			n.c.Log("error: {e}", map[string]any{"e": err})
+			return
+		}
+		if kept {
+			signal(n.dirty)
+		}
+	}
+}
+
+// helperFor is the helper for a piece of work: the live connection's while it runs, else one
+// started for it (done stops it). It waits for another piece of work to end, until ctx does.
+func helperFor(ctx context.Context, c *plugins.Context) (*conn, func(), error) {
+	k := instanceOf(c.ID)
+	for {
+		k.mu.Lock()
+		live := k.live
+		k.mu.Unlock()
+		if live != nil {
+			return live, func() {}, nil
+		}
+		if k.run.TryLock() {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	n, err := open(c, k)
+	if err != nil {
+		k.run.Unlock()
+		return nil, nil, err
+	}
+	return n, func() { n.close(); k.run.Unlock() }, nil
+}
+
+// importLock: one import at a time. Python's host has one (host.import_lock), shared by every
+// plugin; a host that offers it (ImportLock) is used, else this package's own.
+var importLock sync.Mutex
+
+func lockOf(c *plugins.Context) sync.Locker {
+	if h, ok := c.Host().(interface{ ImportLock() sync.Locker }); ok {
+		return h.ImportLock()
+	}
+	return &importLock
+}
+
+func skipChats(c *plugins.Context) map[string]bool {
+	skip := map[string]bool{}
+	if list, ok := c.Settings["skip_chats"].([]any); ok {
+		for _, x := range list {
+			skip[fmt.Sprint(x)] = true
+		}
+	}
+	return skip
+}
+
+// importNow brings signal.db into the archive (as run_importers does for the other sources: the
+// new messages and calls said to the user's devices, changes too).
+func importNow(c *plugins.Context) (err error) {
+	l := lockOf(c)
+	l.Lock()
+	var m0, m1, c0, c1 int64
+	var n Counts
+	func() {
+		defer l.Unlock()
+		var a *archive.Archive
+		if a, err = archive.Open(c.Store().Path); err != nil {
+			return
+		}
+		defer a.Close()
+		defer archive.Recover(&err)
+		m0, c0 = a.Int("SELECT ifnull(max(id), 0) FROM message"), a.Int("SELECT ifnull(max(id), 0) FROM call")
+		if n, err = Import(a, dbPath(c), mediaDir(c), c.ID, skipChats(c)); err != nil {
+			return
+		}
+		m1, c1 = a.Int("SELECT ifnull(max(id), 0) FROM message"), a.Int("SELECT ifnull(max(id), 0) FROM call")
+	}()
+	if err != nil {
+		return err
+	}
+	if m1 > m0 || c1 > c0 {
+		c.Emit(M{"type": "new", "messages": []int64{m0, m1}, "calls": []int64{c0, c1}})
+	}
+	if n.Changes > 0 { // edits, deletions, reactions on messages already shown
+		c.Emit(M{"type": "changed"})
+	}
+	if n.Messages+n.Calls+n.Files+n.Changes > 0 {
+		c.Log("new messages: {m}, new calls: {c}", map[string]any{"m": m1 - m0, "c": c1 - c0})
+	}
+	return nil
+}
+
+// receive starts receiving: first what waited on Signal's server (the phase "syncing", until the
+// queue is empty), then what arrives.
+func (n *conn) receive(ctx context.Context) error {
+	n.k.setPhase(n.c, "syncing")
+	n.c.Log("Bringing what waited on Signal's server", nil)
+	_, err := n.h.Call(ctx, "receive", map[string]any{"download": n.c.Bool("media")})
+	return notLinked(err)
+}
+
+// drain waits for what waited on the server (or for the receiving to end, or ctx), then for it to
+// be in signal.db.
+func (n *conn) drain(ctx context.Context) {
+	select {
+	case <-n.queueEmpty:
+	case why := <-n.ended:
+		if why != "" {
+			n.c.Log("error: {e}", map[string]any{"e": why})
+		}
+	case <-ctx.Done():
+	}
+	n.h.Settle()
+}
+
+// RunImport brings what waited on Signal's server (where the live connection does not run) and
+// what signal.db has into the archive.
+func (p Plugin) RunImport(c *plugins.Context) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	n, done, err := helperFor(ctx, c)
+	if err != nil {
+		return err
+	}
+	k := instanceOf(c.ID)
+	k.mu.Lock()
+	live := k.live == n
+	linked := k.status.Linked
+	k.mu.Unlock()
+	if !live {
+		if !linked {
+			done()
+			return errs.Plugin("Not linked to Signal yet: use “Link this computer” and scan the code with the phone", 0)
+		}
+		if err := n.receive(ctx); err != nil {
+			done()
+			return err
+		}
+		n.drain(ctx) // what waited on the server, then the import
+	}
+	done()
+	return importNow(c)
+}
+
+// Live receives as messages arrive, keeping them in signal.db and importing them a moment later.
+// Not linked, it waits for “Link this computer” (which then goes through it).
+func (p Plugin) Live(ctx context.Context, c *plugins.Context) error {
+	k := instanceOf(c.ID)
+	for !k.run.TryLock() { // a piece of work under way ends first
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	defer k.run.Unlock()
+	n, err := open(c, k)
+	if err != nil {
+		return err
+	}
+	defer n.close()
+	k.mu.Lock()
+	k.live = n
+	linked := k.status.Linked
+	k.mu.Unlock()
+	defer func() {
+		k.mu.Lock()
+		k.live = nil
+		k.mu.Unlock()
+	}()
+	if !linked {
+		c.Log("Not linked to Signal yet: use “Link this computer” and scan the code with the phone", nil)
+		select {
+		case <-k.linked:
+		case <-n.h.Done():
+			return ErrStopped
+		case <-ctx.Done():
+			return nil
+		}
+	}
+	c.Log("connected to Signal", nil)
+	// what this device received while signal.db did not keep it (the app stopped half way)
+	hctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	since := n.store.Newest() - int64(24*time.Hour/time.Millisecond)
+	if raw, err := n.h.Call(hctx, "history", map[string]any{"since": max(since, 0)}); err == nil {
+		var h struct {
+			Events []json.RawMessage `json:"events"`
+		}
+		json.Unmarshal(raw, &h)
+		for _, e := range h.Events {
+			n.store.Apply(e)
+		}
+	}
+	cancel()
+	if err := n.receive(ctx); err != nil {
+		return err
+	}
+	if err := importNow(c); err != nil {
+		c.Log("error: {e}", map[string]any{"e": err})
+	}
+	var later <-chan time.Time
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-n.h.Done():
+			return ErrStopped
+		case why := <-n.ended:
+			if why == "" {
+				why = "the connection to Signal ended"
+			}
+			return errs.Plugin(why, 0)
+		case <-n.dirty:
+			if later == nil { // a moment for what comes together (a message and its group, a burst)
+				later = time.After(time.Second)
+			}
+		case <-later:
+			later = nil
+			if err := importNow(c); err != nil {
+				c.Log("error: {e}", map[string]any{"e": err})
+			}
+		}
+	}
+}
+
+// Action: "link" links this computer to the account (a code for the phone to scan; through the
+// live connection where it runs); "sync" asks the phone for its contacts again.
+func (p Plugin) Action(c *plugins.Context, name string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	n, done, err := helperFor(ctx, c)
+	if err != nil {
+		return err
+	}
+	switch name {
+	case "link":
+		// the code is for a few minutes: then it is said so, and the user asks for another
+		lctx, lcancel := context.WithTimeout(ctx, linkWait)
+		raw, err := n.h.Call(lctx, "link", map[string]any{"device_name": c.Str("device_name")})
+		lcancel()
+		n.k.mu.Lock()
+		n.k.linkURL = ""
+		n.k.mu.Unlock()
+		c.Emit(M{"type": "changed"})
+		var he *HelperError
+		switch {
+		case errors.As(err, &he) && he.Code == "already_linked":
+			done()
+			return errs.Plugin("Already linked to Signal", 0)
+		case errors.Is(err, context.DeadlineExceeded):
+			n.k.setPhase(c, "")
+			n.k.mu.Lock()
+			live := n.k.live == n
+			n.k.mu.Unlock()
+			done()
+			if live { // the live helper is still waiting for the scan: it starts again
+				n.h.Kill()
+			}
+			return errs.Plugin("No code was scanned in time", 0)
+		case err != nil:
+			n.k.setPhase(c, "")
+			done()
+			return err
+		}
+		if err := n.setStatus(raw); err != nil {
+			done()
+			return err
+		}
+		c.Log("Linked to Signal as {phone}", map[string]any{"phone": n.k.status.Phone})
+		n.k.mu.Lock()
+		live := n.k.live == n
+		n.k.mu.Unlock()
+		if live { // the live connection goes on by itself: the first sync, then what arrives
+			signal(n.k.linked)
+			done()
+			return nil
+		}
+		// no live connection: the first sync (contacts, groups, what waited) now, then the import
+		if err := n.receive(ctx); err == nil {
+			n.drain(ctx)
+		}
+		done()
+		return importNow(c)
+	case "sync":
+		defer done()
+		if _, err := n.h.Call(ctx, "sync", nil); err != nil {
+			return notLinked(err)
+		}
+		c.Log("Asked the phone for its contacts", nil)
+		return nil
+	}
+	done()
+	return errs.Plugin("unknown action", 0)
+}
+
+// linkWait is how long a link code waits for the phone.
+var linkWait = 5 * time.Minute
+
+// notLinked says the helper's not_linked in the user's words.
+func notLinked(err error) error {
+	var he *HelperError
+	if errors.As(err, &he) && he.Code == "not_linked" {
+		return errs.Plugin("Not linked to Signal yet: use “Link this computer” and scan the code with the phone", 0)
+	}
+	return err
+}
+
+// Chats are the chats signal.db has, with the user's choice for each.
+func (p Plugin) Chats(c *plugins.Context) ([]M, error) {
+	list, err := ChatList(dbPath(c), skipChats(c))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]M, len(list))
+	for i, x := range list {
+		out[i] = x
+	}
+	return out, nil
+}
+
+// isGroupKey: a person's chat is keyed by their ACI (a UUID, or "PNI:<uuid>"), a group's by its id.
+func isGroupKey(key string) bool {
+	k := strings.TrimPrefix(key, "PNI:")
+	return !(len(k) == 36 && strings.Count(k, "-") == 4)
+}
+
+// aciOf is a person's Signal ACI, from any of their addresses: the address itself where it is one,
+// else one that is a member of the conversation.
+func aciOf(c *plugins.Context, addressID, conversationID int64) (string, error) {
+	var v string
+	if !db.Row(c.Store().Read(), "SELECT a.value FROM person_address mine JOIN person_address theirs ON theirs.person_id = mine.person_id "+
+		"JOIN address a ON a.id = theirs.address_id JOIN address_kind k ON k.id = a.kind_id "+
+		"JOIN service s ON s.id = a.service_id WHERE mine.address_id = ? AND k.name = 'id' AND s.name = 'signal' "+
+		"ORDER BY a.id = mine.address_id DESC, EXISTS (SELECT 1 FROM conversation_member cm WHERE "+
+		"cm.conversation_id = ? AND cm.address_id = a.id) DESC, a.id LIMIT 1", []any{addressID, conversationID}, &v) {
+		return "", errs.Plugin("Unknown person to mention", 0)
+	}
+	return v, nil
+}
+
+type outMention struct {
+	Start  int    `json:"start"`
+	Length int    `json:"length"`
+	ACI    string `json:"aci"`
+}
+
+// mentionsOut is the text with each mention ({start, length} in characters, e.g. "@name") written
+// as Signal's apps do, U+FFFC where the name was, and where each is in UTF-16 units.
+func mentionsOut(c *plugins.Context, text string, ms []plugins.Mention, conversationID int64) (string, []outMention, error) {
+	runes := []rune(text)
+	sorted := append([]plugins.Mention(nil), ms...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Start < sorted[j].Start })
+	var out []rune
+	var placed []outMention
+	at := 0
+	for _, m := range sorted {
+		start, end := min(max(m.Start, at), len(runes)), min(max(m.Start+m.Length, m.Start), len(runes))
+		aci, err := aciOf(c, m.AddressID, conversationID)
+		if err != nil {
+			return "", nil, err
+		}
+		out = append(out, runes[at:start]...)
+		placed = append(placed, outMention{Start: len(utf16.Encode(out)), Length: 1, ACI: aci})
+		out = append(out, '\uFFFC')
+		at = max(end, start)
+	}
+	out = append(out, runes[at:]...)
+	return string(out), placed, nil
+}
+
+// Send sends into a conversation (a reply quoting a message, mentions, a file with the text as its
+// caption); what was sent comes into the archive as Signal's other messages do.
+func (p Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conversation, text string,
+	reply *plugins.Reply, mentions []plugins.Mention, file *plugins.File) (any, error) {
+	n, done, err := helperFor(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	kind := "contact"
+	if isGroupKey(conv.Key) {
+		kind = "group"
+	}
+	req := map[string]any{"chat": M{"kind": kind, "id": conv.Key}, "text": text}
+	if len(mentions) > 0 {
+		t, placed, err := mentionsOut(c, text, mentions, conv.ID)
+		if err != nil {
+			return nil, err
+		}
+		req["text"], req["mentions"] = t, placed
+	}
+	if reply != nil {
+		author, ts, ok := SplitKey(reply.Key)
+		if !ok {
+			return nil, errs.Plugin("This message cannot be answered", 0)
+		}
+		q := M{"ts": ts, "author": author}
+		var t *string
+		if db.Row(c.Store().Read(), "SELECT text FROM message WHERE id = ?", []any{reply.ID}, &t) && t != nil {
+			q["text"] = *t
+		}
+		req["quote"] = q
+	}
+	if file != nil {
+		tmp, err := os.CreateTemp(CacheDir(c), "send-*-"+filepath.Base(file.Filename))
+		if err != nil {
+			return nil, err
+		}
+		defer os.Remove(tmp.Name())
+		_, err = tmp.Write(file.Data)
+		if cerr := tmp.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return nil, err
+		}
+		a := M{"path": tmp.Name()}
+		if file.Filename != "" {
+			a["filename"] = file.Filename
+		}
+		if file.MimeType != "" {
+			a["content_type"] = file.MimeType
+		}
+		req["attachments"] = []M{a}
+	}
+	raw, err := n.h.Call(ctx, "send", req)
+	if err != nil {
+		var he *HelperError
+		if errors.As(err, &he) && he.Code == "failed" {
+			return nil, errs.Plugin("Sending failed", 0)
+		}
+		return nil, notLinked(err)
+	}
+	n.h.Settle() // the message it sent is in signal.db
+	if err := importNow(c); err != nil {
+		return nil, err
+	}
+	var answer struct {
+		TS int64 `json:"ts"`
+	}
+	json.Unmarshal(raw, &answer)
+	return M{"id": Key(n.own, answer.TS)}, nil
+}
+
+// MarkRead sends read receipts for the others' messages of the conversation up to `until` (Unix ms),
+// where the user turned them on; it returns how many were marked.
+func (p Plugin) MarkRead(ctx context.Context, c *plugins.Context, conv plugins.Conversation, until int64) (int, error) {
+	if !c.Bool("read_receipts") {
+		return 0, nil
+	}
+	k := instanceOf(c.ID)
+	k.mu.Lock()
+	n := k.live
+	k.mu.Unlock()
+	if n == nil {
+		return 0, nil // only through the live connection
+	}
+	unread := n.store.Unread(conv.Key, until)
+	if len(unread) == 0 {
+		return 0, nil
+	}
+	raw, err := n.h.Call(ctx, "mark_read", map[string]any{"messages": unread})
+	if err != nil {
+		return 0, notLinked(err)
+	}
+	n.store.Read(unread, time.Now().UnixMilli())
+	if err := importNow(c); err != nil {
+		return 0, err
+	}
+	var answer struct {
+		Marked int `json:"marked"`
+	}
+	json.Unmarshal(raw, &answer)
+	return answer.Marked, nil
+}
