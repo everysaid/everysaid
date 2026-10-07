@@ -63,13 +63,15 @@ class Host:
         (m0, m1), (c0, c1) = event.get("messages", (0, 0)), event.get("calls", (0, 0))
         states = queries._states(self.store)
         chats, incoming = {}, []
-        for mid, conv, outgoing, txt, kind in db.execute(
-                "SELECT m.id, m.conversation_id, m.outgoing, m.text, k.name FROM message m "
+        mine = {a for (a,) in db.execute("SELECT address_id FROM account")}
+        for mid, conv, outgoing, txt, kind, sender in db.execute(
+                "SELECT m.id, m.conversation_id, m.outgoing, m.text, k.name, m.sender_id FROM message m "
                 "JOIN message_kind k ON k.id = m.kind_id WHERE m.id > ? AND m.id <= ? ORDER BY m.id", (m0, m1)):
             cid = queries.chat_of_conversation(self.store, conv)
             if cid:
                 chats[cid] = chats.get(cid, 0) + 1
-                if not outgoing and not states.get(cid, (0, 0, 0))[2]:
+                # no push for the owner's own, written on another device (a source may give it as received)
+                if not outgoing and sender not in mine and kind != "system" and not states.get(cid, (0, 0, 0))[2]:
                     incoming.append((cid, mid, txt, kind))
         if self.push and incoming:
             self.push.notify(self.store, incoming)

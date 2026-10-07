@@ -164,6 +164,9 @@ def run(archive, iphone_db=IPHONE_DB, desktop_db=DESKTOP_DB):
             # the notes are not a group: the app shows them as the user's notes, with the other services'
             archive.db.execute("UPDATE conversation SET is_group = ? WHERE id = ?",
                                (int(c["ZSUBTYPE"] != NOTES), convs[c["Z_PK"]]))
+            if c["ZSUBTYPE"] == NOTES:          # the owner is its member: theirs, said by the source
+                archive.db.executemany("INSERT OR IGNORE INTO conversation_member VALUES (?, ?)",
+                                       [(convs[c["Z_PK"]], archive.address(*h)) for h in own if h[0] == "phone"])
         else:
             convs[c["Z_PK"]] = archive.conversation("viber", mem or [("id", f"conversation:{c['Z_PK']}", "viber")])
     attachment = dict(iphone.execute("SELECT Z_PK, ZTYPE FROM ZATTACHMENT").fetchall())
