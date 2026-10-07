@@ -297,3 +297,103 @@ func TestCardDavWrongAnswer(t *testing.T) {
 		}
 	}
 }
+
+// A CardDAV server that keeps sync tokens (RFC 6578) is asked only what changed: cards changed or
+// added (one sent without its card, asked for after), and cards gone; a token it no longer takes
+// means all again, an answer cut short is asked on.
+func TestCardDavSyncToken(t *testing.T) {
+	card := func(uid, name, tel string) string {
+		return "BEGIN:VCARD\nVERSION:3.0\nUID:" + uid + "\nFN:" + name + "\nTEL:" + tel + "\nEND:VCARD\n"
+	}
+	type entry struct{ href, data string }
+	var asked []string
+	var answer func(token string) (entries []entry, gone []string, next string, more bool)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body := string(b)
+		var out strings.Builder
+		out.WriteString(`<?xml version="1.0"?><d:multistatus xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">`)
+		respond := func(href, data string) {
+			fmt.Fprintf(&out, `<d:response><d:href>%s</d:href><d:propstat><d:prop><d:getetag>"1"</d:getetag>`, href)
+			if data != "" {
+				fmt.Fprintf(&out, `<card:address-data>%s</card:address-data>`, data)
+			}
+			out.WriteString(`</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>`)
+		}
+		switch {
+		case strings.Contains(body, "sync-collection"):
+			token := body[strings.Index(body, "<d:sync-token>")+len("<d:sync-token>") : strings.Index(body, "</d:sync-token>")]
+			asked = append(asked, "sync:"+token)
+			entries, gone, next, more := answer(token)
+			if next == "" {
+				w.WriteHeader(403)
+				io.WriteString(w, `<?xml version="1.0"?><d:error xmlns:d="DAV:"><d:valid-sync-token/></d:error>`)
+				return
+			}
+			for _, e := range entries {
+				respond(e.href, e.data)
+			}
+			for _, g := range gone {
+				fmt.Fprintf(&out, `<d:response><d:href>%s</d:href><d:status>HTTP/1.1 404 Not Found</d:status></d:response>`, g)
+			}
+			if more {
+				out.WriteString(`<d:response><d:href>/c/</d:href><d:status>HTTP/1.1 507 Insufficient Storage</d:status></d:response>`)
+			}
+			fmt.Fprintf(&out, `<d:sync-token>%s</d:sync-token>`, next)
+		case strings.Contains(body, "addressbook-multiget"):
+			asked = append(asked, "multiget")
+			respond("/c/c.vcf", card("c", "Gamma", "+306940000003"))
+		default:
+			asked = append(asked, "query")
+		}
+		out.WriteString(`</d:multistatus>`)
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(207)
+		io.WriteString(w, out.String())
+	}))
+	defer srv.Close()
+	s, c := archiveWith(t, "carddav", M{"url": srv.URL + "/c/", "username": "me"})
+	names := func() string {
+		return strings.Join(db.Strs(s.Read(), "SELECT name FROM contact ORDER BY name"), ",")
+	}
+	sync := func(want string, calls ...string) {
+		t.Helper()
+		asked = nil
+		if err := (CardDav{}).Sync(c); err != nil {
+			t.Fatal(err)
+		}
+		if names() != want || strings.Join(asked, " ") != strings.Join(calls, " ") {
+			t.Fatalf("contacts %s, asked %v", names(), asked)
+		}
+	}
+	// the first time everything, in two parts
+	answer = func(token string) ([]entry, []string, string, bool) {
+		if token == "" {
+			return []entry{{"/c/a.vcf", card("a", "Alpha", "+306940000001")}}, nil, "p1", true
+		}
+		return []entry{{"/c/b.vcf", card("b", "Beta", "+306940000002")}}, nil, "t1", false
+	}
+	sync("Alpha,Beta", "sync:", "sync:p1")
+	// then what changed: Alpha renamed, Beta gone, Gamma new (without its card)
+	answer = func(token string) ([]entry, []string, string, bool) {
+		if token != "t1" {
+			t.Fatalf("token %q", token)
+		}
+		return []entry{{"/c/a.vcf", card("a", "Alpha Two", "+306940000001")}, {"/c/c.vcf", ""}}, []string{"/c/b.vcf"}, "t2", false
+	}
+	sync("Alpha Two,Gamma", "sync:t1", "multiget")
+	if n := db.Int(s.Read(), "SELECT count(*) FROM contact_address"); n != 1 { // Alpha's: the archive's only number
+		t.Fatal(n, "addresses")
+	}
+	// a token no longer taken: everything again, what is not in it gone
+	answer = func(token string) ([]entry, []string, string, bool) {
+		if token == "t2" {
+			return nil, nil, "", false
+		}
+		return []entry{{"/c/a.vcf", card("a", "Alpha", "+306940000001")}}, nil, "t3", false
+	}
+	sync("Alpha", "sync:t2", "sync:")
+	// a server that has no sync tokens: the whole address book, asked for at once
+	answer = func(string) ([]entry, []string, string, bool) { return nil, nil, "", false }
+	sync("", "sync:t3", "sync:", "query")
+}
