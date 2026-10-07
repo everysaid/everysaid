@@ -53,6 +53,10 @@ part of the distribution.
 - **Dependencies.** `go get` what you need; never `go mod tidy` (others' packages may be half
   written). Do not edit packages owned by another part of the work; if you need something from
   them, write it in your own package and say so in your report.
+- **Checks.** `go test ./internal/checks/` looks over the whole code (the port of `tests/test_i18n.py`):
+  the interface's keys, error codes with words, plugin words with Greek, no Greek string in Go code
+  outside `internal/i18n` (and the data packages it lists). It must pass before a part is reported done.
+  A new plugin package is added to `internal/all` (blank import) so that the checks and the binary load it.
 - **Tests.** Each Python test file is ported to Go tests next to the code it tests. Tests run on a
   demo archive or on fixtures made in the test, never on the owner's archive.
 - **The owner's data.** Read only, and only for parity checks: build an archive in a temporary
