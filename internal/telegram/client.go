@@ -20,14 +20,19 @@ import (
 )
 
 // floodWait sleeps through a FLOOD_WAIT up to threshold and tries again, as Telethon's
-// flood_sleep_threshold does; a longer one is the error.
+// flood_sleep_threshold does; a longer one is the error. A call made with withThreshold uses its
+// own (the sync's, on the live connection).
 func floodWait(threshold time.Duration) telegram.Middleware {
 	return telegram.MiddlewareFunc(func(next tg.Invoker) telegram.InvokeFunc {
 		return func(ctx context.Context, input bin.Encoder, output bin.Decoder) error {
+			limit := threshold
+			if v, ok := ctx.Value(thresholdKey{}).(time.Duration); ok {
+				limit = v
+			}
 			for {
 				err := next.Invoke(ctx, input, output)
 				d, ok := tgerr.AsFloodWait(err)
-				if !ok || d > threshold {
+				if !ok || d > limit {
 					return err
 				}
 				select {
@@ -40,17 +45,109 @@ func floodWait(threshold time.Duration) telegram.Middleware {
 	})
 }
 
+type thresholdKey struct{}
+
+// withThreshold is ctx with the longest FLOOD_WAIT its calls sleep through.
+func withThreshold(ctx context.Context, d time.Duration) context.Context {
+	return context.WithValue(ctx, thresholdKey{}, d)
+}
+
+// gate keeps a process to one client with the account's key: two at once (the live connection and
+// an import's sync, or a send while neither runs) would be two sessions of one key, each saving
+// the session over the other's. A client open offers its connection to the others, which use it
+// instead of opening their own; only the live connection, which needs its own updates, and a login
+// wait for the open one to end.
+type gate struct {
+	mu      sync.Mutex
+	busy    bool          // a client is open
+	shared  *conn         // its connection, while others may use it
+	users   int           // how many are using it
+	changed chan struct{} // closed at every change of the three
+}
+
+var one = &gate{changed: make(chan struct{})}
+
+func (g *gate) notify() { // with mu held
+	close(g.changed)
+	g.changed = make(chan struct{})
+}
+
+// take is the connection open now (share: if it may be used), or else the right to open one; done
+// gives back either.
+func (g *gate) take(ctx context.Context, share bool) (cn *conn, done func(), err error) {
+	for {
+		g.mu.Lock()
+		if share && g.shared != nil {
+			cn := g.shared
+			g.users++
+			g.mu.Unlock()
+			return cn, func() {
+				g.mu.Lock()
+				g.users--
+				g.notify()
+				g.mu.Unlock()
+			}, nil
+		}
+		if !g.busy {
+			g.busy = true
+			g.mu.Unlock()
+			return nil, func() {
+				g.mu.Lock()
+				g.busy = false
+				g.notify()
+				g.mu.Unlock()
+			}, nil
+		}
+		ch := g.changed
+		g.mu.Unlock()
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		}
+	}
+}
+
+// share offers cn to the others until stop, which waits (a minute at most) for those using it.
+func (g *gate) share(cn *conn) (stop func()) {
+	g.mu.Lock()
+	g.shared = cn
+	g.notify()
+	g.mu.Unlock()
+	return func() {
+		deadline := time.After(time.Minute)
+		g.mu.Lock()
+		g.shared = nil
+		g.notify()
+		for g.users > 0 {
+			ch := g.changed
+			g.mu.Unlock()
+			select {
+			case <-ch:
+			case <-deadline:
+				return
+			}
+			g.mu.Lock()
+		}
+		g.mu.Unlock()
+	}
+}
+
 // noCredentials: no API id and hash saved.
 const noCredentials = "no credentials: run with --save-credentials first"
 
 // newClient is a gotd client with the saved credentials and session. handler: updates (nil: none).
-func newClient(threshold time.Duration, store *keyringSession, handler telegram.UpdateHandler) (*telegram.Client, error) {
+// tweak: more options (the live connection's).
+func newClient(threshold time.Duration, store *keyringSession, handler telegram.UpdateHandler, tweak ...func(*telegram.Options)) (*telegram.Client, error) {
 	id, hash, ok := credentials()
 	if !ok {
 		return nil, errors.New(noCredentials)
 	}
 	opts := telegram.Options{SessionStorage: store, Middlewares: []telegram.Middleware{floodWait(threshold)},
 		UpdateHandler: handler, NoUpdates: handler == nil, Device: device()}
+	for _, f := range tweak {
+		f(&opts)
+	}
 	return telegram.NewClient(id, hash, opts), nil
 }
 
@@ -103,6 +200,18 @@ func (c *conn) inputPeer(id int64) (tg.InputPeerClass, error) {
 		return p, nil
 	}
 	return nil, fmt.Errorf("could not find the input entity for %d", id)
+}
+
+// peer is inputPeer, reading the dialogs again for a chat not met yet (new since they were read,
+// or a connection shared before it read them).
+func (c *conn) peer(ctx context.Context, id int64) (tg.InputPeerClass, error) {
+	if p, err := c.inputPeer(id); err == nil {
+		return p, nil
+	}
+	if _, err := c.dialogs(ctx); err != nil {
+		return nil, err
+	}
+	return c.inputPeer(id)
 }
 
 // --- dialogs ---------------------------------------------------------------------------------------

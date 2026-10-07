@@ -15,6 +15,7 @@ import (
 
 	"github.com/gotd/td/bin"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 
 	"everysaid/internal/config"
 )
@@ -53,6 +54,8 @@ type fake struct {
 	requests []bin.Encoder
 	files    map[int64][]byte // document id -> its bytes
 	nextID   int
+	noPhotos bool                    // sendMedia refuses photos (PHOTO_INVALID_DIMENSIONS)
+	asked    func(input bin.Encoder) // called at each request, before its answer
 }
 
 func (f *fake) chat(peer tg.PeerClass) *fakeChat {
@@ -182,13 +185,29 @@ func (f *fake) answer(input bin.Encoder) (bin.Encoder, error) {
 	case *tg.UploadGetFileRequest:
 		f.calls = append(f.calls, "getFile")
 		loc := r.Location.(*tg.InputDocumentFileLocation)
-		data := f.files[loc.ID]
+		data, ok := f.files[loc.ID]
+		if !ok {
+			return nil, &tgerr.Error{Code: 400, Type: "FILE_ID_INVALID"}
+		}
 		if r.Offset >= int64(len(data)) {
 			data = nil
 		} else {
 			data = data[r.Offset:min(int64(len(data)), r.Offset+int64(r.Limit))]
 		}
 		return &tg.UploadFileBox{File: &tg.UploadFile{Type: &tg.StorageFileUnknown{}, Bytes: data}}, nil
+	case *tg.UploadSaveFilePartRequest:
+		return &tg.BoolBox{Bool: &tg.BoolTrue{}}, nil
+	case *tg.UploadSaveBigFilePartRequest:
+		return &tg.BoolBox{Bool: &tg.BoolTrue{}}, nil
+	case *tg.MessagesSendMediaRequest:
+		f.calls = append(f.calls, "sendMedia")
+		sent := *r // as it was asked (the caller may change its request and ask again)
+		f.requests = append(f.requests, &sent)
+		if _, photo := r.Media.(*tg.InputMediaUploadedPhoto); photo && f.noPhotos {
+			return nil, &tgerr.Error{Code: 400, Type: "PHOTO_INVALID_DIMENSIONS"}
+		}
+		f.nextID++
+		return &tg.UpdatesBox{Updates: &tg.UpdateShortSentMessage{Out: true, ID: f.nextID, Date: 1700000000}}, nil
 	case *tg.MessagesSendMessageRequest:
 		f.calls = append(f.calls, "sendMessage")
 		f.requests = append(f.requests, r)
@@ -214,6 +233,9 @@ func (f *fake) answer(input bin.Encoder) (bin.Encoder, error) {
 }
 
 func (f *fake) Invoke(ctx context.Context, input bin.Encoder, output bin.Decoder) error {
+	if f.asked != nil {
+		f.asked(input)
+	}
 	f.mu.Lock()
 	resp, err := f.answer(input)
 	f.mu.Unlock()

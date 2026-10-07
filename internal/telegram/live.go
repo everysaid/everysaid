@@ -21,15 +21,17 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf16"
 
 	"github.com/gotd/td/crypto"
 	"github.com/gotd/td/tdp"
+	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/updates"
 	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 
 	"everysaid/internal/archive"
 	"everysaid/internal/db"
@@ -37,25 +39,23 @@ import (
 	"everysaid/internal/plugins/sourcekit"
 )
 
-var lives sync.Map // instance id -> *conn of its live connection (Python's CLIENTS)
-
 const (
 	notSignedIn = "Not signed in to Telegram yet (everysaid telegram-sync --save-credentials, --login)"
 	expired     = "The Telegram sign-in has expired: everysaid telegram-sync --login"
 )
 
-// connect runs fn with a connected, signed-in client. handler: updates (nil: none).
-func connect(ctx context.Context, handler *updates.Manager, fn func(ctx context.Context, cn *conn, self *tg.User) error) error {
+// connect runs fn with a connected, signed-in client, offered to the others meanwhile (the caller
+// holds the gate). handler: updates (nil: none); tweak: more options.
+func connect(ctx context.Context, handler *updates.Manager, fn func(ctx context.Context, cn *conn, self *tg.User) error,
+	tweak ...func(*telegram.Options)) error {
 	if _, _, ok := credentials(); !ok || !hasSession() {
 		return pluginErr(notSignedIn)
 	}
-	var h interface {
-		Handle(context.Context, tg.UpdatesClass) error
-	}
+	var h telegram.UpdateHandler
 	if handler != nil {
 		h = handler
 	}
-	client, err := newClient(60*time.Second, &keyringSession{}, h)
+	client, err := newClient(60*time.Second, &keyringSession{}, h, tweak...)
 	if err != nil {
 		return err
 	}
@@ -71,15 +71,22 @@ func connect(ctx context.Context, handler *updates.Manager, fn func(ctx context.
 		if err != nil {
 			return err
 		}
-		return fn(ctx, newConn(client.API()), self)
+		cn := newConn(client.API())
+		defer one.share(cn)()
+		return fn(ctx, cn, self)
 	})
 }
 
-// withConn runs fn on the live connection, else on one made for it (with the dialogs read, for
-// the access hashes a session does not keep).
-func withConn(ctx context.Context, c *plugins.Context, fn func(ctx context.Context, cn *conn) error) error {
-	if v, ok := lives.Load(c.ID); ok {
-		return fn(ctx, v.(*conn))
+// withConn runs fn on the connection open in this process (the live one, or a sync's), else on
+// one made for it (with the dialogs read, for the access hashes a session does not keep).
+func withConn(ctx context.Context, fn func(ctx context.Context, cn *conn) error) error {
+	open, done, err := one.take(ctx, true)
+	if err != nil {
+		return err
+	}
+	defer done()
+	if open != nil {
+		return fn(ctx, open)
 	}
 	return connect(ctx, nil, func(ctx context.Context, cn *conn, _ *tg.User) error {
 		if _, err := cn.dialogs(ctx); err != nil {
@@ -351,17 +358,40 @@ func chatLabel(chat any) any {
 }
 
 func live(ctx context.Context, c *plugins.Context) error {
+	_, release, err := one.take(ctx, false) // a client of its own, for its updates
+	if err != nil {
+		return nil // the server's end
+	}
+	defer release()
 	d := tg.NewUpdateDispatcher()
-	mgr := updates.New(updates.Config{Handler: d})
-	err := connect(ctx, mgr, func(ctx context.Context, cn *conn, self *tg.User) error {
+	// a gap Telegram cannot fill with updates (too long an absence) is read again from the chats
+	again := make(chan struct{}, 1)
+	resync := func() {
+		select {
+		case again <- struct{}{}:
+		default:
+		}
+	}
+	mgr := updates.New(updates.Config{Handler: d, OnTooLong: resync, OnChannelTooLong: func(int64) { resync() }})
+	var readies atomic.Int32
+	reconnected := make(chan struct{}, 1)
+	onState := func(o *telegram.Options) {
+		o.OnConnectionState = func(s telegram.ConnectionState) {
+			if s == telegram.ConnectionStateReady && readies.Add(1) > 1 {
+				select {
+				case reconnected <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}
+	err = connect(ctx, mgr, func(ctx context.Context, cn *conn, self *tg.User) error {
 		dialogs, err := cn.dialogs(ctx) // the access hashes of every chat (a session keeps none)
 		if err != nil {
 			return err
 		}
 		c.Log("connected to Telegram", nil)
 		handlers(c, cn, d)
-		lives.Store(c.ID, cn)
-		defer lives.Delete(c.ID)
 		started := make(chan struct{})
 		done := make(chan error, 1)
 		go func() {
@@ -372,21 +402,59 @@ func live(ctx context.Context, c *plugins.Context) error {
 		case err := <-done:
 			return err
 		}
-		if err := reportStates(c, dialogStates(dialogs)); err != nil {
+		if err := settle(ctx, c, cn, dialogs); err != nil { // after the handlers: nothing falls between the two
 			return err
 		}
-		if err := noteReads(c, dialogReads(dialogs), false); err != nil {
-			return err
-		}
-		if err := catchUp(ctx, c, cn, dialogs); err != nil { // after the handlers: nothing falls between the two
-			return err
-		}
-		return <-done
-	})
-	if errors.Is(err, context.Canceled) && ctx.Err() != nil {
+		return follow(ctx, c, cn, mgr, done, reconnected, again)
+	}, onState)
+	if ctx.Err() != nil {
 		return nil
 	}
+	if d, ok := tgerr.AsFloodWait(err); ok { // trying again sooner would only be refused again
+		select {
+		case <-time.After(d):
+		case <-ctx.Done():
+			return nil
+		}
+	}
 	return err
+}
+
+// settle brings the chats' states, how far they were read, and what arrived while not connected.
+func settle(ctx context.Context, c *plugins.Context, cn *conn, dialogs []dialog) error {
+	if err := reportStates(c, dialogStates(dialogs)); err != nil {
+		return err
+	}
+	if err := noteReads(c, dialogReads(dialogs), false); err != nil {
+		return err
+	}
+	return catchUp(ctx, c, cn, dialogs)
+}
+
+// follow keeps the connection up to date until it ends (done): back after the connection dropped,
+// it asks Telegram for what came meanwhile, as Telegram Desktop does (else that waits for the next
+// update, or a quarter of an hour); when Telegram says the gap is too long to fill (again), it reads
+// the chats again as on connecting.
+func follow(ctx context.Context, c *plugins.Context, cn *conn, mgr telegram.UpdateHandler, done <-chan error,
+	reconnected, again <-chan struct{}) error {
+	for {
+		select {
+		case err := <-done:
+			return err
+		case <-reconnected:
+			if err := mgr.Handle(ctx, &tg.UpdatesTooLong{}); err != nil {
+				c.Log("error: {e}", map[string]any{"e": err.Error()})
+			}
+		case <-again:
+			dialogs, err := cn.dialogs(ctx)
+			if err == nil {
+				err = settle(ctx, c, cn, dialogs)
+			}
+			if err != nil {
+				return err
+			}
+		}
+	}
 }
 
 // handlers are what the connection does with what Telegram pushes. One bad update must not stop
@@ -594,6 +662,15 @@ func mentionEntities(c *plugins.Context, cn *conn, text string, mentions []plugi
 
 var imageExt = regexp.MustCompile(`(?i)^\.(png|jpe?g)`)
 
+// maxPhoto is the largest picture Telegram takes as a photo; a larger one goes as a file, as
+// Telegram Desktop sends it.
+const maxPhoto = 10 << 20
+
+// notAPhoto are Telegram's refusals of a picture as a photo (its size, its sides, its format):
+// the picture is sent again as a file.
+var notAPhoto = []string{"PHOTO_INVALID_DIMENSIONS", "PHOTO_SAVE_FILE_INVALID", "PHOTO_EXT_INVALID",
+	"PHOTO_INVALID", "IMAGE_PROCESS_FAILED"}
+
 // media is what send_file makes of a file: a photo where its name says a PNG or JPEG and it is not
 // sent as a document, else a document with its name (and a video's attribute).
 func media(ctx context.Context, api *tg.Client, f *plugins.File, forceDocument bool) (tg.InputMediaClass, error) {
@@ -607,7 +684,7 @@ func media(ctx context.Context, api *tg.Client, f *plugins.File, forceDocument b
 	}
 	ext := filepath.Ext(name)
 	isImage := imageExt.MatchString(ext)
-	if isImage && !forceDocument {
+	if isImage && !forceDocument && len(f.Data) <= maxPhoto {
 		return &tg.InputMediaUploadedPhoto{File: handle}, nil
 	}
 	mimeType := f.MimeType // the type given (Telethon guessed it from the name only)
@@ -710,12 +787,12 @@ func fetchEntity(ctx context.Context, cn *conn, peer tg.InputPeerClass) (any, er
 func send(ctx context.Context, c *plugins.Context, conv plugins.Conversation, text string, reply *plugins.Reply,
 	mentions []plugins.Mention, file *plugins.File) (any, error) {
 	var out any
-	err := withConn(ctx, c, func(ctx context.Context, cn *conn) error {
+	err := withConn(ctx, func(ctx context.Context, cn *conn) error {
 		chatID, err := strconv.ParseInt(conv.Key, 10, 64)
 		if err != nil {
 			return err
 		}
-		peer, err := cn.inputPeer(chatID)
+		peer, err := cn.peer(ctx, chatID)
 		if err != nil {
 			return err
 		}
@@ -756,6 +833,12 @@ func send(ctx context.Context, c *plugins.Context, conv plugins.Conversation, te
 				req.SetEntities(entities)
 			}
 			r, err = cn.api.MessagesSendMedia(ctx, req)
+			if _, photo := m.(*tg.InputMediaUploadedPhoto); photo && tgerr.Is(err, notAPhoto...) {
+				if req.Media, err = media(ctx, cn.api, file, true); err != nil {
+					return err
+				}
+				r, err = cn.api.MessagesSendMedia(ctx, req)
+			}
 			if err != nil {
 				return err
 			}
@@ -814,8 +897,8 @@ func markRead(ctx context.Context, c *plugins.Context, conv plugins.Conversation
 	if err != nil {
 		return 0, err
 	}
-	err = withConn(ctx, c, func(ctx context.Context, cn *conn) error {
-		peer, err := cn.inputPeer(chat)
+	err = withConn(ctx, func(ctx context.Context, cn *conn) error {
+		peer, err := cn.peer(ctx, chat)
 		if err != nil {
 			return err
 		}

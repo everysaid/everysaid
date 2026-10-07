@@ -125,7 +125,24 @@ func Sync(ctx context.Context, o SyncOptions, w io.Writer) error {
 	if _, _, ok := credentials(); !ok {
 		return errors.New(out.say(noCredentials, nil))
 	}
-	client, err := newClient(300*time.Second, store, nil)
+	run := func(ctx context.Context, c *conn) error {
+		switch {
+		case o.Survey:
+			return survey(ctx, c, out)
+		case o.Media:
+			return mediaRun(ctx, c, false, only, out)
+		}
+		return syncRun(ctx, c, out)
+	}
+	open, done, err := one.take(ctx, !o.Login)
+	if err != nil {
+		return err
+	}
+	defer done()
+	if open != nil { // the live connection, or another sync's: never a second client
+		return run(withThreshold(ctx, syncThreshold), open)
+	}
+	client, err := newClient(syncThreshold, store, nil)
 	if err != nil {
 		return err
 	}
@@ -154,15 +171,13 @@ func Sync(ctx context.Context, o SyncOptions, w io.Writer) error {
 			return errors.New(out.say("not logged in: run with --login first", nil))
 		}
 		c := newConn(client.API())
-		switch {
-		case o.Survey:
-			return survey(ctx, c, out)
-		case o.Media:
-			return mediaRun(ctx, c, false, only, out)
-		}
-		return syncRun(ctx, c, out)
+		defer one.share(c)()
+		return run(ctx, c)
 	})
 }
+
+// syncThreshold is the longest FLOOD_WAIT the sync sleeps through (telegram-sync.py's).
+const syncThreshold = 300 * time.Second
 
 // --- credentials and login -------------------------------------------------------------------------
 
@@ -414,6 +429,11 @@ func syncRun(ctx context.Context, c *conn, out *printer) (err error) {
 			label = strconv.FormatInt(d.ID, 10)
 		}
 		n := 0
+		// nothing held while Telegram is asked (a flood wait can last minutes): the live connection
+		// writes to the same store meanwhile
+		if err := b.commit(); err != nil {
+			return err
+		}
 		err = c.history(ctx, peer, int(last), func(chunk []sent) error {
 			for _, s := range chunk {
 				db.Exec(b.q(), "INSERT OR IGNORE INTO message (chat_id, id, date, json) VALUES (?, ?, ?, ?)",
@@ -423,13 +443,10 @@ func syncRun(ctx context.Context, c *conn, out *printer) (err error) {
 				}
 				n++
 				if n%1000 == 0 {
-					if err := b.commit(); err != nil {
-						return err
-					}
 					fmt.Fprintf(out, "\r%s: %d", label, n)
 				}
 			}
-			return nil
+			return b.commit()
 		})
 		if err != nil {
 			return err
