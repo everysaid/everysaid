@@ -328,6 +328,8 @@ folders are read as they are: unpacking an archive of them is the user's job.
 - Google Talk is `jabber` (the same people, by the same addresses); Facebook chat, over XMPP or
   Adium's plugin, is `messenger`, by Facebook's ids. An MSN or Jabber handle is an email, shared
   with every service and the address book; the others are ids within their service.
+- The owner's account a chat was on (the log folder's) is a member of its conversation, so that one
+  of several accounts can be hidden; a chat with someone may have been on several.
 - Messages have no ids: the fingerprint (second, direction, kind, text) within the conversation
   tells one seen before, from either program. Status lines are left out; the pictures Adium kept
   beside its logs come in as the messages' files.

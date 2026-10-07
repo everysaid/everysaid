@@ -356,6 +356,15 @@ Everything above is built, with these differences from the draft:
   or either, and a label.
 - **Hidden services** (Settings → Services, `hidden_services`): nothing of them shows anywhere
   (chats, streams, calls, search, media, the day's timeline); the archive keeps all of it.
+- **Groups with no one else** (everyone left, or the source listed no members) stay out of the chat
+  list unless the user shows them (Settings → Names, `hide_empty_groups`, on by default); a search
+  still finds them, and one with an unread message still shows.
+- **Hidden accounts** (`hidden_accounts`), where the user has several on a service (several MSN
+  accounts): the chats held only by the hidden ones show nowhere; a chat also on an account shown
+  stays. Which account a chat was on is the owner's address among its members (the Adium and
+  Pidgin importer writes it, from the log folder of each account).
+- **Analyse now**, in a person's chat info, where a local analysis is on: their chat read at once
+  (a run of the analysis instance with the action `person:<id>`), the suggestions there when done.
 - **Settings** are in tabs: general, names, labels, services, security.
 - **Where a chat was being read** is kept for the session (this tab, a reload included), not
   across sessions; a chat opened afresh stays at its end while what is drawn grows to its real

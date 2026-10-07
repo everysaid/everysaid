@@ -10,6 +10,7 @@ import { service } from "@/lib/services";
 import { Avatar, Button, Input, Segmented, ServiceBadge, Textarea } from "./ui";
 import { avatarUrl } from "./ChatList";
 import { GroupParts } from "./GroupMerge";
+import { ChatLabels } from "./Labels";
 
 export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => void }) {
   const { t } = useTranslation();
@@ -143,6 +144,8 @@ export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => 
         </div>
       )}
 
+      {p && <ChatLabels personId={p.id} />}
+
       {p && (
         <div className="flex flex-col gap-2">
           <Link to="/people/$personId" params={{ personId: String(p.id) }}><Button variant="outline" className="w-full">{t("people.title")}: {t("common.edit")}</Button></Link>
@@ -215,7 +218,7 @@ function ChatStates({ chat }: { chat: ChatDetail }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const set = useMutation({
-    mutationFn: (body: Record<string, unknown>) => api.patch(`/api/chats/${chat.id}/state`, body),
+    mutationFn: (body: Record<string, unknown>) => api.patch(`/api/chats/${chat.id}`, body),
     onSuccess: () => qc.invalidateQueries(),
     onError: (e: Error) => toast.error(e.message),
   });
@@ -228,7 +231,7 @@ function ChatStates({ chat }: { chat: ChatDetail }) {
         const by = chat.state_from[field];
         const reports = chat.state_reports[field] ?? [];
         return (
-          <div key={field} className="space-y-1.5">
+          <div key={field} className="space-y-1.5" data-state-field={field}>
             <div className="flex items-center gap-2">
               <span className="min-w-0 flex-1 text-sm">{t(label)}</span>
               {field === "archived" ? (       // the app's own: whatever a service does later

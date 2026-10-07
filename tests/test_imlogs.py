@@ -112,8 +112,17 @@ def test_adium_and_pidgin_logs(tmp_path):
     own = {v for _, v in db.execute("SELECT s.name, ad.value FROM account x JOIN address ad ON ad.id = x.address_id "
                                     "LEFT JOIN service s ON s.id = x.service_id")}
     assert {"me@hotmail.com", "myaim"} <= own
+    # the owner's account each chat was on is one of its members, also when a later run finds every
+    # message already there
+    on = lambda: {v for (v,) in db.execute(       # noqa: E731
+        "SELECT ad.value FROM conversation_member cm JOIN conversation c ON c.id = cm.conversation_id "
+        "JOIN address ad ON ad.id = cm.address_id WHERE c.key = 'friend@hotmail.com' "
+        "AND cm.address_id IN (SELECT address_id FROM account)")}
+    assert on() == {"me@hotmail.com"}
+    db.execute("DELETE FROM conversation_member WHERE address_id IN (SELECT address_id FROM account)")
     # a second run adds nothing
     again = imlogs.run(a, adium, purple, media=False, out=lambda *x: None)
+    assert on() == {"me@hotmail.com"}
     assert sum(again.added.values()) == 0 and sum(again.seen.values()) == 11
     a.db.close()
 

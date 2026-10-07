@@ -388,7 +388,8 @@ def create_app(archive_path=None, auth_path=None):
         return {"items": queries.chats(store, include_archived=archived, kind=kind, q=q, limit=limit, offset=offset,
                                        unnamed=bool(store.setting("show_unnamed", False)) if unnamed is None else unnamed,
                                        min_messages=max(0, min_messages), max_messages=max_messages, with_services=split(services),
-                                       without_services=split(no_services), people_only=only)}
+                                       without_services=split(no_services), people_only=only,
+                                       empty_groups=not store.setting("hide_empty_groups", True))}
 
     @app.get("/api/chats/{chat_id}")
     def chat(chat_id: str, request: Request):
@@ -604,6 +605,28 @@ def create_app(archive_path=None, auth_path=None):
         """how: models or handle; accept: true (their name) or false (wrong, not suggested again)"""
         labels.decide_guess(store, pid, body.get("how"), bool(body.get("accept")))
         return described(queries.person(store, pid))
+
+    def analyser():
+        """The local analysis instance in use: the first one turned on and set up, or None."""
+        for row in plugins.instances(store, "analysis"):
+            p = plugins.get(row["plugin"])
+            if row["enabled"] and p and p.check(host.ctx(row["id"]))[0]:
+                return row["id"]
+        return None
+
+    @app.get("/api/analysis")
+    def analysis_state():
+        iid = analyser()
+        return {"instance": iid, "running": bool(iid and host.running.get(iid))}
+
+    @app.post("/api/people/{pid}/analyse/now")
+    async def person_analyse_now(pid: int):
+        """The person's chat read by the local analysis now (in the background); it says when done."""
+        iid = analyser()
+        if not iid:
+            raise UserError("analysis.none", 409)
+        await host.run(iid, action=f"person:{pid}")
+        return {"instance": iid}
 
     @app.post("/api/people/{pid}/analyse")
     def person_analyse(pid: int):
@@ -902,7 +925,8 @@ def create_app(archive_path=None, auth_path=None):
 
     @app.get("/api/services/used")
     def services_used():
-        """The services the archive has anything of, hidden or not: [{id, messages, calls, hidden}]."""
+        """The services the archive has anything of, hidden or not: [{id, messages, calls, hidden,
+        accounts}]; accounts: the owner's on it that chats were on, [{id (address), label, chats, hidden}]."""
         def build():
             db = store.read()
             out = defaultdict(lambda: {"messages": 0, "calls": 0})
@@ -910,18 +934,30 @@ def create_app(archive_path=None, auth_path=None):
                 out[name]["messages"] = n
             for name, n in db.execute("SELECT s.name, count(*) FROM call c JOIN service s ON s.id = c.service_id GROUP BY 1"):
                 out[name]["calls"] = n
-            return dict(out)
+            accounts = defaultdict(list)
+            for name, aid, value, n in db.execute(
+                    "SELECT s.name, cm.address_id, a.value, count(*) FROM conversation_member cm "
+                    "JOIN conversation c ON c.id = cm.conversation_id JOIN service s ON s.id = c.service_id "
+                    "JOIN address a ON a.id = cm.address_id WHERE cm.address_id IN (SELECT address_id FROM account) "
+                    "GROUP BY 1, 2 ORDER BY 4 DESC"):
+                accounts[name].append({"id": aid, "label": value, "chats": n})
+            return dict(out), dict(accounts)
         hidden = set(store.setting("hidden_services", []) or [])
-        used = store.cached("services_used", build)
-        return {"items": [{"id": k, **v, "hidden": k in hidden} for k, v in sorted(used.items(), key=lambda kv: -kv[1]["messages"] - kv[1]["calls"])]}
+        hidden_accounts = set(store.setting("hidden_accounts", []) or [])
+        used, accounts = store.cached("services_used", build)
+        return {"items": [{"id": k, **v, "hidden": k in hidden,
+                           "accounts": [{**x, "hidden": x["id"] in hidden_accounts} for x in accounts.get(k, [])]}
+                          for k, v in sorted(used.items(), key=lambda kv: -kv[1]["messages"] - kv[1]["calls"])]}
 
     @app.put("/api/settings")
     def settings_put(body: dict = Body(...)):
         for k, v in body.items():
             if k in ("theme", "language", "push_preview", "density", "send_enter", "unread_since", "show_unnamed",
-                     "show_tone", "mcp_labels"):
+                     "show_tone", "mcp_labels", "hide_empty_groups"):
                 changes.set_setting(store, k, v)
             elif k == "hidden_services" and isinstance(v, list) and all(isinstance(x, str) for x in v):
+                changes.set_setting(store, k, v)
+            elif k == "hidden_accounts" and isinstance(v, list) and all(isinstance(x, int) for x in v):
                 changes.set_setting(store, k, v)
             elif k == "name_order" and (v is None or isinstance(v, list) and all(isinstance(x, str) for x in v)
                                         and len(set(v)) == len(v) and set(v) <= set(plugins.name_weights())):

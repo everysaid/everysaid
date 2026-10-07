@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { ArrowDown, ArrowUp, Check, Pencil, Plus, RotateCcw, Sparkles, X } from "lucide-react";
+import { onEvent } from "@/lib/events";
 import { toast } from "sonner";
 import { api, type Guess, type Label, type LabelKind, type Person, type PersonLabel } from "@/lib/api";
 import { dateOnly, number } from "@/lib/format";
@@ -55,6 +56,41 @@ export function GuessLine({ personId, guess, onDone, onPick }: { personId: numbe
         </div>
       </div>
       {guess.evidence && <div className="mt-1 truncate text-xs italic text-muted">«{guess.evidence}»</div>}
+    </div>
+  );
+}
+
+/** A person's labels in a chat's info, with "analyse now" where a local analysis is on: their chat
+ * read at once, the suggestions there when it is done. */
+export function ChatLabels({ personId }: { personId: number }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const person = useQuery({ queryKey: ["person", personId], queryFn: () => api.get<Person>(`/api/people/${personId}`) });
+  const state = useQuery({ queryKey: ["analysis"], queryFn: () => api.get<{ instance: number | null; running: boolean }>("/api/analysis") });
+  const [busy, setBusy] = useState(false);
+  const now = useMutation({
+    mutationFn: () => api.post<{ instance: number }>(`/api/people/${personId}/analyse/now`),
+    onMutate: () => setBusy(true),
+    onSuccess: () => toast.success(t("labels.analysing")),
+    onError: (e: Error) => { setBusy(false); toast.error(e.message); },
+  });
+  useEffect(() => onEvent((e) => {
+    if (busy && e.type === "plugin" && e.instance === state.data?.instance && e.running === null) {
+      setBusy(false);
+      qc.invalidateQueries({ queryKey: ["person", personId] });
+      qc.invalidateQueries({ queryKey: ["chat"] });
+      toast.success(t("labels.analysed_now"));
+    }
+  }), [busy, state.data?.instance, personId]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!person.data) return null;
+  return (
+    <div className="space-y-2" data-chat-labels>
+      <PersonLabels p={person.data} onChanged={() => qc.invalidateQueries({ queryKey: ["person", personId] })} />
+      {state.data?.instance && (
+        <Button variant="outline" className="w-full" onClick={() => now.mutate()} loading={busy} disabled={busy} data-analyse-now>
+          <Sparkles className="size-4" />{busy ? t("labels.analysing") : t("labels.analyseNow")}
+        </Button>
+      )}
     </div>
   );
 }

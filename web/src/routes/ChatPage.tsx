@@ -539,7 +539,7 @@ function ChatHeader({ chat, wide, onInfo, onJumpDate, hidden, onHide }: {
           </Popover.Content>
         </Popover.Portal>
       </Popover.Root>
-      <IconButton label={t("chat.info")} onClick={onInfo}><Info className="size-5" /></IconButton>
+      <IconButton label={t("chat.info")} onClick={onInfo} data-chat-info><Info className="size-5" /></IconButton>
       {chat && (
         <Menu>
           <MenuTrigger asChild><Button variant="ghost" size="icon" className="rounded-full" aria-label={t("common.more")}><MoreVertical className="size-5" /></Button></MenuTrigger>
