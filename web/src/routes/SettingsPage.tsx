@@ -180,7 +180,7 @@ export function SettingsPage() {
             </Card>
             <Card className="divide-y divide-line">
               <Line label={t("settings.showUnnamed")} hint={t("settings.showUnnamedHint")}>
-                <Switch checked={(settings.data?.show_unnamed as boolean | undefined) ?? false} label={t("settings.showUnnamed")}
+                <Switch checked={(settings.data?.show_unnamed as boolean | undefined) ?? true} label={t("settings.showUnnamed")}
                   onChange={(v) => api.put("/api/settings", { show_unnamed: v }).then(() => qc.invalidateQueries(), (e) => toast.error(e.message))} />
               </Line>
               <Line label={t("settings.showShortNumbers")} hint={t("settings.showShortNumbersHint")}>

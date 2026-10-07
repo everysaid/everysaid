@@ -1425,3 +1425,25 @@ func TestDeletedForEveryoneIsNotOffered(t *testing.T) {
 		}
 	}
 }
+
+// The people without a name come after all those with one: their numbers ("+30…") and handles would
+// otherwise sort first, among the names.
+func TestPeopleWithoutANameLast(t *testing.T) {
+	s := store(t)
+	without := map[int64]bool{}
+	for _, p := range core.UnnamedPeople(s, 100000, 0, nil)["items"].([]core.M) {
+		without[i64(p["id"])] = true
+	}
+	list := core.PeopleList(s, core.PeopleListOptions{Unnamed: true, Short: true, Limit: 100000})["items"].([]core.M)
+	seen := 0
+	for _, p := range list {
+		if without[i64(p["id"])] {
+			seen++
+		} else if seen > 0 {
+			t.Fatalf("%v, with a name, after %d without one", p["name"], seen)
+		}
+	}
+	if seen == 0 || seen == len(list) {
+		t.Fatal("the demo should have both", seen, len(list))
+	}
+}

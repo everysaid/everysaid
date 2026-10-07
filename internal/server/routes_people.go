@@ -131,7 +131,7 @@ func (s *Server) peopleRoutes() {
 			only = s.labelled(label)
 		}
 		out := core.PeopleList(s.Store, core.PeopleListOptions{Q: q.str("q"), Limit: clampLimit(limit, 5000), Offset: int(max(0, offset)),
-			Unnamed: s.setting("show_unnamed", false) || label != 0, Short: s.setting("show_short_numbers", false) || label != 0,
+			Unnamed: s.setting("show_unnamed", true) || label != 0, Short: s.setting("show_short_numbers", false) || label != 0,
 			Only: only})
 		if items, ok := out["items"].([]M); ok {
 			for _, p := range items {
