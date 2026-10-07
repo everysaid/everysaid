@@ -34,6 +34,7 @@ import (
 	"everysaid/internal/archive"
 	"everysaid/internal/db"
 	"everysaid/internal/plugins"
+	"everysaid/internal/plugins/sourcekit"
 )
 
 var lives sync.Map // instance id -> *conn of its live connection (Python's CLIENTS)
@@ -142,7 +143,7 @@ func storeMessages(c *plugins.Context, chat any, msgs []sent) (n int, err error)
 	if idSet(currentSettings(c)["skip_chats"])[chatID] {
 		return 0, nil // kept in telegram.db, not imported: the user left this chat out
 	}
-	_, _, err = runImporters(c, []step{{"Telegram live", func(a *archive.Archive, out func(string)) error {
+	_, _, err = sourcekit.RunImporters(c, []sourcekit.Step{{Label: "Telegram live", Run: func(a *archive.Archive, out func(string)) error {
 		return importTelegram(a, out, keys, nil)
 	}}})
 	return len(keys), err

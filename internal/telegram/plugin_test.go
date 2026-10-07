@@ -17,6 +17,7 @@ import (
 	"everysaid/internal/db"
 	"everysaid/internal/importers"
 	"everysaid/internal/plugins"
+	"everysaid/internal/plugins/sourcekit"
 )
 
 func video(id int, peer tg.PeerClass, docID int64, mime string, attrs ...tg.DocumentAttributeClass) *tg.Message {
@@ -302,16 +303,17 @@ func TestSendAndRead(t *testing.T) {
 	}
 }
 
-func TestLogWriter(t *testing.T) {
+func TestSyncLines(t *testing.T) {
 	in := newInstance(t, M{})
 	c := in.ctx()
-	w := &logWriter{c: c}
+	last := ""
+	term := sourcekit.Terminal(c)
+	w := lastLine{term, &last}
 	w.Write([]byte("one\n\rBob: 1000\rBob: 2000"))
 	w.Write([]byte("\ruser 2000 new  Bob\nlast"))
-	w.Close()
-	got := c.LastLines(10)
-	if !reflect.DeepEqual(got, []string{"one", "last"}) || c.Bar != "user 2000 new  Bob" || w.last != "last" {
-		t.Fatalf("%q %q", got, c.Bar)
+	term.Close()
+	if got := c.LastLines(10); !reflect.DeepEqual(got, []string{"one", "last"}) || c.Bar != "user 2000 new  Bob" || last != "last" {
+		t.Fatalf("%q %q %q", got, c.Bar, last)
 	}
 }
 
