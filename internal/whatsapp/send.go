@@ -49,6 +49,9 @@ type Sender struct {
 	enabled bool
 	limits  SendLimits
 	mu      sync.Mutex // checks and sending one at a time, so limits cannot be raced past
+	// transmit stands in for WhatsApp in tests of reactions, edits and deletions (changes.go): nil
+	// sends through the client
+	transmit func(chat types.JID, msg *waE2E.Message) (whatsmeow.SendResponse, error)
 }
 
 type SendRequest struct {
@@ -84,6 +87,20 @@ func (s *Sender) counts() map[string]int {
 	return map[string]int{"minute": s.count(time.Minute), "hour": s.count(time.Hour), "day": s.count(24 * time.Hour)}
 }
 
+// overLimit says which limit of pace one more message would pass ("" for none).
+func (s *Sender) overLimit() string {
+	for _, l := range []struct {
+		n    int
+		over time.Duration
+		word string
+	}{{s.limits.PerMinute, time.Minute, "minute"}, {s.limits.PerHour, time.Hour, "hour"}, {s.limits.PerDay, 24 * time.Hour, "day"}} {
+		if s.count(l.over) >= l.n {
+			return fmt.Sprintf("limit reached: %d messages a %s", l.n, l.word)
+		}
+	}
+	return ""
+}
+
 // chatFor finds the existing chat a recipient means where the other side has written: a number
 // may be kept under its LID.
 func (s *Sender) chatFor(recipient string) (types.JID, error) {
@@ -97,6 +114,27 @@ func (s *Sender) chatFor(recipient string) (types.JID, error) {
 // chatsFor is every chat a recipient means where the other side has written: one person's may be
 // kept under both their number and their LID (before and after WhatsApp moved the chat to LIDs).
 func (s *Sender) chatsFor(recipient string) ([]types.JID, error) {
+	candidates, err := s.jidsOf(recipient)
+	if err != nil {
+		return nil, err
+	}
+	var chats []types.JID
+	for _, c := range candidates {
+		var n int
+		s.store.db.QueryRow("SELECT count(*) FROM messages WHERE chat_jid = ? AND NOT is_from_me", c.String()).Scan(&n)
+		if n > 0 {
+			chats = append(chats, c)
+		}
+	}
+	if len(chats) == 0 {
+		return nil, fmt.Errorf("no chat with %s where they have written: the bridge sends only there", recipient)
+	}
+	return chats, nil
+}
+
+// jidsOf is every jid a recipient may be kept under (its number and its LID), each a person's or a
+// group's chat.
+func (s *Sender) jidsOf(recipient string) ([]types.JID, error) {
 	var candidates []types.JID
 	if strings.Contains(recipient, "@") {
 		j, err := types.ParseJID(recipient)
@@ -116,23 +154,14 @@ func (s *Sender) chatsFor(recipient string) ([]types.JID, error) {
 			candidates = append(candidates, pn)
 		}
 	}
-	var chats []types.JID
 	for _, c := range candidates {
 		switch c.Server {
 		case types.DefaultUserServer, types.HiddenUserServer, types.GroupServer:
 		default:
 			return nil, fmt.Errorf("not a person's or a group's chat: %s", c)
 		}
-		var n int
-		s.store.db.QueryRow("SELECT count(*) FROM messages WHERE chat_jid = ? AND NOT is_from_me", c.String()).Scan(&n)
-		if n > 0 {
-			chats = append(chats, c)
-		}
 	}
-	if len(chats) == 0 {
-		return nil, fmt.Errorf("no chat with %s where they have written: the bridge sends only there", recipient)
-	}
-	return chats, nil
+	return candidates, nil
 }
 
 // send returns an HTTP status and the answer.
@@ -163,14 +192,8 @@ func (s *Sender) send(req SendRequest) (int, SendResponse) {
 	if err != nil {
 		return fail(http.StatusBadRequest, "%v", err)
 	}
-	for _, l := range []struct {
-		n    int
-		over time.Duration
-		word string
-	}{{s.limits.PerMinute, time.Minute, "minute"}, {s.limits.PerHour, time.Hour, "hour"}, {s.limits.PerDay, 24 * time.Hour, "day"}} {
-		if s.count(l.over) >= l.n {
-			return fail(http.StatusTooManyRequests, "limit reached: %d messages a %s", l.n, l.word)
-		}
+	if over := s.overLimit(); over != "" {
+		return fail(http.StatusTooManyRequests, "%s", over)
 	}
 	media := sha256.Sum256(req.Media)
 	sum := sha256.Sum256([]byte(text + "\x00" + hex.EncodeToString(media[:])))

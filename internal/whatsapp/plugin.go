@@ -63,6 +63,9 @@ func (Plugin) Info() *plugins.Info {
 			{Key: "interval", Label: "Check every (seconds)", Type: "number", Default: 10},
 		},
 		CanSend: true, CanReply: true, CanMention: true, CanMarkRead: true, CanSendFiles: true,
+		// any emoji, the app's six quick ones first
+		CanReact: true, Reactions: []string{"👍", "❤️", "😂", "😮", "😢", "🙏"}, FreeReactions: true,
+		CanEdit: true, CanDelete: true, EditWindow: editWindow, DeleteWindow: deleteWindow,
 		Actions: []plugins.Action{{ID: "link", Label: "Link a device (QR code)"},
 			{ID: "unblock", Label: "Allow sending again"}},
 	}
@@ -522,4 +525,47 @@ func (p Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conve
 	raw, _ := json.Marshal(answer)
 	json.Unmarshal(raw, &out)
 	return out, nil
+}
+
+func (p Plugin) React(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref, emoji string) error {
+	return change(c, conv, msg, ChangeRequest{Kind: "react", Emoji: emoji})
+}
+
+func (p Plugin) Edit(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref, text string) error {
+	return change(c, conv, msg, ChangeRequest{Kind: "edit", Text: text})
+}
+
+func (p Plugin) Delete(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref) error {
+	return change(c, conv, msg, ChangeRequest{Kind: "delete"})
+}
+
+// change asks the bridge to react, edit or delete under the gates of sending (each is a message to
+// WhatsApp), then imports what the bridge stored of it, as Send does.
+func change(c *plugins.Context, conv plugins.Conversation, msg plugins.Ref, req ChangeRequest) error {
+	if !c.Bool("send") {
+		return errs.Plugin("Sending is off in this source's settings", 0)
+	}
+	req.Recipient, req.ID, req.FromMe = recipient(conv.Key), msg.Key, msg.Outgoing
+	if !msg.Outgoing { // for a message the bridge does not have: who wrote it, as the archive says
+		var sender sql.NullString
+		db.Row(c.Store().Read(), "SELECT a.value FROM message m JOIN address a ON a.id = m.sender_id WHERE m.id = ?",
+			[]any{msg.ID}, &sender)
+		req.Sender = sender.String
+	}
+	b := Running(storeDir(c))
+	if b == nil {
+		return errs.Plugin("not connected to WhatsApp", 503)
+	}
+	code, answer := b.Change(req)
+	if code != http.StatusOK {
+		watchState(c)
+		if answer.Message == "" {
+			return errs.Plugin("Sending failed", 0)
+		}
+		return errs.Plugin(answer.Message, 0)
+	}
+	if err := runImport(c); err != nil {
+		c.Log("error: {e}", map[string]any{"e": err})
+	}
+	return nil
 }
