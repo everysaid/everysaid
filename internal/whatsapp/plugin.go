@@ -20,6 +20,7 @@ import (
 	"everysaid/internal/errs"
 	"everysaid/internal/i18n"
 	"everysaid/internal/plugins"
+	"everysaid/internal/plugins/sourcekit"
 )
 
 type M = plugins.M
@@ -40,7 +41,7 @@ func (Plugin) Info() *plugins.Info {
 	return &plugins.Info{
 		ID: "whatsapp-bridge", Name: "WhatsApp (live bridge)", Kind: "source",
 		Services:    []string{"whatsapp"},
-		ServiceInfo: looks,
+		ServiceInfo: sourcekit.Looks("whatsapp"),
 		NameWeights: []plugins.Weight{{Key: "whatsapp/book", Weight: 80}, {Key: "whatsapp/chat", Weight: 50},
 			{Key: "whatsapp/profile", Weight: 30}},
 		StateWeights: map[string]int{"muted": 60, "pinned": 0},
