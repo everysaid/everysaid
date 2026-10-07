@@ -3,12 +3,14 @@ package libraries
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -29,6 +31,7 @@ func TestMain(m *testing.M) {
 		os.Setenv(k, filepath.Join(dir, v))
 	}
 	os.Setenv("EVERYSAID_KEYRING", "everysaid-test-libraries")
+	systemPath = os.Getenv("PATH")
 	os.Setenv("PATH", "") // no exiftool: the copies are the files as they are
 	config.Load()
 	config.Timezone = time.FixedZone("EEST", 3*3600)
@@ -36,6 +39,9 @@ func TestMain(m *testing.M) {
 	os.RemoveAll(dir)
 	os.Exit(code)
 }
+
+// systemPath is the PATH the tests were started with (the tests that want exiftool put it back).
+var systemPath string
 
 type host struct{ store *core.Store }
 
@@ -241,5 +247,104 @@ func TestImmich(t *testing.T) {
 	}
 	if isoformat(time.UnixMilli(dateMS+5).In(config.Timezone)) != "2024-05-01T09:34:56.005000+03:00" {
 		t.Fatal(isoformat(time.UnixMilli(dateMS + 5).In(config.Timezone)))
+	}
+}
+
+// Files stored at the same time, of the same second and service, each get a name of their own:
+// none replaces another.
+func TestFolderSameSecond(t *testing.T) {
+	root := t.TempDir()
+	_, c := instance(t, "folder", M{"path": root})
+	const n = 16
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	refs := make([]string, n)
+	for i := range n {
+		p := file(t, fmt.Sprintf("p%d.jpg", i), fmt.Sprintf("picture %d", i))
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			ref, err := (Folder{}).Store(c, p, M{"date_ms": dateMS, "service": "viber"})
+			if err != nil {
+				t.Error(err)
+			}
+			refs[i] = ref
+		}()
+	}
+	close(start)
+	wg.Wait()
+	seen := map[string]bool{}
+	for i, ref := range refs {
+		b, err := os.ReadFile(filepath.Join(root, ref))
+		if err != nil || string(b) != fmt.Sprintf("picture %d", i) || seen[ref] {
+			t.Fatalf("picture %d: %s %q %v", i, ref, b, err)
+		}
+		seen[ref] = true
+	}
+}
+
+// The API key goes to the address set, and to no other host a redirect points at.
+func TestImmichKeyStaysHome(t *testing.T) {
+	got := ""
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("x-api-key")
+		io.WriteString(w, `{"res":"pong"}`)
+	}))
+	defer elsewhere.Close()
+	other := strings.Replace(elsewhere.URL, "127.0.0.1", "localhost", 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other+r.URL.Path, http.StatusFound)
+	}))
+	defer srv.Close()
+	_, c := instance(t, "immich", M{"url": srv.URL})
+	if _, err := c.SaveSecret("key", "the-key"); err != nil {
+		t.Skip("no place for a secret:", err)
+	}
+	defer c.DeleteSecret("key")
+	if ok, why := plugins.Check(Immich{}, c); ok || got != "" {
+		t.Fatalf("the key went to %s (%v, %s)", other, ok, why)
+	}
+}
+
+// exiftool dates the copy where the file has no date of its own: a video's container dates of
+// zeros are none, and QuickTime keeps UTC; a date of the file's own stays.
+func TestDatesWritten(t *testing.T) {
+	t.Setenv("PATH", systemPath)
+	exiftool, err1 := exec.LookPath("exiftool")
+	ffmpeg, err2 := exec.LookPath("ffmpeg")
+	if err1 != nil || err2 != nil {
+		t.Skip("no exiftool or ffmpeg")
+	}
+	dir := t.TempDir()
+	video, photo := filepath.Join(dir, "v.mp4"), filepath.Join(dir, "p.jpg")
+	for _, args := range [][]string{
+		{ffmpeg, "-loglevel", "error", "-f", "lavfi", "-i", "color=c=red:s=64x64:d=1", "-pix_fmt", "yuv420p", video},
+		{ffmpeg, "-loglevel", "error", "-f", "lavfi", "-i", "color=c=red:s=64x64", "-frames:v", "1", photo},
+		{exiftool, "-q", "-overwrite_original", "-DateTimeOriginal=2019:02:03 04:05:06", photo},
+	} {
+		if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
+			t.Skip(args[0], err, string(out))
+		}
+	}
+	read := func(p, tag string) string {
+		out, _ := exec.Command(exiftool, "-s3", tag, p).Output()
+		return strings.TrimSpace(string(out))
+	}
+	tmp, err := PreparedCopy(video, dateMS, "Everysaid", "viber")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmp)
+	if d := read(tmp, "-QuickTime:CreateDate"); d != "2024:05:01 06:34:56" { // 09:34:56 at +03:00, in UTC
+		t.Fatalf("the video's date: %q", d)
+	}
+	tmp2, err := PreparedCopy(photo, dateMS, "Everysaid", "viber")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmp2)
+	if d := read(tmp2, "-DateTimeOriginal"); d != "2019:02:03 04:05:06" {
+		t.Fatalf("the picture's own date changed: %q", d)
 	}
 }

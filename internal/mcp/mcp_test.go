@@ -466,6 +466,16 @@ func TestHTTP(t *testing.T) {
 	if chats := list(call(t, cs, "list_chats", nil)); len(chats) == 0 {
 		t.Fatal("no chats over HTTP")
 	}
+	// the scheme's name in any case
+	req, _ := http.NewRequest("POST", srv.URL, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	req.Header.Set("Authorization", "bearer chk_a")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	if resp, err := http.DefaultClient.Do(req); err != nil || resp.StatusCode == 401 {
+		t.Fatalf("bearer in lower case: %v %v", resp, err)
+	} else {
+		resp.Body.Close()
+	}
 	call(t, cs, "set_person_note", map[string]any{"person_id": f.nikos, "note": "only in a"})
 	if n := core.Person(other.store, other.nikos)["note"]; n != nil {
 		t.Fatalf("written into the other archive: %v", n)

@@ -9,11 +9,14 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"net"
 	"net/http"
+	"net/netip"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 
@@ -442,6 +445,34 @@ func Schema(what string, tones, relations []core.ModelLabel) map[string]any {
 	return map[string]any{"type": "object", "properties": props, "required": req}
 }
 
+// local is the client the models are asked with. What it sends stays on this computer and its
+// network whatever the address checked before: each connection is to a local address (a name may
+// point elsewhere by the time it connects), through no proxy the environment names, and after no
+// redirect (one would carry the chat to wherever it points).
+var local = &http.Client{
+	Transport: &http.Transport{Proxy: nil,
+		DialContext: (&net.Dialer{Timeout: 30 * time.Second, Control: onlyLocal}).DialContext},
+	CheckRedirect: func(r *http.Request, _ []*http.Request) error {
+		return fmt.Errorf("Ollama's address sends elsewhere (%s)", r.URL.Host)
+	},
+}
+
+// onlyLocal lets a connection be made only to this computer or its network.
+func onlyLocal(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return err
+	}
+	a, err := netip.ParseAddr(host)
+	if err != nil {
+		return err
+	}
+	if !localIP(a) {
+		return fmt.Errorf("%s is not on this computer or its network", host)
+	}
+	return nil
+}
+
 // ask is one model's answer (Ollama's /api/chat, the answer held to the schema).
 var ask = func(c *plugins.Context, model, text string, schema map[string]any) (map[string]any, error) {
 	body, _ := json.Marshal(map[string]any{
@@ -455,7 +486,7 @@ var ask = func(c *plugins.Context, model, text string, schema map[string]any) (m
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	r, err := http.DefaultClient.Do(req)
+	r, err := local.Do(req)
 	if err != nil {
 		return nil, err
 	}

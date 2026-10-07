@@ -4,6 +4,7 @@ package libraries
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -142,25 +143,32 @@ func (Folder) Store(c *plugins.Context, path string, meta M) (string, error) {
 		service = "chat"
 	}
 	base := w.Format("2006-01-02 150405") + " " + service
+	// the name is taken at once (an empty file of its own): two files of the same second stored at
+	// the same time would otherwise get the same name, the second replacing the first
 	dest := filepath.Join(folder, base+e)
-	for n := 2; exists(dest); n++ {
+	for n := 2; ; n++ {
+		f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			f.Close()
+			break
+		}
+		if !errors.Is(err, fs.ErrExist) {
+			return "", err
+		}
 		dest = filepath.Join(folder, fmt.Sprintf("%s %d%s", base, n, e))
 	}
 	tmp, err := PreparedCopy(path, dateMS, makeOf(c), metaStr(meta, "service"))
 	if err != nil {
+		os.Remove(dest)
 		return "", err
 	}
 	if err := move(tmp, dest); err != nil {
 		os.Remove(tmp)
+		os.Remove(dest)
 		return "", err
 	}
 	rel, _ := filepath.Rel(root, dest)
 	return rel, nil
-}
-
-func exists(p string) bool {
-	_, err := os.Lstat(p)
-	return err == nil
 }
 
 func (Folder) Fetch(c *plugins.Context, ref, size string) (*plugins.Fetched, error) {

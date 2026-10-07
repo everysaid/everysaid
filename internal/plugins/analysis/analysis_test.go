@@ -317,3 +317,25 @@ func TestExcerpt(t *testing.T) {
 		t.Fatal("shown, copied")
 	}
 }
+
+// What the models are sent goes to the address checked and no further: not after a redirect, and
+// not to a connection that is not local (the name may point elsewhere by the time it connects).
+func TestAskStaysLocal(t *testing.T) {
+	reached := false
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached = true }))
+	defer elsewhere.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+r.URL.Path, http.StatusTemporaryRedirect) // the body goes along
+	}))
+	defer srv.Close()
+	_, c, _ := knownByEmail(t, srv.URL)
+	if _, err := ask(c, "a", "a private chat", M{}); err == nil || reached {
+		t.Fatalf("the chat followed a redirect (%v)", err)
+	}
+	for address, ok := range map[string]bool{"127.0.0.1:11434": true, "[::1]:11434": true, "192.168.0.10:11434": true,
+		"[fe80::1]:11434": true, "203.0.113.9:11434": false, "[2001:db8::1]:11434": false, "[::ffff:8.8.8.8]:80": false} {
+		if err := onlyLocal("tcp", address, nil); (err == nil) != ok {
+			t.Errorf("%s: %v", address, err)
+		}
+	}
+}

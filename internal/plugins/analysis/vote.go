@@ -50,12 +50,17 @@ func LocalAddress(u string) bool {
 		}
 	}
 	for _, a := range addrs {
-		a = a.Unmap()
-		if !(a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsUnspecified()) {
+		if !localIP(a) {
 			return false
 		}
 	}
 	return true
+}
+
+// localIP: this computer, or an address of its own network.
+func localIP(a netip.Addr) bool {
+	a = a.Unmap()
+	return a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsUnspecified()
 }
 
 // pySplit is Python's str.split(): words between runs of whitespace.

@@ -141,7 +141,9 @@ func Handler(auth func(token string) (Env, bool)) http.Handler {
 		// request comes from localhost with the public host name
 		DisableLocalhostProtection: true})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		// the scheme's name in any case (RFC 9110: "bearer" is "Bearer")
+		scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+		ok = ok && strings.EqualFold(scheme, "Bearer")
 		var env Env
 		if ok && strings.TrimSpace(token) != "" {
 			env, ok = auth(strings.TrimSpace(token))
