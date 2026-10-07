@@ -210,6 +210,7 @@ func TestViberDesktop(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := c.Store().Read()
+	eq(t, "the card's last run", db.Int(q, "SELECT count(*) FROM plugin_instance WHERE id = ? AND last_run > 0 AND last_status = 'ok'", c.ID), int64(1))
 	eq(t, "brought", db.Strs(q, "SELECT text FROM message ORDER BY ts"), []string{"hello all", "mine", "just us", "a note"})
 	conv := func(key string) plugins.Conversation {
 		return plugins.Conversation{ID: db.Int(q, "SELECT id FROM conversation WHERE key = ?", key), Key: key, Service: "viber"}
