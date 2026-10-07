@@ -34,6 +34,7 @@ import (
 	"everysaid/internal/db"
 	"everysaid/internal/errs"
 	"everysaid/internal/plugins"
+	"everysaid/internal/plugins/sourcekit"
 )
 
 type M = plugins.M
@@ -43,17 +44,11 @@ type Plugin struct{}
 
 func init() { plugins.Register(Plugin{}) }
 
-var looks = map[string]plugins.ServiceInfo{
-	// the icon: Simple Icons' (CC0)
-	"signal": {Name: "Signal", Color: "#3A76F0", Short: "Sg",
-		Icon: "M12 0q-.934 0-1.83.139l.17 1.111a11 11 0 0 1 3.32 0l.172-1.111A12 12 0 0 0 12 0M9.152.34A12 12 0 0 0 5.77 1.742l.584.961a10.8 10.8 0 0 1 3.066-1.27zm5.696 0-.268 1.094a10.8 10.8 0 0 1 3.066 1.27l.584-.962A12 12 0 0 0 14.848.34M12 2.25a9.75 9.75 0 0 0-8.539 14.459c.074.134.1.292.064.441l-1.013 4.338 4.338-1.013a.62.62 0 0 1 .441.064A9.7 9.7 0 0 0 12 21.75c5.385 0 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25m-7.092.068a12 12 0 0 0-2.59 2.59l.909.664a11 11 0 0 1 2.345-2.345zm14.184 0-.664.909a11 11 0 0 1 2.345 2.345l.909-.664a12 12 0 0 0-2.59-2.59M1.742 5.77A12 12 0 0 0 .34 9.152l1.094.268a10.8 10.8 0 0 1 1.269-3.066zm20.516 0-.961.584a10.8 10.8 0 0 1 1.27 3.066l1.093-.268a12 12 0 0 0-1.402-3.383M.138 10.168A12 12 0 0 0 0 12q0 .934.139 1.83l1.111-.17A11 11 0 0 1 1.125 12q0-.848.125-1.66zm23.723.002-1.111.17q.125.812.125 1.66c0 .848-.042 1.12-.125 1.66l1.111.172a12.1 12.1 0 0 0 0-3.662M1.434 14.58l-1.094.268a12 12 0 0 0 .96 2.591l-.265 1.14 1.096.255.36-1.539-.188-.365a10.8 10.8 0 0 1-.87-2.35m21.133 0a10.8 10.8 0 0 1-1.27 3.067l.962.584a12 12 0 0 0 1.402-3.383zm-1.793 3.848a11 11 0 0 1-2.345 2.345l.664.909a12 12 0 0 0 2.59-2.59zm-19.959 1.1L.357 21.48a1.8 1.8 0 0 0 2.162 2.161l1.954-.455-.256-1.095-1.953.455a.675.675 0 0 1-.81-.81l.454-1.954zm16.832 1.769a10.8 10.8 0 0 1-3.066 1.27l.268 1.093a12 12 0 0 0 3.382-1.402zm-10.94.213-1.54.36.256 1.095 1.139-.266c.814.415 1.683.74 2.591.961l.268-1.094a10.8 10.8 0 0 1-2.35-.869zm3.634 1.24-.172 1.111a12.1 12.1 0 0 0 3.662 0l-.17-1.111q-.812.125-1.66.125a11 11 0 0 1-1.66-.125"},
-}
-
 func (Plugin) Info() *plugins.Info {
 	return &plugins.Info{
 		ID: "signal", Name: "Signal", Kind: "source",
 		Services:    []string{Service},
-		ServiceInfo: looks,
+		ServiceInfo: sourcekit.Looks(Service),
 		NameWeights: []plugins.Weight{{Key: "signal/book", Weight: 80}, {Key: "signal/profile", Weight: 30}},
 		Description: "Signal as it arrives, through a helper linked to the account as a device (like Signal " +
 			"Desktop): what arrives from the moment it is linked, not the history before it.",
@@ -400,17 +395,6 @@ func helperFor(ctx context.Context, c *plugins.Context) (*conn, func(), error) {
 	return n, func() { n.close(); k.run.Unlock() }, nil
 }
 
-// importLock: one import at a time. Python's host has one (host.import_lock), shared by every
-// plugin; a host that offers it (ImportLock) is used, else this package's own.
-var importLock sync.Mutex
-
-func lockOf(c *plugins.Context) sync.Locker {
-	if h, ok := c.Host().(interface{ ImportLock() sync.Locker }); ok {
-		return h.ImportLock()
-	}
-	return &importLock
-}
-
 func skipChats(c *plugins.Context) map[string]bool {
 	skip := map[string]bool{}
 	if list, ok := c.Settings["skip_chats"].([]any); ok {
@@ -421,40 +405,18 @@ func skipChats(c *plugins.Context) map[string]bool {
 	return skip
 }
 
-// importNow brings signal.db into the archive (as run_importers does for the other sources: the
-// new messages and calls said to the user's devices, changes too).
-func importNow(c *plugins.Context) (err error) {
-	l := lockOf(c)
-	l.Lock()
-	var m0, m1, c0, c1 int64
+// importNow brings signal.db into the archive, as the other sources' imports do; changes to
+// messages already shown are said too.
+func importNow(c *plugins.Context) error {
 	var n Counts
-	func() {
-		defer l.Unlock()
-		var a *archive.Archive
-		if a, err = archive.Open(c.Store().Path); err != nil {
-			return
-		}
-		defer a.Close()
-		defer archive.Recover(&err)
-		m0, c0 = a.Int("SELECT ifnull(max(id), 0) FROM message"), a.Int("SELECT ifnull(max(id), 0) FROM call")
-		if n, err = Import(a, dbPath(c), mediaDir(c), c.ID, skipChats(c)); err != nil {
-			return
-		}
-		m1, c1 = a.Int("SELECT ifnull(max(id), 0) FROM message"), a.Int("SELECT ifnull(max(id), 0) FROM call")
-	}()
-	if err != nil {
+	_, _, err := sourcekit.RunImporters(c, []sourcekit.Step{{Label: "Signal", Run: func(a *archive.Archive, out func(string)) (err error) {
+		n, err = Import(a, dbPath(c), mediaDir(c), c.ID, skipChats(c))
 		return err
-	}
-	if m1 > m0 || c1 > c0 {
-		c.Emit(M{"type": "new", "messages": []int64{m0, m1}, "calls": []int64{c0, c1}})
-	}
-	if n.Changes > 0 { // edits, deletions, reactions on messages already shown
+	}}})
+	if err == nil && n.Changes > 0 { // edits, deletions, reactions on messages already shown
 		c.Emit(M{"type": "changed"})
 	}
-	if n.Messages+n.Calls+n.Files+n.Changes > 0 {
-		c.Log("new messages: {m}, new calls: {c}", map[string]any{"m": m1 - m0, "c": c1 - c0})
-	}
-	return nil
+	return err
 }
 
 // receive starts receiving: first what waited on Signal's server (the phase "syncing", until the

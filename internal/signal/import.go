@@ -26,6 +26,7 @@ import (
 	"everysaid/internal/archive"
 	"everysaid/internal/config"
 	"everysaid/internal/db"
+	"everysaid/internal/importers"
 )
 
 // Service is the archive's service of this plugin.
@@ -310,6 +311,7 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 			scan(&r.author, &r.ts, &r.chatKind, &r.chat, &r.outgoing, &r.js)
 			rows = append(rows, r)
 		})
+	files := importers.NewStore(a)
 	for _, r := range rows {
 		if skip[r.chat] {
 			continue
@@ -360,15 +362,10 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 			if f == "" || f != filepath.Base(f) || f == "." || f == ".." {
 				continue // only files within the helper's folder
 			}
-			added, err := linkMedia(a, src, filepath.Join(mediaDir, f), f, mid)
-			if err != nil {
-				return n, err
-			}
-			if added {
-				n.Files++
-			}
+			files.Link(SourceName(own), src, filepath.Join(mediaDir, f), f, mid)
 		}
 	}
+	n.Files = files.Added[SourceName(own)]
 
 	n.Changes += changes(a, d, p, own, ownSet, edits, deleted)
 	receipts(a, d, p, own, ownSet)
