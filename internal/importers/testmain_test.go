@@ -11,9 +11,6 @@ import (
 // TestMain points every folder of Everysaid into a temporary one, with invented owner settings, so
 // that the tests never touch the user's archive, sources or secrets.
 func TestMain(m *testing.M) {
-	if os.Getenv("EVERYSAID_PARITY_DB") != "" { // a parity run: the folders are given
-		os.Exit(m.Run())
-	}
 	root, err := os.MkdirTemp("", "everysaid-importers-test-")
 	if err != nil {
 		panic(err)

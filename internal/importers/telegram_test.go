@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"everysaid/internal/config"
 	"everysaid/internal/db"
 	"everysaid/internal/telegramstore"
 )
@@ -12,6 +13,9 @@ import (
 // Telegram's kinds, calls and files: a poll, a place, a round video, a missed call (a call of its
 // own too), and a downloaded picture linked to its message.
 func TestTelegramKindsCallsAndFiles(t *testing.T) {
+	t.Cleanup(config.Load) // after the folder is put back
+	t.Setenv("EVERYSAID_CACHE", t.TempDir())
+	config.Load()
 	a, _ := newArchive(t)
 	d := telegramDB(t, telegramstore.DB())
 	add := func(id int64, m M) {

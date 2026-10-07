@@ -41,7 +41,7 @@ func TestPythonSemantics(t *testing.T) {
 			t.Errorf("pyFloat(%v) = %q, want %q", f, got, want)
 		}
 	}
-	if got := splitLines("a\r\nb\rc\u0085d e\n"); !reflect.DeepEqual(got, []string{"a", "b", "c", "d", "e"}) {
+	if got := splitLines("a\r\nb\rc\u0085d\u2028e\n"); !reflect.DeepEqual(got, []string{"a", "b", "c", "d", "e"}) {
 		t.Errorf("splitLines: %q", got)
 	}
 	if got := upper("ßtel ᾳ"); got != "SSTEL ΑΙ" {
