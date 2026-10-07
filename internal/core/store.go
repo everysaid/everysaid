@@ -199,8 +199,14 @@ func (s *Store) Close() {
 var (
 	// StateWeight is how much a plugin's report of a chat's state counts (0: not applied).
 	StateWeight = func(pluginID, field string) int { return 0 }
-	// NameWeights is {source of names: weight}.
-	NameWeights = func() map[string]int { return map[string]int{} }
+	// NameWeights is the sources of names with their weight, in the order first declared.
+	NameWeights = func() []Weight { return nil }
 	// NameLabel is a source of names in words.
 	NameLabel = func(source, lang string) string { return source }
 )
+
+// Weight is how much a source of names is trusted.
+type Weight struct {
+	Key    string
+	Weight int
+}

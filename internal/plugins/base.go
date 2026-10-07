@@ -107,9 +107,10 @@ type Info struct {
 	CanSendFiles   bool // can send a file with a caption
 	Actions        []Action
 	ServiceInfo    map[string]ServiceInfo
-	// The names it brings for people, and how much they are trusted by default: {"<service>/<kind>":
-	// weight} (kind: book, chat, profile), or {"contacts": weight} for an address book.
-	NameWeights map[string]int
+	// The names it brings for people, and how much they are trusted by default: "<service>/<kind>"
+	// (kind: book, chat, profile), or "contacts" for an address book. A list: between equal weights,
+	// the order they are declared in decides.
+	NameWeights []Weight
 	// The state of chats it reports (muted, pinned, read_until; archived only starts the app's own),
 	// and how much it counts against other services by default ({field: weight}; 0: shown, not applied).
 	StateWeights map[string]int
@@ -148,6 +149,12 @@ func (i *Info) Available() bool {
 		}
 	}
 	return false
+}
+
+// Weight is how much a source of names is trusted.
+type Weight struct {
+	Key    string
+	Weight int
 }
 
 // Plugin is what every plugin is.
@@ -285,8 +292,8 @@ func Manifest(p Plugin, lang string) M {
 		platforms = []string{"linux", "darwin", "win32"}
 	}
 	nw, sw := M{}, M{}
-	for k, v := range i.NameWeights {
-		nw[k] = v
+	for _, w := range i.NameWeights {
+		nw[w.Key] = w.Weight
 	}
 	for k, v := range i.StateWeights {
 		sw[k] = v

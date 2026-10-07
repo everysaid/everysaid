@@ -85,18 +85,33 @@ func Services(lang string) map[string]M {
 	return out
 }
 
-// NameWeights is {source of names: weight}: "contacts" (address books) or a service's, the
-// highest any plugin declares; the core orders names by these unless the user set an order.
-func NameWeights() map[string]int {
-	out := map[string]int{}
+// NameWeights is the sources of names with their weight: "contacts" (address books) or a
+// service's, the highest any plugin declares, in the order first declared; the core orders names
+// by these unless the user set an order.
+func NameWeights() []Weight {
+	var out []Weight
+	at := map[string]int{}
 	for _, p := range All() {
-		for k, w := range p.Info().NameWeights {
-			if cur, ok := out[k]; !ok || w > cur {
-				out[k] = w
+		for _, w := range p.Info().NameWeights {
+			if i, ok := at[w.Key]; ok {
+				if w.Weight > out[i].Weight {
+					out[i].Weight = w.Weight
+				}
+				continue
 			}
+			at[w.Key] = len(out)
+			out = append(out, w)
 		}
 	}
 	return out
+}
+
+func weightMap() map[string]int {
+	m := map[string]int{}
+	for _, w := range NameWeights() {
+		m[w.Key] = w.Weight
+	}
+	return m
 }
 
 var nameKinds = map[string]string{"book": "address book copy", "chat": "chat name", "profile": "chosen by them"}
@@ -121,10 +136,10 @@ func NameLabel(source, lang string) string {
 
 // NameSources are the sources of names in the default order, for the UI: [{id, label, weight}].
 func NameSources(lang string) []M {
-	w := NameWeights()
-	keys := make([]string, 0, len(w))
-	for k := range w {
-		keys = append(keys, k)
+	w := weightMap()
+	var keys []string
+	for _, x := range NameWeights() {
+		keys = append(keys, x.Key)
 	}
 	sort.SliceStable(keys, func(i, j int) bool { return w[keys[i]] > w[keys[j]] })
 	out := []M{}
@@ -144,7 +159,13 @@ func StateWeight(pluginID, field string) int {
 
 func init() {
 	core.StateWeight = StateWeight
-	core.NameWeights = NameWeights
+	core.NameWeights = func() []core.Weight {
+		var out []core.Weight
+		for _, w := range NameWeights() {
+			out = append(out, core.Weight{Key: w.Key, Weight: w.Weight})
+		}
+		return out
+	}
 	core.NameLabel = NameLabel
 }
 
