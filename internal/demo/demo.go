@@ -101,8 +101,10 @@ func BuildArchive(seed int64) (path string, err error) {
 	defer archive.Recover(&err)
 	rnd := pyrandom.New(seed)
 	path = filepath.Join(config.Data, "archive.db")
-	if _, err := os.Stat(path); err == nil {
-		if err := os.Remove(path); err != nil {
+	// the journal too (Python leaves it): one left by a process that died would be replayed onto the
+	// new file and break it
+	for _, f := range []string{path, path + "-wal", path + "-shm"} {
+		if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
 			return "", err
 		}
 	}
