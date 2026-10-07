@@ -3,9 +3,11 @@ package core_test
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"everysaid/internal/core"
 )
@@ -43,13 +45,22 @@ func TestParity(t *testing.T) {
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 1<<20), 1<<26)
 	enc := json.NewEncoder(out)
+	var tf *os.File
+	if p := os.Getenv("EVERYSAID_PARITY_TIMES"); p != "" {
+		tf, _ = os.Create(p)
+		defer tf.Close()
+	}
 	for sc.Scan() {
 		var c struct {
 			Fn   string         `json:"fn"`
 			Args map[string]any `json:"args"`
 		}
 		json.Unmarshal(sc.Bytes(), &c)
+		t0 := time.Now()
 		res, err := call(s, c.Fn, c.Args)
+		if tf != nil {
+			fmt.Fprintf(tf, "%s %d\n", c.Fn, time.Since(t0).Microseconds())
+		}
 		if err != nil {
 			res = map[string]any{"error": err.Error()}
 		}
@@ -58,7 +69,7 @@ func TestParity(t *testing.T) {
 }
 
 func str(a map[string]any, k string) string { v, _ := a[k].(string); return v }
-func num(a map[string]any, k string) int64 { v, _ := a[k].(float64); return int64(v) }
+func num(a map[string]any, k string) int64  { v, _ := a[k].(float64); return int64(v) }
 func flag(a map[string]any, k string, def bool) bool {
 	if v, ok := a[k].(bool); ok {
 		return v
