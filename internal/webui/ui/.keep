@@ -1,0 +1,1 @@
+# What `go generate` copies here from web/dist (the built interface); only .keep is tracked.
