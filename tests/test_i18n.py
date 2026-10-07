@@ -63,7 +63,7 @@ def sources():
 
 
 # keys the code builds from data: each whole namespace is used
-DYNAMIC = ("errors.", "kind.", "call.", "nav.", "settings.via.", "sources.", "people.why", "chat.state", "labels.builtin.", "settings.tab.")
+DYNAMIC = ("errors.", "audit.", "kind.", "call.", "nav.", "settings.via.", "sources.", "people.why", "chat.state", "labels.builtin.", "settings.tab.")
 
 
 def test_both_languages_have_the_same_keys():

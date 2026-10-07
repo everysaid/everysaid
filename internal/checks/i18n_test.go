@@ -120,7 +120,7 @@ func webSources(t *testing.T) map[string]string {
 }
 
 // keys the code builds from data: each whole namespace is used
-var dynamic = []string{"errors.", "kind.", "call.", "nav.", "settings.via.", "sources.", "people.why", "chat.state",
+var dynamic = []string{"errors.", "audit.", "kind.", "call.", "nav.", "settings.via.", "sources.", "people.why", "chat.state",
 	"labels.builtin.", "settings.tab."}
 
 func TestBothLanguagesHaveTheSameKeys(t *testing.T) {
@@ -301,6 +301,9 @@ func TestThePluginsWordsHaveGreek(t *testing.T) {
 		}
 		for i, a := range en["actions"].([]plugins.M) {
 			pairs = append(pairs, pair{el["actions"].([]plugins.M)[i]["label"].(string), a["label"].(string)})
+			if q, ok := a["confirm"].(string); ok {
+				pairs = append(pairs, pair{el["actions"].([]plugins.M)[i]["confirm"].(string), q})
+			}
 		}
 		for _, x := range pairs {
 			if x.a == x.b && !proper[x.b] && threeLower.MatchString(x.b) {

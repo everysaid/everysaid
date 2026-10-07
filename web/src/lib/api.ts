@@ -322,7 +322,7 @@ export interface PluginManifest {
   needs: string[];
   settings: SettingField[];
   can_send: boolean;
-  actions: { id: string; label: string }[];
+  actions: { id: string; label: string; confirm?: string }[];  // confirm: asked before it runs
   has_chats: boolean;
 }
 
@@ -383,6 +383,7 @@ export interface Account {
   sessions: { id: string; created_at: number; last_seen: number; agent: string; ip: string; via: string; current: boolean }[];
   recovery_left: number;
   audit: { ts: number; event: string; detail: string | null }[];
+  mcp_tokens?: { id: string; label: string | null; created_at: number; last_used: number | null }[];
   has_password: boolean;
 }
 
