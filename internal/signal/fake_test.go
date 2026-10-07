@@ -3,9 +3,10 @@ package signal
 // A fake helper, speaking the helper's protocol without Signal: the test binary itself, started with
 // EVERYSAID_FAKE_SIGNAL=1. In the store folder it is given it keeps `linked` (once linked), and reads
 // `script.jsonl` (the events a receive brings; a fetch again gives their files); it writes
-// `sent.jsonl`, `read.jsonl` and `fetch.jsonl` (the sends, marks read and fetches asked of it), for
-// the tests to look at. `unlinked` there: Signal refuses the device (it was removed from the phone);
-// `link-fails`: a link fails. It never touches the network.
+// `sent.jsonl`, `acted.jsonl`, `read.jsonl` and `fetch.jsonl` (the sends, reactions, edits and
+// deletions, marks read and fetches asked of it), for the tests to look at. `unlinked` there:
+// Signal refuses the device (it was removed from the phone); `link-fails`: a link fails. It never
+// touches the network.
 
 import (
 	"bufio"
@@ -67,7 +68,8 @@ func fakeHelper() {
 			fail("not_open", "the store is not open")
 			continue
 		}
-		needsLink := map[string]bool{"sync": true, "receive": true, "send": true, "mark_read": true, "history": true}
+		needsLink := map[string]bool{"sync": true, "receive": true, "send": true, "mark_read": true, "history": true,
+			"react": true, "edit": true, "delete": true}
 		if needsLink[cmd] && !linked() {
 			fail("not_linked", "not linked to a Signal account")
 			continue
@@ -142,6 +144,24 @@ func fakeHelper() {
 				ev["attachments"] = list
 			}
 			appendTo("sent.jsonl", req)
+			write(ev)
+			ok(map[string]any{"ts": ts})
+		case "react", "edit", "delete":
+			// said back as Signal's events of the owner, as the helper does
+			sent++
+			ts := 9_000_000 + sent
+			ev := map[string]any{"event": map[string]string{"react": "reaction", "edit": "edit", "delete": "delete"}[cmd],
+				"chat": req["chat"], "sender": fakeOwn, "sender_device": 2, "outgoing": true, "ts": ts, "server_ts": ts}
+			switch cmd {
+			case "react":
+				target := req["target"].(map[string]any)
+				ev["emoji"], ev["remove"], ev["target_author"], ev["target_ts"] = req["emoji"], req["remove"] == true, target["author"], target["ts"]
+			case "edit":
+				ev["target_ts"], ev["text"] = req["target_ts"], req["text"]
+			case "delete":
+				ev["target_author"], ev["target_ts"] = fakeOwn, req["target_ts"]
+			}
+			appendTo("acted.jsonl", req)
 			write(ev)
 			ok(map[string]any{"ts": ts})
 		case "mark_read":

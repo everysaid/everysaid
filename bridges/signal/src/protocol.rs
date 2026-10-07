@@ -49,6 +49,30 @@ pub enum Command {
         #[serde(default = "yes")]
         receipts: bool,
     },
+    /// The owner's reaction on a message, in place of the one there was; `remove` takes it back
+    /// (Signal wants the emoji that was there with it).
+    React {
+        chat: Chat,
+        target: MessageRef,
+        emoji: String,
+        #[serde(default)]
+        remove: bool,
+    },
+    /// The owner's message with a new text: `target_ts` is its newest version's time (the one
+    /// Signal's apps aim an edit at), `original_ts` its first, under which its files are kept.
+    Edit {
+        chat: Chat,
+        target_ts: u64,
+        #[serde(default)]
+        original_ts: Option<u64>,
+        #[serde(default)]
+        text: String,
+    },
+    /// The owner's message (its newest version's time) deleted for everyone in the chat.
+    Delete {
+        chat: Chat,
+        target_ts: u64,
+    },
     /// Fetches again the files of messages the store holds, where they failed before.
     Fetch {
         messages: Vec<MessageRef>,
@@ -192,6 +216,21 @@ mod tests {
         assert_eq!(r.cmd, Command::MarkRead { messages: vec![], receipts: false });
         let r = parse(r#"{"id":10,"cmd":"fetch","messages":[{"author":"a","ts":9}]}"#).unwrap();
         assert_eq!(r.cmd, Command::Fetch { messages: vec![MessageRef { author: "a".into(), ts: 9 }] });
+    }
+
+    #[test]
+    fn react_edit_delete() {
+        let chat = Chat { kind: "contact".into(), id: "a".into() };
+        let r = parse(r#"{"id":11,"cmd":"react","chat":{"kind":"contact","id":"a"},"target":{"author":"b","ts":5},"emoji":"👍"}"#);
+        assert_eq!(
+            r.unwrap().cmd,
+            Command::React { chat: chat.clone(), target: MessageRef { author: "b".into(), ts: 5 }, emoji: "👍".into(), remove: false }
+        );
+        let r = parse(r#"{"id":12,"cmd":"edit","chat":{"kind":"contact","id":"a"},"target_ts":7,"original_ts":5,"text":"x"}"#);
+        assert_eq!(r.unwrap().cmd, Command::Edit { chat: chat.clone(), target_ts: 7, original_ts: Some(5), text: "x".into() });
+        let r = parse(r#"{"id":13,"cmd":"delete","chat":{"kind":"contact","id":"a"},"target_ts":7}"#);
+        assert_eq!(r.unwrap().cmd, Command::Delete { chat, target_ts: 7 });
+        assert_eq!(parse(r#"{"id":14,"cmd":"delete","chat":{"kind":"contact","id":"a"}}"#).unwrap_err().0, Some(14));
     }
 
     #[test]

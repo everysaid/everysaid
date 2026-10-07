@@ -438,6 +438,43 @@ pub fn sent_event(own: &str, device: u32, chat: Value, dm: &DataMessage, ts: u64
     Converted { event: event("message", Value::Object(m)), attachments, group: None }
 }
 
+/// What this helper sent (a reaction, an edit, a deletion), as the events the others' are: to
+/// `destination` (a person's ACI; for a group, its context in the message says where).
+pub fn sent_events(own: &str, device: u32, destination: &str, body: &ContentBody, ts: u64) -> Vec<Converted> {
+    let meta = Meta { sender: own.to_string(), destination: destination.to_string(), sender_device: device, ts, server_ts: ts };
+    convert(&meta, body, own)
+}
+
+/// The message a stored content holds: what was sent or received, or its newest edit.
+pub fn data_message_of(body: &ContentBody) -> Option<&DataMessage> {
+    match body {
+        ContentBody::DataMessage(dm) => Some(dm),
+        ContentBody::EditMessage(EditMessage { data_message: Some(dm), .. }) => Some(dm),
+        ContentBody::SynchronizeMessage(SyncMessage { content: Some(sync_message::Content::Sent(s)), .. }) => {
+            s.message.as_ref().or_else(|| s.edit_message.as_ref().and_then(|e| e.data_message.as_ref()))
+        }
+        _ => None,
+    }
+}
+
+/// An edit's message: an edit replaces the whole message, so the old one's files, quote and timer
+/// go with it; its text is new (the mentions and link previews were of the old text).
+pub fn edited(old: Option<&DataMessage>, text: &str, ts: u64) -> DataMessage {
+    let mut dm = match old {
+        Some(o) => DataMessage {
+            attachments: o.attachments.clone(),
+            quote: o.quote.clone(),
+            expire_timer: o.expire_timer,
+            expire_timer_version: o.expire_timer_version,
+            ..Default::default()
+        },
+        None => DataMessage::default(),
+    };
+    dm.body = (!text.is_empty()).then(|| text.to_string());
+    dm.timestamp = Some(ts);
+    dm
+}
+
 /// Whether a group's admin's deletion is to be kept: of the sender's own message always; of another's
 /// only when the sender is one of the group's admins (as the helper knows them; not known: no).
 pub fn admin_delete_allowed(sender: &str, target_author: &str, admins: Option<&[String]>) -> bool {
@@ -657,6 +694,48 @@ mod tests {
         assert!(convert(&meta(ANNA), &ContentBody::DataMessage(pk), ME).is_empty());
         let typing = presage::proto::TypingMessage::default();
         assert!(convert(&meta(ANNA), &ContentBody::TypingMessage(typing), ME).is_empty());
+    }
+
+    #[test]
+    fn sent_here_reaction_edit_and_delete() {
+        // what this helper sent comes back in the chat it went to, as the owner's
+        let r = DataMessage {
+            reaction: Some(data_message::Reaction {
+                emoji: Some("❤️".into()),
+                remove: Some(false),
+                target_author_aci: Some(ANNA.into()),
+                target_sent_timestamp: Some(900),
+                ..Default::default()
+            }),
+            timestamp: Some(5000),
+            ..Default::default()
+        };
+        let e = sent_events(ME, 2, ANNA, &ContentBody::DataMessage(r), 5000).remove(0).event;
+        assert_eq!(e["event"], "reaction");
+        assert_eq!(e["chat"], json!({"kind": "contact", "id": ANNA}));
+        assert_eq!((e["sender"].as_str(), e["outgoing"].as_bool(), e["target_author"].as_str()), (Some(ME), Some(true), Some(ANNA)));
+
+        let d = DataMessage { delete: Some(data_message::Delete { target_sent_timestamp: Some(4000) }), ..Default::default() };
+        let e = sent_events(ME, 2, ANNA, &ContentBody::DataMessage(d), 5100).remove(0).event;
+        assert_eq!((e["event"].as_str(), e["target_author"].as_str(), e["target_ts"].as_u64()), (Some("delete"), Some(ME), Some(4000)));
+
+        let photo = AttachmentPointer { content_type: Some("image/jpeg".into()), ..Default::default() };
+        let old = DataMessage {
+            body: Some("old \u{fffc}".into()),
+            body_ranges: vec![BodyRange { start: Some(4), length: Some(1), associated_value: None }],
+            attachments: vec![photo],
+            quote: Some(data_message::Quote { id: Some(10), ..Default::default() }),
+            ..Default::default()
+        };
+        let stored = ContentBody::DataMessage(old);
+        let dm = edited(data_message_of(&stored), "new", 5200);
+        assert_eq!((dm.body.as_deref(), dm.timestamp, dm.attachments.len()), (Some("new"), Some(5200), 1));
+        assert!(dm.body_ranges.is_empty() && dm.quote.is_some());
+        let body = ContentBody::EditMessage(EditMessage { target_sent_timestamp: Some(4000), data_message: Some(dm) });
+        assert!(data_message_of(&body).is_some());
+        let c = sent_events(ME, 2, ANNA, &body, 5200).remove(0);
+        assert_eq!((c.event["event"].as_str(), c.event["target_ts"].as_u64(), c.event["ts"].as_u64()), (Some("edit"), Some(4000), Some(5200)));
+        assert_eq!((c.event["text"].as_str(), c.event["outgoing"].as_bool(), c.attachments.len()), (Some("new"), Some(true), 1));
     }
 
     #[test]

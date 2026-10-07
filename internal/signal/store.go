@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"everysaid/internal/db"
@@ -482,6 +483,58 @@ func (s *Store) Read(refs []ref, at int64) {
 	for _, r := range refs {
 		db.Exec(s.DB, "INSERT OR IGNORE INTO read VALUES (?, ?, ?)", r.Author, r.TS, at)
 	}
+}
+
+// Revisions are the times a message has been known by: its own (ts) and its author's edits of it,
+// oldest first. Signal's apps aim an edit (and a reaction, a deletion) at the newest; some at the
+// first, so each edit is followed from any of them.
+func (s *Store) Revisions(author string, ts int64) []int64 {
+	next := map[int64][]int64{}
+	db.Each(s.DB, "SELECT target_ts, ts FROM edit WHERE author = ? ORDER BY ts", []any{author}, func(scan func(...any)) {
+		var target, t int64
+		scan(&target, &t)
+		next[target] = append(next[target], t)
+	})
+	out, seen := []int64{ts}, map[int64]bool{ts: true}
+	for i := 0; i < len(out); i++ {
+		for _, t := range next[out[i]] {
+			if !seen[t] {
+				seen[t] = true
+				out = append(out, t)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// MyReaction is the owner's reaction on a message (any of its times) as signal.db last has it: its
+// emoji ("" taken back), and whether there was one at all.
+func (s *Store) MyReaction(own, author string, times []int64) (string, bool) {
+	var emoji *string
+	args := append([]any{author, own}, db.Args(times)...)
+	if !db.Row(s.DB, "SELECT emoji FROM reaction WHERE target_author = ? AND sender = ? AND target_ts IN ("+
+		db.Marks(len(times))+") ORDER BY ts DESC LIMIT 1", args, &emoji) {
+		return "", false
+	}
+	return deref(emoji), true
+}
+
+// Message is a message's event as signal.db keeps it (false: not there).
+func (s *Store) Message(author string, ts int64) (event, bool) {
+	var js string
+	var e event
+	if !db.Row(s.DB, "SELECT json FROM message WHERE author = ? AND ts = ?", []any{author, ts}, &js) ||
+		json.Unmarshal([]byte(js), &e) != nil {
+		return e, false
+	}
+	return e, true
+}
+
+// Deleted: the message (any of its times) was deleted for everyone.
+func (s *Store) Deleted(author string, times []int64) bool {
+	return db.Int(s.DB, "SELECT count(*) FROM deletion WHERE author = ? AND ts IN ("+db.Marks(len(times))+")",
+		append([]any{author}, db.Args(times)...)...) > 0
 }
 
 func ptr(s *string) any {
