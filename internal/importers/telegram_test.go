@@ -1,6 +1,7 @@
 package importers
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,4 +116,38 @@ func searchKeys(a *archive.Archive, word string) []string {
 		return append(words, "≠ trigrams: "+strings.Join(tri, ","))
 	}
 	return words
+}
+
+// A group's members are those Telegram gave (chat_member) and whoever wrote there: a member who never
+// wrote, is one; the bot, a deleted account and the owner are not. TelegramMembers (the live
+// connection's way) brings a later list's newcomers; one who left stays a member.
+func TestTelegramMembers(t *testing.T) {
+	a, _ := newArchive(t)
+	path := filepath.Join(t.TempDir(), "telegram.db")
+	d := telegramDB(t, path)
+	const carol, bot, gone, dan = 333, 444, 555, 666
+	for _, e := range []M{{"_": "User", "id": carol, "first_name": "Carol", "username": "carol_c"},
+		{"_": "User", "id": bot, "first_name": "Helper", "bot": true}, {"_": "User", "id": gone, "deleted": true},
+		{"_": "User", "id": dan, "first_name": "Dan"}} {
+		db.Exec(d, "INSERT INTO entity VALUES (?, ?)", e["id"], js(e))
+	}
+	for _, u := range []int64{tgMe, tgMaria, carol, bot, gone} {
+		db.Exec(d, "INSERT INTO chat_member VALUES (?, ?)", tgGroup, u)
+	}
+	members := func() []string {
+		return db.Strs(a.Tx(), "SELECT ad.value FROM conversation_member cm JOIN conversation c ON c.id = cm.conversation_id "+
+			"JOIN address ad ON ad.id = cm.address_id WHERE c.key = ? ORDER BY ad.value", fmt.Sprint(tgGroup))
+	}
+	must(t, Telegram(a, nil, TelegramOptions{DBPath: path}))
+	// two members wrote (one is also listed); one is listed only
+	eq(t, "members", members(), []string{"+15557770001", "222", "333"})
+	eq(t, "Carol's username", a.Int("SELECT count(*) FROM address WHERE value = 'carol_c'"), int64(1))
+
+	// a later list: one came, one left
+	must(t, telegramstore.NoteMembers(d, tgGroup, []int64{tgMe, tgMaria, dan}, true, 3))
+	must(t, TelegramMembers(a, nil, path, map[int64]bool{tgGroup: true}))
+	eq(t, "later", members(), []string{"+15557770001", "222", "333", "666"})
+	var name string
+	a.Row("SELECT hn.name FROM handle_name hn JOIN address ad ON ad.id = hn.address_id WHERE ad.value = '666'", nil, &name)
+	eq(t, "Dan's name", name, "Dan")
 }

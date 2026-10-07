@@ -9,7 +9,7 @@
 // tell who is who, and to join them to their contacts later). The owner's own id is an account.
 // Calls, which Telegram keeps as service messages, go to `call` too, keyed by the call's id. Whom
 // texts name (`@username`, or a name linked to the user) goes to `mention`; a group's members are
-// whoever wrote there; how far each chat was read (chat_read) becomes its read_until and, in a chat
+// those Telegram gave when last asked (chat_member) and whoever wrote there; how far each chat was read (chat_read) becomes its read_until and, in a chat
 // with one person, receipts of the owner's messages.
 package importers
 
@@ -493,6 +493,7 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 		chats = append(chats, chat{toInt(r["id"]), r["kind"], r["title"]})
 	}
 	hasDeleted := db.Exists(d, "SELECT 1 FROM sqlite_master WHERE name = 'deleted'") // not in a store the Python made
+	hasMembers := db.Exists(d, "SELECT 1 FROM sqlite_master WHERE name = 'chat_member'")
 	for _, c := range chats {
 		if (chatsWanted != nil && !chatsWanted[c.id]) || opt.Skip[c.id] {
 			continue
@@ -616,6 +617,9 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 				a.Exec("INSERT OR IGNORE INTO conversation_member VALUES (?, ?)", conv, a.Address(member))
 			}
 		}
+		if hasMembers && kind != "user" && kind != "saved" {
+			telegramMembers(a, d, person, own, c.id, conv)
+		}
 		for _, n := range names {
 			if mid, ok := a.MessageByKey("telegram", n.key, conv); ok && mid != 0 {
 				a.Exec("INSERT OR IGNORE INTO mention VALUES (?, ?, ?)", mid, a.Address(n.who), n.token)
@@ -655,6 +659,69 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 		}
 		say(out, "changes to what was there: {list}", map[string]any{"list": strings.Join(parts, ", ")})
 	}
+	return nil
+}
+
+// telegramMembers adds a group's members as Telegram last gave them (chat_member) to its
+// conversation, but bots, deleted accounts and the owner; it gives the user ids added. One who left
+// stays, as in the other services' groups (a member once, and the author of what they wrote).
+func telegramMembers(a *archive.Archive, d *sql.DB, person *tgPeople, own map[archive.Handle]bool, chatID, conv int64) []int64 {
+	var out []int64
+	for _, uid := range db.Ints(d, "SELECT user_id FROM chat_member WHERE chat_id = ? ORDER BY user_id", chatID) {
+		e := person.entity[uid]
+		if truthy(e["bot"]) || truthy(e["deleted"]) || truthy(e["is_self"]) || (person.hasMe && uid == person.me) {
+			continue
+		}
+		h := person.of(uid, true)
+		if own[h] {
+			continue
+		}
+		a.Exec("INSERT OR IGNORE INTO conversation_member VALUES (?, ?)", conv, a.Address(h))
+		out = append(out, uid)
+	}
+	return out
+}
+
+// TelegramMembers: the members kept for those groups (telegram.db's chat_member, as the live
+// connection asked them) into their conversations, with the members' other handles and profile
+// names, as the import gives them. A group with no conversation yet waits for the next import.
+func TelegramMembers(a *archive.Archive, out func(string), dbPath string, chats map[int64]bool) (err error) {
+	defer archive.Recover(&err)
+	if dbPath == "" {
+		dbPath = telegramstore.DB()
+	}
+	if !exists(dbPath) {
+		return nil
+	}
+	d := ro(dbPath)
+	defer d.Close()
+	if !db.Exists(d, "SELECT 1 FROM sqlite_master WHERE name = 'chat_member'") {
+		return nil
+	}
+	person := newTGPeople(d)
+	own := a.Own()
+	if person.hasMe {
+		own[archive.H("id", fmt.Sprint(person.me), "telegram")] = true
+	}
+	for _, r := range maps(d, "SELECT id, kind FROM chat WHERE kind NOT IN ('user', 'saved') ORDER BY id") {
+		chatID := toInt(r["id"])
+		if !chats[chatID] {
+			continue
+		}
+		conv, ok := a.FindConversation("telegram", fmt.Sprint(chatID))
+		if !ok || conv == 0 {
+			continue
+		}
+		for _, uid := range telegramMembers(a, d, person, own, chatID, conv) {
+			for _, h := range person.others(uid) {
+				a.Alias(h, person.of(uid, true))
+			}
+			if name := person.name(uid); name != "" {
+				a.HandleName(person.of(uid, true), "telegram", name, "profile", 0)
+			}
+		}
+	}
+	a.Commit()
 	return nil
 }
 

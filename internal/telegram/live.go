@@ -18,6 +18,7 @@ import (
 	"mime"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -321,8 +322,9 @@ func dialogStates(dialogs []dialog) []stateItem {
 }
 
 // catchUp brings what arrived while the app was not connected: each chat's messages after the
-// newest that telegram.db has (a chat new since then, all of it).
-func catchUp(ctx context.Context, c *plugins.Context, cn *conn, dialogs []dialog) error {
+// newest that telegram.db has (a chat new since then, all of it). It gives the groups whose members
+// changed meanwhile, as their service messages say.
+func catchUp(ctx context.Context, c *plugins.Context, cn *conn, dialogs []dialog) (changed []int64, err error) {
 	have := map[int64]int64{}
 	if err := func() (err error) {
 		defer db.Recover(&err)
@@ -338,7 +340,7 @@ func catchUp(ctx context.Context, c *plugins.Context, cn *conn, dialogs []dialog
 		})
 		return nil
 	}(); err != nil {
-		return err
+		return nil, err
 	}
 	total, chats := 0, 0
 	for _, d := range dialogs {
@@ -351,21 +353,27 @@ func catchUp(ctx context.Context, c *plugins.Context, cn *conn, dialogs []dialog
 		}
 		peer, err := dialogPeer(d)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		var batch []sent
 		if err := cn.history(ctx, peer, int(since), func(chunk []sent) error {
 			batch = append(batch, chunk...)
 			return nil
 		}); err != nil {
-			return err
+			return nil, err
 		}
 		if len(batch) > 0 {
 			if _, err := storeMessages(c, d.Entity, batch); err != nil {
-				return err
+				return nil, err
 			}
 			total += len(batch)
 			chats++
+		}
+		for _, s := range batch {
+			if changesMembers(s.Message) {
+				changed = append(changed, d.ID)
+				break
+			}
 		}
 	}
 	if total > 0 {
@@ -373,7 +381,7 @@ func catchUp(ctx context.Context, c *plugins.Context, cn *conn, dialogs []dialog
 	} else {
 		c.Log("caught up: nothing new", nil)
 	}
-	return nil
+	return changed, nil
 }
 
 // --- the live connection ---------------------------------------------------------------------------
@@ -456,7 +464,11 @@ func live(ctx context.Context, c *plugins.Context) error {
 			return err
 		}
 		c.Log("connected to Telegram", nil)
-		handlers(c, cn, d)
+		ctx, stop := context.WithCancel(ctx)
+		defer stop()
+		queue := newMemberQueue()
+		go queue.run(ctx, c, cn)
+		handlers(c, cn, d, queue.add)
 		liveConn.Store(cn)
 		defer liveConn.Store(nil)
 		started := make(chan struct{})
@@ -487,7 +499,8 @@ func live(ctx context.Context, c *plugins.Context) error {
 	return err
 }
 
-// settle brings the chats' states, how far they were read, and what arrived while not connected.
+// settle brings the chats' states, how far they were read, what arrived while not connected, and
+// the members of the groups where they changed meanwhile or were not asked for a while.
 func settle(ctx context.Context, c *plugins.Context, cn *conn, dialogs []dialog) error {
 	if err := reportStates(c, dialogStates(dialogs)); err != nil {
 		return err
@@ -495,7 +508,20 @@ func settle(ctx context.Context, c *plugins.Context, cn *conn, dialogs []dialog)
 	if err := noteReads(c, dialogReads(dialogs), false); err != nil {
 		return err
 	}
-	return catchUp(ctx, c, cn, dialogs)
+	changed, err := catchUp(ctx, c, cn, dialogs)
+	if err != nil {
+		return err
+	}
+	stale, err := staleMembers(dialogs)
+	if err != nil {
+		return err
+	}
+	for _, id := range changed {
+		if !slices.Contains(stale, id) {
+			stale = append(stale, id)
+		}
+	}
+	return refreshMembers(ctx, c, cn, stale)
 }
 
 // follow keeps the connection up to date until it ends (done): back after the connection dropped,
@@ -525,8 +551,8 @@ func follow(ctx context.Context, c *plugins.Context, cn *conn, mgr telegram.Upda
 }
 
 // handlers are what the connection does with what Telegram pushes. One bad update must not stop
-// the connection: its error is logged.
-func handlers(c *plugins.Context, cn *conn, d tg.UpdateDispatcher) {
+// the connection: its error is logged. members is told of a group whose members changed.
+func handlers(c *plugins.Context, cn *conn, d tg.UpdateDispatcher, members func(chat int64)) {
 	logged := func(err error) error {
 		if err != nil {
 			c.Log("error: {e}", map[string]any{"e": err.Error()})
@@ -558,6 +584,9 @@ func handlers(c *plugins.Context, cn *conn, d tg.UpdateDispatcher) {
 		n, err := storeMessages(c, chat, []sent{{m, sender}})
 		if err != nil {
 			return logged(err)
+		}
+		if changesMembers(m) {
+			members(chatID)
 		}
 		if n > 0 {
 			c.Log("new message in {chat}", map[string]any{"chat": chatLabel(chat)})
@@ -606,6 +635,24 @@ func handlers(c *plugins.Context, cn *conn, d tg.UpdateDispatcher) {
 			return nil
 		}
 		return logged(reportStates(c, []stateItem{{PeerID(p.Peer), "muted", untilMS(u.NotifySettings)}}))
+	})
+
+	// someone joined or left a group (also seen as its service message, where the group shows one)
+	d.OnChatParticipants(func(ctx context.Context, e tg.Entities, u *tg.UpdateChatParticipants) error {
+		members(PeerID(&tg.PeerChat{ChatID: u.Participants.GetChatID()}))
+		return nil
+	})
+	d.OnChatParticipantAdd(func(ctx context.Context, e tg.Entities, u *tg.UpdateChatParticipantAdd) error {
+		members(PeerID(&tg.PeerChat{ChatID: u.ChatID}))
+		return nil
+	})
+	d.OnChatParticipantDelete(func(ctx context.Context, e tg.Entities, u *tg.UpdateChatParticipantDelete) error {
+		members(PeerID(&tg.PeerChat{ChatID: u.ChatID}))
+		return nil
+	})
+	d.OnChannelParticipant(func(ctx context.Context, e tg.Entities, u *tg.UpdateChannelParticipant) error {
+		members(PeerID(&tg.PeerChannel{ChannelID: u.ChannelID}))
+		return nil
 	})
 
 	// read on any of the owner's devices, or by the others (seen as it happens: its time is now)

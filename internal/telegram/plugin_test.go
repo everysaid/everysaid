@@ -370,7 +370,7 @@ func TestLiveHandlers(t *testing.T) {
 	c := in.ctx()
 	cn := account().conn()
 	d := tg.NewUpdateDispatcher()
-	handlers(c, cn, d)
+	handlers(c, cn, d, func(int64) {})
 	bob := user(2, "Bob", 22)
 	call := &tg.MessageService{ID: 9, PeerID: &tg.PeerUser{UserID: 2}, Date: 1600000000,
 		Action: &tg.MessageActionPhoneCall{CallID: 5}}

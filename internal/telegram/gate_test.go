@@ -446,7 +446,7 @@ func TestDeletedEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := tg.NewUpdateDispatcher()
-	handlers(c, account().conn(), d)
+	handlers(c, account().conn(), d, func(int64) {})
 	err := d.Handle(newTestCtx(), &tg.Updates{Updates: []tg.UpdateClass{
 		&tg.UpdateDeleteMessages{Messages: []int{5, 99}},
 		&tg.UpdateDeleteChannelMessages{ChannelID: 30, Messages: []int{5}}}})
