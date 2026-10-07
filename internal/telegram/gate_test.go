@@ -22,6 +22,7 @@ import (
 
 	"everysaid/internal/archive"
 	"everysaid/internal/db"
+	"everysaid/internal/importers"
 	"everysaid/internal/plugins"
 )
 
@@ -420,5 +421,54 @@ func TestFetchMedia(t *testing.T) {
 	n := len(f.calls)
 	if again, _ := p.FetchMedia(newTestCtx(), c, mid); again != want || len(f.calls) != n {
 		t.Fatal("downloaded twice")
+	}
+}
+
+// A message deleted on Telegram: the live update reaches telegram.db, the import marks the
+// archive's message deleted and keeps its text. Private chats' ids are the account's, found in the
+// stored rows; a supergroup's come with its channel.
+func TestDeletedEndToEnd(t *testing.T) {
+	in := newInstance(t, M{})
+	importTelegram = func(a *archive.Archive, out func(string), only map[[2]int64]bool, skip map[int64]bool) error {
+		return importers.Telegram(a, out, importers.TelegramOptions{Only: only, Skip: skip})
+	}
+	c := in.ctx()
+	bob := user(2, "Bob", 22)
+	group := &tg.Channel{ID: 30, Title: "Club", Photo: &tg.ChatPhotoEmpty{}}
+	group.SetMegagroup(true)
+	group.SetAccessHash(55)
+	club := &tg.PeerChannel{ChannelID: 30}
+	if _, err := storeMessages(c, bob, []sent{{text(5, &tg.PeerUser{UserID: 2}, 0, 1600000000, "hello", false), bob},
+		{text(6, &tg.PeerUser{UserID: 2}, 0, 1600000001, "stays", false), bob}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := storeMessages(c, group, []sent{{text(5, club, 2, 1600000002, "in the club", false), bob}}); err != nil {
+		t.Fatal(err)
+	}
+	d := tg.NewUpdateDispatcher()
+	handlers(c, account().conn(), d)
+	err := d.Handle(newTestCtx(), &tg.Updates{Updates: []tg.UpdateClass{
+		&tg.UpdateDeleteMessages{Messages: []int{5, 99}},
+		&tg.UpdateDeleteChannelMessages{ChannelID: 30, Messages: []int{5}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int64{}
+	db.Each(in.h.store.Read(), "SELECT m.text, m.deleted FROM message m", nil, func(scan func(...any)) {
+		var txt string
+		var del int64
+		scan(&txt, &del)
+		got[txt] = del
+	})
+	if !reflect.DeepEqual(got, map[string]int64{"hello": 1, "stays": 0, "in the club": 1}) {
+		t.Fatalf("%v", got)
+	}
+	s, _ := db.ReadOnly(DBPath())
+	defer s.Close()
+	if n := db.Int(s, "SELECT count(*) FROM deleted"); n != 2 {
+		t.Fatalf("%d recorded", n)
+	}
+	if lines := strings.Join(c.LastLines(50), "\n"); strings.Contains(lines, "error") {
+		t.Fatal(lines)
 	}
 }

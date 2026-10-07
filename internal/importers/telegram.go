@@ -492,6 +492,7 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 	for _, r := range maps(d, "SELECT id, kind, title FROM chat ORDER BY id") {
 		chats = append(chats, chat{toInt(r["id"]), r["kind"], r["title"]})
 	}
+	hasDeleted := db.Exists(d, "SELECT 1 FROM sqlite_master WHERE name = 'deleted'") // not in a store the Python made
 	for _, c := range chats {
 		if (chatsWanted != nil && !chatsWanted[c.id]) || opt.Skip[c.id] {
 			continue
@@ -516,6 +517,14 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 			sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 			query = "SELECT id, date, json FROM message WHERE chat_id = ? AND id IN (" + db.Marks(len(ids)) + ") ORDER BY id"
 			args = append(args, db.Args(ids)...)
+		}
+		deleted := map[int64]bool{} // deleted on Telegram since (the live connection's record)
+		if hasDeleted {
+			db.Each(d, "SELECT id FROM deleted WHERE chat_id = ?", []any{c.id}, func(scan func(...any)) {
+				var id int64
+				scan(&id)
+				deleted[id] = true
+			})
 		}
 		senders := map[archive.Handle]bool{}
 		var senderOrder []archive.Handle
@@ -555,7 +564,7 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 				}
 			}
 			if a.HasOrigin(src, rowKey, "") {
-				telegramChanges(a, src, rowKey, m, person, own, updated)
+				telegramChanges(a, src, rowKey, m, person, own, updated, deleted[mid])
 				return
 			}
 			k := telegramKindOf(m)
@@ -598,6 +607,9 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 			a.AddMessage(src, rowKey, archive.Message{Service: "telegram", ConversationID: conv, TS: ts, Outgoing: outgoing,
 				SenderID: senderID, Kind: k.kind, Text: text, Key: fmt.Sprint(mid), Extras: x})
 			added[kind]++
+			if deleted[mid] { // deleted before it was first imported: kept, said deleted
+				telegramChanges(a, src, rowKey, m, person, own, updated, true)
+			}
 		})
 		for _, member := range senderOrder {
 			if !own[member] {
@@ -648,12 +660,18 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 
 // telegramChanges: what Telegram says now of a message the archive already has (the live
 // connection writes an edited message over its row and imports it again): an edit's new text,
-// marked edited, and its reactions as they are now.
+// marked edited, and its reactions as they are now. deleted: deleted on Telegram (its text kept,
+// marked deleted, as other clients show it).
 func telegramChanges(a *archive.Archive, src int64, rowKey string, m map[string]any, person *tgPeople,
-	own map[archive.Handle]bool, updated map[string]int) {
+	own map[archive.Handle]bool, updated map[string]int, deleted bool) {
 	mid, ok := a.IntOK("SELECT message_id FROM message_origin WHERE source_id = ? AND row_key = ?", src, rowKey)
 	if !ok {
 		return
+	}
+	if deleted {
+		for _, c := range ApplyChange(a, mid, Change{Deleted: true}) {
+			updated[c]++
+		}
 	}
 	if truthy(m["edit_date"]) && !truthy(m["edit_hide"]) {
 		var t string // the text as the import makes it: a poll's or a contact's, else the message's
