@@ -61,7 +61,7 @@ func (s *Server) miscRoutes() {
 			return nil, err
 		}
 		out, err := core.Calls(s.Store, core.CallsOptions{ChatID: q.str("chat"), Missed: missed, Service: q.str("service"),
-			Before: before, Limit: clampLimit(limit, 200), Unnamed: s.setting("show_unnamed", true),
+			Before: before, Limit: clampLimit(limit, 200), Unnamed: true,
 			Short: s.setting("show_short_numbers", false)})
 		if err != nil {
 			return nil, is404(err, nil)
@@ -269,7 +269,7 @@ func (s *Server) miscRoutes() {
 
 	h("PUT /api/settings", bodyRequired, func(q *req) (any, error) {
 		simple := map[string]bool{"theme": true, "language": true, "push_preview": true, "density": true, "send_enter": true,
-			"unread_since": true, "show_unnamed": true, "show_tone": true, "mcp_labels": true, "hide_empty_groups": true,
+			"unread_since": true, "show_tone": true, "mcp_labels": true, "hide_empty_groups": true,
 			"show_short_numbers": true}
 		weights := map[string]bool{}
 		for _, w := range plugins.NameWeights() {

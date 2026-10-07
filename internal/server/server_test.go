@@ -382,8 +382,7 @@ func TestMentionsFilesReceiptsAndReadReceipts(t *testing.T) {
 	must(t, a.what == "read" && a.service == "whatsapp", "read receipts: %+v", a)
 }
 
-// People without a name show by default (a new number that writes is not hidden: it is to be named
-// or merged); the setting can still leave them out.
+// People without a name show (a new number that writes is not hidden: it is to be named or merged).
 func TestPeopleWithoutANameShown(t *testing.T) {
 	c := newServer(t)
 	c.login()
@@ -397,8 +396,6 @@ func TestPeopleWithoutANameShown(t *testing.T) {
 	unnamed := core.PrettyPhone("+15550100010")
 	must(t, slices.Contains(titles(), unnamed), "shown: %v", titles())
 	must(t, !slices.Contains(titles(), core.PrettyPhone("+15550100000")), "calls only: on the calls' page, not a chat")
-	must(t, c.do("PUT", "/api/settings", M{"show_unnamed": false}, H).status == 200, "setting")
-	must(t, !slices.Contains(titles(), unnamed), "left out when asked: %v", titles())
 }
 
 func TestLabelsAndNamesFound(t *testing.T) {
