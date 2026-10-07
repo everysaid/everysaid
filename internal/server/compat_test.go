@@ -5,6 +5,7 @@ package server
 // and the push messages sent with it.
 
 import (
+	"context"
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -236,6 +237,8 @@ func TestPushWithThePythonsKey(t *testing.T) {
 	}))
 	defer ps.Close()
 	c.s.Push.httpClient = &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+	pushEndpointOK = func(_ context.Context, e string) bool { return strings.HasPrefix(e, ps.URL+"/") } // on this machine
+	t.Cleanup(func() { pushEndpointOK = pushEndpoint })
 	browser, _ := ecdh.P256().GenerateKey(rand.Reader)
 	sub := M{"endpoint": ps.URL + "/push/1", "keys": M{"p256dh": b64.EncodeToString(browser.PublicKey().Bytes()),
 		"auth": b64.EncodeToString(randomBytes(16))}}

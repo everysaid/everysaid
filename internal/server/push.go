@@ -10,6 +10,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -22,9 +23,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
@@ -51,7 +56,61 @@ type Push struct {
 }
 
 func NewPush(auth *Auth, log *slog.Logger) *Push {
-	return &Push{auth: auth, log: log, httpClient: &http.Client{Timeout: 30 * time.Second}}
+	return &Push{auth: auth, log: log, httpClient: pushClient()}
+}
+
+// pushClient reaches push services only on the internet: an endpoint is the browser's word, so the
+// address is checked as the connection is made (a name may resolve to this machine or its network
+// later than when it was given: DNS rebinding), redirects included; no proxy (its own address would
+// be the one checked).
+func pushClient() *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.Proxy = nil
+	dialer := &net.Dialer{Timeout: 15 * time.Second, Control: func(network, address string, _ syscall.RawConn) error {
+		ap, err := netip.ParseAddrPort(address)
+		if err != nil || !publicIP(ap.Addr()) {
+			return fmt.Errorf("push: %s is not an address on the internet", address)
+		}
+		return nil
+	}}
+	tr.DialContext = dialer.DialContext
+	return &http.Client{Timeout: 30 * time.Second, Transport: tr}
+}
+
+// cgnat is the carriers' shared space (and Tailscale's): not the internet either.
+var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+
+// publicIP says whether an address is one on the internet: not this machine, a private network,
+// link-local, multicast or unspecified.
+func publicIP(a netip.Addr) bool {
+	a = a.Unmap()
+	return a.IsGlobalUnicast() && !a.IsPrivate() && !a.IsLoopback() && !a.IsLinkLocalUnicast() && !cgnat.Contains(a)
+}
+
+// pushEndpointOK is pushEndpoint (a variable: the tests' push service is on this machine).
+var pushEndpointOK = pushEndpoint
+
+// pushEndpoint checks a subscription's endpoint: https, at a name (or an address) on the internet.
+func pushEndpoint(ctx context.Context, endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
+		return false
+	}
+	if a, err := netip.ParseAddr(u.Hostname()); err == nil {
+		return publicIP(a)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", u.Hostname())
+	if err != nil || len(addrs) == 0 {
+		return false
+	}
+	for _, a := range addrs {
+		if !publicIP(a) {
+			return false
+		}
+	}
+	return true
 }
 
 // Key is the VAPID public key, as the browser wants it (base64url of the raw point); made and kept

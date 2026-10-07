@@ -572,10 +572,52 @@ func (a *Auth) NewMCPToken(uid int64, label string) string {
 	return token
 }
 
-// MCPUser is the user of an MCP token, or 0.
+// MCPUser is the user of an MCP token, or 0; the token's use is noted (at most once a minute).
 func (a *Auth) MCPUser(token string) int64 {
-	uid, _ := db.IntOK(a.db, "SELECT user_id FROM mcp_token WHERE hash = ?", h(token))
+	hs := h(token)
+	uid, _ := db.IntOK(a.db, "SELECT user_id FROM mcp_token WHERE hash = ?", hs)
+	if uid != 0 {
+		var last int64
+		if !a.KV(mcpUsedKey(hs), &last) || time.Now().Unix()-last > 60 {
+			a.SetKV(mcpUsedKey(hs), time.Now().Unix())
+		}
+	}
 	return uid
+}
+
+// mcpUsedKey is where a token's last use is kept: in kv, as the table of tokens is the Python's
+// (whose rows have no room for it).
+func mcpUsedKey(hs string) string { return "mcp_used:" + hs[:16] }
+
+// MCPTokens are a user's tokens, the newest first: [{id, label, created_at, last_used}] (id: the
+// start of the token's hash, as a session's).
+func (a *Auth) MCPTokens(uid int64) []map[string]any {
+	out := []map[string]any{}
+	db.Each(a.db, "SELECT hash, label, created_at FROM mcp_token WHERE user_id = ? ORDER BY created_at DESC, hash",
+		[]any{uid}, func(scan func(...any)) {
+			var hs string
+			var label sql.NullString
+			var created int64
+			scan(&hs, &label, &created)
+			out = append(out, map[string]any{"id": hs[:16], "label": nullStr(label), "created_at": created, "last_used": nil})
+		})
+	for _, t := range out {
+		var last int64
+		if a.KV("mcp_used:"+t["id"].(string), &last) {
+			t["last_used"] = last
+		}
+	}
+	return out
+}
+
+// RevokeMCPToken ends a user's token (by its id); false when there is none.
+func (a *Auth) RevokeMCPToken(uid int64, id string) bool {
+	if len(id) != 16 || db.Changed(a.db, "DELETE FROM mcp_token WHERE user_id = ? AND substr(hash, 1, 16) = ?", uid, id) == 0 {
+		return false
+	}
+	db.Exec(a.db, "DELETE FROM kv WHERE key = ?", "mcp_used:"+id)
+	a.Log(&uid, "mcp token revoked", id)
+	return true
 }
 
 // --- rate limit and audit ------------------------------------------------------------------------
@@ -749,7 +791,7 @@ func (a *Auth) CheckPassword(name, password, code, ip string) int64 {
 func HashPassword(password string) string {
 	const n, r, p = 1 << 15, 8, 1
 	salt := randomBytes(16)
-	k, err := scrypt.Key([]byte(password), salt, n, r, p, 32)
+	k, err := scryptKey([]byte(password), salt, n, r, p, 32)
 	if err != nil {
 		panic(err)
 	}
@@ -773,12 +815,25 @@ func VerifyPassword(password, stored string) bool {
 	if n <= 1 || r <= 0 || p <= 0 || float64(128)*float64(n)*float64(r)+float64(128)*float64(r)*float64(p) > 64*1024*1024 {
 		return false
 	}
-	got, err := scrypt.Key([]byte(password), salt, n, r, p, 32)
+	got, err := scryptKey([]byte(password), salt, n, r, p, 32)
 	if err != nil {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(hex.EncodeToString(got)), []byte(parts[5])) == 1
 }
+
+// scryptSlots: each hash takes 32 MB and a core's worth of time, so only so many are made at once
+// (a flood of sign-in attempts from many addresses waits, instead of taking the server's memory).
+var scryptSlots = make(chan struct{}, 2)
+
+// scryptKey is scrypt.Key within the slots (scryptRaw, a variable for the tests).
+func scryptKey(password, salt []byte, n, r, p, keyLen int) ([]byte, error) {
+	scryptSlots <- struct{}{}
+	defer func() { <-scryptSlots }()
+	return scryptRaw(password, salt, n, r, p, keyLen)
+}
+
+var scryptRaw = scrypt.Key
 
 var (
 	dummyOnce sync.Once
