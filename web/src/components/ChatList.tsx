@@ -13,6 +13,7 @@ import { service } from "@/lib/services";
 import { Avatar, Button, Empty, Menu, MenuContent, MenuItem, MenuTrigger, Segmented, ServiceDot, Spinner } from "./ui";
 import { Logo } from "./Logo";
 import { GroupSuggestions } from "./GroupMerge";
+import { ChatFiltersButton, filterParams, keepFilters, savedFilters, type ChatFilters } from "./ChatFilters";
 
 type Filter = "all" | "person" | "group" | "unread";
 
@@ -113,9 +114,14 @@ export function ChatList() {
   const [was] = useState(listPlace);          // as it was left (this tab), coming back to it
   const [filter, setFilter] = useState<Filter>((was?.filter as Filter) ?? "all");
   const [q, setQ] = useState(was?.q ?? "");
-  const [archived, setArchived] = useState(was?.archived ?? false);
+  const [filters, setFiltersNow] = useState<ChatFilters>(savedFilters);
+  const setFilters = (f: ChatFilters) => { setFiltersNow(f); keepFilters(f); };
+  const archived = filters.archived;
   const dq = useDebounced(q, 150);
-  const chats = useChats({ q: dq || undefined, archived: archived || undefined });
+  const narrowed = useDebounced(filters, 250);         // the slider moves on, the list follows
+  const chats = useChats({ q: dq || undefined, ...filterParams(narrowed) });
+  const seen = useRef(new Set<string>());             // every service the list has shown, to filter by
+  for (const c of chats.data?.items ?? []) for (const s of c.services) seen.current.add(s);
   const params = useParams({ strict: false }) as { chatId?: string };
   const items = useMemo(() => {
     let list = chats.data?.items ?? [];
@@ -158,16 +164,7 @@ export function ChatList() {
         <div className="flex items-center gap-2">
           <Logo className="size-8 md:hidden" />
           <h1 className="text-xl font-semibold tracking-tight">{archived ? t("chats.showArchived") : t("chats.title")}</h1>
-          <button
-            onClick={() => setArchived(!archived)}
-            data-show-archived
-            aria-pressed={archived}
-            className={cn("ml-auto grid size-9 place-items-center rounded-full text-muted hover:bg-panel-2", archived && "bg-accent/12 text-accent")}
-            aria-label={t("chats.showArchived")}
-            title={t("chats.showArchived")}
-          >
-            <Archive className="size-4" />
-          </button>
+          <ChatFiltersButton value={filters} onChange={setFilters} seen={[...seen.current]} />
         </div>
         <div className="relative">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" />

@@ -13,6 +13,7 @@ import os
 import re
 
 from .. import archive, text as text_mod
+from ..emoticons import viber_emoji
 from .names import people
 
 PAGE = 60
@@ -42,6 +43,19 @@ def unread_since(store):
 
 # --- the chat list -------------------------------------------------------------------------------
 
+def _hidden_services(store):
+    """The services the user hid (setting `hidden_services`): their ids. Nothing of them shows
+    anywhere (chats, streams, calls, search, media), though the archive keeps all of it."""
+    names = set(store.setting("hidden_services", []) or [])
+    return {i for i, n in _lookups(store)["service"].items() if n in names}
+
+
+def _shown(store, column="service_id"):
+    """SQL: the rows of services not hidden."""
+    ids = _hidden_services(store)
+    return f"{column} NOT IN ({','.join(str(int(i)) for i in ids)})" if ids else "1"
+
+
 def _chat_index(store):
     """Which conversations and addresses make each chat, built once per archive version."""
     def build():
@@ -55,11 +69,25 @@ def _chat_index(store):
         links = dict(db.execute("SELECT conversation_id, into_id FROM group_link"))     # merged groups
         chats = {}              # chat id -> dict
         conv_chat = {}
-        for cid, sid, is_group, title in db.execute("SELECT id, service_id, is_group, title FROM conversation"):
-            others = {ppl.person_of.get(a) for a in members[cid] if a not in ppl.own_addresses}
-            others.discard(None)
-            others -= ppl.me
-            if not is_group and len(others) == 1:
+        rows = db.execute(f"SELECT id, service_id, is_group, title FROM conversation WHERE {_shown(store)}").fetchall()
+
+        def others_of(cid):
+            out = {ppl.person_of.get(a) for a in members[cid] if a not in ppl.own_addresses}
+            out.discard(None)
+            return out - ppl.me
+        # the user's notes to themselves, on every service (Viber's notes, Telegram's saved messages, an
+        # SMS to one's own number): one chat, with the id of the first of them
+        # (none of anyone else, ever: not a chat whose people the sources did not list)
+        heard = {c for (c,) in db.execute("SELECT DISTINCT conversation_id FROM message WHERE outgoing = 0")}
+        alone = {cid for cid, _, is_group, _ in rows if not is_group and cid not in heard and not others_of(cid)}
+        notes = min(alone, default=None)
+        for cid, sid, is_group, title in rows:
+            others = others_of(cid)
+            if cid in alone:
+                key = f"c{notes}"
+                chat = chats.setdefault(key, {"id": key, "type": "conversation", "conversation_id": notes, "title": None,
+                                              "title_ts": -1, "conversations": [], "services": set(), "last_ts": 0})
+            elif not is_group and len(others) == 1:
                 pid = others.pop()
                 key = f"p{pid}"
                 chat = chats.setdefault(key, {"id": key, "type": "person", "person_id": pid,
@@ -76,14 +104,14 @@ def _chat_index(store):
             chat["services"].add(lk["service"][sid])
             chat["last_ts"] = max(chat["last_ts"], last.get(cid) or 0)
             conv_chat[cid] = key
-        for cid, ts in db.execute("SELECT conversation_id, max(ts) FROM call WHERE conversation_id IS NOT NULL "
-                                  "GROUP BY conversation_id"):     # a group's calls
+        for cid, ts in db.execute(f"SELECT conversation_id, max(ts) FROM call WHERE conversation_id IS NOT NULL "
+                                  f"AND {_shown(store)} GROUP BY conversation_id"):     # a group's calls
             if cid in conv_chat:
                 chat = chats[conv_chat[cid]]
                 chat["last_ts"] = max(chat["last_ts"], ts or 0)
         for aid, sid, ts in db.execute(
-                "SELECT address_id, service_id, max(ts) FROM call WHERE conversation_id IS NULL "
-                "AND address_id IS NOT NULL GROUP BY address_id, service_id"):
+                f"SELECT address_id, service_id, max(ts) FROM call WHERE conversation_id IS NULL "
+                f"AND address_id IS NOT NULL AND {_shown(store)} GROUP BY address_id, service_id"):
             pid = ppl.person_of.get(aid)
             if pid is None or pid in ppl.me:
                 continue
@@ -213,7 +241,8 @@ def _last_item(store, chat):
     if row:
         mid, ts, outgoing, kind_id, txt, sid, sender, subtype, deleted = row
         return {"type": "message", "id": mid, "ts": ts, "outgoing": bool(outgoing), "kind": lk["kind"][kind_id],
-                "text": (txt or "")[:160], "service": lk["service"][sid], "subtype": subtype, "deleted": bool(deleted),
+                "text": (viber_emoji(txt or "") if lk["service"][sid] == "viber" else txt or "")[:160],
+                "service": lk["service"][sid], "subtype": subtype, "deleted": bool(deleted),
                 "sender": people(store).name_of_address(sender) if chat["type"] == "group" and sender else None}
     return None
 
@@ -242,14 +271,21 @@ def _unnamed(store):
     return store.cached("unnamed", build)
 
 
-def chats(store, include_archived=False, kind=None, q=None, limit=None, offset=0, unnamed=True):
+def chats(store, include_archived=False, kind=None, q=None, limit=None, offset=0, unnamed=True,
+          min_messages=0, max_messages=None, with_services=(), without_services=(), people_only=None):
     """The chat list, newest first, pinned ones on top: [{id, type, title, services, last, unread,
     pinned, muted, avatar}]: the chats with something in them (a message or a call). kind: person,
     group or conversation; q: parts of the title (each word).
     unnamed False: without the people who have no name, unless they wrote something unread or q
-    asks for them."""
+    asks for them.
+    min_messages, max_messages: only chats with at least, or at most, so many messages; with_services,
+    without_services: only chats that have each of these services, and none of those; people_only:
+    only the chats of these people (a set of person ids)."""
     index, _ = _chat_index(store)
     states = _states(store)
+    sizes = store.cached("conversation_sizes", lambda: dict(store.read().execute(
+        "SELECT conversation_id, count(*) FROM message GROUP BY conversation_id"))) if min_messages or max_messages is not None else {}
+    with_services, without_services = set(with_services), set(without_services)
     base = unread_since(store)
     ppl = people(store)
     items = []
@@ -263,6 +299,14 @@ def chats(store, include_archived=False, kind=None, q=None, limit=None, offset=0
             continue
         if kind and chat["type"] != kind:
             continue
+        if people_only is not None and chat.get("person_id") not in people_only:
+            continue
+        if with_services - set(chat["services"]) or without_services & set(chat["services"]):
+            continue
+        if min_messages or max_messages is not None:
+            n = sum(sizes.get(c, 0) for c in chat["conversations"])
+            if n < min_messages or (max_messages is not None and n > max_messages):
+                continue
         if chat.get("person_id") in hidden:
             since = max(read or 0, base)
             if chat["last_ts"] <= since or not _unread(store, chat, since):
@@ -359,7 +403,7 @@ def _fetch(store, convs, addrs, where, args, order, limit, hidden=None):
     """Raw message and call rows of a stream, within `where` on (ts, id); hidden: not these services."""
     db = store.read()
     rows = []
-    ids = [i for i, name in _lookups(store)["service"].items() if name in (hidden or ())]
+    ids = [i for i, name in _lookups(store)["service"].items() if name in (hidden or ())] + list(_hidden_services(store))
     if ids:
         where = f"{where} AND service_id NOT IN ({','.join(str(int(i)) for i in ids)})"
     if convs:
@@ -492,6 +536,11 @@ def hydrate(store, rows, chat=None):
             calls[cid] = {"type": "call", "id": cid, "ts": ts, "service": lk["service"][sid], "outgoing": bool(outgoing),
                           "answered": bool(answered), "duration": duration, "detail": detail, "video": bool(video),
                           "attempts": attempts, "with": ppl.name_of_address(aid)}
+    for m in msgs.values():         # Viber's "(inlove)" as 😍 (not where mentions point into the text)
+        if m["service"] == "viber" and not m["mentions"]:
+            m["text"] = viber_emoji(m["text"])
+            if m.get("reply"):
+                m["reply"]["text"] = viber_emoji(m["reply"]["text"])
     out = []
     for t, (i, _) in rows:
         item = msgs.get(i) if t == "m" else calls.get(i)
@@ -653,6 +702,7 @@ def search(store, q, chat_id=None, service=None, kind=None, since=None, until=No
             args.append('"%s"' % folded.replace('"', '""'))
     if not where:
         return {"items": [], "total": 0}
+    where.append(_shown(store, "m.service_id"))
     db = store.read()
     lk = _lookups(store)
     if service:
@@ -722,7 +772,7 @@ def between(store, since, until, chat_id=None, service=None, kind=None, outgoing
     lk = _lookups(store)
     index, conv_chat = _chat_index(store)
     ppl = people(store)
-    where, args = ["ts >= ?", "ts < ?"], [since if since is not None else -2**62, until if until is not None else 2**62]
+    where, args = ["ts >= ?", "ts < ?", _shown(store)], [since if since is not None else -2**62, until if until is not None else 2**62]
     if service:
         where.append("service_id = ?")
         args.append({v: k for k, v in lk["service"].items()}.get(service))
@@ -1057,7 +1107,7 @@ def calls(store, chat_id=None, missed=None, service=None, before=None, limit=PAG
     """unnamed False: without the calls of people who have no name, and of hidden numbers (not in
     one chat's calls)."""
     db = store.read()
-    where, args = ["1"], []
+    where, args = [_shown(store)], []
     if chat_id:
         _, _, addrs = _stream_sources(store, chat_id)
         where.append(f"address_id IN ({','.join('?' * len(addrs))})")
@@ -1093,7 +1143,7 @@ def media(store, chat_id=None, kind="all", before=None, limit=PAGE, available_on
     db = store.read()
     lk = _lookups(store)
     kinds = [k for k, v in lk["kind"].items() if v in MEDIA_KINDS.get(kind, MEDIA_KINDS["all"])]
-    where = [f"m.kind_id IN ({','.join('?' * len(kinds))})"]
+    where = [f"m.kind_id IN ({','.join('?' * len(kinds))})", _shown(store, "m.service_id")]
     args = list(kinds)
     if chat_id:
         _, convs, _ = _stream_sources(store, chat_id)
@@ -1128,10 +1178,10 @@ def media(store, chat_id=None, kind="all", before=None, limit=PAGE, available_on
 def timeline(store, day_start, day_end):
     """Everything between two instants (Unix ms), across chats, oldest first."""
     db = store.read()
-    rows = [("m", r) for r in db.execute("SELECT id, ts FROM message WHERE ts >= ? AND ts < ? ORDER BY ts, id",
-                                         (day_start, day_end))]
-    rows += [("c", r) for r in db.execute("SELECT id, ts FROM call WHERE ts >= ? AND ts < ? ORDER BY ts, id",
-                                          (day_start, day_end))]
+    rows = [("m", r) for r in db.execute(f"SELECT id, ts FROM message WHERE ts >= ? AND ts < ? AND {_shown(store)} "
+                                         f"ORDER BY ts, id", (day_start, day_end))]
+    rows += [("c", r) for r in db.execute(f"SELECT id, ts FROM call WHERE ts >= ? AND ts < ? AND {_shown(store)} "
+                                          f"ORDER BY ts, id", (day_start, day_end))]
     rows.sort(key=lambda r: (r[1][1], r[0], r[1][0]))
     items = hydrate(store, rows[:2000])
     _, conv_chat = _chat_index(store)

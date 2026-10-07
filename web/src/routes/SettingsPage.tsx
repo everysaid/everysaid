@@ -1,16 +1,20 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ArrowDown, ArrowUp, Bell, Download, Fingerprint, KeyRound, LogOut, Monitor, Moon, Palette, Shield, Sun, Tags, Trash2, UserRound } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
+import { ArrowDown, ArrowUp, Bell, Download, Fingerprint, KeyRound, LogOut, Monitor, Moon, Palette, EyeOff, Shield, Sun, Tags, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import { api, type Account, type NameSources } from "@/lib/api";
-import { fullDate, relative } from "@/lib/format";
+import { fullDate, number, relative } from "@/lib/format";
 import { setLanguage } from "@/lib/i18n";
 import { currentSubscription, disablePush, enablePush, isIos, isStandalone, pushSupported } from "@/lib/push";
 import { register } from "@/lib/passkeys";
 import { applyTheme, getTheme, type Theme } from "@/lib/theme";
 import { useSettings } from "@/lib/hooks";
-import { Button, Card, Dialog, Section, Segmented, Switch } from "@/components/ui";
+import { Button, Card, Dialog, Section, Segmented, ServiceDot, Switch } from "@/components/ui";
+import { settingsRoute } from "@/router";
+import { service } from "@/lib/services";
+
 import { PageHeader } from "@/components/PageHeader";
 import { passkeyFailed, RecoveryCodes } from "./Auth";
 import { PasswordSetup } from "@/components/PasswordSetup";
@@ -34,8 +38,43 @@ function Line({ label, hint, children }: { label: React.ReactNode; hint?: React.
   );
 }
 
+const TABS = [
+  { id: "general", icon: Palette },
+  { id: "names", icon: UserRound },
+  { id: "labels", icon: Tags },
+  { id: "services", icon: EyeOff },
+  { id: "security", icon: Shield },
+] as const;
+
+/** The services the archive has, each one hidden or shown everywhere in the app (the archive keeps all). */
+function HiddenServices() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const used = useQuery({ queryKey: ["services-used"], queryFn: () => api.get<{ items: { id: string; messages: number; calls: number; hidden: boolean }[] }>("/api/services/used") });
+  const items = used.data?.items ?? [];
+  const toggle = (id: string, hide: boolean) => {
+    const hidden = items.filter((s) => (s.id === id ? hide : s.hidden)).map((s) => s.id);
+    api.put("/api/settings", { hidden_services: hidden }).then(() => qc.invalidateQueries(), (e) => toast.error(e.message));
+  };
+  return (
+    <Section title={<span className="flex items-center gap-2"><EyeOff className="size-4" />{t("settings.services")}</span>}>
+      <p className="-mt-1 px-1 text-xs text-muted">{t("settings.servicesHint")}</p>
+      <Card className="divide-y divide-line">
+        {items.map((s) => (
+          <Line key={s.id} label={<span className="flex items-center gap-2"><ServiceDot id={s.id} />{service(s.id).name}</span>}
+            hint={[s.messages && t("settings.nMessages", { count: s.messages, n: number(s.messages) }), s.calls && t("settings.nCalls", { count: s.calls, n: number(s.calls) })].filter(Boolean).join(" · ")}>
+            <span data-service-shown={s.id}><Switch checked={!s.hidden} onChange={(v) => toggle(s.id, !v)} label={service(s.id).name} /></span>
+          </Line>
+        ))}
+      </Card>
+    </Section>
+  );
+}
+
 export function SettingsPage() {
   const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
+  const tab = settingsRoute.useSearch().tab ?? "general";
   const qc = useQueryClient();
   const settings = useSettings();
   const account = useQuery({ queryKey: ["account"], queryFn: () => api.get<Account>("/api/auth/account") });
@@ -84,6 +123,12 @@ export function SettingsPage() {
       <PageHeader title={t("settings.title")} />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-2xl space-y-8 p-4 pb-12 md:p-6">
+          <div className="-mx-4 overflow-x-auto px-4 md:mx-0 md:px-0">
+            <Segmented value={tab} onChange={(v) => navigate({ to: "/settings", search: { tab: v === "general" ? undefined : v }, replace: true })}
+              options={TABS.map(({ id, icon: Icon }) => ({ value: id, label: <span className="flex items-center gap-1.5 whitespace-nowrap"><Icon className="size-3.5" />{t(`settings.tab.${id}`)}</span> }))} />
+          </div>
+          {tab === "services" && <HiddenServices />}
+          {tab === "general" && (
           <Section title={<span className="flex items-center gap-2"><Palette className="size-4" />{t("settings.appearance")}</span>}>
             <Card className="divide-y divide-line">
               <Line label={t("settings.theme")}>
@@ -106,7 +151,9 @@ export function SettingsPage() {
               )}
             </Card>
           </Section>
+          )}
 
+          {tab === "names" && (
           <Section title={<span className="flex items-center gap-2"><UserRound className="size-4" />{t("settings.names")}</span>}
             action={names.data?.custom && <Button size="sm" variant="ghost" onClick={() => setOrder(null)}>{t("settings.namesDefault")}</Button>}>
             <p className="-mt-1 px-1 text-xs text-muted">{t("settings.namesHint")}</p>
@@ -125,7 +172,9 @@ export function SettingsPage() {
               </Line>
             </Card>
           </Section>
+          )}
 
+          {tab === "labels" && (
           <Section title={<span className="flex items-center gap-2"><Tags className="size-4" />{t("settings.labels")}</span>}>
             <p className="-mt-1 px-1 text-xs text-muted">{t("settings.labelsHint")}</p>
             <Card className="divide-y divide-line">
@@ -140,7 +189,9 @@ export function SettingsPage() {
             </Card>
             <LabelLists />
           </Section>
+          )}
 
+          {tab === "general" && (
           <Section title={<span className="flex items-center gap-2"><Bell className="size-4" />{t("settings.notifications")}</span>}>
             <Card className="divide-y divide-line">
               <Line label={t("settings.push")} hint={isIos() && !isStandalone() ? t("settings.pushIos") : t("settings.pushHint")}>
@@ -156,7 +207,9 @@ export function SettingsPage() {
               )}
             </Card>
           </Section>
+          )}
 
+          {tab === "security" && (
           <Section title={<span className="flex items-center gap-2"><Shield className="size-4" />{t("settings.security")}</span>}>
             <Card className="divide-y divide-line">
               <div className="px-4 pt-3.5 text-sm font-medium">{t("settings.passkeys")}</div>
@@ -213,8 +266,9 @@ export function SettingsPage() {
               <LogOut className="size-4" />{t("settings.logout")}
             </Button>
           </Section>
+          )}
 
-          {a && (
+          {a && tab === "security" && (
             <Section title={t("settings.activity")}>
               <Card className="divide-y divide-line text-sm">
                 {a.audit.slice(0, 15).map((e, i) => (

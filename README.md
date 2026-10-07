@@ -549,3 +549,7 @@ mobile). Next:
 6. **Names written back to the address book**: from the people without a name, a new contact, or a
    handle added to an existing one, in the user's CardDAV address book (today contacts are only
    read), so that a name lives there and not only in the app.
+7. **Viber's notes to self known as such**: the iPhone's Viber marks its "My Notes" chat with
+   `ZCONVERSATION.ZSUBTYPE` 5 (3 is a channel); the importer could record it, and the app call it
+   "Notes" with its own place. Today it is a nameless group of the owner alone, like a group whose
+   members all left (those have messages of others; the notes have none).

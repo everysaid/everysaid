@@ -15,7 +15,8 @@ export function useMedia(query: string) {
 
 export const useWide = () => useMedia("(min-width: 768px)");
 
-export function useChats(params: { kind?: string; q?: string; archived?: boolean } = {}) {
+export function useChats(params: { kind?: string; q?: string; archived?: boolean; unnamed?: boolean; min_messages?: number; max_messages?: number;
+  services?: string; no_services?: string; label?: number } = {}) {
   return useQuery({
     queryKey: ["chats", params],
     queryFn: () => api.get<{ items: ChatSummary[] }>(`/api/chats${qs(params)}`),

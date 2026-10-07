@@ -495,6 +495,9 @@ class WhatsappBridge(Plugin):
             except ValueError:
                 raise e from None
             await asyncio.to_thread(self.watch_state, ctx)
+            if file and "recipient and message are required" in (answer.get("message") or ""):
+                # an older bridge (whatsapp-mcp's), which sends text only
+                raise plugin_error("This bridge cannot send files: it is an older one; Everysaid's bridge (bridges/whatsapp) can") from e
             raise plugin_error(answer.get("message") or "Sending failed") from e
         if not answer.get("success", True):
             raise plugin_error(answer.get("message") or "Sending failed")

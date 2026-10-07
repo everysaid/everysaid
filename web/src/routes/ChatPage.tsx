@@ -331,8 +331,29 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       const i = items.findIndex((x) => x.cursor === resume.cursor);
       if (i >= 0) return { index: i, align: "start" as const, offset: resume.offset ?? 0 };
     }
-    return items.length - 1;
+    return { index: items.length - 1, align: "end" as const };
   }, [ready]); // eslint-disable-line react-hooks/exhaustive-deps
+  // opened at its end: kept there while what was drawn grows to its real height (pictures, previews,
+  // long texts measured), until the user scrolls, or for a few seconds
+  const stick = useRef(false);
+  useEffect(() => {
+    stick.current = ready && !jumpTo && !around && !resume;
+    if (!stick.current) return;
+    const done = setTimeout(() => { stick.current = false; }, 4000);
+    return () => clearTimeout(done);
+  }, [ready]); // eslint-disable-line react-hooks/exhaustive-deps
+  const letGo = () => { stick.current = false; };
+  useEffect(() => {          // any move up (keys, a scrollbar, a jump to a message) lets it go too
+    const el = scroller.current;
+    if (!ready || !el) return;
+    let last = el.scrollTop;
+    const on = () => {
+      if (el.scrollTop < last - 2) stick.current = false;
+      last = el.scrollTop;
+    };
+    el.addEventListener("scroll", on, { passive: true });
+    return () => el.removeEventListener("scroll", on);
+  }, [ready, items.length > 0]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const render = useCallback((index: number, item: StreamItem) => {
     const i = index - first;
@@ -373,7 +394,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       <div className="flex min-w-0 flex-1 flex-col">
         <ChatHeader chat={detail.data} wide={wide} onInfo={() => setInfoOpen((o) => !o)} onJumpDate={(d) => navigate({ to: "/chat/$chatId", params: { chatId }, search: { ts: d, hide } })}
           hidden={hide ? hide.split(",") : []} onHide={(list) => navigate({ to: "/chat/$chatId", params: { chatId }, search: { hide: list.join(",") || undefined }, replace: true })} />
-        <div data-stream className="chat-bg relative min-h-0 flex-1">
+        <div data-stream className="chat-bg relative min-h-0 flex-1" onWheel={letGo} onTouchStart={letGo} onKeyDown={letGo} onMouseDown={letGo}>
           {!ready ? (
             <Center><Spinner className="size-7" /></Center>
           ) : items.length === 0 ? (
@@ -390,6 +411,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
               startReached={loadOlder}
               endReached={() => loadNewer()}
               atBottomStateChange={setAtBottom}
+              totalListHeightChanged={() => { if (stick.current) scrollEnd(); }}
               rangeChanged={() => { if (ready) requestAnimationFrame(remember); }}
               isScrolling={(on) => { if (!on && ready) remember(); }}
               atBottomThreshold={120}

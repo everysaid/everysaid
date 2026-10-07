@@ -350,6 +350,16 @@ Everything above is built, with these differences from the draft:
   from the app's menu has none (the menu is the way on), and one opened directly goes back to its
   section (a person's page to People, the calls or media of a chat to the chat). On a wide screen
   a chat shows back only when it was opened from another page (the list is beside it).
+- **The chat list's filters**, in a small panel kept on the device: the archived chats, people
+  without a name (as Settings say, or not), at least or at most so many messages (a slider in
+  growing steps: 0, 1, 2, 3, 5, 10, 20, 50, 100 … 5000), each service as must have, must not have
+  or either, and a label.
+- **Hidden services** (Settings → Services, `hidden_services`): nothing of them shows anywhere
+  (chats, streams, calls, search, media, the day's timeline); the archive keeps all of it.
+- **Settings** are in tabs: general, names, labels, services, security.
+- **Where a chat was being read** is kept for the session (this tab, a reload included), not
+  across sessions; a chat opened afresh stays at its end while what is drawn grows to its real
+  height (pictures, previews), until the user scrolls.
 - **Sources** are in tabs by kind (messages, pictures, contacts, analysis, devices); the local
   analysis has a start and pause button, and an action shows only when it has something to do.
 - **Names found** for people without one: from their handles (an email's or a user name's words,

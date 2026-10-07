@@ -11,6 +11,7 @@ Guards on every request:
 - Login attempts are limited per address.
 """
 import asyncio
+from collections import defaultdict
 from contextlib import asynccontextmanager
 import io
 import json
@@ -373,9 +374,21 @@ def create_app(archive_path=None, auth_path=None):
 
     @app.get("/api/chats")
     def chats(kind: str | None = None, q: str | None = None, archived: bool = False, limit: int | None = None,
-              offset: int = 0):
+              offset: int = 0, unnamed: bool | None = None, min_messages: int = 0, max_messages: int | None = None,
+              services: str | None = None,
+              no_services: str | None = None, label: int | None = None):
+        """unnamed: with the people without a name (else as the setting says); min_messages, max_messages; services,
+        no_services: comma-separated, the chats with each of these and none of those; label: only the
+        chats of the people with it."""
+        split = lambda s: [x for x in (s or "").split(",") if x]       # noqa: E731
+        only = None
+        if label:
+            tagged = labels.by_person(store, suggested=bool(store.setting("show_tone", False)))
+            only = {pid for pid, ls in tagged.items() if any(x["id"] == label for x in ls)}
         return {"items": queries.chats(store, include_archived=archived, kind=kind, q=q, limit=limit, offset=offset,
-                                       unnamed=bool(store.setting("show_unnamed", False)))}
+                                       unnamed=bool(store.setting("show_unnamed", False)) if unnamed is None else unnamed,
+                                       min_messages=max(0, min_messages), max_messages=max_messages, with_services=split(services),
+                                       without_services=split(no_services), people_only=only)}
 
     @app.get("/api/chats/{chat_id}")
     def chat(chat_id: str, request: Request):
@@ -887,11 +900,28 @@ def create_app(archive_path=None, auth_path=None):
     def services(lang: str = "en"):
         return plugins.services(lang)
 
+    @app.get("/api/services/used")
+    def services_used():
+        """The services the archive has anything of, hidden or not: [{id, messages, calls, hidden}]."""
+        def build():
+            db = store.read()
+            out = defaultdict(lambda: {"messages": 0, "calls": 0})
+            for name, n in db.execute("SELECT s.name, count(*) FROM message m JOIN service s ON s.id = m.service_id GROUP BY 1"):
+                out[name]["messages"] = n
+            for name, n in db.execute("SELECT s.name, count(*) FROM call c JOIN service s ON s.id = c.service_id GROUP BY 1"):
+                out[name]["calls"] = n
+            return dict(out)
+        hidden = set(store.setting("hidden_services", []) or [])
+        used = store.cached("services_used", build)
+        return {"items": [{"id": k, **v, "hidden": k in hidden} for k, v in sorted(used.items(), key=lambda kv: -kv[1]["messages"] - kv[1]["calls"])]}
+
     @app.put("/api/settings")
     def settings_put(body: dict = Body(...)):
         for k, v in body.items():
             if k in ("theme", "language", "push_preview", "density", "send_enter", "unread_since", "show_unnamed",
                      "show_tone", "mcp_labels"):
+                changes.set_setting(store, k, v)
+            elif k == "hidden_services" and isinstance(v, list) and all(isinstance(x, str) for x in v):
                 changes.set_setting(store, k, v)
             elif k == "name_order" and (v is None or isinstance(v, list) and all(isinstance(x, str) for x in v)
                                         and len(set(v)) == len(v) and set(v) <= set(plugins.name_weights())):

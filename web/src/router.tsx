@@ -42,12 +42,13 @@ const mergeReview = createRoute({ getParentRoute: () => rootRoute, path: "/peopl
 export const personRoute = createRoute({ getParentRoute: () => rootRoute, path: "/people/$personId", component: lazyRouteComponent(() => import("./routes/PersonPage"), "PersonPage") });
 export const sourcesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/sources",
   validateSearch: (s: Record<string, unknown>): { tab?: string } => ({ tab: (s.tab as string) || undefined }), component: lazyRouteComponent(() => import("./routes/SourcesPage"), "SourcesPage") });
-const settings = createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: lazyRouteComponent(() => import("./routes/SettingsPage"), "SettingsPage") });
+export const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings",
+  validateSearch: (s: Record<string, unknown>): { tab?: string } => ({ tab: (s.tab as string) || undefined }), component: lazyRouteComponent(() => import("./routes/SettingsPage"), "SettingsPage") });
 const overview = createRoute({ getParentRoute: () => rootRoute, path: "/overview", component: OverviewPage });
 const setup = createRoute({ getParentRoute: () => rootRoute, path: "/setup", component: () => <Outlet /> });
 
 const routeTree = rootRoute.addChildren([index, chatRoute, searchRoute, callsRoute, mediaRoute, people, mergeReview, unnamed, personRoute, sourcesRoute,
-  settings, overview, setup]);
+  settingsRoute, overview, setup]);
 
 export const router = createRouter({ routeTree, context: { queryClient: undefined! }, defaultPreload: "intent", scrollRestoration: true });
 watchNavigation(router);

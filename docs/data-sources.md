@@ -558,7 +558,9 @@ among them.
 
 **Channels are skipped:** iPhone `ZCONVERSATION.ZSUBTYPE` 3, desktop `ChatInfo.PGType` 3 (`CHANNEL`).
 The notes-to-self chat (a nameless group of the user alone) is kept: it may matter a lot, so check
-it before removing anything that belongs to it.
+it before removing anything that belongs to it. On the iPhone it is the conversation with `ZSUBTYPE` 5 (its
+`ZMETADATA` has `myNotesCheckboxCounter`); a group whose members all left looks the same in the
+archive, but has messages of others.
 
 **Extras** (`extras.viber_desktop`, `extras.viber_iphone`): reactions (codes 1-5 as ❤️😂😮😢😡,
 every code also in `reaction.code` as `viber:N`, the emoji NULL for 6 and later; one-to-one

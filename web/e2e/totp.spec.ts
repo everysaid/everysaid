@@ -27,7 +27,7 @@ test("password and authenticator code", async ({ page }, info) => {
   await expect(page.getByRole("heading", { name: /Συνομιλίες|Chats/ })).toBeVisible({ timeout: 15000 });
 
   // sign out, then in with name, password and the next code (each code is accepted once)
-  await page.goto("/settings");
+  await page.goto("/settings?tab=security");
   await expect(page.getByText(/Κωδικός και εφαρμογή επαλήθευσης|Password and authenticator app/)).toBeVisible();
   await page.getByRole("button", { name: /^Αποσύνδεση$|^Sign out$/ }).last().click();
   await page.getByRole("button", { name: /Σύνδεση με κωδικό|Sign in with a password/ }).click();

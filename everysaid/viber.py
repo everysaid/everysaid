@@ -26,6 +26,7 @@ IPHONE_ATTACHMENT_KINDS = {"picture": "image", "gif": "image", "video": "video",
                            "file": "file", "sticker": "sticker", "customLocation": "location"}
 IPHONE_TEXT_TYPES = ("", "url", "formatted")
 CHANNEL = 3     # ZCONVERSATION.ZSUBTYPE on the iPhone, ChatInfo.PGType in the desktop export: not wanted
+NOTES = 5       # ZCONVERSATION.ZSUBTYPE on the iPhone: "My Notes", the chat with oneself (a group of one)
 # A token carries its send time: (token >> 22) + this offset is Unix ms (measured on the iPhone's
 # messages: nearly all within 2 s). Used only where the date itself is missing.
 TOKEN_EPOCH_MS = 292057776050
@@ -160,7 +161,9 @@ def run(archive, iphone_db=IPHONE_DB, desktop_db=DESKTOP_DB):
             convs[c["Z_PK"]] = None
         elif c["ZGROUPID"]:
             convs[c["Z_PK"]] = archive.conversation("viber", mem, key=f"group:{c['ZGROUPID']}", title=c["ZNAME"])
-            archive.db.execute("UPDATE conversation SET is_group = 1 WHERE id = ?", (convs[c["Z_PK"]],))
+            # the notes are not a group: the app shows them as the user's notes, with the other services'
+            archive.db.execute("UPDATE conversation SET is_group = ? WHERE id = ?",
+                               (int(c["ZSUBTYPE"] != NOTES), convs[c["Z_PK"]]))
         else:
             convs[c["Z_PK"]] = archive.conversation("viber", mem or [("id", f"conversation:{c['Z_PK']}", "viber")])
     attachment = dict(iphone.execute("SELECT Z_PK, ZTYPE FROM ZATTACHMENT").fetchall())

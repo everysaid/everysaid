@@ -178,6 +178,8 @@ EL = {
     "the folder": "ο φάκελος",
     "the address": "η διεύθυνση",
     "the API key": "το API key",
+    "This bridge cannot send files: it is an older one; Everysaid's bridge (bridges/whatsapp) can":
+        "Αυτή η γέφυρα δεν στέλνει αρχεία: είναι παλιότερη· η γέφυρα του Everysaid (bridges/whatsapp) στέλνει",
     # the local analysis
     "Local analysis (Ollama)": "Τοπική ανάλυση (Ollama)",
     "Local models read the chats of people without a name and suggest who they are, and the chats' tone. "
