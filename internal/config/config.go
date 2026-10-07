@@ -138,21 +138,23 @@ func env(name, def string) string {
 // userDir is the platform's folder of a kind (data, cache, config, state) for the app.
 func userDir(kind string) string {
 	home, _ := os.UserHomeDir()
-	switch runtime.GOOS {
-	case "darwin":
-		if kind == "cache" {
-			return filepath.Join(home, "Library", "Caches", App)
-		}
-		return filepath.Join(home, "Library", "Application Support", App)
-	case "windows":
-		base := os.Getenv("LOCALAPPDATA")
+	return platformDir(runtime.GOOS, kind, home, os.Getenv)
+}
+
+// platformDir is platformdirs' folder (as the Python finds it) of a kind on a system: on Linux and
+// macOS an XDG variable set to an absolute path wins (platformdirs reads them on macOS too), else
+// the system's own place; Windows has only its own.
+func platformDir(goos, kind, home string, getenv func(string) string) string {
+	join := filepath.Join
+	if goos == "windows" {
+		base := getenv("LOCALAPPDATA")
 		if base == "" {
-			base = filepath.Join(home, "AppData", "Local")
+			base = join(home, "AppData", "Local")
 		}
 		if kind == "cache" {
-			return filepath.Join(base, App, "Cache")
+			return join(base, App, "Cache")
 		}
-		return filepath.Join(base, App)
+		return join(base, App)
 	}
 	xdg := map[string][2]string{
 		"data":   {"XDG_DATA_HOME", ".local/share"},
@@ -160,11 +162,16 @@ func userDir(kind string) string {
 		"config": {"XDG_CONFIG_HOME", ".config"},
 		"state":  {"XDG_STATE_HOME", ".local/state"},
 	}[kind]
-	base := os.Getenv(xdg[0])
-	if base == "" || !filepath.IsAbs(base) {
-		base = filepath.Join(home, xdg[1])
+	if base := strings.TrimSpace(getenv(xdg[0])); strings.HasPrefix(base, "/") {
+		return join(base, App)
 	}
-	return filepath.Join(base, App)
+	if goos == "darwin" {
+		if kind == "cache" {
+			return join(home, "Library", "Caches", App)
+		}
+		return join(home, "Library", "Application Support", App)
+	}
+	return join(home, xdg[1], App)
 }
 
 // Get is a setting of config.toml, or nil.

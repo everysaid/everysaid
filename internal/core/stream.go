@@ -88,8 +88,11 @@ func streamSources(s *Store, chatID string) (*Chat, []int64, []int64, error) {
 }
 
 // fetch is the raw message and call rows of a stream, within `where` on (ts, id); hidden: not these
-// services.
-func fetch(s *Store, convs, addrs []int64, where string, args []any, order string, limit int, hidden []string) []Item {
+// services. args are the messages' and callArgs the calls' (nil: the same).
+func fetch(s *Store, convs, addrs []int64, where string, args, callArgs []any, order string, limit int, hidden []string) []Item {
+	if callArgs == nil {
+		callArgs = args
+	}
 	q := s.Read()
 	lk := lookupsOf(s)
 	var ids []string
@@ -118,7 +121,7 @@ func fetch(s *Store, convs, addrs []int64, where string, args []any, order strin
 		})
 	}
 	if len(addrs) > 0 {
-		a := append(append(db.Args(addrs), args...), limit)
+		a := append(append(db.Args(addrs), callArgs...), limit)
 		db.Each(q, "SELECT id, ts FROM call WHERE address_id IN ("+db.Marks(len(addrs))+") AND conversation_id IS NULL AND "+
 			where+" ORDER BY ts "+order+", id "+order+" LIMIT ?", a, func(scan func(...any)) {
 			r := Item{Type: "c"}
@@ -167,11 +170,16 @@ func Stream(s *Store, chatID string, o StreamOptions) (M, error) {
 		if err != nil {
 			return nil, err
 		}
-		i := int64(-1)
+		// at the cursor's instant calls come before messages: after a message, the later messages and
+		// no call of that instant; after a call, the later calls and every message of it
+		mi, ci := int64(-1), int64(1)<<62
 		if k.t == 1 {
-			i = k.id
+			mi = k.id
+		} else {
+			ci = k.id
 		}
-		rows := fetch(s, convs, addrs, "(ts > ? OR (ts = ? AND id > ?))", []any{k.ts, k.ts, i}, "ASC", limit+1, o.Hidden)
+		rows := fetch(s, convs, addrs, "(ts > ? OR (ts = ? AND id > ?))", []any{k.ts, k.ts, mi}, []any{k.ts, k.ts, ci},
+			"ASC", limit+1, o.Hidden)
 		sort.SliceStable(rows, func(a, b int) bool { return keyOf(rows[a]).less(keyOf(rows[b])) })
 		var kept []Item
 		for _, r := range rows {
@@ -192,13 +200,18 @@ func Stream(s *Store, chatID string, o StreamOptions) (M, error) {
 		if err != nil {
 			return nil, err
 		}
-		i := int64(1) << 62
+		// before a message, the earlier messages and every call of its instant; before a call, the
+		// earlier calls and no message of it
+		mi, ci := int64(-1), int64(1)<<62
 		if k.t == 1 {
-			i = k.id
+			mi = k.id
+		} else {
+			ci = k.id
 		}
-		rows = fetch(s, convs, addrs, "(ts < ? OR (ts = ? AND id < ?))", []any{k.ts, k.ts, i}, "DESC", limit+1, o.Hidden)
+		rows = fetch(s, convs, addrs, "(ts < ? OR (ts = ? AND id < ?))", []any{k.ts, k.ts, mi}, []any{k.ts, k.ts, ci},
+			"DESC", limit+1, o.Hidden)
 	} else {
-		rows = fetch(s, convs, addrs, "1", nil, "DESC", limit+1, o.Hidden)
+		rows = fetch(s, convs, addrs, "1", nil, nil, "DESC", limit+1, o.Hidden)
 	}
 	sort.SliceStable(rows, func(a, b int) bool { return keyOf(rows[b]).less(keyOf(rows[a])) })
 	if o.Before != "" {

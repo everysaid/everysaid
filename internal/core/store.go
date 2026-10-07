@@ -47,8 +47,9 @@ type Store struct {
 	probe     *sql.Conn
 	ownWrites atomic.Int64
 
-	cacheMu sync.Mutex
-	cache   map[string]cacheEntry
+	cacheMu  sync.Mutex
+	cache    map[string]cacheEntry
+	building map[string]*sync.Mutex // one build of a key at a time
 }
 
 type cacheEntry struct {
@@ -78,7 +79,11 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	writer.SetMaxOpenConns(1)
-	s := &Store{Path: abs, read: read, writer: writer, cache: map[string]cacheEntry{}}
+	// readers stay open between requests, as the Python's one per thread: database/sql keeps only
+	// two idle by default, and the rest were closed and opened again (their cache lost) under a
+	// few requests at once, which made them take twice as long
+	read.SetMaxIdleConns(16)
+	s := &Store{Path: abs, read: read, writer: writer, cache: map[string]cacheEntry{}, building: map[string]*sync.Mutex{}}
 	if v := archive.Version(read); v != archive.SchemaVersion {
 		s.Close()
 		return nil, fmt.Errorf("%s: schema v%d, known: v%d", abs, v, archive.SchemaVersion)
@@ -138,21 +143,56 @@ func (s *Store) Version() [2]int64 {
 	return [2]int64{v, s.ownWrites.Load()}
 }
 
-// Cached is build() once per version of the database.
+// Cached is build() once per version of the database. Requests asking at once for what is not
+// built wait for the one build of it rather than each building it again; what was built for an
+// older version is let go.
 func Cached[T any](s *Store, key string, build func() T) T {
 	v := s.Version()
+	if value, ok := s.cachedAt(key, v); ok {
+		return value.(T)
+	}
 	s.cacheMu.Lock()
-	hit, ok := s.cache[key]
+	mu := s.building[key]
+	if mu == nil {
+		mu = &sync.Mutex{}
+		s.building[key] = mu
+	}
 	s.cacheMu.Unlock()
-	if ok && hit.version == v {
-		return hit.value.(T)
+	mu.Lock()
+	defer mu.Unlock()
+	v = s.Version()
+	if value, ok := s.cachedAt(key, v); ok { // built meanwhile
+		return value.(T)
 	}
 	value := build()
 	s.cacheMu.Lock()
-	s.cache[key] = cacheEntry{v, value}
-	s.cacheMu.Unlock()
+	defer s.cacheMu.Unlock()
+	if s.building[key] == mu { // those waiting have it; later ones find the value
+		delete(s.building, key)
+	}
+	for k, e := range s.cache {
+		if older(e.version, v) {
+			delete(s.cache, k)
+		}
+	}
+	if e, ok := s.cache[key]; !ok || !older(v, e.version) {
+		s.cache[key] = cacheEntry{v, value}
+	}
 	return value
 }
+
+func (s *Store) cachedAt(key string, v [2]int64) (any, bool) {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	hit, ok := s.cache[key]
+	if ok && hit.version == v {
+		return hit.value, true
+	}
+	return nil, false
+}
+
+// older says whether version a is before b (both of its counts only grow).
+func older(a, b [2]int64) bool { return a != b && a[0] <= b[0] && a[1] <= b[1] }
 
 // Setting is a shared setting's value (JSON) decoded into out; false when it is not set.
 func (s *Store) Setting(key string, out any) bool {

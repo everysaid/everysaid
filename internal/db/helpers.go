@@ -65,6 +65,18 @@ type Rows struct {
 	query string
 }
 
+// Next is the next row; a statement that fails before its last row panics here, as one that
+// fails at once does, rather than passing for the end of the rows.
+func (r *Rows) Next() bool {
+	if r.Rows.Next() {
+		return true
+	}
+	if err := r.Rows.Err(); err != nil {
+		panic(&Error{r.query, err})
+	}
+	return false
+}
+
 func (r *Rows) Scan(dest ...any) {
 	if err := r.Rows.Scan(dest...); err != nil {
 		panic(&Error{r.query, err})
