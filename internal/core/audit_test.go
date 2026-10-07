@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -333,5 +334,105 @@ func TestStatsOfOneYearAndOfNothing(t *testing.T) {
 	st := core.Stats(s, true)
 	if len(st["by_year"].(map[string]int64)) != 1 {
 		t.Fatal(st["by_year"])
+	}
+}
+
+// A group call is the group's, as messengers show it: in the group's stream (walked whole, at
+// the same instant as a message too), in that chat's calls and said to be its; not in the calls
+// of the one who started it.
+func TestAGroupCallIsInItsGroup(t *testing.T) {
+	s := store(t)
+	group := firstChat(t, chats(s, nil), func(c core.M) bool { return c["type"] == "group" })
+	id := group["id"].(string)
+	convs := core.GetChat(s, id)["conversations"].([]int64)
+	var caller int64
+	write(t, s, func(tx *sql.Tx) {
+		var sid, ts int64
+		db.Row(tx, "SELECT service_id, ts, sender_id FROM message WHERE conversation_id = ? AND sender_id IS NOT NULL "+
+			"ORDER BY ts LIMIT 1 OFFSET 5", []any{convs[0]}, &sid, &ts, &caller)
+		for i, at := range []int64{ts, ts, ts + 1} {
+			db.Exec(tx, "INSERT INTO call (id, service_id, address_id, ts, outgoing, answered, duration, conversation_id) "+
+				"VALUES (?, ?, ?, ?, 0, 1, 60, ?)", 800000+i, sid, caller, at, convs[0])
+		}
+	})
+	want := db.Int(s.Read(), "SELECT count(*) FROM message WHERE conversation_id IN ("+db.Marks(len(convs))+")", db.Args(convs)...) + 3
+	for _, limit := range []int{1, 2, 7, 60} {
+		back, forth := walk(t, s, id, limit)
+		calls := 0
+		for _, c := range back {
+			if strings.Contains(c, ":c:") {
+				calls++
+			}
+		}
+		if int64(len(back)) != want || int64(len(forth)) != want || calls != 3 {
+			t.Fatalf("limit %d: %d and %d of %d, %d calls", limit, len(back), len(forth), want, calls)
+		}
+	}
+	r, err := core.Calls(s, core.CallsOptions{ChatID: id, Unnamed: true, Short: true})
+	if err != nil || len(items(r)) != 3 {
+		t.Fatalf("%v %v", err, r)
+	}
+	for _, it := range items(r) {
+		if it["chat_id"] != id {
+			t.Fatalf("said to be %v's", it["chat_id"])
+		}
+	}
+	if pid, ok := core.PeopleOf(s).PersonOf[caller]; ok {
+		if r, err := core.Calls(s, core.CallsOptions{ChatID: fmt.Sprintf("p%d", pid), Limit: 100000}); err == nil {
+			for _, it := range items(r) {
+				if i64(it["id"]) >= 800000 {
+					t.Fatal("a group call among a person's")
+				}
+			}
+		}
+	}
+}
+
+// The chat list finds a person by their number, as messengers find a contact: typed with spaces,
+// with or without its +, or only part of it.
+func TestTheChatListFindsAPersonByNumber(t *testing.T) {
+	s := store(t)
+	ppl := core.PeopleOf(s)
+	var chat core.M
+	var number string
+	for _, c := range chats(s, nil) {
+		if !isPerson(c) {
+			continue
+		}
+		for _, h := range ppl.Handles[i64(c["person_id"])] {
+			if h.Kind == "phone" && len(h.Value) > 10 && !strings.Contains(c["title"].(string), h.Value) {
+				chat, number = c, h.Value
+			}
+		}
+		if chat != nil {
+			break
+		}
+	}
+	if chat == nil {
+		t.Fatal("no named person with a number")
+	}
+	digits := strings.TrimPrefix(number, "+")
+	for _, q := range []string{number, digits, digits[:3] + " " + digits[3:7] + " " + digits[7:], digits[len(digits)-6:],
+		"(" + digits[:3] + ") " + digits[3:]} {
+		if !ids(chats(s, func(o *core.ChatsOptions) { o.Q = q }))[chat["id"].(string)] {
+			t.Fatalf("not found by %q", q)
+		}
+	}
+	if ids(chats(s, func(o *core.ChatsOptions) { o.Q = digits[:4] + "x" }))[chat["id"].(string)] {
+		t.Fatal("found by what is not its number")
+	}
+}
+
+// What depends on more than the archive is built again after its time, without a time in its key.
+func TestACacheWithAnAge(t *testing.T) {
+	s := store(t)
+	n := 0
+	build := func() int { n++; return n }
+	core.CachedFor(s, "aged", 30*time.Millisecond, build)
+	core.CachedFor(s, "aged", 30*time.Millisecond, build)
+	time.Sleep(40 * time.Millisecond)
+	core.CachedFor(s, "aged", 30*time.Millisecond, build)
+	if n != 2 {
+		t.Fatalf("built %d times", n)
 	}
 }

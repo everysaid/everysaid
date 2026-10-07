@@ -637,11 +637,8 @@ func (h *Host) Senders() []sender {
 // can_send_files; "" for any); kept until the archive changes, and at most a minute (a login outside
 // the app changes only the keyring, and a plugin's check may read it: too slow for every chat opened).
 func (h *Host) Able(flag string) map[string]bool {
-	key := fmt.Sprintf("%s:%d", flag, time.Now().Unix()/60)
-	if flag == "" {
-		key = fmt.Sprintf("sendable:%d", time.Now().Unix()/60)
-	}
-	return core.Cached(h.store, key, func() map[string]bool {
+	key := "able:" + flag
+	return core.CachedFor(h.store, key, time.Minute, func() map[string]bool {
 		out := map[string]bool{}
 		for _, s := range h.Senders() {
 			i := s.p.Info()
@@ -659,7 +656,7 @@ func (h *Host) Able(flag string) map[string]bool {
 // Unsendable is {service: why}: the services an enabled source reaches but may not send to now, each
 // with what its source says is missing (English, as plugins word it).
 func (h *Host) Unsendable() map[string]string {
-	return core.Cached(h.store, fmt.Sprintf("unsendable:%d", time.Now().Unix()/60), func() map[string]string {
+	return core.CachedFor(h.store, "unsendable", time.Minute, func() map[string]string {
 		out := map[string]string{}
 		for _, row := range h.sourcesAndAnalysis() {
 			p := plugins.Get(row.Plugin)

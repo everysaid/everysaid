@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"everysaid/internal/archive"
 	"everysaid/internal/db"
@@ -55,6 +56,7 @@ type Store struct {
 type cacheEntry struct {
 	version [2]int64
 	value   any
+	at      time.Time // when it was built
 }
 
 // Open opens an archive that exists, of the known schema.
@@ -146,9 +148,13 @@ func (s *Store) Version() [2]int64 {
 // Cached is build() once per version of the database. Requests asking at once for what is not
 // built wait for the one build of it rather than each building it again; what was built for an
 // older version is let go.
-func Cached[T any](s *Store, key string, build func() T) T {
+func Cached[T any](s *Store, key string, build func() T) T { return CachedFor(s, key, 0, build) }
+
+// CachedFor is Cached, and built again after maxAge too (0: never): for what depends on more than
+// the archive (a plugin's login, which changes only the keyring).
+func CachedFor[T any](s *Store, key string, maxAge time.Duration, build func() T) T {
 	v := s.Version()
-	if value, ok := s.cachedAt(key, v); ok {
+	if value, ok := s.cachedAt(key, v, maxAge); ok {
 		return value.(T)
 	}
 	s.cacheMu.Lock()
@@ -161,7 +167,7 @@ func Cached[T any](s *Store, key string, build func() T) T {
 	mu.Lock()
 	defer mu.Unlock()
 	v = s.Version()
-	if value, ok := s.cachedAt(key, v); ok { // built meanwhile
+	if value, ok := s.cachedAt(key, v, maxAge); ok { // built meanwhile
 		return value.(T)
 	}
 	value := build()
@@ -176,16 +182,16 @@ func Cached[T any](s *Store, key string, build func() T) T {
 		}
 	}
 	if e, ok := s.cache[key]; !ok || !older(v, e.version) {
-		s.cache[key] = cacheEntry{v, value}
+		s.cache[key] = cacheEntry{v, value, time.Now()}
 	}
 	return value
 }
 
-func (s *Store) cachedAt(key string, v [2]int64) (any, bool) {
+func (s *Store) cachedAt(key string, v [2]int64, maxAge time.Duration) (any, bool) {
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
 	hit, ok := s.cache[key]
-	if ok && hit.version == v {
+	if ok && hit.version == v && (maxAge == 0 || time.Since(hit.at) < maxAge) {
 		return hit.value, true
 	}
 	return nil, false

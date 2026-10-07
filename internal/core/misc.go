@@ -33,12 +33,13 @@ func Calls(s *Store, o CallsOptions) (M, error) {
 	}
 	where, args := []string{shown(s, "", "")}, []any{}
 	if o.ChatID != "" {
-		_, _, addrs, err := streamSources(s, o.ChatID)
+		_, convs, addrs, err := streamSources(s, o.ChatID)
 		if err != nil {
 			return nil, err
 		}
-		where = append(where, "address_id IN ("+db.Marks(len(addrs))+")")
-		args = append(args, db.Args(addrs)...)
+		cond, a := callsOf(convs, addrs)
+		where = append(where, cond)
+		args = append(args, a...)
 	} else if !o.Unnamed {
 		nameless := joinIDs(unnamedPeople(s).Addresses)
 		where = append(where, fmt.Sprintf("(conversation_id IS NOT NULL OR (address_id IS NOT NULL AND address_id NOT IN (%s)))", nameless))
@@ -76,11 +77,16 @@ func Calls(s *Store, o CallsOptions) (M, error) {
 	rows.Close()
 	items := Hydrate(s, page, nil)
 	ppl := PeopleOf(s)
+	ix := Index(s)
 	for i, it := range items {
-		var aid sql.NullInt64
-		db.Row(q, "SELECT address_id FROM call WHERE id = ?", []any{page[i].ID}, &aid)
+		var aid, conv sql.NullInt64
+		db.Row(q, "SELECT address_id, conversation_id FROM call WHERE id = ?", []any{page[i].ID}, &aid, &conv)
 		it["chat_id"] = nil
-		if aid.Valid {
+		if conv.Valid { // a group call: its group's
+			if c, ok := ix.ConvChat[conv.Int64]; ok {
+				it["chat_id"] = c
+			}
+		} else if aid.Valid {
 			if pid, ok := ppl.PersonOf[aid.Int64]; ok {
 				it["chat_id"] = fmt.Sprintf("p%d", pid)
 			}
