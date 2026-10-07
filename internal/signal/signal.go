@@ -576,7 +576,7 @@ func (p Plugin) Live(ctx context.Context, c *plugins.Context) error {
 	// what this device received while signal.db did not keep it (the app stopped half way)
 	hctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	since := n.store.Newest() - int64(24*time.Hour/time.Millisecond)
-	if raw, err := n.h.Call(hctx, "history", map[string]any{"since": max(since, 0)}); err == nil {
+	if raw, err := n.h.Call(hctx, "history", map[string]any{"since": max(since, 0), "chats": n.store.PNIs()}); err == nil {
 		var h struct {
 			Events []json.RawMessage `json:"events"`
 		}

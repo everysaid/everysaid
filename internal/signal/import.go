@@ -3,11 +3,14 @@ package signal
 // New (the Python never had Signal); written as the importers of everysaid/telegram.py and
 // whatsapp.py are. Imports signal.db into the archive, service "signal".
 //
-// A chat's conversation is keyed by Signal's own id: the other person's ACI, or the group's id.
+// A chat's conversation is keyed by Signal's own id: the other person's ACI (their PNI, the id of
+// their number, for someone the owner wrote to only by number), or the group's id.
 // Signal names a message by its author and the time it was sent, so its key (and its row key in the
 // source) is "<author ACI>:<sent ms>"; a reply's, its quote's. People are stored by phone number
 // where Signal shows it (so they meet the same person on other services), else by their ACI (an
-// `id` within the service); the ACI then joins the same person. The owner's ACI is an account.
+// `id` within the service); the ACI then joins the same person. A PNI is its number's, or its
+// ACI's, where Signal told them (the `pni` table), at every import: a chat kept under it before
+// joins the person then. The owner's ACI is an account.
 // What changed on messages the archive has (edits, deletions: marked, the text stays as the
 // archive first had it; reactions: as they are now), receipts of the owner's messages, how far the
 // owner read each chat (on any device) and the calls the phone or the others reported are brought
@@ -59,13 +62,18 @@ type contactRow struct {
 	seen                 int64
 }
 
-// people: Signal's ACIs as the archive's handles.
+// people: Signal's ids as the archive's handles.
 type people struct {
 	contacts map[string]contactRow
+	pnis     map[string]pniRow // by "PNI:<uuid>"
+	pniOf    map[string]string // an ACI's PNI
 }
 
+// pniRow is what Signal told of a PNI: the number it is the id of, the ACI it belongs to.
+type pniRow struct{ phone, aci string }
+
 func loadPeople(d db.Querier) *people {
-	p := &people{contacts: map[string]contactRow{}}
+	p := &people{contacts: map[string]contactRow{}, pnis: map[string]pniRow{}, pniOf: map[string]string{}}
 	db.Each(d, "SELECT aci, coalesce(phone, ''), coalesce(name, ''), coalesce(profile_name, ''), seen_at FROM contact",
 		nil, func(scan func(...any)) {
 			var aci string
@@ -73,23 +81,75 @@ func loadPeople(d db.Querier) *people {
 			scan(&aci, &c.phone, &c.name, &c.profile, &c.seen)
 			p.contacts[aci] = c
 		})
+	if db.Exists(d, "SELECT 1 FROM sqlite_master WHERE name = 'pni'") { // a signal.db from before it
+		db.Each(d, "SELECT pni, coalesce(phone, ''), coalesce(aci, '') FROM pni ORDER BY pni", nil, func(scan func(...any)) {
+			var pni string
+			var r pniRow
+			scan(&pni, &r.phone, &r.aci)
+			p.pnis[pni] = r
+			if r.aci != "" {
+				p.pniOf[r.aci] = pni
+			}
+		})
+	}
 	return p
 }
 
-// handle is a person's handle: their number where Signal shows it, else their ACI.
-func (p *people) handle(aci string) archive.Handle {
-	if c, ok := p.contacts[aci]; ok && c.phone != "" {
+// contact is what is known of someone by any of their ids: a PNI is its ACI's where Signal told it,
+// and the number is the one either of them carries.
+func (p *people) contact(id string) contactRow {
+	r, isPNI := p.pnis[id]
+	switch {
+	case isPNI && r.aci != "":
+		id = r.aci
+	case !isPNI:
+		r = p.pnis[p.pniOf[id]]
+	}
+	c := p.contacts[id]
+	if c.phone == "" {
+		c.phone = r.phone
+	}
+	return c
+}
+
+// ids are every id of someone Signal told of (ACIs and PNIs), sorted.
+func (p *people) ids() []string {
+	set := map[string]bool{}
+	for id := range p.contacts {
+		set[id] = true
+	}
+	for pni, r := range p.pnis {
+		set[pni] = true
+		if r.aci != "" {
+			set[r.aci] = true
+		}
+	}
+	out := make([]string, 0, len(set))
+	for id := range set {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// handle is a person's handle: their number where Signal shows it, else their ACI (a PNI's, where
+// Signal told it), else the id itself.
+func (p *people) handle(id string) archive.Handle {
+	if c := p.contact(id); c.phone != "" {
 		if k, v := archive.Address(c.phone, config.Region); k == "phone" {
 			return archive.H(k, v)
 		}
 	}
-	return archive.H("id", aci, Service)
+	if r := p.pnis[id]; r.aci != "" {
+		return archive.H("id", r.aci, Service)
+	}
+	return archive.H("id", id, Service)
 }
 
 // mentionName is how a text names someone it mentions: their name, else their number, else the
 // start of their ACI.
 func (p *people) mentionName(aci string) string {
-	c := p.contacts[aci]
+	c := p.contact(aci)
 	for _, n := range []string{c.name, c.profile, c.phone} {
 		if strings.TrimSpace(n) != "" {
 			return strings.TrimSpace(n)
@@ -259,14 +319,10 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 	a.Account(ownH, Service, "")
 	ownSet := a.Own()
 	ownSet[ownH] = true
-	acis := make([]string, 0, len(p.contacts))
-	for aci := range p.contacts {
-		acis = append(acis, aci)
-	}
-	sort.Strings(acis)
-	for _, aci := range acis {
-		if h := p.handle(aci); h.Kind == "phone" {
-			a.Alias(archive.H("id", aci, Service), h)
+	ids := p.ids()
+	for _, id := range ids { // each id joins the person of their number (or of the ACI of a PNI)
+		if h := p.handle(id); h != archive.H("id", id, Service) {
+			a.Alias(archive.H("id", id, Service), h)
 		}
 	}
 
@@ -296,7 +352,14 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 				}
 			}
 		} else {
-			id = a.Conversation(Service, []archive.Handle{p.handle(chat)}, chat, "")
+			h := p.handle(chat)
+			id = a.Conversation(Service, []archive.Handle{h}, chat, "")
+			// one person's chat has them alone: an id it was kept under before Signal told their
+			// number (or a PNI's ACI) leaves it, so that the chat meets theirs on other services;
+			// that id's own person, if it became one, stays as it is (merging people is the owner's)
+			a.Exec("DELETE FROM conversation_member WHERE conversation_id = ? AND address_id != ? AND address_id IN "+
+				"(SELECT x.id FROM address x JOIN address_kind k ON k.id = x.kind_id WHERE k.name = 'id' AND x.service_id = ?)",
+				id, a.Address(h), a.Service.ID(Service))
 		}
 		convs[kind+"\x00"+chat] = id
 		return id
@@ -419,8 +482,11 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 	reads(a, d, src)
 	n.Calls += calls(a, d, p, src, conv, skip)
 
-	for _, aci := range acis { // the names Signal shows, for the handles in the archive
-		c := p.contacts[aci]
+	for _, aci := range ids { // the names Signal shows, for the handles in the archive
+		c, ok := p.contacts[aci]
+		if !ok {
+			continue // a PNI: its ACI's names are said under the ACI
+		}
 		if h := p.handle(aci); !ownSet[h] && aci != own {
 			if c.name != "" {
 				a.HandleName(h, Service, c.name, "book", c.seen)
