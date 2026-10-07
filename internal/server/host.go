@@ -29,6 +29,7 @@ import (
 	"everysaid/internal/db"
 	"everysaid/internal/errs"
 	"everysaid/internal/i18n"
+	"everysaid/internal/mcp"
 	"everysaid/internal/plugins"
 )
 
@@ -1005,6 +1006,43 @@ func (h *Host) Fetch(sha256, size string) *plugins.Fetched {
 		}
 	}
 	return nil
+}
+
+// FetchMedia (the MCP's MediaFetcher) asks the sources that read a message's service, and can bring
+// a file now, for its file: enabled ones, a live one only while its connection runs. The first path
+// given wins; mcp.ErrNoFetch when none could.
+func (h *Host) FetchMedia(ctx context.Context, _ *core.Store, messageID int64) (path string, err error) {
+	defer db.Recover(&err)
+	svc := db.Str(h.store.Read(), "SELECT s.name FROM message m JOIN service s ON s.id = m.service_id WHERE m.id = ?", messageID)
+	if svc == "" {
+		return "", mcp.ErrNoFetch
+	}
+	var last error
+	for _, row := range h.sourcesAndAnalysis() {
+		p := plugins.Get(row.Plugin)
+		f, ok := p.(plugins.MediaFetcher)
+		if !ok || !row.Enabled || !contains(p.Info().Services, svc) || p.Info().HasMode("live") && !h.isLive(row.ID) {
+			continue
+		}
+		got, err := func() (got string, err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					err = fmt.Errorf("%v", r)
+				}
+			}()
+			return f.FetchMedia(ctx, plugins.NewContext(h, row), messageID)
+		}()
+		if err == nil && got != "" {
+			return got, nil
+		}
+		if err != nil {
+			last = err
+		}
+	}
+	if last != nil {
+		return "", last
+	}
+	return "", mcp.ErrNoFetch
 }
 
 // --- helpers -------------------------------------------------------------------------------------

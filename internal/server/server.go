@@ -564,7 +564,7 @@ func (s *Server) mcpEnv(token string) (mcp.Env, bool) {
 	if u == nil || u.Archive != s.Store.Path {
 		return mcp.Env{}, false
 	}
-	return mcp.Env{Store: s.Store, Library: librarian{s.Host}, Inline: true}, true
+	return mcp.Env{Store: s.Store, Library: librarian{s.Host}, Fetcher: s.Host, Inline: true}, true
 }
 
 // librarian is the host's ToLibrary into the default library, as the MCP tools want it.
