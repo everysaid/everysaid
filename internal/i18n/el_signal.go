@@ -45,7 +45,10 @@ func init() {
 		"Unlinked from Signal: if the phone still lists this computer, remove it there (Settings, Linked devices)":                                                                                                                               "Αποσυνδέθηκε από το Signal: αν το κινητό εξακολουθεί να δείχνει αυτόν τον υπολογιστή, αφαίρεσέ τον από εκεί (Ρυθμίσεις, Συνδεδεμένες συσκευές)",
 		"Linking to Signal failed: try “Link this computer” again":                                                                                                                                                                               "Η σύνδεση στο Signal απέτυχε: δοκίμασε ξανά «Σύνδεση αυτού του υπολογιστή»",
 		"Files that had not come, asked again: {n}": "Αρχεία που δεν είχαν έρθει, ζητήθηκαν ξανά: {n}",
-		"unknown action": "άγνωστη ενέργεια",
+		"unknown action":                                "άγνωστη ενέργεια",
+		"Signal cannot find this message":               "Το Signal δεν μπορεί να βρει αυτό το μήνυμα",
+		"Signal does not let this message be edited":    "Το Signal δεν επιτρέπει να αλλάξει αυτό το μήνυμα",
+		"Signal lets a message be edited only 10 times": "Το Signal επιτρέπει να αλλάξει ένα μήνυμα μόνο 10 φορές",
 	} {
 		EL[k] = v
 	}

@@ -860,3 +860,178 @@ func TestEditOfAnImportedMessage(t *testing.T) {
 		t.Fatalf("again: %+v", n)
 	}
 }
+
+// The user's reaction, edit and deletion: asked of the helper as Signal's apps aim them (at the
+// message's newest version; a reaction taken back with the emoji it was), said back by it, kept in
+// signal.db and brought into the archive as the same change from the phone would be.
+func TestReactEditDelete(t *testing.T) {
+	sticker := map[string]any{"event": "message", "chat": contact(anna), "sender": fakeOwn, "outgoing": true, "ts": 2500,
+		"attachments": []any{map[string]any{"content_type": "image/webp", "sticker": true}}}
+	c, h := linked(t, nil, append(scriptEvents("none.jpg")[:5],
+		// the phone edited the owner's message once already
+		map[string]any{"event": "edit", "chat": contact(anna), "sender": fakeOwn, "outgoing": true, "ts": 2050,
+			"target_ts": 2000, "text": "hi back!"},
+		sticker))
+	p := Plugin{}
+	if err := p.RunImport(c); err != nil {
+		t.Fatal(err)
+	}
+	q := c.Store().Read()
+	num := func(query string, args ...any) int64 { return db.Int(q, query, args...) }
+	ref := func(key string) plugins.Ref {
+		r := plugins.Ref{Key: key}
+		db.Row(q, "SELECT id, outgoing, ts FROM message WHERE key = ?", []any{key}, &r.ID, &r.Outgoing, &r.TS)
+		if r.ID == 0 {
+			t.Fatalf("no message %s", key)
+		}
+		return r
+	}
+	conv := func(key string) plugins.Conversation {
+		cv := plugins.Conversation{Key: key, Service: Service}
+		db.Row(q, "SELECT id FROM conversation WHERE key = ?", []any{key}, &cv.ID)
+		return cv
+	}
+	acted := func() []map[string]any { return lines(t, filepath.Join(StoreDir(c), "acted.jsonl")) }
+	ctx := context.Background()
+	annaMsg, mine := ref(anna+":1000"), ref(fakeOwn+":2000")
+	mineReaction := func(mid int64) string {
+		return db.Str(q, "SELECT coalesce(max(emoji), '') FROM reaction WHERE message_id = ? AND outgoing = 1", mid)
+	}
+
+	// a reaction, changed, taken back: one of the user's at a time, gone at the end
+	if err := p.React(ctx, c, conv(anna), annaMsg, "❤️"); err != nil {
+		t.Fatal(err)
+	}
+	if got := mineReaction(annaMsg.ID); got != "❤️" {
+		t.Fatalf("reaction %q", got)
+	}
+	if err := p.React(ctx, c, conv(anna), annaMsg, "👍"); err != nil {
+		t.Fatal(err)
+	}
+	if got := mineReaction(annaMsg.ID); got != "👍" || num("SELECT count(*) FROM reaction WHERE message_id = ?", annaMsg.ID) != 1 {
+		t.Fatalf("changed reaction %q", got)
+	}
+	if err := p.React(ctx, c, conv(anna), annaMsg, ""); err != nil {
+		t.Fatal(err)
+	}
+	a := acted()
+	if last := a[len(a)-1]; last["emoji"] != "👍" || last["remove"] != true ||
+		last["target"].(map[string]any)["author"] != anna || last["target"].(map[string]any)["ts"].(float64) != 1000 {
+		t.Fatalf("taken back as %v", last)
+	}
+	if num("SELECT count(*) FROM reaction WHERE message_id = ?", annaMsg.ID) != 0 {
+		t.Fatal("the reaction stays")
+	}
+	if err := p.React(ctx, c, conv(anna), annaMsg, ""); err != nil || len(acted()) != len(a) {
+		t.Fatalf("nothing to take back, yet asked: %v", err)
+	}
+	// in a group, to the group
+	if err := p.React(ctx, c, conv(group), ref(bob+":3000"), "😂"); err != nil {
+		t.Fatal(err)
+	}
+	if a := acted(); a[len(a)-1]["chat"].(map[string]any)["kind"] != "group" || mineReaction(ref(bob+":3000").ID) != "😂" {
+		t.Fatalf("group reaction %v", a[len(a)-1])
+	}
+
+	// edits: aimed at the newest version (the phone's edit, then this one's), the archive's text follows
+	if err := p.Edit(ctx, c, conv(anna), mine, "hi again"); err != nil {
+		t.Fatal(err)
+	}
+	a = acted()
+	if last := a[len(a)-1]; last["target_ts"].(float64) != 2050 || last["original_ts"].(float64) != 2000 {
+		t.Fatalf("edit aimed at %v", last)
+	}
+	if got := db.Str(q, "SELECT text FROM message WHERE id = ?", mine.ID); got != "hi again" ||
+		num("SELECT edited FROM message WHERE id = ?", mine.ID) != 1 {
+		t.Fatalf("edited text %q", got)
+	}
+	if err := p.Edit(ctx, c, conv(anna), mine, "hi at last"); err != nil {
+		t.Fatal(err)
+	}
+	a = acted()
+	if prev, last := a[len(a)-2], a[len(a)-1]; last["target_ts"].(float64) <= prev["target_ts"].(float64) {
+		t.Fatalf("second edit aimed at %v", last)
+	}
+	if got := db.Str(q, "SELECT text FROM message WHERE id = ?", mine.ID); got != "hi at last" {
+		t.Fatalf("text %q", got)
+	}
+	if err := p.Edit(ctx, c, conv(anna), ref(fakeOwn+":2500"), "x"); err == nil ||
+		!strings.Contains(err.Error(), "does not let this message be edited") {
+		t.Fatalf("a sticker edited: %v", err)
+	}
+
+	// deleted for everyone: marked in the archive (its text kept); then neither edited nor deleted again
+	if err := p.Delete(ctx, c, conv(anna), mine); err != nil {
+		t.Fatal(err)
+	}
+	sdb, err := db.ReadOnly(dbPath(c))
+	if err != nil {
+		t.Fatal(err)
+	}
+	newest := db.Int(sdb, "SELECT max(ts) FROM edit WHERE author = ?", fakeOwn) // the second edit's
+	sdb.Close()
+	a = acted()
+	if last := a[len(a)-1]; int64(last["target_ts"].(float64)) != newest || newest < 9_000_000 {
+		t.Fatalf("deletion aimed at %v, the newest version is %d", last, newest)
+	}
+	if num("SELECT deleted FROM message WHERE id = ?", mine.ID) != 1 {
+		t.Fatal("not marked deleted")
+	}
+	if err := p.Edit(ctx, c, conv(anna), mine, "after"); err == nil {
+		t.Fatal("a deleted message edited")
+	}
+	if err := p.Delete(ctx, c, conv(anna), mine); err != nil || len(acted()) != len(a) {
+		t.Fatalf("deleted twice: %v", err)
+	}
+	if len(h.saw("changed")) == 0 {
+		t.Fatal("no changed event")
+	}
+
+	// as many edits as Signal allows, then no more
+	s, err := OpenStore(dbPath(c))
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply(t, s, map[string]any{"event": "message", "chat": contact(bob), "sender": fakeOwn, "outgoing": true, "ts": 6000, "text": "v0"})
+	for i := 1; i <= maxEdits; i++ {
+		apply(t, s, map[string]any{"event": "edit", "chat": contact(bob), "sender": fakeOwn, "outgoing": true,
+			"ts": 6000 + i, "target_ts": 6000 + i - 1, "text": "v"})
+	}
+	s.Close()
+	if err := importNow(c); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Edit(ctx, c, conv(bob), ref(fakeOwn+":6000"), "v11"); err == nil || !strings.Contains(err.Error(), "10 times") {
+		t.Fatalf("edit past the limit: %v", err)
+	}
+}
+
+// One person's reactions aimed at different versions of an edited message are one reaction: the
+// newest is what stays, whichever version it was aimed at.
+func TestReactionsAcrossEdits(t *testing.T) {
+	dir := folders(t)
+	path := newArchive(t, dir)
+	s, err := OpenStore(filepath.Join(dir, "signal.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.Account(Status{Linked: true, ACI: fakeOwn})
+	apply(t, s, map[string]any{"event": "message", "chat": contact(anna), "sender": anna, "ts": 1000, "text": "hi"},
+		map[string]any{"event": "edit", "chat": contact(anna), "sender": anna, "ts": 1500, "target_ts": 1000, "text": "hi!"},
+		map[string]any{"event": "reaction", "chat": contact(anna), "sender": fakeOwn, "ts": 3000, "emoji": "👍",
+			"target_author": anna, "target_ts": 1500},
+		map[string]any{"event": "reaction", "chat": contact(anna), "sender": fakeOwn, "ts": 4000, "emoji": "👍",
+			"remove": true, "target_author": anna, "target_ts": 1000})
+	a, err := archive.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if _, err := Import(a, s.Path, filepath.Join(dir, "media"), 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := db.Int(a.DB, "SELECT count(*) FROM reaction"); n != 0 {
+		t.Fatalf("the reaction taken back stays (%d)", n)
+	}
+}

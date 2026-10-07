@@ -24,8 +24,8 @@ use presage::manager::Registered;
 use presage::model::identity::OnNewIdentity;
 use presage::model::messages::Received;
 use presage::proto::{
-    body_range, data_message, receipt_message, sync_message, BodyRange, DataMessage, GroupContextV2,
-    ReceiptMessage, SyncMessage,
+    body_range, data_message, receipt_message, sync_message, BodyRange, DataMessage, EditMessage,
+    GroupContextV2, ReceiptMessage, SyncMessage,
 };
 use presage::store::{ContentsStore, StateStore, Thread};
 use presage::Manager;
@@ -283,6 +283,11 @@ async fn handle(state: &Shared, out: &Out, cmd: Command) -> Result<Value, Fail> 
             Ok(json!({"started": true}))
         }
         Command::Send(req) => send(state, out, req).await,
+        Command::React { chat, target, emoji, remove } => react(state, out, chat, target, emoji, remove).await,
+        Command::Edit { chat, target_ts, original_ts, text } => {
+            edit(state, out, chat, target_ts, original_ts.unwrap_or(target_ts), text).await
+        }
+        Command::Delete { chat, target_ts } => delete(state, out, chat, target_ts).await,
         Command::MarkRead { messages, receipts } => mark_read(state, messages, receipts).await,
         Command::Fetch { messages } => fetch_again(state, out, messages).await,
         Command::History { since } => history(state, since).await,
@@ -606,22 +611,7 @@ async fn send(state: &Shared, out: &Out, req: protocol::SendRequest) -> Result<V
         dm.attachments.push(r.map_err(|e| failed(format!("{e:?}")))?);
     }
     let chat = json!({"kind": req.chat.kind, "id": req.chat.id});
-    match req.chat.kind.as_str() {
-        "contact" => {
-            let to = parse_sid(&req.chat.id)?;
-            m.send_message(to, dm.clone(), ts).await.map_err(failed)?;
-        }
-        "group" => {
-            let (key, revision) = group_key(m.store(), &req.chat.id).await?;
-            dm.group_v2 = Some(GroupContextV2 {
-                master_key: Some(key.to_vec()),
-                revision: Some(revision),
-                ..Default::default()
-            });
-            m.send_message_to_group(&key, dm.clone(), ts).await.map_err(failed)?;
-        }
-        _ => return Err(fail_with("bad_request", "chat kind is contact or group")),
-    }
+    send_to(&mut m, &req.chat, &mut dm, None, ts).await?;
     // what was sent comes back as the others' messages do, its files kept like theirs
     let device = m.registration_data().device_id.unwrap_or(0);
     let mut c = convert::sent_event(&own, device, chat, &dm, ts);
@@ -634,6 +624,133 @@ async fn send(state: &Shared, out: &Out, req: protocol::SendRequest) -> Result<V
         }
     }
     out.send(c.event);
+    Ok(json!({"ts": ts}))
+}
+
+/// Sends into a chat: to the person, or to the group's members with the group's context in the
+/// message (an edit's message, for an edit), as Signal's apps do; `dm` keeps the context put in it.
+async fn send_to(
+    m: &mut Signal,
+    chat: &protocol::Chat,
+    dm: &mut DataMessage,
+    edit: Option<u64>,
+    ts: u64,
+) -> Result<(), Fail> {
+    let group = match chat.kind.as_str() {
+        "contact" => None,
+        "group" => Some(group_key(m.store(), &chat.id).await?),
+        _ => return Err(fail_with("bad_request", "chat kind is contact or group")),
+    };
+    if let Some((key, revision)) = group {
+        dm.group_v2 =
+            Some(GroupContextV2 { master_key: Some(key.to_vec()), revision: Some(revision), ..Default::default() });
+    }
+    let body: ContentBody = match edit {
+        Some(target) => EditMessage { target_sent_timestamp: Some(target), data_message: Some(dm.clone()) }.into(),
+        None => dm.clone().into(),
+    };
+    match group {
+        Some((key, _)) => m.send_message_to_group(&key, body, ts).await.map_err(failed),
+        None => m.send_message(parse_sid(&chat.id)?, body, ts).await.map_err(failed),
+    }
+}
+
+/// What this helper sent besides a message (a reaction, an edit, a deletion), as the events of the
+/// others' are, so that it is kept the same way.
+fn sent_back(m: &Signal, chat: &protocol::Chat, body: &ContentBody, ts: u64) -> Vec<Converted> {
+    let device = m.registration_data().device_id.unwrap_or(0);
+    let to = if chat.kind == "contact" { chat.id.as_str() } else { "" };
+    convert::sent_events(&own_aci(m), device, to, body, ts)
+}
+
+/// The owner's reaction on a message (in place of the one there was), or taken back with `remove`.
+async fn react(
+    state: &Shared,
+    out: &Out,
+    chat: protocol::Chat,
+    target: protocol::MessageRef,
+    emoji: String,
+    remove: bool,
+) -> Result<Value, Fail> {
+    if emoji.is_empty() {
+        return Err(fail_with("bad_request", "no emoji"));
+    }
+    let mut m = manager_of(state)?;
+    let ts = now_ms();
+    let mut dm = DataMessage {
+        reaction: Some(data_message::Reaction {
+            emoji: Some(emoji),
+            remove: Some(remove),
+            target_author_aci: Some(target.author),
+            target_sent_timestamp: Some(target.ts),
+            ..Default::default()
+        }),
+        timestamp: Some(ts),
+        ..Default::default()
+    };
+    send_to(&mut m, &chat, &mut dm, None, ts).await?;
+    for c in sent_back(&m, &chat, &ContentBody::DataMessage(dm), ts) {
+        out.send(c.event);
+    }
+    Ok(json!({"ts": ts}))
+}
+
+/// The owner's message with a new text. Signal's edit replaces the whole message, so it is made from
+/// the one the store holds (its files and quote kept); the files of the edit's event are those
+/// already fetched for the message.
+async fn edit(
+    state: &Shared,
+    out: &Out,
+    chat: protocol::Chat,
+    target_ts: u64,
+    original_ts: u64,
+    text: String,
+) -> Result<Value, Fail> {
+    let mut m = manager_of(state)?;
+    let own = own_aci(&m);
+    let thread = match chat.kind.as_str() {
+        "contact" => Thread::Contact(parse_sid(&chat.id)?),
+        "group" => Thread::Group(group_key(m.store(), &chat.id).await?.0),
+        _ => return Err(fail_with("bad_request", "chat kind is contact or group")),
+    };
+    let stored = m.store().message(&thread, target_ts).await.ok().flatten();
+    let old = stored.as_ref().and_then(|c| convert::data_message_of(&c.body));
+    if text.is_empty() && old.is_none_or(|o| o.attachments.is_empty()) {
+        return Err(fail_with("bad_request", "an edit leaves nothing of the message"));
+    }
+    let ts = now_ms();
+    let mut dm = convert::edited(old, &text, ts);
+    send_to(&mut m, &chat, &mut dm, Some(target_ts), ts).await?;
+    let body = ContentBody::EditMessage(EditMessage { target_sent_timestamp: Some(target_ts), data_message: Some(dm) });
+    let dir = state.borrow().attachments.clone();
+    for mut c in sent_back(&m, &chat, &body, ts) {
+        for (i, ptr) in c.attachments.iter().enumerate() {
+            for at in [original_ts, target_ts] {
+                let name = attachment_name(at, &own, i, ptr.content_type.as_deref(), ptr.file_name.as_deref());
+                if dir.join(&name).exists() {
+                    c.event["attachments"][i]["file"] = json!(name);
+                    break;
+                }
+            }
+        }
+        out.send(c.event);
+    }
+    Ok(json!({"ts": ts}))
+}
+
+/// The owner's message deleted for everyone in the chat.
+async fn delete(state: &Shared, out: &Out, chat: protocol::Chat, target_ts: u64) -> Result<Value, Fail> {
+    let mut m = manager_of(state)?;
+    let ts = now_ms();
+    let mut dm = DataMessage {
+        delete: Some(data_message::Delete { target_sent_timestamp: Some(target_ts) }),
+        timestamp: Some(ts),
+        ..Default::default()
+    };
+    send_to(&mut m, &chat, &mut dm, None, ts).await?;
+    for c in sent_back(&m, &chat, &ContentBody::DataMessage(dm), ts) {
+        out.send(c.event);
+    }
     Ok(json!({"ts": ts}))
 }
 

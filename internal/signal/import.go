@@ -489,7 +489,9 @@ func changes(a *archive.Archive, d db.Querier, p *people, own string, ownSet map
 	}
 	byTarget := map[string][]reaction{}
 	var targets []string
-	db.Each(d, "SELECT target_author, target_ts, sender, emoji FROM reaction ORDER BY target_author, target_ts, sender",
+	// in the order they were made: one person's reactions aimed at different times of an edited
+	// message are one, the newest last
+	db.Each(d, "SELECT target_author, target_ts, sender, emoji FROM reaction ORDER BY ts, target_author, target_ts, sender",
 		nil, func(scan func(...any)) {
 			var author, sender string
 			var ts int64

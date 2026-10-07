@@ -64,6 +64,10 @@ func (Plugin) Info() *plugins.Info {
 				Help: "When a chat is opened here, the others see it read (it is marked read on the phone in any case)"},
 		},
 		CanSend: true, CanReply: true, CanMention: true, CanMarkRead: true, CanSendFiles: true,
+		// any emoji, Signal's own quick ones first; edits and deletions for everyone within the day
+		// Signal's apps allow (global.normalDeleteMaxAgeInSeconds, a day by default, for both)
+		CanReact: true, Reactions: []string{"❤️", "👍", "👎", "😂", "😮", "😢"}, FreeReactions: true,
+		CanEdit: true, CanDelete: true, EditWindow: 24 * time.Hour, DeleteWindow: 24 * time.Hour,
 		Actions: []plugins.Action{{ID: "link", Label: "Link this computer (QR code)"},
 			{ID: "sync", Label: "Ask the phone for its contacts"},
 			{ID: "unlink", Label: "Unlink this computer", Confirm: "Unlink this computer from Signal? The link goes, and " +
@@ -948,4 +952,103 @@ func (p Plugin) MarkRead(ctx context.Context, c *plugins.Context, conv plugins.C
 	}
 	json.Unmarshal(raw, &answer)
 	return answer.Marked, nil
+}
+
+// maxEdits is how many times Signal's apps let a message be edited (but in the notes to oneself).
+const maxEdits = 10
+
+// act sends what the user did to a message (a reaction, an edit, a deletion) through the helper,
+// which says it back as Signal's events: kept in signal.db, then brought into the archive as the
+// same change from the phone would be. ask gets the helper (its signal.db, its account) and the
+// message's author and times, and says the request, or why there is none (nil and no error: nothing
+// to do).
+func act(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref, cmd string,
+	ask func(n *conn, author string, times []int64) (M, error)) error {
+	if removed(c) {
+		return errs.Plugin(removedText, 0)
+	}
+	author, ts, ok := SplitKey(msg.Key)
+	if !ok {
+		return errs.Plugin("Signal cannot find this message", 0)
+	}
+	n, done, err := helperFor(ctx, c)
+	if err != nil {
+		return err
+	}
+	defer done()
+	req, err := ask(n, author, n.store.Revisions(author, ts))
+	if err != nil || req == nil {
+		return err
+	}
+	kind := "contact"
+	if isGroupKey(conv.Key) {
+		kind = "group"
+	}
+	req["chat"] = M{"kind": kind, "id": conv.Key}
+	if _, err := n.h.Call(ctx, cmd, req); err != nil {
+		var he *HelperError
+		if errors.As(err, &he) && he.Code == "failed" {
+			return errs.Plugin("Sending failed", 0)
+		}
+		return notLinked(err)
+	}
+	n.h.Settle() // what it sent is in signal.db
+	return importNow(c)
+}
+
+// React puts the user's reaction on a message, in place of the one there was; "" takes it back,
+// which Signal wants said with the emoji that was there. Like Signal's apps, it is aimed at the
+// message's newest version.
+func (p Plugin) React(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref, emoji string) error {
+	return act(ctx, c, conv, msg, "react", func(n *conn, author string, times []int64) (M, error) {
+		target := M{"author": author, "ts": times[len(times)-1]}
+		if emoji != "" {
+			return M{"target": target, "emoji": emoji}, nil
+		}
+		was, known := n.store.MyReaction(n.own, author, times)
+		if !known { // put before signal.db kept reactions: the archive has it
+			var e *string
+			db.Row(c.Store().Read(), "SELECT emoji FROM reaction WHERE message_id = ? AND outgoing = 1", []any{msg.ID}, &e)
+			was = deref(e)
+		}
+		if was == "" {
+			return nil, nil // none there
+		}
+		return M{"target": target, "emoji": was, "remove": true}, nil
+	})
+}
+
+// Edit gives the user's own message a new text (a file's caption), as Signal's apps allow: not a
+// sticker, a voice note, a shared contact, a poll or a view-once message, not one deleted, and so
+// many times.
+func (p Plugin) Edit(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref, text string) error {
+	return act(ctx, c, conv, msg, "edit", func(n *conn, author string, times []int64) (M, error) {
+		if e, ok := n.store.Message(author, times[0]); ok {
+			for _, a := range e.Attachments {
+				if a.Sticker || a.Voice {
+					return nil, errs.Plugin("Signal does not let this message be edited", 0)
+				}
+			}
+			if len(e.Contacts) > 0 || e.Poll != nil || e.ViewOnce {
+				return nil, errs.Plugin("Signal does not let this message be edited", 0)
+			}
+		}
+		if n.store.Deleted(author, times) {
+			return nil, errs.Plugin("Signal does not let this message be edited", 0)
+		}
+		if len(times)-1 >= maxEdits && conv.Key != n.own {
+			return nil, errs.Plugin("Signal lets a message be edited only 10 times", 0)
+		}
+		return M{"target_ts": times[len(times)-1], "original_ts": times[0], "text": text}, nil
+	})
+}
+
+// Delete deletes the user's own message for everyone in the conversation.
+func (p Plugin) Delete(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref) error {
+	return act(ctx, c, conv, msg, "delete", func(n *conn, author string, times []int64) (M, error) {
+		if n.store.Deleted(author, times) {
+			return nil, nil // already
+		}
+		return M{"target_ts": times[len(times)-1]}, nil
+	})
 }

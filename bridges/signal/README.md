@@ -69,6 +69,9 @@ most).
 | `groups` | | `{groups: [{id, title, description, revision, members, pending}]}` |
 | `receive` | `download` (default true: fetch attachments) | `{started}`; then events until the helper ends |
 | `send` | `chat`, `text`, `quote`, `mentions`, `attachments` | `{ts}`; and a `message` event of what was sent |
+| `react` | `chat`, `target: {author, ts}`, `emoji`, `remove` | the owner's reaction (in place of the one there was; `remove` with the emoji that was there takes it back): `{ts}`; and a `reaction` event of it |
+| `edit` | `chat`, `target_ts` (the message's newest version), `original_ts` (its first), `text` | the owner's message with a new text, its files and quote kept from the store's copy: `{ts}`; and an `edit` event of it |
+| `delete` | `chat`, `target_ts` (the message's newest version) | the owner's message deleted for everyone: `{ts}`; and a `delete` event of it |
 | `mark_read` | `messages: [{author, ts}]`, `receipts` (default true) | a read sync to the phone always, read receipts to each author where `receipts`: `{marked}` |
 | `fetch` | `messages: [{author, ts}]` | the files of these messages (in the store) fetched again: each comes again as its `message` event; `{found}` |
 | `history` | `since` (Unix ms) | `{events: [...]}`: what the store holds, as events (files already fetched only) |
