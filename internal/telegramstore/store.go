@@ -41,6 +41,12 @@ CREATE TABLE IF NOT EXISTS chat_read (     -- how far each chat was read, as Tel
     outbox_at INTEGER,                  -- when it last moved, Unix s, where the live connection saw it happen
     observed_at INTEGER NOT NULL        -- Unix s
 );
+CREATE TABLE IF NOT EXISTS deleted (       -- messages deleted on Telegram, as the live connection saw it
+    chat_id INTEGER NOT NULL,
+    id INTEGER NOT NULL,
+    at INTEGER NOT NULL,                -- when it was seen, Unix s
+    PRIMARY KEY (chat_id, id)
+) WITHOUT ROWID;
 `
 
 // DB is the store's path; Media the folder of its downloaded files.

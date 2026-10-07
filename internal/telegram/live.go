@@ -161,6 +161,58 @@ func storeMessages(c *plugins.Context, chat any, msgs []sent) (n int, err error)
 	return len(keys), err
 }
 
+// noteDeleted records messages deleted on Telegram in telegram.db and has the archive mark them.
+// chat 0: ids of the account's common box (private chats and small groups), unique across them, so
+// each one's chat is the stored row's. Messages never stored (a channel's, a bot's) are passed by.
+func noteDeleted(c *plugins.Context, chat int64, ids []int) (err error) {
+	defer db.Recover(&err)
+	if len(ids) == 0 {
+		return nil
+	}
+	store, err := openStore(DBPath())
+	if err != nil {
+		return err
+	}
+	keys := map[[2]int64]bool{}
+	err = func() error {
+		defer store.Close()
+		tx, err := store.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		query, args := "SELECT chat_id, id FROM message WHERE chat_id > ? AND id IN ("+db.Marks(len(ids))+")",
+			append([]any{-channelMark}, db.Args(ids)...)
+		if chat != 0 {
+			query, args = "SELECT chat_id, id FROM message WHERE chat_id = ? AND id IN ("+db.Marks(len(ids))+")",
+				append([]any{chat}, db.Args(ids)...)
+		}
+		db.Each(tx, query, args, func(scan func(...any)) {
+			var k [2]int64
+			scan(&k[0], &k[1])
+			keys[k] = true
+		})
+		now := time.Now().Unix()
+		for k := range keys {
+			db.Exec(tx, "INSERT OR IGNORE INTO deleted (chat_id, id, at) VALUES (?, ?, ?)", k[0], k[1], now)
+		}
+		return tx.Commit()
+	}()
+	skip := idSet(currentSettings(c)["skip_chats"])
+	for k := range keys {
+		if skip[k[0]] {
+			delete(keys, k) // kept in telegram.db, not imported: the user left this chat out
+		}
+	}
+	if err != nil || len(keys) == 0 {
+		return err
+	}
+	_, _, err = sourcekit.RunImporters(c, []sourcekit.Step{{Label: "Telegram live", Run: func(a *archive.Archive, out func(string)) error {
+		return importTelegram(a, out, keys, nil)
+	}}})
+	return err
+}
+
 // untilMS is Telegram's mute_until as Unix ms: 0 not muted, -1 for ever (past the year 3000).
 func untilMS(s tg.PeerNotifySettings) int64 {
 	until, ok := s.GetMuteUntil()
@@ -523,6 +575,14 @@ func handlers(c *plugins.Context, cn *conn, d tg.UpdateDispatcher) {
 	})
 	d.OnEditChannelMessage(func(ctx context.Context, e tg.Entities, u *tg.UpdateEditChannelMessage) error {
 		return onMessage(ctx, e, u.Message)
+	})
+
+	// deleted on any device, by the user or (for everyone) by the others: kept, said deleted
+	d.OnDeleteMessages(func(ctx context.Context, e tg.Entities, u *tg.UpdateDeleteMessages) error {
+		return logged(noteDeleted(c, 0, u.Messages))
+	})
+	d.OnDeleteChannelMessages(func(ctx context.Context, e tg.Entities, u *tg.UpdateDeleteChannelMessages) error {
+		return logged(noteDeleted(c, PeerID(&tg.PeerChannel{ChannelID: u.ChannelID}), u.Messages))
 	})
 
 	// archived, pinned or muted on any of the user's devices
