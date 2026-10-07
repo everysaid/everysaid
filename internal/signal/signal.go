@@ -82,16 +82,24 @@ func CacheDir(c *plugins.Context) string {
 func dbPath(c *plugins.Context) string   { return filepath.Join(CacheDir(c), "signal.db") }
 func mediaDir(c *plugins.Context) string { return filepath.Join(CacheDir(c), "media") }
 
-// passphrase is the helper's store's: made the first time, kept in the keyring (never shown).
+// passphrase is the helper's store's: made the first time, kept in the keyring (never shown). A
+// store already made is never given a new one (the keyring locked, or cleared): it would be lost.
 func passphrase(c *plugins.Context) (string, error) {
-	if p := c.Secret("passphrase"); p != "" {
+	p, err := config.Secret(c.SecretName("passphrase"))
+	if err != nil {
+		return "", err
+	}
+	if p != "" {
 		return p, nil
+	}
+	if _, err := os.Stat(filepath.Join(StoreDir(c), "presage.db")); err == nil {
+		return "", errs.Plugin("The Signal helper's store cannot be opened with the passphrase in the keyring", 0)
 	}
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
-	p := hex.EncodeToString(b)
+	p = hex.EncodeToString(b)
 	if _, err := c.SaveSecret("passphrase", p); err != nil {
 		return "", err
 	}
@@ -151,6 +159,7 @@ type instance struct {
 	live    *conn  // the live connection's, while it runs
 	status  Status // the helper's last word on its account
 	linkURL string // a link waiting for the phone to scan it
+	linking bool   // a link asked of the helper, not yet answered
 	phase   string // "", linking, syncing (receiving what waited on the server), ready
 	linked  chan struct{}
 }
@@ -563,12 +572,21 @@ func (p Plugin) Action(c *plugins.Context, name string) error {
 	}
 	switch name {
 	case "link":
+		// one at a time: a second would start over on the store the first is linking (the live one)
+		n.k.mu.Lock()
+		busy := n.k.linking
+		n.k.linking = true
+		n.k.mu.Unlock()
+		if busy {
+			done()
+			return errs.Plugin("A code is already waiting for the phone", 0)
+		}
 		// the code is for a few minutes: then it is said so, and the user asks for another
 		lctx, lcancel := context.WithTimeout(ctx, linkWait)
 		raw, err := n.h.Call(lctx, "link", map[string]any{"device_name": c.Str("device_name")})
 		lcancel()
 		n.k.mu.Lock()
-		n.k.linkURL = ""
+		n.k.linkURL, n.k.linking = "", false
 		n.k.mu.Unlock()
 		c.Emit(M{"type": "changed"})
 		var he *HelperError

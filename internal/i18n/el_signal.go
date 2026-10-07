@@ -31,12 +31,13 @@ func init() {
 		"Up to date with Signal":                                            "Ενημερωμένο με το Signal",
 		"Contacts from the phone: {n}":                                      "Επαφές από το κινητό: {n}",
 		"No code was scanned in time":                                       "Κανένας κωδικός δεν σαρώθηκε εγκαίρως",
-		"Contacts":                                                          "Επαφές",
-		"Groups":                                                            "Ομάδες",
-		"Asked the phone for its contacts":                                  "Ζητήθηκαν από το κινητό οι επαφές του",
-		"the connection to Signal ended":                                    "η σύνδεση με το Signal τερματίστηκε",
-		"the Signal helper stopped":                                         "το βοηθητικό πρόγραμμα του Signal σταμάτησε",
-		"unknown action":                                                    "άγνωστη ενέργεια",
+		"A code is already waiting for the phone":                           "Ένας κωδικός περιμένει ήδη το κινητό",
+		"Contacts":                         "Επαφές",
+		"Groups":                           "Ομάδες",
+		"Asked the phone for its contacts": "Ζητήθηκαν από το κινητό οι επαφές του",
+		"the connection to Signal ended":   "η σύνδεση με το Signal τερματίστηκε",
+		"the Signal helper stopped":        "το βοηθητικό πρόγραμμα του Signal σταμάτησε",
+		"unknown action":                   "άγνωστη ενέργεια",
 	} {
 		EL[k] = v
 	}

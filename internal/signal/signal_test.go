@@ -509,3 +509,143 @@ func TestNoHelper(t *testing.T) {
 		t.Fatal("ran without a helper")
 	}
 }
+
+// An edit of an edit: Signal's apps aim the next edit at the last edit's time, and a reaction or a
+// deletion may be aimed at it too; each is the first message's.
+func TestEditChain(t *testing.T) {
+	dir := folders(t)
+	path := newArchive(t, dir)
+	s, err := OpenStore(filepath.Join(dir, "cache", "signal", "1", "signal.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.Account(Status{Linked: true, ACI: fakeOwn, Phone: fakePhone})
+	apply(t, s,
+		map[string]any{"event": "message", "chat": contact(anna), "sender": anna, "ts": 1000, "text": "helo"},
+		map[string]any{"event": "edit", "chat": contact(anna), "sender": anna, "ts": 1500, "target_ts": 1000, "text": "hello"},
+		map[string]any{"event": "edit", "chat": contact(anna), "sender": anna, "ts": 1600, "target_ts": 1500, "text": "hello!"},
+		map[string]any{"event": "reaction", "chat": contact(anna), "sender": fakeOwn, "ts": 1700, "emoji": "❤️",
+			"target_author": anna, "target_ts": 1600},
+		map[string]any{"event": "message", "chat": contact(anna), "sender": fakeOwn, "outgoing": true, "ts": 2000, "text": "x"},
+		map[string]any{"event": "edit", "chat": contact(anna), "sender": fakeOwn, "outgoing": true, "ts": 2100, "target_ts": 2000, "text": "y"},
+		map[string]any{"event": "delete", "chat": contact(anna), "sender": fakeOwn, "outgoing": true, "ts": 2200,
+			"target_author": fakeOwn, "target_ts": 2100},
+		map[string]any{"event": "receipt", "sender": anna, "kind": "read", "timestamps": []any{2100}, "ts": 2300})
+	a, err := archive.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if _, err := Import(a, s.Path, filepath.Join(dir, "media"), 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	str := func(q string, args ...any) string { return db.Str(a.DB, q, args...) }
+	num := func(q string, args ...any) int64 { return db.Int(a.DB, q, args...) }
+	if num("SELECT count(*) FROM message") != 2 {
+		t.Fatal("two messages")
+	}
+	if got := str("SELECT text FROM message WHERE key = ?", anna+":1000"); got != "hello!" {
+		t.Fatalf("the last edit: %q", got)
+	}
+	if str("SELECT r.emoji FROM reaction r JOIN message m ON m.id = r.message_id WHERE m.key = ?", anna+":1000") != "❤️" {
+		t.Fatal("the reaction to the edited message")
+	}
+	if num("SELECT deleted FROM message WHERE key = ?", fakeOwn+":2000") != 1 {
+		t.Fatal("the deletion of the edited message")
+	}
+	if num("SELECT r.read_at FROM receipt r JOIN message m ON m.id = r.message_id WHERE m.key = ?", fakeOwn+":2000") != 2300 {
+		t.Fatal("the receipt of the edited message")
+	}
+}
+
+// A store made with a passphrase the keyring no longer gives (it is locked, or was cleared) is not
+// given a new one: that would leave it unreadable, the device's keys with it.
+func TestNoNewPassphraseForAStore(t *testing.T) {
+	c, _, _ := newPlugin(t, nil)
+	c.DeleteSecret("passphrase") // an earlier test's instance of the same id
+	os.MkdirAll(StoreDir(c), 0o700)
+	os.WriteFile(filepath.Join(StoreDir(c), "presage.db"), []byte("encrypted"), 0o600)
+	err := Plugin{}.RunImport(c)
+	if err == nil || !strings.Contains(err.Error(), "passphrase") {
+		t.Fatalf("opened: %v", err)
+	}
+	if c.Secret("passphrase") != "" {
+		t.Fatal("a new passphrase was made for the store")
+	}
+}
+
+// Someone seen in a message, described by the helper once their profile came: their own name, the
+// address book's name and number kept.
+func TestContactSeen(t *testing.T) {
+	dir := folders(t)
+	s, err := OpenStore(filepath.Join(dir, "signal.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	apply(t, s,
+		map[string]any{"event": "contacts", "contacts": []any{
+			map[string]any{"aci": anna, "phone": "+306900000001", "name": "Anna Rita", "profile_name": nil}}},
+		map[string]any{"event": "contact", "aci": anna, "phone": nil, "name": nil, "profile_name": "Anna P"},
+		map[string]any{"event": "contact", "aci": bob, "phone": nil, "name": nil, "profile_name": "Bob"})
+	got := db.Strs(s.DB, "SELECT aci || '|' || coalesce(phone, '') || '|' || coalesce(name, '') || '|' || coalesce(profile_name, '') FROM contact ORDER BY aci")
+	if strings.Join(got, ",") != anna+"|+306900000001|Anna Rita|Anna P,"+bob+"|||Bob" {
+		t.Fatalf("contacts %v", got)
+	}
+}
+
+// A second "Link this computer" while a code waits for the phone (through the live connection, which
+// both would share) is refused, and the code stays shown.
+func TestLinkOnce(t *testing.T) {
+	c, _, _ := newPlugin(t, nil)
+	p := Plugin{}
+	os.MkdirAll(StoreDir(c), 0o700)
+	os.WriteFile(filepath.Join(StoreDir(c), "no-scan"), nil, 0o600)
+	ctx, cancel := context.WithCancel(context.Background())
+	live := make(chan error, 1)
+	go func() { live <- p.Live(ctx, c) }()
+	defer func() {
+		cancel()
+		<-live
+	}()
+	k := instanceOf(c.ID)
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		k.mu.Lock()
+		up := k.live != nil
+		k.mu.Unlock()
+		if up {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("live did not start")
+		}
+	}
+	linkWait = 3 * time.Second
+	defer func() { linkWait = 5 * time.Minute }()
+	first := make(chan error, 1)
+	go func() { first <- p.Action(c, "link") }()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		k.mu.Lock()
+		url := k.linkURL
+		k.mu.Unlock()
+		if url != "" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no code")
+		}
+	}
+	if err := p.Action(c, "link"); err == nil || !strings.Contains(err.Error(), "already waiting") {
+		t.Fatalf("second link: %v", err)
+	}
+	k.mu.Lock()
+	url := k.linkURL
+	k.mu.Unlock()
+	if url == "" {
+		t.Fatal("the first code is gone")
+	}
+	if err := <-first; err == nil || !strings.Contains(err.Error(), "No code was scanned") {
+		t.Fatalf("first link: %v", err)
+	}
+}

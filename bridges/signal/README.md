@@ -65,7 +65,7 @@ most).
 | `status` | | `{open, linked, receiving, aci, pni, phone, device_id, device_name}` |
 | `link` | `device_name` (default "Everysaid") | a `link_url` event, then (once scanned) status |
 | `sync` | | asks the phone for its contacts: `{requested: true}`; they come as a `contacts` event |
-| `contacts` | | `{contacts: [{aci, phone, name, profile_name}]}` |
+| `contacts` | | `{contacts: [{aci, phone, name, profile_name}]}` (`name`: the address book's, only with a `phone`) |
 | `groups` | | `{groups: [{id, title, description, revision, members, pending}]}` |
 | `receive` | `download` (default true: fetch attachments) | `{started}`; then events until the helper ends |
 | `send` | `chat`, `text`, `quote`, `mentions`, `attachments` | `{ts}`; and a `message` event of what was sent |
@@ -90,6 +90,7 @@ Signal's name for a message) and `server_ts`.
 | `link_url` | `url` (`sgnl://linkdevice?...`: draw it as a QR code for the phone) |
 | `queue_empty` | what waited on the server has all come |
 | `contacts` | `contacts`, as the `contacts` request (after the phone sent them) |
+| `contact` | `aci, phone, name, profile_name`: someone whose message came, once presage fetched their profile |
 | `group` | as one of `groups`, before the first message of a group at a new revision |
 | `message` | `text`, `mentions`, `quote`, `attachments` (`content_type, filename, size, width, height, caption, voice, gif, borderless, sticker, file` or `error`), `contacts` (shared), `previews`, `poll`, `group_change`, `group_revision`, `group_call`, `expire_timer_update`, `expire_timer`, `forwarded`, `view_once`, `pin`, `unpin`, `payment`, `gift`, `story_reply` |
 | `edit` | `target_ts` and the message's new fields |

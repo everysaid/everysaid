@@ -8,12 +8,13 @@ mod convert;
 mod protocol;
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use futures::{channel::oneshot, future, pin_mut, StreamExt};
+use futures::{channel::oneshot, future, pin_mut, FutureExt, StreamExt};
 use presage::libsignal_service::configuration::SignalServers;
 use presage::libsignal_service::content::{Content, ContentBody, Metadata};
 use presage::libsignal_service::prelude::{phonenumber, AttachmentPointer, Uuid};
@@ -34,7 +35,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 use tokio::task::{spawn_local, LocalSet};
 
-use convert::{attachment_name, convert, group_id, Converted, Meta};
+use convert::{attachment_name, contact_names, convert, group_id, Converted, Meta};
 use protocol::{event, fail, ok, Command, Request};
 
 type Signal = Manager<SqliteStore, Registered>;
@@ -47,6 +48,7 @@ struct State {
     attachments: PathBuf,
     receiving: bool,
     revisions: HashMap<[u8; 32], u32>, // groups described to Everysaid, at their revision
+    described: HashSet<String>,        // people described to Everysaid (or being), by ACI
 }
 
 type Shared = Rc<RefCell<State>>;
@@ -140,7 +142,7 @@ async fn run() {
                 }
                 let (state, out, busy) = (state.clone(), out.clone(), busy.clone());
                 spawn_local(async move {
-                    let r = handle(&state, &out, cmd).await;
+                    let r = guarded(handle(&state, &out, cmd)).await.unwrap_or_else(|e| Err(failed(e)));
                     answer(&out, id, r);
                     if counted {
                         busy.set(busy.get() - 1);
@@ -157,6 +159,15 @@ async fn run() {
     }
     let _ = out.0.send(None);
     let _ = done_rx.await;
+}
+
+/// A future run with a panic in it (presage's or libsignal's) caught and said, so that a request is
+/// still answered and the receiving still says it ended.
+async fn guarded<T>(f: impl std::future::Future<Output = T>) -> Result<T, String> {
+    AssertUnwindSafe(f).catch_unwind().await.map_err(|p| {
+        let why = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned());
+        format!("the helper failed: {}", why.unwrap_or_else(|| "panic".into()))
+    })
 }
 
 fn answer(out: &Out, id: u64, r: Result<Value, Fail>) {
@@ -263,7 +274,12 @@ async fn handle(state: &Shared, out: &Out, cmd: Command) -> Result<Value, Fail> 
             }
             state.borrow_mut().receiving = true;
             let (state, out) = (state.clone(), out.clone());
-            spawn_local(async move { receive(state, out, download).await });
+            spawn_local(async move {
+                if let Err(e) = guarded(receive(state.clone(), out.clone(), download)).await {
+                    state.borrow_mut().receiving = false;
+                    out.send(event("receive_ended", json!({"error": e})));
+                }
+            });
             Ok(json!({"started": true}))
         }
         Command::Send(req) => send(state, out, req).await,
@@ -303,23 +319,42 @@ fn profile_name(p: &presage::libsignal_service::Profile) -> Option<String> {
     Some(full.trim().to_string()).filter(|s| !s.is_empty())
 }
 
+async fn contact_json(store: &SqliteStore, c: &presage::model::contacts::Contact) -> Value {
+    let sid = ServiceId::Aci(c.uuid.into());
+    let mut profile = None;
+    if let Ok(Some(key)) = store.profile_key(&sid).await {
+        if let Ok(Some(p)) = store.profile(c.uuid, key).await {
+            profile = profile_name(&p);
+        }
+    }
+    let (name, profile) = contact_names(c.phone_number.is_some(), &c.name, profile);
+    json!({"aci": c.uuid.to_string(), "phone": c.phone_number.as_ref().map(e164), "name": name, "profile_name": profile})
+}
+
 async fn contacts(store: &SqliteStore) -> Result<Vec<Value>, Fail> {
     let mut out = vec![];
     let list: Vec<_> = store.contacts().await.map_err(failed)?.filter_map(Result::ok).collect();
     for c in list {
-        let sid = ServiceId::Aci(c.uuid.into());
-        let mut profile = None;
-        if let Ok(Some(key)) = store.profile_key(&sid).await {
-            if let Ok(Some(p)) = store.profile(c.uuid, key).await {
-                profile = profile_name(&p);
-            }
-        }
-        out.push(json!({
-            "aci": c.uuid.to_string(), "phone": c.phone_number.as_ref().map(e164),
-            "name": Some(c.name.trim()).filter(|n| !n.is_empty()), "profile_name": profile,
-        }));
+        out.push(contact_json(store, &c).await);
     }
     Ok(out)
+}
+
+/// Someone whose message came, described once presage has fetched their profile (it does so in the
+/// background, from the profile key the message carries): a `contact` event, so that a group's
+/// members have their names before the phone next sends its contacts.
+async fn describe_later(state: Shared, out: Out, store: SqliteStore, aci: String) {
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    let found = match ServiceId::parse_from_service_id_string(&aci) {
+        Some(sid @ ServiceId::Aci(_)) => store.contact_by_id(&sid).await.ok().flatten(),
+        _ => None,
+    };
+    match found {
+        Some(c) if !c.name.trim().is_empty() => out.send(event("contact", contact_json(&store, &c).await)),
+        _ => {
+            state.borrow_mut().described.remove(&aci); // tried again at their next message
+        }
+    }
 }
 
 fn group_json(key: &[u8; 32], g: &presage::model::groups::Group) -> Value {
@@ -343,6 +378,7 @@ async fn groups(store: &SqliteStore) -> Result<Vec<Value>, Fail> {
 fn meta_of(m: &Metadata) -> Meta {
     Meta {
         sender: m.sender.service_id_string(),
+        destination: m.destination.service_id_string(),
         sender_device: u32::from(m.sender_device),
         ts: m.client_timestamp.timestamp_millis().max(0) as u64,
         server_ts: m.server_timestamp.timestamp_millis().max(0) as u64,
@@ -367,7 +403,11 @@ async fn receive(state: Shared, out: Out, download: bool) {
         match item {
             Received::QueueEmpty => out.send(event("queue_empty", json!({}))),
             Received::Contacts => match contacts(manager.store()).await {
-                Ok(list) => out.send(event("contacts", json!({"contacts": list}))),
+                Ok(list) => {
+                    let mut s = state.borrow_mut();
+                    s.described.extend(list.iter().filter_map(|c| c["aci"].as_str().map(str::to_string)));
+                    out.send(event("contacts", json!({"contacts": list})))
+                }
                 Err(f) => tracing::warn!(error = f.msg, "contacts"),
             },
             Received::DecryptionError(sender) => {
@@ -377,6 +417,10 @@ async fn receive(state: Shared, out: Out, download: bool) {
                 let meta = meta_of(&content.metadata);
                 for c in convert(&meta, &content.body, &own) {
                     deliver(&state, &out, &manager, c, download).await;
+                }
+                if meta.sender != own && state.borrow_mut().described.insert(meta.sender.clone()) {
+                    let (state, out, store) = (state.clone(), out.clone(), manager.store().clone());
+                    spawn_local(describe_later(state, out, store, meta.sender.clone()));
                 }
             }
         }
@@ -584,4 +628,21 @@ async fn history(state: &Shared, since: u64) -> Result<Value, Fail> {
         }
     }
     Ok(json!({"events": events}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_panic_is_an_answer() {
+        assert_eq!(guarded(async { 7 }).await, Ok(7));
+        let r = guarded(async {
+            if now_ms() > 0 {
+                panic!("in presage");
+            }
+        })
+        .await;
+        assert_eq!(r, Err("the helper failed: in presage".to_string()));
+    }
 }

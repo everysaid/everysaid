@@ -252,12 +252,17 @@ func decodeEvent(raw []byte) (event, error) {
 	if err := json.Unmarshal(raw, &e); err != nil {
 		return e, err
 	}
-	if e.Event == "contacts" {
+	switch e.Event {
+	case "contacts":
 		var c struct {
 			Contacts []contactEv `json:"contacts"`
 		}
 		json.Unmarshal(raw, &c)
 		e.ContactList, e.Contacts = c.Contacts, nil
+	case "contact": // one person, seen in a message
+		var c contactEv
+		json.Unmarshal(raw, &c)
+		e.ContactList = []contactEv{c}
 	}
 	return e, nil
 }
@@ -310,10 +315,15 @@ func (s *Store) Apply(raw []byte) (kept bool, err error) {
 		}
 	case "call":
 		return s.call(e), nil
-	case "contacts":
+	case "contacts", "contact":
+		// the book's name and the number stay where presage no longer has them (it names those it
+		// saw in a message after their profile, without their number)
 		for _, c := range e.ContactList {
+			if c.ACI == "" {
+				continue
+			}
 			db.Exec(s.DB, "INSERT INTO contact VALUES (?, ?, ?, ?, ?) ON CONFLICT (aci) DO UPDATE SET "+
-				"phone = coalesce(excluded.phone, contact.phone), name = excluded.name, "+
+				"phone = coalesce(excluded.phone, contact.phone), name = coalesce(excluded.name, contact.name), "+
 				"profile_name = coalesce(excluded.profile_name, contact.profile_name), seen_at = excluded.seen_at",
 				c.ACI, ptr(c.Phone), ptr(c.Name), ptr(c.ProfileName), now)
 		}
