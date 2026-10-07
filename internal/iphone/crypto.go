@@ -154,6 +154,8 @@ func decryptFile(inPath string, key []byte, outPath string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	hold(tmp.Name())
+	defer release(tmp.Name())
 	n, err := decryptStream(in, st.Size(), key, tmp)
 	if cerr := tmp.Close(); err == nil {
 		err = cerr

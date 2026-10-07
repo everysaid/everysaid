@@ -121,6 +121,7 @@ func (b *Backup) decryptManifest() error {
 	if b.tmp, err = os.MkdirTemp("", "everysaid-manifest-"); err != nil {
 		return err
 	}
+	hold(b.tmp)
 	path := filepath.Join(b.tmp, "Manifest.db")
 	if _, err := decryptFile(filepath.Join(b.Dir, "Manifest.db"), key, path); err != nil {
 		return err
@@ -150,6 +151,7 @@ func (b *Backup) Close() error {
 	}
 	if b.tmp != "" {
 		err := os.RemoveAll(b.tmp)
+		release(b.tmp)
 		b.tmp = ""
 		return err
 	}
@@ -200,17 +202,30 @@ func (b *Backup) ExtractFile(relativePath, domainLike, output string, info func(
 	if err != nil {
 		return err
 	}
-	key, err := b.keybag.unwrapForClass(rec.ProtectionClass, rec.EncryptionKey)
-	if err != nil {
-		return err
-	}
-	in, err := b.FilePath(id)
-	if err != nil {
-		return err
-	}
-	n, err := decryptFile(in, key, output)
-	if err != nil {
-		return err
+	var n int64
+	if rec.EncryptionKey == nil {
+		// iOS stores an empty file without a key: it is extracted empty (the library failed on it)
+		if rec.Size != 0 {
+			return errors.New("Path is not an encrypted file.")
+		}
+		if err := os.MkdirAll(filepath.Dir(output), 0o700); err != nil {
+			return err
+		}
+		if err := os.WriteFile(output, nil, 0o600); err != nil {
+			return err
+		}
+	} else {
+		key, err := b.keybag.unwrapForClass(rec.ProtectionClass, rec.EncryptionKey)
+		if err != nil {
+			return err
+		}
+		in, err := b.FilePath(id)
+		if err != nil {
+			return err
+		}
+		if n, err = decryptFile(in, key, output); err != nil {
+			return err
+		}
 	}
 	if n != rec.Size && info != nil {
 		info(n, rec.Size)

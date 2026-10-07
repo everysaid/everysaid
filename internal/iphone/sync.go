@@ -48,6 +48,9 @@ type SyncOptions struct {
 	NoBackup   bool   // only decrypt the backup already there
 	Full       bool   // a full backup instead of an incremental one
 	Only       []string
+	// Archive is the archive whose files are not copied again (default: <data>/archive.db); the
+	// app gives the one it serves, which may be another.
+	Archive string
 	// Password is given for this run only (the app asks for it, or has it in the keyring): never
 	// stored, never printed.
 	Password []byte
@@ -70,6 +73,9 @@ func (o *SyncOptions) defaults() {
 	if o.BackupRoot == "" {
 		o.BackupRoot = config.IphoneBackupRoot
 	}
+	if o.Archive == "" {
+		o.Archive = filepath.Join(config.Data, "archive.db")
+	}
 	if o.Say == nil {
 		o.Say = func(string, map[string]any) {}
 	}
@@ -80,6 +86,16 @@ func (o *SyncOptions) defaults() {
 
 func (o *SyncOptions) resolve() (*syncRun, error) {
 	o.defaults()
+	for _, name := range o.Only { // a name mistyped would decrypt nothing, and say done
+		if !slices.ContainsFunc(files, func(f struct{ name, rel, domain string }) bool { return f.name == name }) {
+			var names []string
+			for _, f := range files {
+				names = append(names, f.name)
+			}
+			return nil, phones.Fail("Not one of the databases: {name} ({names})",
+				map[string]any{"name": name, "names": strings.Join(names, ", ")})
+		}
+	}
 	if o.UDID == "" {
 		udid, n := config.IphoneUDID(o.BackupRoot)
 		if udid == "" {
@@ -96,6 +112,17 @@ func (o *SyncOptions) resolve() (*syncRun, error) {
 
 var errNoBackup = phones.Fail("There is no complete backup yet (its Manifest.plist is missing).", nil)
 
+// openBackup is Open with a backup made without a password said in the user's words, and what to
+// do about it.
+func openBackup(dir string, password []byte) (*Backup, error) {
+	b, err := Open(dir, password)
+	if errors.Is(err, ErrNotEncrypted) {
+		return nil, phones.Fail("The backup is not encrypted, so it holds no calls: turn its encryption on "+
+			"(idevicebackup2 encryption on) and back up again.", nil)
+	}
+	return b, err
+}
+
 // Sync is iphone-sync.py with the password given: a new backup (unless NoBackup), then the
 // databases and the new media out of it.
 func Sync(o SyncOptions) error {
@@ -108,7 +135,7 @@ func Sync(o SyncOptions) error {
 	}
 	var opened *Backup
 	if r.have {
-		if opened, err = Open(r.backupDir, r.Password); errors.Is(err, ErrWrongPassword) {
+		if opened, err = openBackup(r.backupDir, r.Password); errors.Is(err, ErrWrongPassword) {
 			return phones.Fail("Wrong backup password.", nil)
 		} else if err != nil {
 			return err
@@ -132,7 +159,7 @@ func (r *syncRun) run(opened *Backup) error {
 	b := opened
 	if b == nil {
 		var err error
-		if b, err = Open(r.backupDir, r.Password); errors.Is(err, ErrWrongPassword) {
+		if b, err = openBackup(r.backupDir, r.Password); errors.Is(err, ErrWrongPassword) {
 			return phones.Fail("Wrong backup password.", nil)
 		} else if err != nil {
 			return err
@@ -185,7 +212,7 @@ func (r *syncRun) extract(b *Backup) (err error) {
 	// Media are copied when they belong to a message, and unless the archive already has them: it
 	// keeps a record of every file it took (`attachment.source_path`) even after the file itself
 	// has gone to the photo library or been removed, so those are not brought back.
-	known, err := archivedMedia()
+	known, err := archivedMedia(r.Archive)
 	if err != nil {
 		return err
 	}
@@ -275,9 +302,9 @@ func messageFiles(out string) (wanted map[string]map[string]bool, err error) {
 	return wanted, nil
 }
 
-// archivedMedia is, for each media folder, the file paths the archive has already taken (read only).
-func archivedMedia() (known map[string]map[string]bool, err error) {
-	path := filepath.Join(config.Data, "archive.db")
+// archivedMedia is, for each media folder, the file paths the archive at path has already taken
+// (read only).
+func archivedMedia(path string) (known map[string]map[string]bool, err error) {
 	known = map[string]map[string]bool{}
 	if _, err := os.Stat(path); err != nil {
 		return known, nil
@@ -307,6 +334,7 @@ func archivedMedia() (known map[string]map[string]bool, err error) {
 // keyring (the file where there is none), --move-to-keyring moves an existing file into the
 // keyring. Without it, it is asked first (hidden), so the rest runs unattended. It is never printed.
 func SyncMain(args []string, out io.Writer) error {
+	defer onSignal()()
 	def := filepath.Join(config.Cache, "iphone")
 	ap := phones.NewArgs("iphone-sync", "Back up the iPhone and decrypt its databases.")
 	ap.Params = map[string]any{"default": def, "file": config.SecretFile(Secret)}
@@ -341,7 +369,7 @@ func SyncMain(args []string, out io.Writer) error {
 			opened.Close()
 		}
 		var err error
-		opened, err = Open(r.backupDir, pw)
+		opened, err = openBackup(r.backupDir, pw)
 		return err
 	}
 	var pw []byte
