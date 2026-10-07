@@ -1,4 +1,4 @@
-// Ports tests/test_mcp.py, and tests what whatsapp-mcp gave (a contact's chat, the last
+// The assistant's tools, and what whatsapp-mcp gave (a contact's chat, the last
 // interaction, messages by sender, a file), the HTTP mode and its token.
 package mcp
 

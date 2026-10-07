@@ -1,4 +1,4 @@
-// Package checks holds the tests that look over the whole code (ports tests/test_i18n.py).
+// Package checks holds the tests that look over the whole code.
 //
 // Nothing the user reads skips translation. The interface's words are in web/src/lib/i18n.ts
 // (Greek and English; tsc already fails when a key is in one and not the other); the server's

@@ -1,6 +1,6 @@
 package server
 
-// Ports tests/test_server.py and the server's part of tests/test_marks.py.
+// The server's routes, end to end on a small archive, and the server's part of mentions and receipts.
 
 import (
 	"context"

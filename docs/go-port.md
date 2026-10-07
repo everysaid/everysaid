@@ -1,12 +1,14 @@
 # The Go port: how it is written
 
-Everysaid is being ported from Python to Go, for one static binary (no cgo) on Linux, macOS and
-Windows. The Python code stays, untouched, as the reference until the port is audited: **no Python
-file is deleted or changed**. `docs/go-ecosystem.md` has the libraries chosen and why.
+Everysaid was ported from Python to Go, for one static binary (no cgo) on Linux, macOS and
+Windows. While the port was made and audited the Python code stayed, untouched, as the reference: no
+Python file was deleted or changed. Once the Go was done and in use, the Python left this
+repository; it is in the repository's history (the Python files the Go code and this page name are
+there). `docs/go-ecosystem.md` has the libraries chosen and why.
 
 ## Layout
 
-| Python | Go |
+| Python (in the history) | Go |
 |---|---|
 | `everysaid/config.py` | `internal/config` (folders like platformdirs, `config.toml`, secrets in the keyring or a 600 file) |
 | `everysaid/text.py` | `internal/text` (`Fold`, `Query`, `Matcher`, `Lower` as Python's `str.lower`) |
@@ -23,10 +25,12 @@ file is deleted or changed**. `docs/go-ecosystem.md` has the libraries chosen an
 | `bridges/whatsapp/` (Go, a separate process) | `internal/whatsapp` (in-process, same store files) |
 | — | `bridges/signal/` (Rust, presage, AGPL-3.0: a separate helper, JSON over stdin/stdout) |
 
-The owner's own picture tools (`immich-*`, `media-*`, `vlm-review.py`) stay Python and are not
-part of the distribution.
+The owner's own picture tools stay Python and are kept separately, outside this repository: they
+are not part of the app.
 
 ## Rules
+
+The rules the port followed; those about the Go code still hold.
 
 - **A correct port.** Each Go file says at the top which Python file it ports. Same behaviour,
   same SQL, same JSON shapes (keys, nulls, order of lists), same edge cases; the Python is the
@@ -35,7 +39,7 @@ part of the distribution.
   Unicode, `isalnum`, integer division of negatives, `round`, sorting stability, dict order),
   match Python's. Comments keep the project's style: plain prose saying why, not what.
 - **The archive does not change.** Same schema, same files, same keyring names, same folders: the
-  Go binary opens what the Python made, and the Python scripts keep working beside it.
+  Go binary opens what the Python made, and tools that read the archive keep working beside it.
 - **Errors.** A failing SQL statement panics with `*db.Error` (as a Python exception would stop
   the script); entry points (`archive.Recover`, `db.Recover`, the server's handlers, the importers'
   `Run`) turn it back into an error. A failure the user is told about is `*errs.UserError`,
@@ -54,18 +58,20 @@ part of the distribution.
 - **Dependencies.** `go get` what you need; never `go mod tidy` (others' packages may be half
   written). Do not edit packages owned by another part of the work; if you need something from
   them, write it in your own package and say so in your report.
-- **Checks.** `go test ./internal/checks/` looks over the whole code (the port of `tests/test_i18n.py`):
+- **Checks.** `go test ./internal/checks/` looks over the whole code:
   the interface's keys, error codes with words, plugin words with Greek, no Greek string in Go code
   outside `internal/i18n` (and the data packages it lists). It must pass before a part is reported done.
   A new plugin package is added to `internal/all` (blank import) so that the checks and the binary load it.
-- **Tests.** Each Python test file is ported to Go tests next to the code it tests. Tests run on a
-  demo archive or on fixtures made in the test, never on the owner's archive.
+- **Tests.** Each Python test was ported to Go tests next to the code it tests (`go test ./...`).
+  Tests run on a demo archive or on fixtures made in the test, never on the owner's archive.
 - **The owner's data.** Read only, and only for parity checks: build an archive in a temporary
   folder from the same sources with the Python and with the Go, and compare them by counts and
-  hashes. Never print message text, names or numbers; numbers, timings and status codes only.
+  hashes (the `TestParity*` tests, skipped unless their variables are set, are the Go side of
+  those comparisons; the Python side runs from the history). Never print message text, names or
+  numbers; numbers, timings and status codes only.
   Never write to `~/.local/share/everysaid`, `~/.cache/everysaid` (except a temporary folder of
   your own), the backups, or a phone. Never read `~/.config/everysaid/backup-password` yourself
-  (the ported code may read it through `config.Secret`, as the scripts do; never print it).
+  (the code may read it through `config.Secret`; never print it).
 - **Accounts.** Never connect to the owner's Telegram, WhatsApp or Signal accounts with their
   sessions: a second connection with the same key can end the owner's session. Live connections
   are tested only at the switch-over, by the main session.

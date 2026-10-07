@@ -37,7 +37,7 @@ Contents:
 
 ```
  iPhone ──USB/usbmuxd──► idevicebackup2 ──► <backup_root>/<UDID>/   (encrypted, Finder format)
-                                                          │  iphone_backup_decrypt + password
+                                                          │  everysaid iphone-sync + password
                                                           ▼
                                   <cache>/iphone/  sms.db, CallHistory.storedata,
                                                    viber.sqlite, whatsapp.sqlite,
@@ -46,25 +46,25 @@ Contents:
                                                    viber-media/, whatsapp-media/
  Android phone ──adb── content query/read ─────► <export>/<device>/android.db (+ *.txt.gz, mms-parts/)
                ──adb pull Android/data/com.viber.voip/files ──► a folder of Viber media
- Viber Desktop (linked to the Android phone) ── LD_PRELOAD export ──► viber-desktop-<date>.sqlite
+ Viber Desktop (linked to a phone) ── LD_PRELOAD bridge, snapshot ──► <cache>/…/viber.db (plain copy)
  WhatsApp bridge (bridges/whatsapp, live) ──────► <data>/whatsapp-bridge/messages.db, whatsapp.db, media/
 
-                     uv run python -m everysaid sms calls viber whatsapp telegram voip media
+                     everysaid import sms calls viber whatsapp telegram voip media   (or the sources in the app)
                                                           ▼
                      <data>/archive.db  +  <cache>/media/<ab>/<sha256><ext>
                                                           │
-            immich (API or nightly dump) ─► immich-index ─► immich-match / immich-dupes / media-vlm
+                     the user's decisions (the app; separate picture tools for the backlog)
                                                           ▼
-                     review pages (user approves) ─► media-prune: library_link, local copies removed
+                     the photo library: library_link, local copies removed
 ```
 
 Three layers, each rebuildable from the one before it:
 
 | Layer | Where | Written by | Rebuildable from |
 |---|---|---|---|
-| Raw acquisition | `<backup_root>/`, `<export>/<device>/` | `idevicebackup2`, `android-export.py`, `adb pull`, the Viber export | the devices only (an encrypted iPhone backup is the only copy of the phone's call history) |
-| Decrypted extracts | `<cache>/iphone/` | `iphone-sync.py` | the encrypted backup |
-| Unified archive | `<data>/archive.db`, `<cache>/media/` | `everysaid` | the extracts; but see section 13: once media are pruned, the archive is the only record |
+| Raw acquisition | `<backup_root>/`, `<export>/<device>/` | `idevicebackup2`, `everysaid android-export`, `adb pull`, the Viber bridge's snapshot | the devices only (an encrypted iPhone backup is the only copy of the phone's call history) |
+| Decrypted extracts | `<cache>/iphone/` | `everysaid iphone-sync` | the encrypted backup |
+| Unified archive | `<data>/archive.db`, `<cache>/media/` | `everysaid import`, the sources | the extracts; but see section 13: once media are pruned, the archive is the only record |
 
 An Android export may be removed once everything in it is in the archive (9.1, "Both origins of a
 pair"); the importers run without it.
@@ -78,10 +78,9 @@ pair"); the importers run without it.
   restore, no `adb push`, no provider writes, without the user's explicit agreement.
 - **The encrypted backup is precious.** `<backup_root>/` is modified only by
   `idevicebackup2 backup`. Every other tool opens it read only. Pruning media never touches it.
-- **Private on disk.** Every script that writes decrypted data sets `umask 077` (folders 700, files
-  600). This covers `iphone-sync.py`, `Archive`, `immich-index.py`, `media-vlm.py` and the review
-  pages; the Viber export log is created under umask 077 too.
-- **Atomic replacement.** Files are written as `NAME.part` and then `os.replace`d over the old
+- **Private on disk.** Everything that writes decrypted data does so as folders 700 and files 600
+  (`iphone-sync`, the archive, the demo).
+- **Atomic replacement.** Files are written as `NAME.part` and then renamed over the old
   one, so an interrupted run never leaves a half-written database in place. This covers the
   extracts, the media files, the password file and the MMS parts.
 - **Idempotent imports.** Every importer can be run again. A row is identified by `(source,
@@ -99,7 +98,7 @@ pair"); the importers run without it.
   approves each item. A picture there carries its real capture date.
 - **Secrets.** The backup password and the immich key live in the system's keyring (service
   `everysaid`), or, where there is none, in `<config>/<name>` (600); see README,
-  "Secrets". Only the scripts read them (`config.secret()`). They are never an argument and never
+  "Secrets". Only the code reads them (`config.Secret`). They are never an argument and never
   printed.
 
 ---
@@ -109,14 +108,14 @@ pair"); the importers run without it.
 ### 3.1 Transport and pairing
 
 - `libimobiledevice`: `idevicepair`, `ideviceinfo`, `idevicebackup2`.
-- `usbmuxd` is started by udev when the phone is plugged in. The scripts use the cable; Wi-Fi sync
+- `usbmuxd` is started by udev when the phone is plugged in. Everysaid uses the cable; Wi-Fi sync
   and iCloud backup play no part.
 - Pairing creates a lockdown pairing record (host certificate and keys) on both sides; the phone
   shows "Trust this computer". To check it:
   - `idevicepair validate`
   - `ideviceinfo -q com.apple.mobile.backup` (must show `WillEncrypt: true`)
 - Device: its UDID, set in `config.toml` (`[iphone] udid`); without it the
-  scripts take the only backup in `[iphone] backup_root`, else the only phone on the cable.
+  commands take the only backup in `[iphone] backup_root`, else the only phone on the cable.
 
 ### 3.2 Why encrypted, and what that protects
 
@@ -134,7 +133,7 @@ pair"); the importers run without it.
 
 ### 3.3 Making the backup (first and incremental)
 
-`iphone-sync.py` runs `idevicebackup2 -u <UDID> backup [--full] <backup_root>`.
+`everysaid iphone-sync` runs `idevicebackup2 -u <UDID> backup [--full] <backup_root>`.
 
 **Format** (the one Finder uses):
 
@@ -155,16 +154,15 @@ pair"); the importers run without it.
   host which to delete; `Manifest.db` is rewritten. An incremental run takes a few minutes.
 - **`--full`** forces a complete backup.
 - **Passcode.** The phone may ask for its own passcode to start.
-- **Failure.** If `idevicebackup2` returns non-zero, the script stops before touching `Data/`:
-  "Το backup απέτυχε· τα αρχεία στο ... δεν άλλαξαν."
+- **Failure.** If `idevicebackup2` returns non-zero, the command stops before touching the
+  extracts, and says that they did not change.
 - The backup is complete only once `Manifest.plist` exists. `--no-backup` and `--save-password`
   refuse to run without it.
 
 ### 3.4 Decrypting: how the encryption is opened
 
-Decryption is done by the Python library `iphone_backup_decrypt` (the `iphone` extra:
-`uv run --extra iphone ...`). This is the
-standard iOS backup scheme, in outline:
+Decryption is done by `internal/iphone` (a port of the Python library `iphone_backup_decrypt`).
+This is the standard iOS backup scheme, in outline:
 
 1. **Unlocking the keybag.** The password unlocks the `BackupKeyBag` in `Manifest.plist`.
    - The key is derived with PBKDF2-SHA256, using the keybag's `DPSL` salt and `DPIC` iterations,
@@ -174,36 +172,32 @@ standard iOS backup scheme, in outline:
    - The derived key unwraps the class keys (AES key wrap, RFC 3394).
 2. **Opening `Manifest.db`.** The `ManifestKey` (prefixed with its protection class) is unwrapped
    with that class key, and `Manifest.db` is decrypted with it (AES-256-CBC) into a temporary file.
-   That is what `manifest_db_cursor()` queries.
 3. **Opening each file.** Every file's `EncryptionKey`, found in its `file` plist, is unwrapped with
    the key of its protection class. The content is then decrypted with AES-256-CBC and the padding
    removed.
 
-The scripts' usage:
-
-- `EncryptedBackup(backup_directory=..., passphrase=pw)`, then `test_decryption()`. This raises
-  `IncorrectPassphraseError` on a wrong password; any other exception is reported separately.
-- `extract_file(relative_path=..., domain_like=..., output_filename=...)` gets one file;
-  `RelativePath.TEXT_MESSAGES` and `RelativePath.CALL_HISTORY` are the library's constants for
-  `Library/SMS/sms.db` and `Library/CallHistoryDB/CallHistory.storedata`.
+The password is checked first, by opening the keybag and `Manifest.db`: a wrong one is reported as
+such, any other failure separately. Then each file is found in `Manifest.db` by domain and path and
+decrypted on its own.
 
 ### 3.5 The password
 
-- **Saving it once.** `iphone-sync.py --save-password` asks with `getpass` (hidden input, any number
-  of tries), checks the password against the existing backup, and writes it.
+- **Saving it once.** `everysaid iphone-sync --save-password` asks for it (hidden input, any number
+  of tries), checks the password against the existing backup, and stores it: in the keyring, else
+  in a file.
   - The folder `<config>` is created as 700.
-  - The file is written through `os.open(..., 0o600)` to `.part` and then `os.replace`d into place.
+  - The file is written with mode 600 to `.part` and then renamed into place.
 - **Every later run.**
-  - A password file readable by group or others (`st_mode & 0o077`) is refused: "chmod 600 και
-    ξανά" (`config.exposed()`; not checked on Windows, where `st_mode` does not say).
+  - A password file readable by group or others is refused ("chmod 600 and again"; not checked on
+    Windows, where the mode does not say).
   - A wrong stored password stops the run with a message to save it again.
   - Without a file, the password is asked for interactively before anything else, so the rest of
     the run is unattended.
-- `iphone-verify.py` and `iphone-ls.py` use the file too, or ask.
+- `iphone-verify` and `iphone-ls` read it the same way, or ask.
 
 ### 3.6 Extracting the databases
 
-**Databases in `FILES`** (`iphone-sync.py`):
+**Databases** (`internal/iphone`, `iphone-sync`):
 
 | Output | Domain | Path in the backup |
 |---|---|---|
@@ -215,7 +209,7 @@ The scripts' usage:
 | `whatsapp-calls.sqlite` | same | `CallHistory.sqlite` (WhatsApp's call log) |
 
 `--only NAME...` decrypts only the named databases and stops before the media (e.g.
-`iphone-sync.py --no-backup --only whatsapp-calls.sqlite`).
+`everysaid iphone-sync --no-backup --only whatsapp-calls.sqlite`).
 
 **Refresh:**
 
@@ -226,7 +220,7 @@ The scripts' usage:
   left them, and they belong to the old file, not the new one.
 
 **WAL:** the backup carries no `-wal` files for these databases (check with
-`iphone-ls.py '%' '%sms.db%'` and likewise for the others). iOS checkpoints them into the main file
+`everysaid iphone-ls '%' '%sms.db%'` and likewise for the others). iOS checkpoints them into the main file
 before backing up, so the single file is complete.
 
 **Found in the backup but not extracted yet:**
@@ -236,7 +230,7 @@ before backing up, so the single file is complete.
 
 ### 3.7 Extracting media (incremental)
 
-`MEDIA` in `iphone-sync.py`:
+The media `iphone-sync` copies:
 
 | Output folder | Domain | Prefixes taken | Stripped |
 |---|---|---|---|
@@ -249,7 +243,7 @@ How a refresh works:
    prefixes.
 2. Skip a path whose output file already exists. Media files have unique names and never change
    once written, so existence is enough: no hashing, no dates.
-3. Skip a path the archive has already taken (`archived_media()`).
+3. Skip a path the archive has already taken.
    - It opens `archive.db` **read only** and collects `attachment.source_path` for the sources
      `iphone/whatsapp` and `iphone/viber`.
    - The archive keeps these rows after the file has gone to immich or been removed. So pruned
@@ -267,15 +261,15 @@ What this means for deletions:
 
 ### 3.8 Looking without extracting, and verifying
 
-- **`iphone-ls.py DOMAIN_LIKE [PATH_LIKE] [--depth N]`** lists without extracting anything.
+- **`everysaid iphone-ls DOMAIN_LIKE [PATH_LIKE] [--depth N]`** lists without extracting anything.
   - It groups `Files` rows by domain and the first N path components, with counts and sizes.
   - The size comes from the `Size` in each row's `file` plist (`$objects[1]`).
-- **`iphone-verify.py`** checks the whole backup.
-  - It decrypts every `flags = 1` file in memory (`_decrypt_inner_file`) and compares the length
+- **`everysaid iphone-verify`** checks the whole backup.
+  - It decrypts every `flags = 1` file in memory and compares the length
     with the plist's size.
   - Empty files have no key and are counted separately.
   - Mismatches where both sizes are whole 4,096-byte pages are reported as "databases that changed
-    during the backup". The library itself notes this happens routinely.
+    during the backup". This happens routinely.
   - Anything else is a problem, and the exit status is 1.
   - Chromium `Web Data` databases (the Google app, Brave) use 2,048-byte pages, so they still show
     up as problems; they are harmless.
@@ -312,7 +306,7 @@ Before that, a phone exposes only MTP and mass storage. `adb devices -l` shows i
 **If adb hangs:** a stuck adb server is fixed by `adb kill-server` and `adb start-server`. Long
 transfers must not be wrapped in a short timeout, which kills a run half way.
 
-### 4.2 `scripts/android-export.py`
+### 4.2 `everysaid android-export`
 
 | Table | Provider URI |
 |---|---|
@@ -329,7 +323,7 @@ transfers must not be wrapped in a short timeout, which kills a run half way.
    from the `Row: 0 ` line (`(?:^Row: 0 |, )([A-Za-z0-9_]+)=`); duplicate or missing names abort.
 2. **Rows.** The same query with `--projection col1:col2:...`, so the column order is known and
    fixed.
-3. **Parsing** (`parse`). The text format is `Row: N col=value, col=value, ...` with no escaping.
+3. **Parsing.** The text format is `Row: N col=value, col=value, ...` with no escaping.
    Commas and newlines inside a message body are therefore ambiguous.
    - The parser relies on two exact markers. A row starts at `\nRow: <n+1> `, with n counted up.
    - A value ends at `, <next expected column>=`. Because the column sequence is known, a body
@@ -341,7 +335,7 @@ transfers must not be wrapped in a short timeout, which kills a run half way.
 5. **Saving.**
    - The raw output is kept, gzip-compressed, as `<table>.txt.gz` next to the database.
    - Each table gets exactly the provider's columns, every column `TEXT`. Values are stored as text
-     and converted by the importers (`CAST(_id AS INTEGER)`, `int(date)`).
+     and converted by the importers (`CAST(_id AS INTEGER)`).
 6. **`mms_addr`.** One query per `mms._id` (`content://mms/<id>/addr`); messages without addresses
    are skipped.
 7. **MMS parts.** For each `mms_part` row with `_data` not NULL, the binary part is read with
@@ -352,7 +346,7 @@ transfers must not be wrapped in a short timeout, which kills a run half way.
 
 ### 4.3 Incremental behaviour
 
-- **Granularity is the table.** A table already in `android.db` is skipped whole ("υπάρχει ήδη").
+- **Granularity is the table.** A table already in `android.db` is skipped whole.
   To refresh one, drop it (or write to a new database) and run again.
 - **MMS parts are per file.** A part already in `mms-parts/` is not read again, nor one the
   archive has already taken from that export (`attachment.source_path` of the source
@@ -407,7 +401,7 @@ transfers must not be wrapped in a short timeout, which kills a run half way.
 
 Afterwards Viber can be moved back to the iPhone and the desktop linked to it again.
 
-### 5.3 Viber Desktop's encrypted database: `scripts/viber-desktop-export.cpp`
+### 5.3 Viber Desktop's encrypted database
 
 **The lock.**
 
@@ -416,47 +410,15 @@ Afterwards Viber can be moved back to the iPhone and the desktop linked to it ag
 - The key passed there is transformed internally before use, so even with the pragma's value the
   file does not open in a stock SQLCipher.
 
-**The way in: use Viber's own open connection.** An `LD_PRELOAD` library overrides
-`QSqlQuery::exec(const QString&)`, mangled as `_ZN9QSqlQuery4execERK7QString`.
+**The way in: use Viber's own open connection.** An `LD_PRELOAD` library inside the running Viber
+Desktop works through Viber's own unlocked connection. Everysaid's Viber bridge (`bridges/viber/`,
+its README, and `docs/viber-bridge.md`) does so: its `snapshot` writes a plain copy of the whole
+database (mode 600), which the Viber importer reads, and the same bridge follows what arrives and
+sends. Before the bridge, a one-off `LD_PRELOAD` exporter did the same through Viber's
+`QSqlQuery` after its `PRAGMA hexkey` (`ATTACH` of a plain database, then a copy of every table);
+a copy made so can still be named in `[viber] desktop_export`.
 
-1. Every call is forwarded to the real function, found with `dlsym(RTLD_NEXT, ...)`.
-2. When the SQL starts with `PRAGMA hexkey` (case-insensitive), the hook is armed.
-3. On the **next** `exec` call, with the database now unlocked and before Viber's own statement
-   runs, it does the export once, through that same `QSqlQuery` object:
-   - `ATTACH DATABASE '<VIBER_PLAIN_OUT>' AS plain KEY ''`. An empty key gives a plain,
-     unencrypted SQLite file.
-   - `SELECT sqlcipher_export('plain')`. This copies everything if the function exists.
-   - If it does not: list `main.sqlite_master` tables, excluding `sqlite_%`, and run
-     `CREATE TABLE plain."<t>" AS SELECT * FROM main."<t>"` for each. Then
-     `CREATE TABLE plain._schema AS SELECT type, name, tbl_name, sql FROM main.sqlite_master`, which
-     keeps the original DDL, with types, keys and indexes, for reference. `CREATE TABLE AS` does
-     not copy constraints.
-   - `DETACH DATABASE plain`.
-4. Every statement and its result go to `/tmp/vb/export.log`, opened under umask 077.
-
-**Building it.** Compile against Viber's bundled Qt 6.10 libraries with the system Qt 6 headers.
-`-DQT_NO_VERSION_TAGGING` avoids symbol-version mismatches between the headers and the bundled
-libraries.
-
-```
-g++ -shared -fPIC -O1 -std=c++17 -DQT_NO_VERSION_TAGGING -o /tmp/viber-export.so \
-    scripts/viber-desktop-export.cpp -I/usr/include/qt6 -I/usr/include/qt6/QtCore \
-    -I/usr/include/qt6/QtSql -L/opt/viber/lib -Wl,-rpath,/opt/viber/lib -lQt6Core -lQt6Sql -ldl
-mkdir -p /tmp/vb
-VIBER_PLAIN_OUT=/path/to/viber-desktop-YYYY-MM-DD.sqlite \
-    LD_PRELOAD=/tmp/viber-export.so /opt/viber/Viber
-```
-
-**Pitfalls:**
-
-- Viber must not already be running. A second start hands over to the first instance, which was
-  started without the library.
-- Viber ignores SIGTERM, so it has to be quit from its menu or killed.
-- The output file holds the whole history in clear: keep it 600.
-- `VIBER_PLAIN_OUT` unset means the hook does nothing.
-
-A later export of the same profile is a superset of an earlier one; the importer reads the one
-named in `[viber] desktop_export`.
+A later copy of the same profile is a superset of an earlier one.
 
 ### 5.4 Desktop schema used
 
@@ -471,10 +433,10 @@ named in `[viber] desktop_export`.
 
 `Calls` is empty: Viber calls are not on the desktop.
 
-### 5.5 Android Viber media → messages: `scripts/viber-link-media.py` (retired)
+### 5.5 Android Viber media → messages (retired)
 
-How an Android phone's Viber media were linked to their messages. The script is retired; this is
-the record of the method, for whoever writes the step again.
+How an Android phone's Viber media were linked to their messages. The tool that did it is retired;
+this is the record of the method, for whoever writes the step again.
 
 **The primary key.**
 
@@ -504,17 +466,17 @@ the record of the method, for whoever writes the step again.
 - **`EncParams`** is a random per-file key, so it cannot be checked against the files either.
 
 **Output and review.** `viber-media/links.tsv` had the columns `file`, `method`, `confidence` and
-`event_ids`. Only `certain` rows were imported. The uncertain ones were reviewed by hand with
-`media-review.py` (see 10.6).
+`event_ids`. Only `certain` rows were imported. The uncertain ones were reviewed by hand on a
+review page.
 
 **Re-running.**
 
 - The file could carry hand work (rows of deleted files removed, renamed files).
-- So the script kept every existing row exactly as it was. It linked only files that had no row,
+- So the tool kept every existing row exactly as it was. It linked only files that had no row,
   and appended them.
 - With nothing new it wrote nothing. Otherwise it wrote `links.tsv.part` and renamed it over the
   old file.
-- It read the same desktop export that `everysaid.viber` imported (`[viber] desktop_export`).
+- It read the same desktop export that the Viber importer imported (`[viber] desktop_export`).
 - Byte-identical copies inherited only from `certain` rows.
 
 ### 5.6 The iPhone's Viber database (`viber.sqlite`, Core Data)
@@ -528,7 +490,7 @@ the record of the method, for whoever writes the step again.
 | `ZPHONENUMBER` | `ZMEMBER`, `ZCANONIZEDPHONENUM`, `ZPHONE` |
 | `Z_5PHONENUMINDEXES` | `Z_5CONVERSATIONS`, `Z_10PHONENUMINDEXES` (conversation members) |
 
-### 5.7 Import (`everysaid/viber.py`)
+### 5.7 Import (`internal/importers/viber.go`)
 
 **Key.** The message token is the same id on every device. This was checked: every message matching
 on text and time within 5 s also matches on token, and none matches on text with a different token.
@@ -540,11 +502,11 @@ among them.
 - iPhone: `(ZDATE + 978307200) * 1000`.
 - Desktop: `TimeStamp`, already in ms.
 - A token carries its send time: `(token >> 22) + 292057776050` is Unix ms. This is within 2 s for
-  almost every message. `token_time()` uses it only when the date is missing or 0.
+  almost every message. The importer uses it only when the date is missing or 0.
 
 **People.**
 
-- `phones()` builds Viber member id → number from the desktop's `Contact` and the iPhone's
+- The importer builds Viber member id → number from the desktop's `Contact` and the iPhone's
   `ZMEMBER` + `ZPHONENUMBER`, with the desktop first.
 - A person is stored as a normalised phone address where a number is known, so they meet their SMS
   and calls. Otherwise the person is stored as `('viber', MID)`.
@@ -562,13 +524,13 @@ it before removing anything that belongs to it. On the iPhone it is the conversa
 `ZMETADATA` has `myNotesCheckboxCounter`); a group whose members all left looks the same in the
 archive, but has messages of others.
 
-**Extras** (`extras.viber_desktop`, `extras.viber_iphone`): reactions (codes 1-5 as ❤️😂😮😢😡,
+**Extras** (`internal/importers/extras.go`, desktop and iPhone): reactions (codes 1-5 as ❤️😂😮😢😡,
 every code also in `reaction.code` as `viber:N`, the emoji NULL for 6 and later; one-to-one
 reactions without a type `viber:?`, and the counterpart resolved as `"peer"`), replies, edits,
 forwards, links and pins (`subtype_code` `viber:9`/`viber:url`, `viber:15`/`viber:systemPinnedMessageCreated`),
 and the sender's position (`sender_lat`, `sender_lon`).
 
-**Marks** (`iphone_marks`, iPhone only): mentions into `mention` (the token as the text has it);
+**Marks** (iPhone only): mentions into `mention` (the token as the text has it);
 `ZLASTREADTOKEN` as the chat's `read_until`; `ZSEENSTATUSLASTTOKEN`, in a person's chat, as
 receipts of the owner's messages up to it (`read_at` 0: read, when not known).
 
@@ -579,7 +541,7 @@ receipts of the owner's messages up to it (`read_at` 0: read, when not known).
    Android phone, `[android] device`) was not the one in use, is skipped: the iPhone copy wins.
    Otherwise the desktop copy wins, and the iPhone row is marked as taken.
 3. Add the iPhone rows not marked as taken.
-4. `add()` skips a row in these cases (the last two are counted and printed as "υπήρχαν ήδη"):
+4. A row is skipped in these cases (the last two are counted and said as already there):
    - its `(source, row_key)` exists;
    - its token is already in `message` for Viber, whatever source it came from;
    - it has no token (some system events) and the same conversation already has a keyless Viber
@@ -592,18 +554,18 @@ receipts of the owner's messages up to it (`read_at` 0: read, when not known).
 
 **iPhone.**
 
-- Every `iphone-sync.py` brings a new `viber.sqlite` and the new media.
-- `python -m everysaid viber calls voip media` adds the new rows (`voip` for the calls in the recents,
+- Every `iphone-sync` brings a new `viber.sqlite` and the new media.
+- `everysaid import viber calls voip media` adds the new rows (`voip` for the calls in the recents,
   after `calls`); the row key is `Z_PK`, and the token
   dedupes against the desktop rows.
 
 **Desktop (Android history).**
 
-- This is a fixed snapshot. `[viber] desktop_export` (`DESKTOP_DB` in `viber.py`) names the dated
-  file.
-- Linking Viber Desktop to the iPhone and exporting again gives a new file. Then:
-  - point `[viber] desktop_export` at it (media would need a new linking step: `viber-link-media.py`
-    is retired);
+- A copy made before the bridge is a fixed snapshot, named by `[viber] desktop_export`.
+- With the bridge, the Viber Desktop source reads a new snapshot at each import. For a copy made
+  otherwise:
+  - point `[viber] desktop_export` at it (media would need a new linking step: the one of 5.5 is
+    retired);
   - keep the source name `<device>/viber` only if it is the same history, otherwise add a new
     source name;
   - tokens and the keyless-row rule (5.7) keep what is already there from coming in twice.
@@ -713,7 +675,7 @@ decoded yet, so these receipts are not read (looked at on 6 October 2026).
 - `metadata_text()` keeps sentences: strings with a space or non-ASCII. It drops URLs, `/v/` paths
   and jids, and removes repeats.
 
-### 6.4 Import order (`everysaid/whatsapp.py`)
+### 6.4 Import order (`internal/importers/whatsapp.go`)
 
 Channels (`...@newsletter`) and status (`status@broadcast`, and each contact's own, `...@status` and
 `...@lid.status`) are skipped (`CHANNELS`). A bare id longer than 15 digits is no phone number (a
@@ -743,7 +705,7 @@ The bridge contributes only the tail.
 
 ### 6.5 Refresh
 
-- iPhone: `iphone-sync.py`, then `python -m everysaid whatsapp calls voip media` (`voip` for the calls, after `calls`).
+- iPhone: `everysaid iphone-sync`, then `everysaid import whatsapp calls voip media` (`voip` for the calls, after `calls`).
 - Bridge: nothing to do. It fills `messages.db` while running, and the next `whatsapp` import picks
   up the new rows.
 - Bridge media: the bridge downloads them as messages arrive, and the plugin's import links them
@@ -807,7 +769,7 @@ so `key` is NULL.
   - The text is the concatenation of `text/plain` parts, in `seq` order.
   - The kind comes from the first part that is neither `text/plain` nor `application/smil`.
 
-### 7.3 Pairing the two phones (`everysaid/sms.py`)
+### 7.3 Pairing the two phones (`internal/importers/sms.go`)
 
 Phones carry the same history, copied from phone to phone at each change.
 
@@ -832,7 +794,7 @@ Phones carry the same history, copied from phone to phone at each change.
 
 ### 7.4 Refresh
 
-- `iphone-sync.py` brings a new `sms.db`. Then run `python -m everysaid sms calls voip` (`voip` reads the
+- `everysaid iphone-sync` brings a new `sms.db`. Then run `everysaid import sms calls voip` (`voip` reads the
   carrier's missed-call notices from the new SMS, and must come after `calls`).
 - The pairing is recomputed in memory on every run, and only rows whose `(source, row_key)` is new
   are added.
@@ -867,24 +829,24 @@ Phones carry the same history, copied from phone to phone at each change.
 
 ### 8.3 Pairing and refresh
 
-- **Pairing** (`everysaid/calls.py`) works as for SMS. The key is (normalised address, direction),
+- **Pairing** (`internal/importers/calls.go`) works as for SMS. The key is (normalised address, direction),
   and the nearest call within 2 s wins.
   - It applies only to the iPhone's `phone` service.
   - Pairs occur only where the two phones' histories overlap (the months a move carried over).
 - **Choice.** The device in use at the time (`Archive.keeper()`): the Android phone in its period,
   the iPhone otherwise.
-- **Refresh.** `iphone-sync.py`, then `python -m everysaid calls voip`. The row key is `ZUNIQUE_ID`.
+- **Refresh.** `everysaid iphone-sync`, then `everysaid import calls voip`. The row key is `ZUNIQUE_ID`.
 - **Detail** (`extras.call`): Android `type` 3 missed, 5 rejected, 6 blocked (`detail_code`
   `android:3`...); iPhone `ZCALLTYPE` 8 (video) sets `video` (FaceTime video calls).
 
-### 8.4 App calls and carrier notices (`everysaid/voip.py`, importer `voip`)
+### 8.4 App calls and carrier notices (`internal/importers/voip.go`, importer `voip`)
 
 | Source | Read from | Row key |
 |---|---|---|
 | `iphone/whatsapp-calls` | `whatsapp-calls.sqlite`, WhatsApp's call log | its call id |
 | `iphone/whatsapp` | call bubbles in the chats (`ZMESSAGETYPE` 59; metadata field 87: 1.1 video, 1.2 outcome, 1.3 duration, 1.5 participants) | the bubble's `Z_PK` |
 | `iphone/viber-calls` | `viber.sqlite` `ZRECENT` (recents) | its `Z_PK` |
-| `sms-alerts` | the carrier's missed-call SMS in the archive itself, read by the parsers enabled in `[import] carrier_notices` (`everysaid/carriers/`; `gr`: Greek carriers, Latin look-alike letters normalised, Athens time) | `<message_id>/<i>` |
+| `sms-alerts` | the carrier's missed-call SMS in the archive itself, read by the parsers enabled in `[import] carrier_notices` (`internal/importers/carriers.go`; `gr`: Greek carriers, Latin look-alike letters normalised, Athens time) | `<message_id>/<i>` |
 
 - The WhatsApp log and the bubbles describe the same calls: they are matched by time window and
   direction, the person taken from the chat, the creator jid as fallback (the log uses LIDs).
@@ -910,7 +872,7 @@ Phones carry the same history, copied from phone to phone at each change.
 
 ## 9. The unified archive
 
-### 9.1 Schema (`everysaid/archive.py`)
+### 9.1 Schema (`internal/archive`)
 
 `PRAGMA user_version` is 1 until the first release; until then the schema changes in place, without
 migrations.
@@ -937,7 +899,7 @@ migrations.
 |---|---|
 | `address` | `kind_id`, `value`, `service_id` (NULL for the shared kinds); unique on (kind, value, service) |
 | `person` | `name` (set by the user), `name_source` (where the user pinned their name to come from: a source of names, or `address:<id>`), `contact_uid` (vCard UID), `contact_url` (CardDAV href or any other), `note` |
-| `handle_name` | every name a service has shown for a handle: `address_id`, `service_id`, `kind` (`book`: the service's copy of the user's address book; `chat`: a chat's name; `profile`: chosen by them), `name`, `first_seen`, `last_seen`, `current` (the latest of that handle, service and kind); many handles may share a name. WhatsApp gives all three kinds, Telegram profile names; `core/names.py` picks a person's name from them |
+| `handle_name` | every name a service has shown for a handle: `address_id`, `service_id`, `kind` (`book`: the service's copy of the user's address book; `chat`: a chat's name; `profile`: chosen by them), `name`, `first_seen`, `last_seen`, `current` (the latest of that handle, service and kind); many handles may share a name. WhatsApp gives all three kinds, Telegram profile names; `internal/core` (names) picks a person's name from them |
 | `merge_dismissed` | pairs of people the user said are not one (`a` < `b`, `at`): that suggestion is not shown again |
 | `group_link` | groups the user merged: each conversation shown as part of the chat of `into_id` (`c<into_id>`, itself never linked) |
 | `group_dismissed` | pairs of groups (their chats' conversations, `a` < `b`, `at`) the user said are not one |
@@ -948,7 +910,7 @@ migrations.
 | `plugin_instance` | `plugin` (its id), `kind` (source, library, contacts, analysis), `label`, `settings` and `state` (JSON), `enabled`, `device_id`, `is_default` (the library kept files go to), `created_at`, `last_run`, `last_status` |
 | `contact`, `contact_address` | an address book's contacts (`instance_id`, `uid`, `url`, `name`, `organization`, `photo` in `<cache>/avatars/`) and the addresses they list, joined only to addresses the archive has |
 | `state_report` | what a source says about a conversation: `conversation_id`, `instance_id`, `field` (`archived`, which only starts the app's own in `chat_state`; `muted`, `pinned`, `read_until`), `value` (muted: until, Unix ms, -1 for ever), `observed_at` (when the source's data was so), `changed_at` (when it became so) |
-| `chat_state` | what the user chose in the app per chat (`p<person>`, `c<conversation>`): `field`, `value`, `set_at`, `always`; `core/queries.py` combines it with the reports (see `docs/design.md`) |
+| `chat_state` | what the user chose in the app per chat (`p<person>`, `c<conversation>`): `field`, `value`, `set_at`, `always`; `internal/core` combines it with the reports (see `docs/design.md`) |
 | `setting` | the user's settings shared by every device (JSON values), e.g. `unread_since`, `push_preview` |
 | `label` | the words people are described by: `kind` (`tone`, many to a person; `relation`, one), `key` (one the app brings, its words in the app's languages; NULL: the user's), `name` (the user's), `meaning` (what the local models read; NULL: the app's own; '': never theirs), `sensitive`, `position`; the app's are put in once (`archive.LABELS`, setting `labels_seeded`) |
 | `person_label` | a person's labels: `state` (`yes`, `no`: the user's; `suggested`: the models'), `votes` of `models`, `evidence` (a line of the chat), `at` |
@@ -974,7 +936,7 @@ person; the migration made one person per address, which is how the archive beha
 | `call_origin` | as `message_origin` |
 | `viber_member` | Viber member id → number, as the sources said |
 | `blocked` | `address_id`, `phone` (the device), `original`: numbers blocked on a phone |
-| `message_fts` | contentless FTS5 (`contentless_delete=1`) over the text folded by `everysaid/text.py` (lower case, combining marks removed in every script, final sigma as sigma, NFKC), rowid = `message.id`; written by `Archive.add_message()` (a trigger cannot fold); a query is folded the same way (`text.query()`) |
+| `message_fts` | contentless FTS5 (`contentless_delete=1`) over the text folded by `internal/text` (lower case, combining marks removed in every script, final sigma as sigma, NFKC), rowid = `message.id`; written by `Archive.add_message()` (a trigger cannot fold); a query is folded the same way (`text.query()`) |
 
 **Media:**
 
@@ -988,7 +950,7 @@ person; the migration made one person per address, which is how the archive beha
 
 **Connection settings:** WAL journal, `foreign_keys = ON`, `umask 077`.
 
-**Extras.** `everysaid/extras.py` turns each source row into the extra columns and reactions
+**Extras.** `internal/importers/extras.go` turns each source row into the extra columns and reactions
 (`add_message(..., extras=)`); `Archive.resolve()` then links replies by `reply_key` (within the
 conversation where keys are per chat), applies edit events and iMessage tapbacks. A position on a
 message that is not a location is the sender's (Viber only, `sender_lat`). iMessage's
@@ -1008,7 +970,7 @@ Which copy is kept: `Archive.keeper()`, the device in use at the time by its per
 else the one in use most recently, else the first named (the iPhone).
 
 **Location.** `DB` = `<data>/archive.db`; `MEDIA_ROOT` = `[media] store`, `<data>` by default (the media, under `media/`);
-`IPHONE_DATA` = `<cache>/iphone`. Scripts that read the archive use the same path (`ARCHIVE_DB`).
+`IPHONE_DATA` = `<cache>/iphone`. Tools that read the archive use the same path.
 
 ### 9.2 Address normalisation (`address()`)
 
@@ -1024,9 +986,9 @@ else the one in use most recently, else the first named (the iPhone).
 | otherwise | `+digits` |
 
 Without `[owner] region` a national number cannot be read: it is kept as `+digits`.
-`scripts/archive-phonenumbers.py DB` is a dry run of the rule against an existing archive: it lists
-the addresses that would be renamed or merged in `<cache>/phonenumbers-dry-run.tsv`, and compares
-the numbers as the iPhone's databases and `viber_member` write them.
+A dry run of the rule against an existing archive (a separate tool, not part of the app) lists the
+addresses that would be renamed or merged, and compares the numbers as the iPhone's databases and
+`viber_member` write them.
 
 **A spurious country code on an iPhone.** An SMS history inherited from older phones can have
 short codes and foreign numbers with the home country code in front (e.g. `+3015551234567` for
@@ -1042,13 +1004,13 @@ Contact names are not taken from any phone. They are meant to come from the user
 ### 9.3 Running
 
 ```
-uv run python -m everysaid [--db PATH] [sms calls viber whatsapp telegram voip media]
+everysaid import [--db PATH] [sms calls viber whatsapp telegram voip media]
 ```
 
-- **Registry.** `IMPORTERS` in `everysaid/__main__.py`, in the order they run. Without names, the
+- **Registry.** `importers.Names` in `internal/importers/importers.go`, in the order they run. Without names, the
   ones `[import] importers` lists, else all. Every source is optional: an importer whose sources are
   missing says so and adds nothing. The carrier notices are read only by the parsers
-  `[import] carrier_notices` enables (`everysaid/carriers/`, one module per carrier or country).
+  `[import] carrier_notices` enables (`internal/importers/carriers.go`, one parser per carrier or country).
 
 - **Order matters.** The `media` importer resolves messages through `message.key` and
   `message_origin`, so the message importers must have run first; `voip` reads the carrier notices
@@ -1076,12 +1038,12 @@ uv run python -m everysaid [--db PATH] [sms calls viber whatsapp telegram voip m
 
 ## 10. Media: from the archive to the photo library
 
-### 10.1 Into the archive (`everysaid/media.py`)
+### 10.1 Into the archive (`internal/importers/media.go`)
 
 **Storage.** Each file is stored once by content: `<cache>/media/<sha256[:2]>/<sha256><ext>`.
 
-- It is a **hard link** (`os.link`) to the source file: same file system, no extra space. Across
-  file systems it is a copy (`link_or_copy`).
+- It is a **hard link** to the source file: same file system, no extra space. Across file systems
+  it is a copy.
 - The `mime` is guessed from the extension.
 
 **Links per source:**
@@ -1103,7 +1065,7 @@ and was removed with the files it served.
 - An existing `(source, path, message)` link is skipped.
 - A file already linked from the same source path reuses its recorded sha256 and is not hashed
   again.
-- Files missing on disk, for example pruned ones, are counted as "χωρίς αρχείο" and skipped. This is
+- Files missing on disk, for example pruned ones, are counted as without a file and skipped. This is
   harmless.
 
 ### 10.2 Pictures do not stay
@@ -1115,188 +1077,25 @@ The archive keeps the record, but not the file.
   choice).
 - Documents and PDFs are a second phase. Video calls are never kept.
 
-### 10.3 Reading immich without touching it: `scripts/immich-index.py`
+### 10.3 The separate picture tools
 
-**Through the API (the default).** `[immich] url` and the key `immich-key`; only reads.
+The backlog of chat pictures was worked through with tools kept separately, outside this
+repository; they are not part of the app. They index the immich library (read only), match the chat
+pictures against it (checksum, perceptual hashes, image embeddings, capture dates), have local
+vision models say what the rest show, offer review pages that only mark the user's decisions, and
+then carry them out: `library_link` written and committed before any local copy is removed, every
+copy checked to be the same content, the encrypted backup never touched. Their own files are listed
+in section 14. The app's own way is its media view and the library plugins (folder, immich).
 
-- **Assets.** `POST /search/metadata` (permission asset.read), 1,000 a page, with EXIF, for each
-  visibility (timeline, archive, hidden); the trash is left out. The checksum comes as base64 and
-  is stored as hex; times are written as the dump writes them (`2020-01-01 12:00:00.000+00`), so
-  the readers are the same. An index made this way agrees in every field with one made from the
-  dump, for the assets in both.
-- **Previews.** `GET /assets/{id}/thumbnail?size=thumbnail` (asset.view; about 250 px, WebP) into
-  `<cache>/immich-thumbs/<id>.webp`, only those not there yet. Without asset.view the
-  index has no previews (a message says so), and the hash and look-alike checks have nothing to
-  compare with.
-- **Embeddings.** The API does not give immich's. `immich-match.py` makes them from the previews
-  with the same model, and the index keeps them (and `phash`) from run to run for unchanged assets.
-
-**From the nightly dump (`--dump [FILE]`).**
-
-- **No API key, no API calls.** immich writes a nightly Postgres dump to
-  `<data_folder>/backups/immich-db-backup-*.sql.gz` (`<data_folder>` is `[immich] data_folder` in
-  `config.toml`). The newest one (or one given as an argument) is parsed directly.
-  - Only the `COPY public.<table> (...) FROM stdin;` blocks of `asset`, `asset_exif`, `asset_file`,
-    `smart_search` and `system_metadata` are read.
-  - Fields are tab-separated. `\N` means NULL, and `\t \n \r \\` are unescaped.
-- **Output.** `<cache>/immich.db`, rebuilt from scratch each time. Table `asset`: id,
-  type, original name, SHA-1, `fileCreatedAt`, `dateTimeOriginal`, make, model, EXIF width and
-  height, size, preview path, CLIP embedding, and later `phash`.
-- **Trash.** Assets with `deletedAt` are left out.
-- **Field conversions.**
-  - The checksum is `bytea` (`\x<hex>`) and is stored as hex.
-  - The preview path `/usr/src/app/upload/...` (inside the container; `[immich] container_prefix`)
-    is rewritten to `<data_folder>/...`.
-  - The embedding is the pgvector text `[f, f, ...]`, stored as float32 bytes. The model comes from
-    `system-config` → `machineLearning.clip.modelName`, e.g. `ViT-B-16-SigLIP2__webli`, 768
-    dimensions.
-- **Freshness.** The index is as fresh as the last nightly dump.
-
-### 10.4 Matching chat media against immich
-
-**`immich-match.py`** runs with `uv run --extra ml --extra torch` (`--extra rocm` instead on an AMD
-GPU). The device is a CUDA/ROCm GPU, else Apple's MPS, else the CPU.
-
-- **Candidates:** archive `media` rows that are images or videos (or `.heic`), with the earliest
-  message time.
-- **Embeddings for immich.** Assets the index has none for (read through the API) get one first,
-  from their preview, stored in the index.
-- **Exact match.** The file's SHA-1 against immich's checksum.
-- **Similarity.**
-  - The embedding comes from `google/siglip2-base-patch16-224` (HuggingFace cache), the local
-    equivalent of immich's model. The same picture scores 0.90–0.99 against immich's own embedding;
-    different pictures score about 0.5.
-  - It is compared by cosine with every immich embedding, and the best asset is kept.
-  - Pictures are read with Pillow (pillow-heif for HEIC), turned as their EXIF says and shrunk to
-    1440 px; videos are judged by an ffmpeg frame 1 s in (or 0 s).
-- **Capture date.** exiftool `DateTimeOriginal` + `OffsetTimeOriginal`, in batches of 500.
-  - With the offset, the time is taken in its own zone; without it, the configured one.
-  - Years before 1990 are ignored.
-  - Ignoring the offset puts photos taken abroad hours off.
-- **Output.** `<cache>/match.db`, table `match`: path, origin, sha1, exact, best,
-  similarity, taken, message, immich_date. Rebuilt from scratch each time.
-
-**`immich-phash.py`** (`--extra media`) handles a CLIP weakness: CLIP squashes a tall
-portrait into a square, so a copy can score only 0.89. For each candidate's best asset it adds:
-
-- `phash`, the pHash Hamming distance between the picture as shown and the immich preview;
-- `same_shot`, taken within ±2 s with the same pixel size in either orientation.
-
-**`immich-dupes.py`** compares all against all, like Czkawka.
-
-1. pHash every immich preview. Kept in `immich.db` `asset.phash` as a signed 64-bit int, so later
-   runs hash only new assets.
-2. pHash every chat picture, as shown, through Pillow at 512 px (JPEG decoded with `draft`; HEIC
-   through pillow-heif). This uses all cores but two.
-3. Find the nearest immich asset by Hamming distance, with vectorised XOR and popcount in blocks.
-   Stored as `hash_asset`, `hash_dist`.
-4. Group chat pictures within distance 6 of each other with union-find (`hash_group`).
-5. **Confirm** every pair within 6:
-   - the same aspect ratio as shown, within 6% (`hash_aspect`);
-   - a second hash, dHash, within 10 (`hash_dhash`).
-   - Reason: a pHash of 6 can be chance (a news clipping against a painting, a memoji against a
-     person).
-   - A pair counts as the same picture when `hash_dist ≤ 6`, `hash_aspect = 1` and `hash_dhash ≤ 10`.
-
-### 10.5 Judging the rest with a local vision model: `scripts/media-vlm.py`
-
-Answers go to `<data>/vlm.db`. It holds hours of work, so it lives in the data folder rather than
-in the cache.
-
-**Cheap filters first,** without a model, stored in `vlm.db` `filtered`:
-
-- already in immich: an exact match, or CLIP ≥ 0.90 at the same time (±120 s from the capture date;
-  or, without one, the message date between 1 h before and 30 days after immich's date);
-- WhatsApp GIFs and round video notes (`message.subtype` gif, video note);
-- `.gif` or `/GIF-` names; `.webp` stickers;
-- a longest side under 480 px;
-- files that are gone.
-
-**The model.**
-
-- Each remaining file becomes a JPEG of at most 896 px (videos: a frame at 1 s).
-- It is sent to the local Ollama (`[ollama] url`, default `http://localhost:11434`, `/api/chat`)
-  with `[ollama] model` (default `qwen2.5vl:7b`): temperature 0, `num_predict 300`,
-  `keep_alive 10m`.
-- The answer is forced to a JSON schema: `kind` (nine values), `value` 1–5 and `description` (Greek).
-
-**Robustness.**
-
-- Every answer is committed at once. The run resumes from what is not yet in `answer`, so Ctrl-C, a
-  crash or sleep loses at most one picture.
-- If Ollama is unreachable, it waits 15 s and retries, forever.
-- An HTTP error for one picture is tried 3 times. Invalid JSON, a strip under 32 px or an
-  unconvertible file is set aside in `skipped` with the reason.
-- `--retry-skipped` retries the set-aside pictures; `--report` compares the answers with the
-  reference.
-- Keep the machine awake with `systemd-inhibit --what=sleep` (the screen can still turn off).
-
-**Model choice.**
-
-- Local models are measured on a pilot set of pictures against a reference model's answers
-  (`[review] reference_model`, stored in `vlm.db` like any model's); `--report` gives the
-  agreement. Sending pictures to an outside reference model needs the user's explicit consent.
-- The default, `qwen2.5vl:7b`, was chosen this way over Gemma 3 12B and Llama 3.2 Vision.
-- Next: larger local models as a second opinion.
-
-### 10.6 Review pages and pruning
-
-| Tool | Port | Shows | Writes |
-|---|---|---|---|
-| `immich-review.py` | 8519 | each candidate next to its immich match: similarity, pHash, dates, sizes; `--origin archive/kept/filtered`, `--only hash/false` | `<data>/review.db` `decision`, `date_from` (until acted on); a date or an approval turns a `triage` "delete" of the file into "keep" |
-| `vlm-review.py` | 8518 | the models' answers per picture | `vlm.db` `verdict` (answers marked wrong), `review.db` `triage`; Apply: first the exact list (`media-triage.py --dry-run --plan`), then, on a second click, that list only (`--only`) |
-| `media-triage.py [--table aside_decision] [--dry-run --plan FILE] [--only FILE]` | n/a | n/a | carries out the newest decision per file across `triage`, `aside_decision`, `aside`, `restored`, `decision` and `date_from`; a delete older than (or as old as) any other decision is not carried out and is listed |
-| `media-prune.py LIST [--dry-run] [--done FILE]` | n/a | n/a | `library_link`, then removes every local copy |
-| `media-aside.py LABEL CONV_ID...` | n/a | n/a | hard links (copies where the folder is on another file system) in `<aside>/<LABEL>/<kind>/` (`[media] aside`, default `<data>/aside`), and `aside` in `review.db`; the pages leave these files out, and only `media-triage.py --table aside_decision` deletes them, passing their aside links to `media-prune.py` as known copies |
-
-Retired, with the Android Viber media they served: `media-review.py` (port
-8517) showed the Android Viber files no `attachment` referred to (by `links.tsv` category, CLIP label,
-duplicates, faces, date, shape) and moved those chosen to `viber-media/_deleted/` after checking
-again that they were unreferenced and not hard-linked; `media-classify.py` gave it CLIP ViT-L/14
-labels, an optimal-leaf order, duplicates (≥ 0.95) and an insightface face count
-(`viber-media/_review/ai.json`).
-
-All pages:
-
-- listen on 127.0.0.1 only, and answer only requests whose Host (and Origin, if any) is
-  127.0.0.1 or localhost on their port, so another web site cannot reach them by DNS rebinding;
-- print their address with a key of the run (`/?k=KEY`); opening it sets a cookie
-  (`everysaid-<port>`, HttpOnly, SameSite=Strict) that every request needs, GETs included, so
-  another local user cannot read or drive them;
-- accept a change (POST) only with the run's random token, which the page itself sends with every
-  request (`X-Token`) and another site cannot know;
-- escape every text they show and send a Content-Security-Policy with a nonce per page, so a chat
-  or person name, or a model's answer, cannot run as script;
-- accept only paths under their own roots (`safe()`);
-- keep thumbnails in a private `/tmp` folder that is removed on exit.
-
-**`media-prune.py`, step by step.** LIST lines are `archive path \t asset id \t method \t score`,
-optionally followed by the file's links in the aside folder (known copies; refused outside it).
-
-1. Check that the path is the archive's own path for that sha256.
-2. Collect the copies: the archive's hard link, plus every `attachment.source_path` under the
-   source's root (`<cache>/iphone/whatsapp-media`, `…/viber-media`).
-3. Group the copies by inode.
-   - The first path of each inode must hash to that sha256. Separate files with the same content
-     happen: the same picture received twice.
-   - Each inode's link count must equal the number of copies found. Otherwise there is an unknown
-     copy somewhere, and the file is skipped.
-   - A file another one is linked to as the copy kept (`media_same.same_as`) is refused.
-4. If the asset is not `-`, write `library_link` and **commit before removing anything**.
-5. Remove the copies.
-
-The encrypted backup is never touched, and the next `iphone-sync.py` does not bring the files back
-(3.7).
-
-### 10.7 Where the archive and its media live
+### 10.4 Where the archive and its media live
 
 - The database is `<data>/archive.db`. The data folder should be covered by the user's backups
   (best from a snapshot, so the copy is consistent); backing it up is not Everysaid's job.
 - The archive's media wait in `<cache>/media/` (`MEDIA_ROOT`) as hard links to the files
-  `iphone-sync.py` copied into `<cache>/iphone/`; both must be on the same file system for the links
+  `iphone-sync` copied into `<cache>/iphone/`; both must be on the same file system for the links
   to work (otherwise they are copies). The cache is meant to be left out of backups: everything
-  there can be made again from the encrypted iPhone backup (`media-restore.py` for media already
-  taken by the archive).
+  there can be made again from the encrypted iPhone backup (media the archive already took, with
+  one of the separate tools).
 
 ---
 
@@ -1306,34 +1105,26 @@ With the iPhone on the cable:
 
 ```
 # 1. back up and extract (password from the keyring; the phone may ask for its passcode)
-uv run --extra iphone python scripts/iphone-sync.py
+everysaid iphone-sync
 # 2. bring everything new into the archive (bridge rows come in with `whatsapp`)
-uv run python -m everysaid sms calls viber whatsapp telegram voip media
+everysaid import sms calls viber whatsapp telegram voip media
 ```
 
-Optional, for the photo-library work:
-
-```
-uv run python scripts/immich-index.py                               # through the API (--dump: the nightly dump)
-uv run --extra ml --extra torch python scripts/immich-match.py      # rebuilds match.db (--extra rocm on AMD)
-uv run --extra media python scripts/immich-dupes.py
-systemd-inhibit --what=sleep uv run --extra media python scripts/media-vlm.py   # resumable
-uv run --extra media python scripts/immich-review.py --origin archive          # user approves
-uv run python scripts/media-prune.py LIST --dry-run                 # then without --dry-run
-```
+(The iPhone source in the app does both.) The photo-library work is done with the separate tools
+(10.3).
 
 **Occasionally:**
 
-- `scripts/iphone-verify.py` checks the whole backup (expect databases that changed during the
+- `everysaid iphone-verify` checks the whole backup (expect databases that changed during the
   backup, and browser "Web Data" files, to be reported; see 3.8).
-- `scripts/iphone-ls.py` shows what else the backup holds.
+- `everysaid iphone-ls` shows what else the backup holds.
 
 **One-off sources (a retired Android phone), final once done:**
 
-- `android-export.py`;
+- `everysaid android-export`;
 - `adb pull` of the Viber media;
-- the Viber Desktop export;
-- the linking of the Viber media (`viber-link-media.py`, retired: 5.5).
+- Viber Desktop's history, through the bridge;
+- the linking of the Viber media (retired: 5.5).
 
 ---
 
@@ -1344,15 +1135,11 @@ uv run python scripts/media-prune.py LIST --dry-run                 # then witho
 | `idevicebackup2 backup` | full (or `--full`) | phone sends changed files, deletes removed ones | file |
 | database extraction | decrypt 6 DBs | decrypt them again in full, replace atomically (`--only` for some) | whole file |
 | media extraction | all files | only names not on disk and not in the archive's `attachment` | file |
-| `android-export.py` | all tables, all parts | skips existing tables, existing part files | table / part |
-| Viber Desktop export | full copy | a new full copy into a new file | whole DB |
-| `everysaid` importers | everything | rows whose `(source, row_key)` is new and whose `key` is not yet present | row |
-| `everysaid voip` | everything | calls whose source row is new and that no other source has (same service, person, ±60 s) | call |
-| `everysaid media` | hash and link all | new `(source, path, message)` only; known paths not rehashed | link |
-| `immich-index.py` | build | rebuild from the newest dump | whole DB |
-| `immich-match.py` | build | rebuild | whole DB |
-| `immich-dupes.py` | hash all | immich previews: only new; chat pictures: all again | asset |
-| `media-vlm.py` | all | only files without an answer for the model | picture |
+| `everysaid android-export` | all tables, all parts | skips existing tables, existing part files | table / part |
+| Viber Desktop snapshot (the bridge) | full copy | a new full copy | whole DB |
+| `everysaid import` | everything | rows whose `(source, row_key)` is new and whose `key` is not yet present | row |
+| `everysaid import voip` | everything | calls whose source row is new and that no other source has (same service, person, ±60 s) | call |
+| `everysaid import media` | hash and link all | new `(source, path, message)` only; known paths not rehashed | link |
 
 ---
 
@@ -1379,14 +1166,14 @@ Found while writing this, from the code:
    avatars.
 6. **Bridge media are not in the archive.** Viber calls older than the iPhone's recents are lost
    (they are not in the desktop database).
-7. **`immich.db` lags.** It reflects immich as of its last nightly dump. Something uploaded today is
-   invisible to the matching until tomorrow.
+7. **The separate tools' immich index lags** when it is made from immich's nightly dump: something
+   uploaded today is invisible to their matching until tomorrow.
 8. **Short codes and alphanumeric senders** are stored without a country code by design. Two
    phones writing the same short code differently (`+1234` / `1234`) are normalised to the bare
    digits.
 9. **A new iPhone** means a new UDID in `config.toml` (or none, to take the only backup or phone).
    A new backup is also needed (a new keybag, though the same password can be set). Paths and
-   settings are in `everysaid/config.py` (README, "Folders and configuration").
+   settings are in `internal/config` (README, "Folders and configuration").
 
 ---
 
@@ -1395,20 +1182,19 @@ Found while writing this, from the code:
 | Path | Contents | Mode | In backups? |
 |---|---|---|---|
 | `<backup_root>/<UDID>/` | encrypted iPhone backup | as written by idevicebackup2 | the user's to back up: the only copy of the call history |
-| `<cache>/iphone/` | decrypted DBs and new media (`iphone-sync.py`) | 700/600 | no: made again from the backup |
-| `<cache>/media/` | the archive's media until they go to immich | 700/600 | no: from the backup (`media-restore.py`) |
+| `<cache>/iphone/` | decrypted DBs and new media (`iphone-sync`) | 700/600 | no: made again from the backup |
+| `<cache>/media/` | the archive's media until they go to immich | 700/600 | no: from the backup (with one of the separate tools) |
 | `<data>/archive.db` | the archive | 600 | yes, with the data folder |
 | `<config>/config.toml` | settings (README, "Folders and configuration") | 600 | yes |
 | keyring, service `everysaid` | `backup-password`, `immich-key` | the keyring's | the keyring's |
-| `<config>/backup-password`, `immich-key` | the same secrets where there is no keyring (or until moved with `--move-to-keyring`) | 600, folder 700 | opened only by the scripts |
-| `<cache>/immich.db` | immich index | 600 | rebuildable |
+| `<config>/backup-password`, `immich-key` | the same secrets where there is no keyring (or until moved with `--move-to-keyring`) | 600, folder 700 | opened only by Everysaid's code |
+| `<cache>/immich.db` | immich index (the separate tools, as the rows below) | 600 | rebuildable |
 | `<cache>/immich-thumbs/` | immich's small previews, through the API | 700/600 | rebuildable |
 | `<cache>/match.db` | match results | 600 | rebuildable |
 | `<data>/vlm.db` | model answers, `filtered`, `skipped`, `verdict` | 600 | yes (answers take hours to remake) |
 | `<data>/review.db` | the user's decisions: `triage`, `decision`, `date_from`, `aside`, `aside_decision`, `aside_date`, `restored` | 600 | yes (not rebuildable) |
 | `<cache>/` `faces.db`, `neighbours.db`, `similar.tsv`/`.npz` | faces, tags, immich neighbours, look-alike groups | 600 | rebuildable (but `faces.db` holds names the user gave to face groups) |
 | the models' own caches (Ollama, HuggingFace, insightface) | models | n/a | rebuildable by downloading again |
-| `/tmp/vb/export.log` | Viber export log | 600 | scratch |
 
 The rule is:
 

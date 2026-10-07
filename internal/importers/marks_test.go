@@ -1,4 +1,4 @@
-// Ports tests/test_marks.py (its importer parts): mentions, receipts and how far chats were read,
+// Mentions, receipts and how far chats were read,
 // as the Telegram and Viber importers bring them, on small databases made here (shaped as
 // telegram.db and the iPhone's viber.sqlite).
 package importers

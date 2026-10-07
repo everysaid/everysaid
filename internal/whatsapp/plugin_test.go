@@ -1,7 +1,7 @@
 package whatsapp
 
-// Ports the plugin's part of tests/test_whatsapp_bridge.py (what the plugin reads of the store and
-// asks of the bridge); the importers' part goes with internal/importers. Everything is made in
+// The plugin's part of the WhatsApp connection (what the plugin reads of the store and asks of the
+// bridge); the importers' part is tested in internal/importers. Everything is made in
 // temporary folders: never a real store or archive, and no connection to WhatsApp.
 
 import (

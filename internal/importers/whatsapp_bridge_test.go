@@ -1,5 +1,4 @@
-// Ports tests/test_whatsapp_bridge.py (its importer side): the WhatsApp bridge's databases as the
-// importers read them: a bridge of this version (kinds, replies, places, reactions, edits,
+// The WhatsApp bridge's databases as the importers read them: a bridge of this version (kinds, replies, places, reactions, edits,
 // deletions, calls, the files it downloaded, its state), and one from before.
 package importers
 

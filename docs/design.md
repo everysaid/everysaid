@@ -2,7 +2,9 @@
 
 Agreed on 5 October 2026 and built the same day; section 12 has the owner's decisions, section 13
 where the build differs from this text. It builds on what existed (the archive, the importers, the
-scripts; see `README.md` and `docs/data-sources.md`).
+scripts; see `README.md` and `docs/data-sources.md`). It was written and first built in Python; the
+app is now Go (`docs/go.md`, `docs/go-port.md`), and the Python files the early sections name are in
+the repository's history.
 
 ## 1. What it is for
 
@@ -29,10 +31,10 @@ the services themselves (it reads them; where a service allows, it may also send
         iPhone backup · adb · Viber Desktop export · Telegram API · WhatsApp bridge · Meta export
 ```
 
-- **The core** (Python package `everysaid`): the only code that reads or writes the archive. Queries
-  (streams, search, people, calls, timelines, statistics), changes (merge people, names, notes,
-  decisions on media), and the import pipeline (normalise, deduplicate, store). Plain functions and
-  classes, no web framework inside, so the API, the MCP server, the CLI and tests all call the same
+- **The core** (first the Python package `everysaid`, now `internal/core`): the only code that
+  reads or writes the archive. Queries (streams, search, people, calls, timelines, statistics),
+  changes (merge people, names, notes, decisions on media), and the import pipeline (normalise,
+  deduplicate, store). Plain functions and classes, no web framework inside, so the API, the MCP server, the CLI and tests all call the same
   thing.
 - **The API**: a thin layer over the core. REST for queries and changes, one WebSocket per open
   client for live events (new messages, sync progress, plugin status; typing indicators are out of scope).
@@ -41,7 +43,8 @@ the services themselves (it reads them; where a service allows, it may also send
 - **The UI**: a PWA served by the same process; it talks only to the API.
 - **The MCP server**: tools that call the core; runs in the same process (streamable HTTP) or as a
   separate stdio process opening the archive read only.
-- **The CLI** stays: `python -m everysaid ...` for imports and maintenance, also calling the core.
+- **The CLI** stays: `everysaid import ...` and the other subcommands for imports and maintenance,
+  also calling the core.
 
 One process by default, so a single user runs `everysaid serve` (or one container) and nothing
 else. SQLite in WAL mode serves many readers and one writer, which fits: writes come from plugins
@@ -84,7 +87,7 @@ and implements a small interface:
   import and whose media to fetch (select all, deselect all, filters).
 
 A plugin knows nothing about the archive's tables; the core knows nothing about backups, adb or
-Telethon. Today's importers (`everysaid/sms.py`, `viber.py`, `whatsapp.py`, `telegram.py`, ...) and
+Telethon. The importers of the time (`everysaid/sms.py`, `viber.py`, `whatsapp.py`, `telegram.py`, ...) and
 extract scripts (`iphone-sync.py`, `android-export.py`, `telegram-sync.py`) become plugins: their
 reading code moves, their writing code becomes the core's import pipeline.
 
@@ -92,9 +95,8 @@ reading code moves, their writing code becomes the core's import pipeline.
 accounts. Each instance has its own settings, secrets, state and device record. The user chooses
 which instances feed the same archive.
 
-**Third-party plugins.** At first, plugins are Python modules inside the project (entry points
-later, so others can be installed as packages). They run in the same process; plugins from others
-would need isolation (a subprocess with a narrow protocol) and are out of the first version.
+**Third-party plugins.** At first, plugins are packages inside the project (registered in
+`internal/all`). They run in the same process; plugins from others would need isolation (a subprocess with a narrow protocol) and are out of the first version.
 
 ## 4. Data model
 
@@ -140,7 +142,7 @@ needed.
   gone). Thumbnails and previews are made on demand into the cache.
 - **The library** is where kept pictures and videos go, and it is a **plugin** like the sources.
   In the first version two: `folder` (a folder on disk, files named by date, the date written into
-  the file where it has none) and `immich` (API upload, as `immich-upload.py` does now). Others
+  the file where it has none) and `immich` (API upload, as the separate picture tools did then). Others
   (Nextcloud, PhotoPrism, ...) are later plugins. A library plugin answers "is it already there?"
   (checksum; perceptual hash where the library allows; what it has from that day), stores a file
   with its date and the camera make where the file has none, and returns a reference for
@@ -204,7 +206,7 @@ rewriting it. Live SMS and calls of an Android phone need a small native Android
 ## 7. The API
 
 - Python, **FastAPI** (or Litestar) with Pydantic models; OpenAPI schema → generated TypeScript
-  client; uvicorn.
+  client; uvicorn. (So it was first built; now Go's `net/http`, `internal/server`, the same routes.)
 - REST, cursor-paginated: `/people`, `/people/{id}/stream?before=&after=`, `/conversations`,
   `/search`, `/calls`, `/media`, `/plugins`, `/instances`, `/settings`.
 - WebSocket `/events`: new records, plugin status, import progress.
@@ -240,13 +242,13 @@ Online, for one owner, with the strongest protection that does not get in the wa
 Tools as calls into the core: search messages; a message with its context; a person (handles,
 services, counts, first and last contact); a person's stream for a period; calls; a day's timeline
 across services; statistics; media of a person. Harmless actions only (a note, a name), each
-confirmed. Built with the official MCP Python SDK.
+confirmed. Built with the official MCP SDK (Python's first, now Go's, `internal/mcp`).
 
 ## 10. Platforms and installation
 
 Linux first; macOS and Windows where the plugins' tools exist (each plugin says where it runs).
-`uv` for development; for users a package (`pipx`/`uv tool install everysaid`) and a container
-image. The generality fixes found by the audit of October 2026 come first: time zones on Windows,
+For users one static binary per system (`docs/go.md`; first planned as a Python package) and a
+container image. The generality fixes found by the audit of October 2026 come first: time zones on Windows,
 safe SQLite paths, UTF-8 file I/O, the media store in the data folder, phone numbers without a
 region, messages through i18n.
 
@@ -296,11 +298,11 @@ Everything above is built, with these differences from the draft:
 - **Chat streams** use react-virtuoso (reverse scrolling with prepended pages, follow-output) rather
   than TanStack Virtual; the API's TypeScript types are written by hand (`web/src/lib/api.ts`)
   rather than generated.
-- **Search** is a contentless FTS5 index of folded text (`everysaid/text.py`), written by the archive
+- **Search** is a contentless FTS5 index of folded text (`internal/text`), written by the archive
   as it adds a message; the snippet is made from the original text.
 - **Users, passkeys, sessions** live in `<data>/server.db`, apart from the archives; each user row
   names its archive, so a second user is a second row and a second archive.
-- **Plugins' words** are English in the code, translated per language (`everysaid/plugins/i18n.py`).
+- **Plugins' words** are English in the code, translated per language (`internal/i18n`).
 - **Choosing chats** is a plugin's `chats()`; Telegram has it (import and media per chat).
 - **Media on demand** is in the MCP server (`find_media`, `send_media_to_library`) and in the app
   (the media view and the lightbox: keep, remove, to the library, each checked against it first).
@@ -414,10 +416,12 @@ Everything above is built, with these differences from the draft:
   are in `web/src/lib/i18n.ts`; the server's errors are codes (`UserError`) said by the interface;
   what the server says by itself (logs, statuses, notifications, a plugin's errors) is English in
   code, said in the language the user last chose (setting `language`, or the request's `X-Lang`)
-  through `plugins/i18n.py`. `tests/test_i18n.py` and tsc keep it so.
+  through `internal/i18n`. `internal/checks` and tsc keep it so.
 - **A demo or a test** keeps its secrets apart (`EVERYSAID_KEYRING`), so it never connects to the
   user's accounts.
 
-Where things are: `everysaid/core/` (store, names, queries, changes), `everysaid/plugins/`,
-`everysaid/server/` (app, auth, host, push, users), `everysaid/mcp_server.py`, `everysaid/demo.py`,
-`web/` (the PWA), `tests/` and `web/e2e/`. `docs/app.md` tells how to run it.
+Where things are: `internal/core/` (store, names, queries, changes, labels), `internal/plugins/` and
+the packages of the live sources (`internal/telegram`, `internal/whatsapp`, `internal/signal`,
+`internal/viber`), `internal/server/` (routes, auth, host, push, users), `internal/mcp`,
+`internal/demo`, `cmd/everysaid` (the binary), `web/` (the PWA); tests beside the code they test,
+`internal/checks` over the whole code, and `web/e2e/`. `docs/app.md` tells how to run it.

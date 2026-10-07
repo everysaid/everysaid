@@ -4,6 +4,10 @@ Research for porting Everysaid (Python: `everysaid/`, scripts, FastAPI server, M
 binary: static, cross-compiled for Linux, macOS and Windows on amd64/arm64, with as little cgo as
 possible. Versions and dates were checked on GitHub and `proxy.golang.org` on 2026-10-07.
 
+This is the research as it was written before the port. The port is done (`docs/go.md`,
+`docs/go-port.md`) and the Python has since left the repository: the Python files, scripts and
+tests named below are in its history, and the steps about running both side by side are past.
+
 ## 0. What the Python code uses today (the scope)
 
 | Piece | Python today | Where |

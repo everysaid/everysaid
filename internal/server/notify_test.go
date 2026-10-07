@@ -1,0 +1,97 @@
+package server
+
+import (
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"database/sql"
+	"io"
+	"net/http"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"everysaid/internal/config"
+	"everysaid/internal/core"
+	"everysaid/internal/db"
+)
+
+// pushRecorder is a push service that takes every message and only counts them.
+type pushRecorder struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (p *pushRecorder) Do(r *http.Request) (*http.Response, error) {
+	p.mu.Lock()
+	p.n++
+	p.mu.Unlock()
+	return &http.Response{StatusCode: 201, Body: io.NopCloser(strings.NewReader("")), Header: http.Header{}}, nil
+}
+
+func (p *pushRecorder) count() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.n
+}
+
+// New messages in an archived chat are shown as they come, but the chat stays archived and sends no
+// notification; the other chat's do.
+func TestAnArchivedChatStaysArchivedAndSaysNothingOfNewMessages(t *testing.T) {
+	defer config.DeleteSecret("vapid-private")
+	c := newServer(t)
+	c.login()
+	rec := &pushRecorder{}
+	c.s.Push.httpClient = rec
+	pushEndpointOK = func(context.Context, string) bool { return true }
+	t.Cleanup(func() { pushEndpointOK = pushEndpoint })
+	browser, _ := ecdh.P256().GenerateKey(rand.Reader)
+	sub := M{"endpoint": "https://push.invalid/1", "keys": M{"p256dh": b64.EncodeToString(browser.PublicKey().Bytes()),
+		"auth": b64.EncodeToString(randomBytes(16))}}
+	must(t, c.post("/api/push/subscribe", sub).status == 200, "subscribe")
+
+	s := c.s.Host.Store()
+	q := s.Read()
+	byChat := map[string]int64{} // two chats, one conversation of each
+	var order []string
+	for _, conv := range db.Ints(q, "SELECT id FROM conversation c WHERE NOT is_group AND EXISTS "+
+		"(SELECT 1 FROM message m WHERE m.conversation_id = c.id AND NOT m.outgoing) ORDER BY id") {
+		cid := core.ChatOfConversation(s, conv)
+		if _, ok := byChat[cid]; cid != "" && !ok {
+			byChat[cid] = conv
+			order = append(order, cid)
+		}
+	}
+	must(t, len(order) >= 2, "two chats with incoming messages: %d", len(order))
+	archived, other := order[0], order[1]
+	must(t, core.SetChatState(s, archived, false, map[string]core.StateValue{"archived": true}) == nil, "archive")
+	first := db.Int(q, "SELECT max(id) FROM message")
+	s.MustWrite(func(tx *sql.Tx) {
+		for _, cid := range []string{archived, other} {
+			db.Exec(tx, "INSERT INTO message (service_id, conversation_id, ts, outgoing, sender_id, kind_id, text) "+
+				"SELECT service_id, conversation_id, ?, 0, sender_id, kind_id, 'hi' FROM message "+
+				"WHERE conversation_id = ? AND NOT outgoing LIMIT 1", time.Now().UnixMilli(), byChat[cid])
+		}
+	})
+	last := db.Int(s.Read(), "SELECT max(id) FROM message")
+
+	ch := c.s.Host.Listen()
+	defer c.s.Host.Unlisten(ch)
+	c.s.Host.Emit(M{"type": "new", "messages": []int64{first, last}})
+	var event M
+	select {
+	case event = <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no event")
+	}
+	chats := event["chats"].(map[string]int64)
+	must(t, len(chats) == 2 && chats[archived] == 1 && chats[other] == 1, "both shown as they come: %v", chats)
+	must(t, core.States(s)[archived].Archived, "still archived")
+	deadline := time.Now().Add(5 * time.Second)
+	for rec.count() < 1 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(200 * time.Millisecond) // a second one, were it sent, would be here by now
+	must(t, rec.count() == 1, "only the other chat notifies: %d sent", rec.count())
+}

@@ -7,10 +7,13 @@
 ## Building and running
 
 ```
-uv sync --extra app                     # Python: server, MCP, Telegram
-cd web && pnpm install && pnpm build    # the interface, into web/dist (served by everysaid serve)
-cd .. && uv run everysaid serve          # http://localhost:8520
+cd web && pnpm install && pnpm build && cd ..   # the interface, into web/dist
+go generate ./internal/webui                     # web/dist into the binary's files
+CGO_ENABLED=0 go build -o everysaid ./cmd/everysaid
+./everysaid serve                                # http://localhost:8520
 ```
+
+`docs/go.md` has the rest of the building (other systems, Signal's helper).
 
 The first start prints a one-time setup link (`.../setup#...`, valid for an hour). Open it, give a
 name, and choose how you will sign in:
@@ -36,7 +39,7 @@ cannot be made in a browser, use the password way: the app does not depend on an
 ### Trying it on invented data
 
 ```
-uv run everysaid demo --dir /tmp/chr-demo --serve     # http://localhost:8530
+everysaid demo --dir /tmp/chr-demo --serve     # http://localhost:8530
 ```
 
 builds an archive of invented people, groups, calls and pictures in that folder (with its own
@@ -83,8 +86,7 @@ Description=Everysaid
 After=network-online.target
 
 [Service]
-WorkingDirectory=%h/path/to/everysaid
-ExecStart=%h/.local/bin/uv run --extra app everysaid serve
+ExecStart=%h/.local/bin/everysaid serve
 Restart=on-failure
 
 [Install]
@@ -137,14 +139,14 @@ import only and kept nowhere; its settings can keep it in the keyring instead (o
 The iPhone's card shows where its backup is, of when, and how big; "A new backup before importing"
 (on by default) takes one over the cable first, else the import decrypts the backup that is there.
 
-Every run of a source writes a whole log of its own (its scripts' output, errors in full), and a
+Every run of a source writes a whole log of its own (all it said, errors in full), and a
 live connection one a day, in the state folder (`~/.local/state/everysaid/logs/` on Linux); the
 source's card lists them, each opened whole.
 
 ## The assistant (MCP)
 
 ```json
-{ "mcpServers": { "everysaid": { "command": "uv", "args": ["run", "--directory", "/path/to/everysaid", "--extra", "mcp", "everysaid", "mcp"] } } }
+{ "mcpServers": { "everysaid": { "command": "/path/to/everysaid", "args": ["mcp"] } } }
 ```
 
 Tools: search messages, list and read chats, a message in context, people, calls, a day's timeline,
@@ -154,8 +156,11 @@ app.
 ## Developing
 
 ```
-uv run pytest                                          # the core, the server, the MCP server (on a demo archive)
+go test ./...                                          # every package (on demo archives and fixtures)
 cd web && pnpm dev                                     # the interface with hot reload, /api proxied to :8520
-EVERYSAID_EXTRA_ORIGINS=http://localhost:5173 uv run everysaid serve    # so passkeys work on the dev port
-cd web && pnpm exec playwright test                    # end to end, desktop and mobile, against the demo (web/e2e)
+EVERYSAID_EXTRA_ORIGINS=http://localhost:5173 everysaid serve    # so passkeys work on the dev port
+cd web && EVERYSAID_CMD=/path/to/everysaid pnpm exec playwright test   # end to end, desktop and mobile, against the demo (web/e2e)
 ```
+
+The end-to-end tests expect the demo served on port 8530 (`everysaid demo --dir /tmp/chr-demo
+--serve`, by the same binary); without `EVERYSAID_CMD` they run `go run ./cmd/everysaid`.

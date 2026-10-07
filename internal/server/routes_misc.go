@@ -106,7 +106,7 @@ func (s *Server) miscRoutes() {
 		if err := core.DecideMedia(s.Store, q.r.PathValue("sha"), decision, date.Value); err != nil {
 			return nil, passUser(err, func(e error) error { return failed(400, e.Error()) })
 		}
-		if decision == "remove" { // what the user chose to delete (the scripts carry it out later)
+		if decision == "remove" { // what the user chose to delete (carried out later, outside the app)
 			s.Auth.Log(&q.uid, "media to remove", pyCut(q.r.PathValue("sha"), 12))
 		}
 		return M{"ok": true}, nil

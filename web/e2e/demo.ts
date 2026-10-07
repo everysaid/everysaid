@@ -8,9 +8,9 @@ import { execFileSync } from "node:child_process";
 const DEMO = process.env.DEMO_DIR ?? "/tmp/chr-demo";
 export const env = { ...process.env, EVERYSAID_DATA: `${DEMO}/data`, EVERYSAID_CACHE: `${DEMO}/cache`, EVERYSAID_CONFIG: `${DEMO}/config` };
 
-/** The everysaid command: EVERYSAID_CMD (e.g. a built binary), else the project's own through uv. */
+/** The everysaid command: EVERYSAID_CMD (e.g. a built binary), else the project's own through `go run`. */
 export function everysaid(...args: string[]) {
-  const cmd = (process.env.EVERYSAID_CMD ?? "uv run everysaid").split(" ");
+  const cmd = (process.env.EVERYSAID_CMD ?? "go run ./cmd/everysaid").split(" ");
   return execFileSync(cmd[0], [...cmd.slice(1), ...args], { cwd: "..", env }).toString();
 }
 

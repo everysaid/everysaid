@@ -14,9 +14,8 @@
 // the same hour: the same random numbers (package pyrandom), drawn in the same order, and the
 // pictures drawn and encoded as Pillow and libjpeg-turbo do (pictures.go, jpeg.go).
 //
-// For tests: Build(t) makes a fresh demo archive in a temporary folder, as tests/conftest.py does,
-// and gives its folder and the archive's path; the environment and the settings point there until
-// the test ends.
+// For tests: Build(t) makes a fresh demo archive in a temporary folder and gives its folder and the
+// archive's path; the environment and the settings point there until the test ends.
 package demo
 
 import (

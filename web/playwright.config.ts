@@ -1,7 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
 
 // End-to-end tests run against a demo archive of invented people (never the user's):
-//   uv run everysaid demo --dir /tmp/chr-demo && EVERYSAID_DATA=... everysaid serve   (see e2e/README)
+//   everysaid demo --dir /tmp/chr-demo --serve        (port 8530; docs/go.md, "Developing")
+// with EVERYSAID_CMD naming the same everysaid binary (else e2e/demo.ts uses `go run ./cmd/everysaid`).
 export default defineConfig({
   testDir: "e2e",
   timeout: 60_000,

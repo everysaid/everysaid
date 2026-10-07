@@ -1,4 +1,3 @@
-// Ports tests/test_emoticons.py.
 package emoticons
 
 import "testing"

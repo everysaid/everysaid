@@ -1,4 +1,4 @@
-// Ports the core's part of tests/test_labels.py (the analysis plugin's part is in its package).
+// The core's part of the labels (the analysis plugin's part is tested in its package).
 package core_test
 
 import (

@@ -1,4 +1,3 @@
-// Ports test_a_read_seen_late_is_known_but_not_when of tests/test_marks.py.
 package telegramstore
 
 import (

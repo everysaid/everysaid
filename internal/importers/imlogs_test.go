@@ -1,4 +1,4 @@
-// Ports tests/test_imlogs.py: the Adium and Pidgin logs importer, on invented logs of both programs.
+// The Adium and Pidgin logs importer, on invented logs of both programs.
 package importers
 
 import (

@@ -72,4 +72,4 @@ everysaid demo --dir /tmp/chr-demo --serve &
 cd web && EVERYSAID_CMD=/path/to/everysaid pnpm exec playwright test
 ```
 
-(without `EVERYSAID_CMD` the tests call the Python's `uv run everysaid`).
+(without `EVERYSAID_CMD` the tests run `go run ./cmd/everysaid` from the repository's folder).

@@ -21,7 +21,7 @@
 //	export = "..."                  # android-export's folder; default: <data>/android
 //
 //	[viber]
-//	desktop_export = "..."          # a decrypted Viber Desktop database (viber-desktop-export.cpp)
+//	desktop_export = "..."          # a decrypted copy of Viber Desktop's database (made before the live bridge)
 //
 //	[whatsapp]
 //	bridge = "..."                  # the WhatsApp store folder (messages.db, whatsapp.db)

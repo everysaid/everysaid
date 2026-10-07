@@ -1,8 +1,8 @@
 # Viber: live send and receive through Viber Desktop
 
 A feasibility study for a Viber bridge in the spirit of `bridges/whatsapp/`, able to
-**send** and **receive** on the owner's own account — not just read old history as the existing export
-does (`scripts/viber-desktop-export.cpp`, see `docs/data-sources.md`). The outcome: send, receive,
+**send** and **receive** on the owner's own account — not just read old history as the one-off export
+of the time did (since retired, see `docs/data-sources.md`, 5.3). The outcome: send, receive,
 replies, reactions and media all work, driving the running Viber Desktop client from inside.
 
 ## The problem

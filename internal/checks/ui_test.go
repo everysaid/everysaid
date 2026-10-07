@@ -1,4 +1,4 @@
-// Ports tests/test_ui_rules.py: rules of the interface's code that a whole kind of mistake breaks.
+// Rules of the interface's code that a whole kind of mistake breaks.
 //
 // A button of a list that does something to its row (`x.mutate(row)`) spins only while that row is
 // being done (`loading={x.isPending && x.variables ... row}`): with `loading={x.isPending}` every
