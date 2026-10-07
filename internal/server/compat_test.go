@@ -12,9 +12,11 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
@@ -213,8 +215,18 @@ func TestPythonServerDatabase(t *testing.T) {
 // browsers' subscriptions stay valid; push messages go out signed with it, and a subscription the
 // push service says is gone is forgotten.
 func TestPushWithThePythonsKey(t *testing.T) {
-	const pemKey = "-----BEGIN PRIVATE KEY-----\nREDACTED\n-----END PRIVATE KEY-----\n"
-	const pub = "BFOCeKnmSry-ab-SG1psPP2KXwT8bX_74BIwEWYNdrY0o4QFrpjYouuvol6tNav7Nf5ClwIfDr_2rz2aRv03eGk"
+	// a key as py_vapid writes it (a PKCS#8 PEM), made for this test
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemKey := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+	ek, _ := key.ECDH()
+	pub := b64.EncodeToString(ek.PublicKey().Bytes())
 	if _, err := config.SaveSecret("vapid-private", pemKey); err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +269,7 @@ func TestPushWithThePythonsKey(t *testing.T) {
 	raw, _ := b64.DecodeString(pub)
 	x, y := elliptic.Unmarshal(elliptic.P256(), raw)
 	claims := jwt.MapClaims{}
-	_, err := jwt.ParseWithClaims(tok, claims, func(*jwt.Token) (any, error) {
+	_, err = jwt.ParseWithClaims(tok, claims, func(*jwt.Token) (any, error) {
 		return &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}, nil
 	})
 	must(t, err == nil && claims["sub"] == "mailto:everysaid@localhost" && claims["aud"] == ps.URL, "the token: %v %v", err, claims)
