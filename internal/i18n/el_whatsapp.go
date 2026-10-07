@@ -1,0 +1,27 @@
+package i18n
+
+// The words of WhatsApp inside the process (internal/whatsapp) that el.go does not have.
+func init() {
+	for k, v := range map[string]string{
+		"WhatsApp as it arrives, through a whatsmeow client inside Everysaid, linked as a device (like WhatsApp Web). Unofficial: WhatsApp may block accounts that use one; sending raises that risk.": "Το WhatsApp όπως έρχεται, μέσω ενός client whatsmeow μέσα στο Everysaid, συνδεδεμένου ως συσκευή (όπως το WhatsApp Web). Ανεπίσημο: το WhatsApp μπορεί να μπλοκάρει λογαριασμούς που τον χρησιμοποιούν· η αποστολή μεγαλώνει το ρίσκο.",
+		"a link from the phone (a QR code)": "σύνδεση από το κινητό (ένας κωδικός QR)",
+		"A risk for the account; needs [whatsapp] send = true in config.toml. Turned off by itself when WhatsApp warns the account": "Ρίσκο για τον λογαριασμό· χρειάζεται [whatsapp] send = true στο config.toml. Κλείνει μόνη της όταν το WhatsApp προειδοποιήσει τον λογαριασμό",
+		"Link a device (QR code)":              "Σύνδεση συσκευής (κωδικός QR)",
+		"Allow sending again":                  "Να επιτρέπεται ξανά η αποστολή",
+		"off in config.toml ([whatsapp] send)": "κλειστή στο config.toml ([whatsapp] send)",
+		"not linked yet (Link a device)":       "δεν έχει συνδεθεί ακόμα (Σύνδεση συσκευής)",
+		"The standalone WhatsApp bridge is running: stop it first (both on one device would end its session)": "Η ξεχωριστή γέφυρα WhatsApp τρέχει: σταμάτησέ τη πρώτα (και οι δύο στην ίδια συσκευή θα τερμάτιζαν τη σύνδεσή της)",
+		"Scan this QR code in WhatsApp on the phone (Linked devices):":                                        "Σάρωσε αυτόν τον κωδικό QR στο WhatsApp του κινητού (Συνδεδεμένες συσκευές):",
+		"Not linked to WhatsApp yet: use “Link a device” and scan the QR code with the phone":                 "Δεν έχει γίνει ακόμα σύνδεση στο WhatsApp: πάτα «Σύνδεση συσκευής» και σάρωσε τον κωδικό QR με το κινητό",
+		"Turn the live connection on first: linking goes through it":                                          "Άνοιξε πρώτα τη ζωντανή σύνδεση: η σύνδεση συσκευής γίνεται μέσα από αυτήν",
+		"Linked to WhatsApp":                                       "Συνδέθηκε στο WhatsApp",
+		"Already linked to WhatsApp":                               "Είναι ήδη συνδεδεμένη στο WhatsApp",
+		"No QR code was scanned in time":                           "Κανένας κωδικός QR δεν σαρώθηκε εγκαίρως",
+		"Sending allowed again at the bridge (blocked for: {why})": "Η αποστολή επιτρέπεται ξανά στη γέφυρα (ήταν μπλοκαρισμένη για: {why})",
+		"Sending limits":                                           "Όρια αποστολής",
+		"{minute} a minute, {hour} an hour, {day} a day; the same text into {same} chats an hour (config.toml, [whatsapp])": "{minute} το λεπτό, {hour} την ώρα, {day} τη μέρα· το ίδιο κείμενο σε {same} συνομιλίες την ώρα (config.toml, [whatsapp])",
+		"unknown action": "άγνωστη ενέργεια",
+	} {
+		EL[k] = v
+	}
+}
