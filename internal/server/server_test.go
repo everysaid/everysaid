@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"os"
@@ -691,4 +692,27 @@ func TestDemoIncoming(t *testing.T) {
 		t.Fatalf("new: %v %v", ev, err)
 	}
 	must(t, c.post("/api/demo/incoming", M{"chat": "nope"}).status == 404, "no chat")
+}
+
+// What breaks in a goroutine of the host (outside a request) is logged; the server goes on.
+func TestABrokenLiveConnectionDoesNotEndTheServer(t *testing.T) {
+	c := newServer(t)
+	c.login()
+	iid := num(c.post("/api/plugins", M{"plugin": "test-broken", "label": "Broken"}).json()["id"])
+	must(t, c.post(fmt.Sprintf("/api/plugins/%d/live", iid), M{"on": true}).status == 200, "on")
+	c.s.Store.MustWrite(func(tx *sql.Tx) {
+		db.Exec(tx, `UPDATE plugin_instance SET settings = '{"broken": true, "_live": true}' WHERE id = ?`, iid)
+	})
+	c.s.Host.StopLive(iid, false)
+	for len(brokenChecks) > 0 {
+		<-brokenChecks
+	}
+	c.s.Host.StartLive(iid) // its check now breaks inside the connection's goroutine
+	select {
+	case <-brokenChecks:
+	case <-time.After(5 * time.Second):
+		t.Fatal("not checked")
+	}
+	time.Sleep(100 * time.Millisecond)
+	must(t, c.get("/api/health").status == 200, "the server goes on")
 }

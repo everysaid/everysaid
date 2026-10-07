@@ -304,7 +304,30 @@ func (testLive) RunImport(c *plugins.Context) error {
 	return nil
 }
 
+// testBroken breaks outside its connection (its check), as a broken archive breaks a log line.
+type testBroken struct{}
+
+var brokenChecks = make(chan struct{}, 100)
+
+func (testBroken) Info() *plugins.Info {
+	return &plugins.Info{ID: "test-broken", Name: "Test broken", Kind: "source", Modes: []string{"live"}}
+}
+
+func (testBroken) Check(c *plugins.Context) (bool, string) {
+	select {
+	case brokenChecks <- struct{}{}:
+	default:
+	}
+	if c.Bool("broken") {
+		panic("broken")
+	}
+	return true, "ready"
+}
+
+func (testBroken) Live(ctx context.Context, c *plugins.Context) error { <-ctx.Done(); return nil }
+
 func registerTestPlugins() {
+	plugins.Register(testBroken{})
 	plugins.Register(testLive{})
 	plugins.Register(testSource{})
 	plugins.Register(testLibrary{})
