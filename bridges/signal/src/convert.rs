@@ -14,9 +14,10 @@ use serde_json::{json, Map, Value};
 
 use crate::protocol::event;
 
-/// Who sent a message, from which device, and when (Unix ms).
+/// Who sent a message (to whom), from which device, and when (Unix ms).
 pub struct Meta {
     pub sender: String,
+    pub destination: String,
     pub sender_device: u32,
     pub ts: u64,
     pub server_ts: u64,
@@ -78,11 +79,14 @@ fn group_chat(key: &[u8; 32]) -> Value {
 
 /// The events of one received content. `own` is the account's ACI.
 pub fn convert(meta: &Meta, body: &ContentBody, own: &str) -> Vec<Converted> {
+    // a person's chat is the other person's: the sender's, or (what this device sent, as the store
+    // keeps it) the destination's
+    let peer = if meta.sender == own && !meta.destination.is_empty() { &meta.destination } else { &meta.sender };
     match body {
         ContentBody::DataMessage(dm) => {
             let (chat, group) = match master_key(&dm.group_v2) {
                 Some(k) => (group_chat(&k), Some(k)),
-                None => (contact_chat(&meta.sender), None),
+                None => (contact_chat(peer), None),
             };
             let ts = dm.timestamp.unwrap_or(meta.ts);
             data_events(meta, dm, &meta.sender, meta.sender == own, chat, group, ts)
@@ -90,9 +94,9 @@ pub fn convert(meta: &Meta, body: &ContentBody, own: &str) -> Vec<Converted> {
         ContentBody::EditMessage(EditMessage { target_sent_timestamp: Some(target), data_message: Some(dm) }) => {
             let (chat, group) = match master_key(&dm.group_v2) {
                 Some(k) => (group_chat(&k), Some(k)),
-                None => (contact_chat(&meta.sender), None),
+                None => (contact_chat(peer), None),
             };
-            edit_event(meta, dm, &meta.sender, false, chat, group, *target)
+            edit_event(meta, dm, &meta.sender, meta.sender == own, chat, group, *target)
         }
         ContentBody::SynchronizeMessage(sm) => sync_events(meta, sm, own),
         ContentBody::CallMessage(cm) => call_events(meta, cm, own),
@@ -427,10 +431,22 @@ fn receipt_event(meta: &Meta, rm: &ReceiptMessage) -> Vec<Converted> {
 
 /// A message this helper sent, as the event the others' messages are.
 pub fn sent_event(own: &str, device: u32, chat: Value, dm: &DataMessage, ts: u64) -> Converted {
-    let meta = Meta { sender: own.to_string(), sender_device: device, ts, server_ts: ts };
+    let meta = Meta { sender: own.to_string(), destination: String::new(), sender_device: device, ts, server_ts: ts };
     let mut m = base(&meta, own, true, chat, ts);
     let attachments = message_fields(&mut m, dm);
     Converted { event: event("message", Value::Object(m)), attachments, group: None }
+}
+
+/// A contact's names, (the address book's, their own). The book names only those whose number Signal
+/// shows: presage names the others, and anyone it saw a message of, after their profile (dropping the
+/// number), so a name without a number is the person's own.
+pub fn contact_names(has_phone: bool, name: &str, profile: Option<String>) -> (Option<String>, Option<String>) {
+    let name = Some(name.trim().to_string()).filter(|n| !n.is_empty());
+    if has_phone {
+        (name, profile)
+    } else {
+        (None, profile.or(name))
+    }
 }
 
 /// The file name an attachment of a message is saved under (unique by author, time and place).
@@ -471,7 +487,7 @@ mod tests {
     const BOB: &str = "33333333-3333-3333-3333-333333333333";
 
     fn meta(sender: &str) -> Meta {
-        Meta { sender: sender.into(), sender_device: 1, ts: 1000, server_ts: 1001 }
+        Meta { sender: sender.into(), destination: ME.into(), sender_device: 1, ts: 1000, server_ts: 1001 }
     }
 
     fn one(meta: &Meta, body: ContentBody) -> Value {
@@ -558,6 +574,17 @@ mod tests {
     }
 
     #[test]
+    fn sent_here_as_the_store_keeps_it() {
+        // presage keeps what this device sent as a plain message from the owner, to its destination:
+        // replayed by `history`, it is in the chat of whom it went to, not the owner's notes
+        let dm = DataMessage { body: Some("sent from here".into()), timestamp: Some(4000), ..Default::default() };
+        let m = Meta { destination: ANNA.into(), ..meta(ME) };
+        let e = one(&m, ContentBody::DataMessage(dm));
+        assert_eq!(e["chat"], json!({"kind": "contact", "id": ANNA}));
+        assert_eq!((e["sender"].as_str(), e["outgoing"].as_bool()), (Some(ME), Some(true)));
+    }
+
+    #[test]
     fn sent_from_the_phone() {
         let sent = Sent {
             destination_service_id: Some(ANNA.into()),
@@ -623,6 +650,15 @@ mod tests {
         assert!(convert(&meta(ANNA), &ContentBody::DataMessage(pk), ME).is_empty());
         let typing = presage::proto::TypingMessage::default();
         assert!(convert(&meta(ANNA), &ContentBody::TypingMessage(typing), ME).is_empty());
+    }
+
+    #[test]
+    fn names_of_contacts() {
+        assert_eq!(contact_names(true, " Anna Rita ", None), (Some("Anna Rita".into()), None));
+        assert_eq!(contact_names(true, "Anna Rita", Some("Anna".into())), (Some("Anna Rita".into()), Some("Anna".into())));
+        // seen in a message: presage's contact, named after the profile, without the number
+        assert_eq!(contact_names(false, "Bob P", None), (None, Some("Bob P".into())));
+        assert_eq!(contact_names(false, "", None), (None, None));
     }
 
     #[test]

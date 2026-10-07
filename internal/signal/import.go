@@ -292,16 +292,42 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 		}
 	}
 
-	edits := map[string]string{} // the newest edit of each message
-	db.Each(d, "SELECT author, target_ts, json FROM edit ORDER BY ts", nil, func(scan func(...any)) {
-		var author, js string
-		var ts int64
-		scan(&author, &ts, &js)
-		edits[Key(author, ts)] = js
+	// an edit's own time names its message too: Signal's apps aim the next edit (and may aim a
+	// deletion, a reaction or a receipt) at the last edit's time, followed back here to the message
+	type editRow struct {
+		author     string
+		target, ts int64
+		js         string
+	}
+	var editRows []editRow
+	db.Each(d, "SELECT author, target_ts, ts, json FROM edit ORDER BY ts", nil, func(scan func(...any)) {
+		var r editRow
+		scan(&r.author, &r.target, &r.ts, &r.js)
+		editRows = append(editRows, r)
 	})
+	edited := map[string]string{} // an edit's key: the key of what it edited
+	for _, r := range editRows {
+		if r.ts != r.target {
+			edited[Key(r.author, r.ts)] = Key(r.author, r.target)
+		}
+	}
+	root := func(k string) string {
+		for range len(edited) {
+			to, ok := edited[k]
+			if !ok {
+				break
+			}
+			k = to
+		}
+		return k
+	}
+	edits := map[string]string{} // the newest edit of each message
+	for _, r := range editRows {
+		edits[root(Key(r.author, r.target))] = r.js
+	}
 	deleted := map[string]bool{}
 	for _, k := range db.Strs(d, "SELECT author || ':' || ts FROM deletion") {
-		deleted[k] = true
+		deleted[root(k)] = true
 	}
 
 	var rows []msgRow
@@ -367,8 +393,8 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 	}
 	n.Files = files.Added[SourceName(own)]
 
-	n.Changes += changes(a, d, p, own, ownSet, edits, deleted)
-	receipts(a, d, p, own, ownSet)
+	n.Changes += changes(a, d, p, own, ownSet, edits, deleted, root)
+	receipts(a, d, p, own, ownSet, root)
 	reads(a, d, src)
 	n.Calls += calls(a, d, p, src, conv, skip)
 
@@ -392,7 +418,7 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 // changes: what happened to messages the archive has: edits and deletions (marked), and reactions
 // as they are now (one per person: changed, added, or removed once taken back). It returns how many.
 func changes(a *archive.Archive, d db.Querier, p *people, own string, ownSet map[archive.Handle]bool,
-	edits map[string]string, deleted map[string]bool) int {
+	edits map[string]string, deleted map[string]bool, root func(string) string) int {
 	n := 0
 	mark := func(keys []string, flag string) {
 		sort.Strings(keys)
@@ -423,7 +449,7 @@ func changes(a *archive.Archive, d db.Querier, p *people, own string, ownSet map
 			var ts int64
 			var emoji *string
 			scan(&author, &ts, &sender, &emoji)
-			k := Key(author, ts)
+			k := root(Key(author, ts))
 			if _, ok := byTarget[k]; !ok {
 				targets = append(targets, k)
 			}
@@ -472,7 +498,7 @@ func changes(a *archive.Archive, d db.Querier, p *people, own string, ownSet map
 var receiptColumn = map[string]string{"delivery": "delivered_at", "read": "read_at", "viewed": "played_at"}
 
 // receipts: who got, read and played the owner's messages, and when (the first time each).
-func receipts(a *archive.Archive, d db.Querier, p *people, own string, ownSet map[archive.Handle]bool) {
+func receipts(a *archive.Archive, d db.Querier, p *people, own string, ownSet map[archive.Handle]bool, root func(string) string) {
 	db.Each(d, "SELECT ts, aci, kind, at FROM receipt ORDER BY ts, aci, kind", nil, func(scan func(...any)) {
 		var ts, at int64
 		var aci, kind string
@@ -482,7 +508,7 @@ func receipts(a *archive.Archive, d db.Querier, p *people, own string, ownSet ma
 		if !ok || aci == own || ownSet[h] {
 			return
 		}
-		mid, found := a.MessageByKey(Service, Key(own, ts), 0)
+		mid, found := a.MessageByKey(Service, root(Key(own, ts)), 0)
 		if !found {
 			return
 		}
