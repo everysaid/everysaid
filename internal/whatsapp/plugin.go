@@ -422,6 +422,39 @@ func (p Plugin) MarkRead(ctx context.Context, c *plugins.Context, conv plugins.C
 	return n, nil
 }
 
+// FetchMedia downloads a message's file now through the bridge running here (only while the live
+// connection runs): the message by its id in the bridge's store, in whichever chat it has it.
+func (p Plugin) FetchMedia(ctx context.Context, c *plugins.Context, messageID int64) (string, error) {
+	b := Running(storeDir(c))
+	if b == nil {
+		return "", nil
+	}
+	var key sql.NullString
+	if !db.Row(c.Store().Read(), "SELECT m.key FROM message m JOIN service s ON s.id = m.service_id "+
+		"WHERE m.id = ? AND s.name = 'whatsapp'", []any{messageID}, &key) || key.String == "" {
+		return "", nil
+	}
+	path, _ := paths(c)
+	if _, err := os.Stat(path); err != nil {
+		return "", nil
+	}
+	bridge, err := db.ReadOnly(path)
+	if err != nil {
+		return "", err
+	}
+	chats := db.Strs(bridge, "SELECT chat_jid FROM messages WHERE id = ?", key.String)
+	bridge.Close()
+	var last error
+	for _, jid := range chats {
+		got, err := b.Download(key.String, jid)
+		if err == nil && got != "" {
+			return got, nil
+		}
+		last = err
+	}
+	return "", last
+}
+
 // floorDiv is Python's //.
 func floorDiv(a, b int64) int64 {
 	q := a / b

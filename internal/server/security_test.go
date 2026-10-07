@@ -30,6 +30,7 @@ import (
 	"everysaid/internal/config"
 	"everysaid/internal/core"
 	"everysaid/internal/db"
+	"everysaid/internal/mcp"
 	"everysaid/internal/plugins"
 )
 
@@ -377,4 +378,58 @@ func TestDeletionsAreLogged(t *testing.T) {
 	for _, e := range []string{"plugin removed", "test-folder: Gone", "label removed", "media to remove"} {
 		must(t, strings.Contains(audit, e), "%q not in the log: %s", e, audit)
 	}
+}
+
+// fetcher brings files of iMessage (live or not, as told), counting how often it is asked.
+type fetcher struct {
+	id   string
+	live bool
+	path string
+	n    *atomic.Int32
+}
+
+func (f fetcher) Info() *plugins.Info {
+	i := &plugins.Info{ID: f.id, Name: f.id, Kind: "source", Services: []string{"imessage"}}
+	if f.live {
+		i.Modes = []string{"import", "live"}
+	}
+	return i
+}
+
+func (f fetcher) FetchMedia(ctx context.Context, c *plugins.Context, messageID int64) (string, error) {
+	f.n.Add(1)
+	return f.path, nil
+}
+
+func (f fetcher) Live(ctx context.Context, c *plugins.Context) error { <-ctx.Done(); return nil }
+
+// A message whose file the archive never had: the assistant (MCP) gets it from a source that can
+// bring it now, an enabled one that reads its service, a live one only while connected.
+func TestMediaIsFetchedThroughASourceAtWork(t *testing.T) {
+	c := newServer(t)
+	file := filepath.Join(t.TempDir(), "fetched.jpg")
+	os.WriteFile(file, tinyJPEG(), 0o600)
+	var asked, liveAsked atomic.Int32
+	plugins.Register(fetcher{"test-fetcher", false, file, &asked})
+	plugins.Register(fetcher{"test-live-fetcher", true, "/elsewhere", &liveAsked})
+	mid := db.Int(c.s.Store.Read(), "SELECT m.id FROM message m JOIN service s ON s.id = m.service_id WHERE s.name = 'imessage' LIMIT 1")
+	_, err := c.s.Host.FetchMedia(context.Background(), c.s.Store, mid)
+	must(t, errors.Is(err, mcp.ErrNoFetch), "with no fetcher: %v", err)
+
+	plugins.Create(c.s.Store, "test-live-fetcher", "Live fetcher", M{})
+	iid, _ := plugins.Create(c.s.Store, "test-fetcher", "Fetcher", M{})
+	uid := c.s.Auth.CreateUser("Me", c.s.Store.Path)
+	token := c.s.Auth.NewMCPToken(uid, "test")
+	r := c.do("POST", "/mcp", fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"download_media","arguments":{"message_id":%d}}}`, mid),
+		map[string]string{"Authorization": "Bearer " + token, "Accept": "application/json, text/event-stream"})
+	must(t, r.status == 200 && strings.Contains(string(r.body), `\"from\":\"service\"`), "download_media: %d %s", r.status, r.body)
+	must(t, asked.Load() == 1 && liveAsked.Load() == 0, "asked %d, the live one (not connected) %d", asked.Load(), liveAsked.Load())
+
+	other := db.Int(c.s.Store.Read(), "SELECT m.id FROM message m JOIN service s ON s.id = m.service_id WHERE s.name = 'whatsapp' LIMIT 1")
+	_, err = c.s.Host.FetchMedia(context.Background(), c.s.Store, other)
+	must(t, errors.Is(err, mcp.ErrNoFetch) && asked.Load() == 1, "another service's message: %v", err)
+	off := false
+	plugins.Update(c.s.Store, iid, nil, nil, &off, false)
+	_, err = c.s.Host.FetchMedia(context.Background(), c.s.Store, mid)
+	must(t, errors.Is(err, mcp.ErrNoFetch) && asked.Load() == 1, "a disabled source: %v", err)
 }
