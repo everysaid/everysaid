@@ -541,3 +541,21 @@ def test_groups_with_no_one_else_hidden_when_asked(store):
     assert all(c["id"] in {x["id"] for x in queries.chats(store, unnamed=True, empty_groups=False)} for c in groups[1:])
     if g["title"]:
         assert g["id"] in {c["id"] for c in queries.chats(store, q=g["title"], empty_groups=False)}
+
+
+def test_short_numbers_hidden_when_asked(store):
+    with store.write() as db:
+        aid = db.execute("INSERT INTO address (kind_id, value) VALUES ((SELECT id FROM address_kind WHERE name = 'phone'), "
+                         "'13800')").lastrowid
+        pid = db.execute("INSERT INTO person DEFAULT VALUES").lastrowid
+        db.execute("INSERT INTO person_address (address_id, person_id) VALUES (?, ?)", (aid, pid))
+        conv = db.execute("INSERT INTO conversation (service_id, key) VALUES ((SELECT id FROM service WHERE name = 'sms'), "
+                          "'13800')").lastrowid
+        db.execute("INSERT INTO conversation_member VALUES (?, ?)", (conv, aid))
+        db.execute("INSERT INTO message (service_id, conversation_id, ts, outgoing, sender_id, kind_id, text) VALUES "
+                   "((SELECT id FROM service WHERE name = 'sms'), ?, 1700000000000, 0, ?, "
+                   "(SELECT id FROM message_kind WHERE name = 'text'), 'Your code is 1234')", (conv, aid))
+    assert f"p{pid}" in {c["id"] for c in queries.chats(store, unnamed=True)}
+    assert f"p{pid}" not in {c["id"] for c in queries.chats(store, unnamed=True, short=False)}
+    assert f"p{pid}" in {c["id"] for c in queries.chats(store, q="13800", short=False)}
+    assert pid not in {p["id"] for p in queries.people_list(store, limit=5000, short=False)["items"]}

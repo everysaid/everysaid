@@ -298,9 +298,21 @@ def _unnamed(store):
     return store.cached("unnamed", build)
 
 
+def _short_numbers(store):
+    """(people, their addresses): those whose every handle is a number of five digits or fewer
+    (short codes: carriers, banks, services)."""
+    def build():
+        ppl = people(store)
+        short = lambda v: v.lstrip("+").isdigit() and len(v.lstrip("+")) <= 5      # noqa: E731
+        pids = {pid for pid, hs in ppl.handles.items()
+                if pid not in ppl.me and hs and all(k == "phone" and short(v) for k, v, _, _ in hs)}
+        return pids, {a for pid in pids for a in ppl.addresses(pid)}
+    return store.cached("short_numbers", build)
+
+
 def chats(store, include_archived=False, kind=None, q=None, limit=None, offset=0, unnamed=True,
           min_messages=0, max_messages=None, with_services=(), without_services=(), people_only=None,
-          empty_groups=True):
+          empty_groups=True, short=True):
     """The chat list, newest first, pinned ones on top: [{id, type, title, services, last, unread,
     pinned, muted, avatar}]: the chats with a message in them (calls have a page of their own), by
     their latest message. kind: person,
@@ -311,7 +323,8 @@ def chats(store, include_archived=False, kind=None, q=None, limit=None, offset=0
     without_services: only chats that have each of these services, and none of those; people_only:
     only the chats of these people (a set of person ids).
     empty_groups False: without the groups with no one in them but the owner (everyone left, or the
-    source listed no one), unless they have something unread or q asks for them."""
+    source listed no one), unless they have something unread or q asks for them.
+    short False: without the people of numbers of five digits or fewer, unless q asks for them."""
     index, _ = _chat_index(store)
     states = _states(store)
     sizes = store.cached("conversation_sizes", lambda: dict(store.read().execute(
@@ -322,6 +335,7 @@ def chats(store, include_archived=False, kind=None, q=None, limit=None, offset=0
     items = []
     qf = text_mod.fold(q).split() if q else None
     hidden = set() if unnamed or qf else _unnamed(store)[0]
+    shorts = set() if short or qf else _short_numbers(store)[0]
     for chat in index.values():
         last_ts = chat.get("last_message", 0)
         if not last_ts:                 # no message in it: calls only (they have their own page), or a source's empty chat
@@ -332,6 +346,8 @@ def chats(store, include_archived=False, kind=None, q=None, limit=None, offset=0
         if kind and chat["type"] != kind:
             continue
         if people_only is not None and chat.get("person_id") not in people_only:
+            continue
+        if chat.get("person_id") in shorts:
             continue
         if with_services - set(chat["services"]) or without_services & set(chat["services"]):
             continue
@@ -927,12 +943,14 @@ def _active(store):
     return store.cached("active", build)
 
 
-def people_list(store, q=None, limit=100, offset=0, unnamed=True, only=None):
+def people_list(store, q=None, limit=100, offset=0, unnamed=True, only=None, short=True):
     """The people the archive has something of. unnamed False: without those who have no name,
     unless q asks for them. only: just these people (those with a label)."""
     ppl = people(store)
     qf = text_mod.fold(q).split() if q else None
     hidden = set() if unnamed or qf else _unnamed(store)[0]
+    if not short and not qf:
+        hidden = hidden | _short_numbers(store)[0]
     active = _active(store)
     out = []
     for pid in ppl.handles:
@@ -1135,9 +1153,9 @@ def group_suggestions(store, chat_id=None, limit=50):
 
 # --- calls, media, timeline, statistics ----------------------------------------------------------
 
-def calls(store, chat_id=None, missed=None, service=None, before=None, limit=PAGE, unnamed=True):
-    """unnamed False: without the calls of people who have no name, and of hidden numbers (not in
-    one chat's calls)."""
+def calls(store, chat_id=None, missed=None, service=None, before=None, limit=PAGE, unnamed=True, short=True):
+    """unnamed False: without the calls of people who have no name, and of hidden numbers; short
+    False: without those of numbers of five digits or fewer (neither in one chat's calls)."""
     db = store.read()
     where, args = [_shown(store)], []
     if chat_id:
@@ -1147,6 +1165,8 @@ def calls(store, chat_id=None, missed=None, service=None, before=None, limit=PAG
     elif not unnamed:
         nameless = ",".join(str(int(a)) for a in _unnamed(store)[1])
         where.append(f"(conversation_id IS NOT NULL OR (address_id IS NOT NULL AND address_id NOT IN ({nameless})))")
+    if not short and not chat_id and _short_numbers(store)[1]:
+        where.append(f"(address_id IS NULL OR address_id NOT IN ({','.join(str(int(a)) for a in _short_numbers(store)[1])}))")
     if missed:
         where.append("outgoing = 0 AND answered = 0")
     if service:
