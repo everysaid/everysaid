@@ -845,16 +845,16 @@ def _active(store):
     return store.cached("active", build)
 
 
-def people_list(store, q=None, limit=100, offset=0, unnamed=True):
+def people_list(store, q=None, limit=100, offset=0, unnamed=True, only=None):
     """The people the archive has something of. unnamed False: without those who have no name,
-    unless q asks for them."""
+    unless q asks for them. only: just these people (those with a label)."""
     ppl = people(store)
     qf = text_mod.fold(q).split() if q else None
     hidden = set() if unnamed or qf else _unnamed(store)[0]
     active = _active(store)
     out = []
     for pid in ppl.handles:
-        if pid in ppl.me or pid in hidden or pid not in active:
+        if pid in ppl.me or pid in hidden or pid not in active or (only is not None and pid not in only):
             continue
         name = ppl.name(pid)
         if qf and not _named(qf, name, *(h[1] for h in ppl.handles[pid])):

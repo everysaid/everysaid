@@ -132,6 +132,10 @@ class Plugin:
     def action(self, ctx, name):
         raise NotImplementedError(name)
 
+    def idle_actions(self, ctx):
+        """The actions that have nothing to do now (their buttons are not shown): [id]."""
+        return []
+
     def check(self, ctx):
         """Whether the instance is ready: (ok, message)."""
         missing = [s.label for s in self.settings if s.required and s.type != "secret" and not ctx.settings.get(s.key)]

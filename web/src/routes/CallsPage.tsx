@@ -27,7 +27,7 @@ export function CallsPage() {
   const items = res.data?.pages.flatMap((p) => p.items) ?? [];
   return (
     <div className="flex h-full flex-col">
-      <PageHeader title={t("nav.calls")} actions={
+      <PageHeader title={t("nav.calls")} back={chat ? `/chat/${chat}` : undefined} actions={
         <Segmented value={missed} onChange={setMissed} options={[{ value: "all", label: t("call.all") }, { value: "missed", label: t("call.missedOnly") }]} />
       } />
       {chat && <div className="flex bg-panel px-4 pb-3 md:px-6"><ChatFilter chat={chat} onClear={() => navigate({ to: "/calls", search: {} })} /></div>}

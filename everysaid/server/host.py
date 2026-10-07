@@ -104,6 +104,7 @@ class Host:
                     "live_capable": bool(p and "live" in p.modes), "live": iid in self.live_tasks,
                     "can_send": bool(p and p.can_send), "log": [line for _, line in (c.lines[-30:] if c else [])], "bar": c.bar if c else "",
                     "asks": [{"key": k, "label": tr(label, lang)} for k, label in (p.asks(ctx) if p else [])],
+                    "idle_actions": p.idle_actions(ctx) if p else [],
                     "info": [{"label": tr(label, lang), "value": tr(value, lang)} for label, value in (p.info(ctx) if p else [])]})
         return out
 

@@ -160,6 +160,18 @@ def person_labels(store, person_id, suggested=True):
                 + ("" if suggested else "AND pl.state = 'yes' ") + "ORDER BY l.kind DESC, l.position, l.id", (person_id,))]
 
 
+def by_person(store, suggested=True):
+    """Every person's labels at once, for lists: {person id: [{id, kind, key, name, state}]}, the
+    user's and (unless `suggested` is False) the models'."""
+    out = defaultdict(list)
+    for pid, i, k, key, name, state in store.read().execute(
+            "SELECT pl.person_id, l.id, l.kind, l.key, l.name, pl.state FROM person_label pl JOIN label l ON l.id = pl.label_id "
+            "WHERE pl.state = 'yes'" + (" OR pl.state = 'suggested'" if suggested else "")
+            + " ORDER BY l.kind DESC, l.position, l.id"):
+        out[pid].append({"id": i, "kind": k, "key": key, "name": name, "state": state})
+    return out
+
+
 def set_person_label(store, person_id, label_id, state):
     """The user's word on a label of a person: 'yes' (it is so: one relation only), 'no' (it is not:
     the models do not suggest it again), or None (no word: gone, the models may suggest it)."""

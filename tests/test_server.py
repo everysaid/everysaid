@@ -353,3 +353,20 @@ def test_the_assistant_sees_labels_only_when_allowed(app):
     from everysaid.core import changes
     changes.set_setting(store, "mcp_labels", True)
     assert call(mcp, "get_person", person_id=person["id"])["labels"] == [{"kind": "relation", "label": "friend", "by": "user"}]
+
+
+def test_people_by_label(app):
+    app, c = app
+    login(app, c)
+    from everysaid.core import labels
+    store = app.state.store
+    friend = next(x["id"] for x in labels.labels(store) if x["key"] == "friend")
+    first, second = c.get("/api/people").json()["items"][:2]
+    labels.set_person_label(store, first["id"], friend, "yes")
+    labels.save_analysis(store, second["id"], 30, ["m"], relation=(friend, 1, 1, None))
+    people = {p["id"]: p for p in c.get("/api/people").json()["items"]}
+    assert [x["key"] for x in people[first["id"]]["labels"]] == ["friend"]
+    assert people[second["id"]]["labels"] == []                 # the models' only when shown
+    assert [p["id"] for p in c.get("/api/people", params={"label": friend}).json()["items"]] == [first["id"]]
+    c.put("/api/settings", json={"show_tone": True}, headers=H)
+    assert {p["id"] for p in c.get("/api/people", params={"label": friend}).json()["items"]} == {first["id"], second["id"]}

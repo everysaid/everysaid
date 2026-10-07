@@ -31,6 +31,7 @@ export function PersonPage() {
     qc.invalidateQueries({ queryKey: ["people"] });
     qc.invalidateQueries({ queryKey: ["chats"] });
     qc.invalidateQueries({ queryKey: ["chat"] });
+    qc.invalidateQueries({ queryKey: ["labels"] });
   };
   const save = useMutation({
     mutationFn: (b: Record<string, string>) => api.patch(`/api/people/${pid}`, b),

@@ -218,13 +218,22 @@ class Ollama(Plugin):
             out.append(("Read by an older list of labels", str(labels_mod.stale(ctx.store))))
         return out
 
+    def idle_actions(self, ctx):
+        db = ctx.store.read()
+        out = [] if labels_mod.stale(ctx.store) else ["again"]
+        if not (db.execute("SELECT 1 FROM analysis").fetchone() or db.execute(
+                "SELECT 1 FROM person_label WHERE state = 'suggested'").fetchone() or db.execute(
+                "SELECT 1 FROM name_guess WHERE how = 'models' AND NOT dismissed").fetchone()):
+            out.append("forget")
+        return out
+
     def action(self, ctx, name):
         if name == "forget":
             n = labels_mod.forget_analysis(ctx.store)
             ctx.log("the analysis is forgotten: {n} suggestions; your own labels stay", n=n)
         elif name == "again":
             n = labels_mod.judge_again(ctx.store)
-            ctx.log("{n} people to read again", n=n)
+            ctx.log("{n} people to read again; they are read while the analysis runs", n=n)
         else:
             raise NotImplementedError(name)
 

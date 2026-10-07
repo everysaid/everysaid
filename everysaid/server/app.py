@@ -519,8 +519,15 @@ def create_app(archive_path=None, auth_path=None):
 
     # ---- people ----------------------------------------------------------------------------------
     @app.get("/api/people")
-    def people_list(q: str | None = None, limit: int = 100, offset: int = 0):
-        return queries.people_list(store, q, min(limit, 5000), offset, unnamed=bool(store.setting("show_unnamed", False)))
+    def people_list(q: str | None = None, limit: int = 100, offset: int = 0, label: int | None = None):
+        """label: only the people with it (theirs by the user, or suggested where the user shows those)"""
+        tagged = labels.by_person(store, suggested=bool(store.setting("show_tone", False)))
+        only = {pid for pid, ls in tagged.items() if any(x["id"] == label for x in ls)} if label else None
+        out = queries.people_list(store, q, min(limit, 5000), offset, unnamed=bool(store.setting("show_unnamed", False)) or bool(label),
+                                  only=only)
+        for p in out["items"]:
+            p["labels"] = tagged.get(p["id"], [])
+        return out
 
     @app.get("/api/people/suggestions")
     def suggestions(limit: int = 50, recent: bool = False):
