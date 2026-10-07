@@ -4,6 +4,7 @@ package telegram
 
 import (
 	"context"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 
 	"everysaid/internal/config"
 	"everysaid/internal/db"
+	"everysaid/internal/plugins"
 )
 
 // wanted says whether a stored message's media is one --media downloads, and its size.
@@ -360,4 +362,69 @@ func mediaRun(ctx context.Context, c *conn, dryRun bool, only map[int64]bool, ou
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, out.say("{n} downloaded into {folder}", map[string]any{"n": done, "folder": MediaPath()}))
 	return nil
+}
+
+// FetchMedia downloads a message's file now through the live connection (only while it runs), into
+// the place the sync's --media uses, and records it there as the sync does: the file's path; "" when
+// not connected, not a Telegram message, or one that carries no file (any more).
+func (Plugin) FetchMedia(ctx context.Context, c *plugins.Context, messageID int64) (path string, err error) {
+	cn, done := one.borrow()
+	if cn == nil {
+		return "", nil
+	}
+	defer done()
+	if cn != liveConn.Load() {
+		return "", nil // a sync's connection: the live one is not running
+	}
+	var key, chatKey sql.NullString
+	if !db.Row(c.Store().Read(), "SELECT m.key, cv.key FROM message m JOIN service s ON s.id = m.service_id "+
+		"JOIN conversation cv ON cv.id = m.conversation_id WHERE m.id = ? AND s.name = 'telegram'",
+		[]any{messageID}, &key, &chatKey) {
+		return "", nil
+	}
+	id, err1 := strconv.Atoi(key.String)
+	chatID, err2 := strconv.ParseInt(chatKey.String, 10, 64)
+	if err1 != nil || err2 != nil {
+		return "", nil
+	}
+	defer db.Recover(&err)
+	store, err := openStore(DBPath())
+	if err != nil {
+		return "", err
+	}
+	defer store.Close()
+	var have sql.NullString
+	if db.Row(store, "SELECT file FROM message WHERE chat_id = ? AND id = ?", []any{chatID, id}, &have) && have.Valid {
+		p := filepath.Join(MediaPath(), filepath.FromSlash(have.String))
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	peer, err := cn.peer(ctx, chatID)
+	if err != nil {
+		return "", err
+	}
+	msgs, err := cn.byIDs(ctx, peer, []int{id}) // fetched again: the file references expire
+	if err != nil || msgs[0] == nil {
+		return "", err
+	}
+	p, d := fileOf(msgs[0])
+	if p == nil && d == nil {
+		return "", nil
+	}
+	rel := fmt.Sprintf("%d/%d%s", chatID, id, fileExt(p, d))
+	dest := filepath.Join(MediaPath(), filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+		return "", err
+	}
+	wrote, err := download(ctx, cn.api, msgs[0], dest+".part")
+	if err != nil || !wrote {
+		os.Remove(dest + ".part")
+		return "", err
+	}
+	if err := os.Rename(dest+".part", dest); err != nil {
+		return "", err
+	}
+	db.Exec(store, "UPDATE message SET file = ? WHERE chat_id = ? AND id = ?", rel, chatID, id)
+	return dest, nil
 }

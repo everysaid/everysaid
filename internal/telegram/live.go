@@ -42,6 +42,8 @@ import (
 const (
 	notSignedIn = "Not signed in to Telegram yet (everysaid telegram-sync --save-credentials, --login)"
 	expired     = "The Telegram sign-in has expired: everysaid telegram-sync --login"
+	// the live connection waits for telegram-sync run by hand (or another server) to finish
+	waitingOther = "waiting: Telegram is connected by another Everysaid (telegram-sync run by hand?)"
 )
 
 // connect runs fn with a connected, signed-in client, offered to the others meanwhile (the caller
@@ -80,7 +82,10 @@ func connect(ctx context.Context, handler *updates.Manager, fn func(ctx context.
 // withConn runs fn on the connection open in this process (the live one, or a sync's), else on
 // one made for it (with the dialogs read, for the access hashes a session does not keep).
 func withConn(ctx context.Context, fn func(ctx context.Context, cn *conn) error) error {
-	open, done, err := one.take(ctx, true)
+	open, done, err := one.take(ctx, true, nil)
+	if errors.Is(err, errHeld) {
+		return pluginErr(heldElsewhere)
+	}
 	if err != nil {
 		return err
 	}
@@ -357,10 +362,17 @@ func chatLabel(chat any) any {
 	return EntityID(chat)
 }
 
+// liveConn is the live connection while it runs (what FetchMedia uses).
+var liveConn atomic.Pointer[conn]
+
 func live(ctx context.Context, c *plugins.Context) error {
-	_, release, err := one.take(ctx, false) // a client of its own, for its updates
+	// a client of its own, for its updates; after the one another process may have open
+	_, release, err := one.take(ctx, false, func() { c.Log(waitingOther, nil) })
 	if err != nil {
-		return nil // the server's end
+		if ctx.Err() != nil {
+			return nil // the server's end
+		}
+		return err
 	}
 	defer release()
 	d := tg.NewUpdateDispatcher()
@@ -372,7 +384,8 @@ func live(ctx context.Context, c *plugins.Context) error {
 		default:
 		}
 	}
-	mgr := updates.New(updates.Config{Handler: d, OnTooLong: resync, OnChannelTooLong: func(int64) { resync() }})
+	mgr := updates.New(updates.Config{Handler: d, Storage: newFileState(StatePath()),
+		OnTooLong: resync, OnChannelTooLong: func(int64) { resync() }})
 	var readies atomic.Int32
 	reconnected := make(chan struct{}, 1)
 	onState := func(o *telegram.Options) {
@@ -392,6 +405,8 @@ func live(ctx context.Context, c *plugins.Context) error {
 		}
 		c.Log("connected to Telegram", nil)
 		handlers(c, cn, d)
+		liveConn.Store(cn)
+		defer liveConn.Store(nil)
 		started := make(chan struct{})
 		done := make(chan error, 1)
 		go func() {
