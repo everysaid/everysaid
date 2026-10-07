@@ -807,3 +807,56 @@ func TestLinkFails(t *testing.T) {
 		t.Fatal("Signal's words not in the log")
 	}
 }
+
+// An edit, then another, of a message already in the archive: its newest text is shown and found
+// (the old one no longer), its mention written out; again, nothing changes.
+func TestEditOfAnImportedMessage(t *testing.T) {
+	dir := folders(t)
+	path := newArchive(t, dir)
+	s, err := OpenStore(filepath.Join(dir, "signal.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.Account(Status{Linked: true, ACI: fakeOwn})
+	apply(t, s, map[string]any{"event": "contacts", "contacts": []any{map[string]any{"aci": bob, "name": "Bob"}}},
+		map[string]any{"event": "message", "chat": contact(anna), "sender": anna, "ts": 1000, "text": "meet at noon"})
+	a, err := archive.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	run := func() Counts {
+		n, err := Import(a, s.Path, filepath.Join(dir, "media"), 0, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	found := func(word string) bool {
+		return db.Int(a.DB, "SELECT count(*) FROM message_fts f JOIN message m ON m.id = f.rowid WHERE m.key = ? AND message_fts MATCH ?",
+			anna+":1000", word) > 0
+	}
+	run()
+	apply(t, s, map[string]any{"event": "edit", "chat": contact(anna), "sender": anna, "ts": 1100, "target_ts": 1000,
+		"text": "meet at one"})
+	if n := run(); n.Changes == 0 {
+		t.Fatal("the edit changed nothing")
+	}
+	apply(t, s, map[string]any{"event": "edit", "chat": contact(anna), "sender": anna, "ts": 1200, "target_ts": 1100,
+		"text": "meet at two ￼", "mentions": []any{map[string]any{"start": 12, "length": 1, "aci": bob}}})
+	run()
+	if got := db.Str(a.DB, "SELECT text FROM message WHERE key = ?", anna+":1000"); got != "meet at two @Bob" {
+		t.Fatalf("text %q", got)
+	}
+	if !found("two") || found("noon") || found("one") {
+		t.Fatal("search does not follow the edit")
+	}
+	if db.Int(a.DB, "SELECT edited FROM message WHERE key = ?", anna+":1000") != 1 ||
+		db.Str(a.DB, "SELECT token FROM mention") != "@Bob" {
+		t.Fatal("edited, mention")
+	}
+	if n := run(); n != (Counts{}) {
+		t.Fatalf("again: %+v", n)
+	}
+}

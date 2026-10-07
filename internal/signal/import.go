@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -128,6 +129,20 @@ func withMentions(text string, ms []mentionEv, name func(string) string) (string
 		toks = append(toks, token{m.ACI, t})
 	}
 	return string(utf16.Decode(u)), toks
+}
+
+// asEdited puts an edit's content (its event, "" for none) into a message's event; it says whether
+// there was one.
+func asEdited(e *event, edit string) bool {
+	var ed event
+	if edit == "" || json.Unmarshal([]byte(edit), &ed) != nil {
+		return false
+	}
+	e.Text, e.Mentions = ed.Text, ed.Mentions
+	if len(ed.Attachments) > 0 {
+		e.Attachments = ed.Attachments
+	}
+	return true
 }
 
 // describe is a message's kind, extras and text, from the helper's event.
@@ -338,6 +353,15 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 			rows = append(rows, r)
 		})
 	files := importers.NewStore(a)
+	linkFiles := func(mid int64, atts []attachmentEv) {
+		for _, at := range atts {
+			f := deref(at.File)
+			if f == "" || f != filepath.Base(f) || f == "." || f == ".." {
+				continue // only files within the helper's folder
+			}
+			files.Link(SourceName(own), src, filepath.Join(mediaDir, f), f, mid)
+		}
+	}
 	for _, r := range rows {
 		if skip[r.chat] {
 			continue
@@ -360,16 +384,7 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 		if err := json.Unmarshal([]byte(r.js), &e); err != nil {
 			continue
 		}
-		edited := false
-		if js, ok := edits[key]; ok { // its content as last edited
-			var ed event
-			if json.Unmarshal([]byte(js), &ed) == nil {
-				e.Text, e.Mentions, edited = ed.Text, ed.Mentions, true
-				if len(ed.Attachments) > 0 {
-					e.Attachments = ed.Attachments
-				}
-			}
-		}
+		edited := asEdited(&e, edits[key]) // its content as last edited
 		kind, x, text := describe(e)
 		x.Edited, x.Deleted = edited, deleted[key]
 		text, toks := withMentions(text, e.Mentions, p.mentionName)
@@ -383,13 +398,7 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 		for _, t := range toks {
 			a.Exec("INSERT OR IGNORE INTO mention VALUES (?, ?, ?)", mid, a.Address(p.handle(t.aci)), t.text)
 		}
-		for _, at := range e.Attachments {
-			f := deref(at.File)
-			if f == "" || f != filepath.Base(f) || f == "." || f == ".." {
-				continue // only files within the helper's folder
-			}
-			files.Link(SourceName(own), src, filepath.Join(mediaDir, f), f, mid)
-		}
+		linkFiles(mid, e.Attachments)
 	}
 	// files that came after their message was imported (fetched again)
 	db.Each(d, "SELECT l.author, l.ts, m.json FROM late_file l JOIN message m ON m.author = l.author AND m.ts = l.ts "+
@@ -401,15 +410,11 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 		if !ok || json.Unmarshal([]byte(r.js), &e) != nil {
 			return
 		}
-		for _, at := range e.Attachments {
-			if f := deref(at.File); f != "" && f == filepath.Base(f) && f != "." && f != ".." {
-				files.Link(SourceName(own), src, filepath.Join(mediaDir, f), f, mid)
-			}
-		}
+		linkFiles(mid, e.Attachments)
 	})
-	n.Files = files.Added[SourceName(own)]
 
-	n.Changes += changes(a, d, p, own, ownSet, edits, deleted, root)
+	n.Changes += changes(a, d, p, own, ownSet, edits, deleted, root, linkFiles)
+	n.Files = files.Added[SourceName(own)]
 	receipts(a, d, p, own, ownSet, root)
 	reads(a, d, src)
 	n.Calls += calls(a, d, p, src, conv, skip)
@@ -434,16 +439,8 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 // changes: what happened to messages the archive has: edits and deletions (marked), and reactions
 // as they are now (one per person: changed, added, or removed once taken back). It returns how many.
 func changes(a *archive.Archive, d db.Querier, p *people, own string, ownSet map[archive.Handle]bool,
-	edits map[string]string, deleted map[string]bool, root func(string) string) int {
+	edits map[string]string, deleted map[string]bool, root func(string) string, linkFiles func(int64, []attachmentEv)) int {
 	n := 0
-	mark := func(keys []string, flag string) {
-		sort.Strings(keys)
-		for _, k := range keys {
-			if mid, ok := a.MessageByKey(Service, k, 0); ok {
-				n += int(db.Changed(a.Tx(), "UPDATE message SET "+flag+" = 1 WHERE id = ? AND NOT "+flag, mid))
-			}
-		}
-	}
 	var ek, dk []string
 	for k := range edits {
 		ek = append(ek, k)
@@ -451,8 +448,41 @@ func changes(a *archive.Archive, d db.Querier, p *people, own string, ownSet map
 	for k := range deleted {
 		dk = append(dk, k)
 	}
-	mark(ek, "edited")
-	mark(dk, "deleted")
+	sort.Strings(ek)
+	sort.Strings(dk)
+	// an edit: the message's text as last edited (as an import of it would have it, its mentions
+	// too), its files linked
+	for _, k := range ek {
+		mid, ok := a.MessageByKey(Service, k, 0)
+		author, ts, _ := SplitKey(k)
+		var js string
+		if !ok || !db.Row(d, "SELECT json FROM message WHERE author = ? AND ts = ?", []any{author, ts}, &js) {
+			continue
+		}
+		var e event
+		if json.Unmarshal([]byte(js), &e) != nil || !asEdited(&e, edits[k]) {
+			continue
+		}
+		_, x, text := describe(e)
+		text, toks := withMentions(text, e.Mentions, p.mentionName)
+		if x.Text != "" {
+			text = x.Text
+		}
+		changed := importers.ApplyChange(a, mid, importers.Change{Text: &text, Edited: true})
+		if slices.Contains(changed, "text") {
+			a.Exec("DELETE FROM mention WHERE message_id = ?", mid)
+			for _, t := range toks {
+				a.Exec("INSERT OR IGNORE INTO mention VALUES (?, ?, ?)", mid, a.Address(p.handle(t.aci)), t.text)
+			}
+		}
+		n += len(changed)
+		linkFiles(mid, e.Attachments)
+	}
+	for _, k := range dk {
+		if mid, ok := a.MessageByKey(Service, k, 0); ok {
+			n += len(importers.ApplyChange(a, mid, importers.Change{Deleted: true}))
+		}
+	}
 	type reaction struct {
 		sender string
 		emoji  *string
