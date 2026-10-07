@@ -337,6 +337,7 @@ func (h *Host) Run(iid int64, action string, given map[string]any) error {
 	h.wg.Add(1)
 	go func() {
 		defer h.wg.Done()
+		defer h.recovered("run", iid)
 		ctx.SetLogPath(plugins.RunLogPath(iid, fileWord(what)))
 		defer func() {
 			ctx.SetLogPath("")
@@ -449,6 +450,11 @@ func (h *Host) StartLive(iid int64) error {
 	if h.isLive(iid) {
 		return nil
 	}
+	if os.Getenv("EVERYSAID_NO_LIVE") != "" {
+		// a trial on a copy of an archive: never connect with the accounts its sources hold, which
+		// the user's own server may be connected with
+		return errors.New("live connections are off (EVERYSAID_NO_LIVE)")
+	}
 	c, err := h.Ctx(iid)
 	if err != nil {
 		return err
@@ -492,41 +498,66 @@ func (h *Host) keep(ctx context.Context, iid int64, p plugins.Plugin, liver plug
 		}
 	}
 	for ctx.Err() == nil {
-		c, err := h.Ctx(iid)
-		if err != nil {
-			return // the instance went
+		var stop bool
+		pause, stop = h.connect(ctx, iid, p, liver, pause, sleep)
+		if stop {
+			return
 		}
-		if ok, why := plugins.Check(p, c); !ok {
-			c.Logf("live: %s", why)
-			if !sleep(time.Minute) {
-				return
+	}
+}
+
+// connect is one connection of keep, and the pause after it: the next pause, and whether to stop
+// (the server's end, or the instance gone). What breaks here (a log line on a broken archive) is
+// written to the server's log, and the connection is tried again.
+func (h *Host) connect(ctx context.Context, iid int64, p plugins.Plugin, liver plugins.Liver, pause time.Duration,
+	sleep func(time.Duration) bool) (next time.Duration, stop bool) {
+	next = pause
+	defer func() {
+		if r := recover(); r != nil {
+			h.log.Error("live connection", "instance", iid, "panic", r, "stack", string(debug.Stack()))
+			next, stop = min(pause*2, 600*time.Second), !sleep(pause)
+		}
+	}()
+	c, err := h.Ctx(iid)
+	if err != nil {
+		return next, true // the instance went
+	}
+	if ok, why := plugins.Check(p, c); !ok {
+		c.Logf("live: %s", why)
+		return next, !sleep(time.Minute)
+	}
+	h.Emit(M{"type": "plugin", "instance": iid, "live": true})
+	err = func() (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("%v", r)
+				h.log.Error("live connection", "instance", iid, "panic", r, "stack", string(debug.Stack()))
 			}
-			continue
-		}
-		h.Emit(M{"type": "plugin", "instance": iid, "live": true})
-		err = func() (err error) {
-			defer func() {
-				if r := recover(); r != nil {
-					err = fmt.Errorf("%v", r)
-					h.log.Error("live connection", "instance", iid, "panic", r, "stack", string(debug.Stack()))
-				}
-			}()
-			return liver.Live(ctx, c)
 		}()
-		if ctx.Err() != nil {
-			return
-		}
-		if err == nil {
-			pause = 5 * time.Second
-		} else {
-			c.Log("live: error {e}; again in {pause}s", M{"e": err.Error(), "pause": int(pause.Seconds())})
-		}
-		if !sleep(pause) {
-			return
-		}
-		if err != nil {
-			pause = min(pause*2, 600*time.Second)
-		}
+		return liver.Live(ctx, c)
+	}()
+	if ctx.Err() != nil {
+		return next, true
+	}
+	if err == nil {
+		next = 5 * time.Second
+	} else {
+		c.Log("live: error {e}; again in {pause}s", M{"e": err.Error(), "pause": int(pause.Seconds())})
+	}
+	if !sleep(next) {
+		return next, true
+	}
+	if err != nil {
+		next = min(pause*2, 600*time.Second)
+	}
+	return next, false
+}
+
+// recovered, deferred at the top of a goroutine of the host, writes what broke it to the server's
+// log instead of ending the server.
+func (h *Host) recovered(what string, iid int64) {
+	if r := recover(); r != nil {
+		h.log.Error(what, "instance", iid, "panic", r, "stack", string(debug.Stack()))
 	}
 }
 
