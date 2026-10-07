@@ -32,6 +32,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -313,7 +314,10 @@ func (a *Auth) TakeSetup(token string, consume bool) (bool, *int64) {
 		a.mu.Lock()
 		delete(a.setup, token)
 		a.mu.Unlock()
-		db.Exec(a.db, "DELETE FROM kv WHERE key = ?", "setup:"+h(token))
+		// every link is in the database: of two uses at once, the one that removes it is the one
+		if db.Changed(a.db, "DELETE FROM kv WHERE key = ?", "setup:"+h(token)) == 0 {
+			return false, nil
+		}
 	}
 	return true, l.uid
 }
@@ -466,7 +470,11 @@ func (a *Auth) UseRecoveryCode(code string) int64 {
 	if !ok {
 		return 0
 	}
-	db.Exec(a.db, "UPDATE recovery_code SET used_at = ? WHERE hash = ?", time.Now().Unix(), h(code))
+	// of two uses at once, the one that marks it used is the one let in
+	if db.Changed(a.db, "UPDATE recovery_code SET used_at = ? WHERE user_id = ? AND hash = ? AND used_at IS NULL",
+		time.Now().Unix(), uid, h(code)) == 0 {
+		return 0
+	}
 	a.Log(&uid, "recovery code used", nil)
 	return uid
 }
@@ -501,23 +509,35 @@ func (a *Auth) Recent(token string, minutes int) bool {
 
 // Session is the user and session hash of a live session, renewing it; ok false otherwise.
 func (a *Auth) Session(token string) (int64, string, bool) {
+	uid, hs, _, ok := a.session(token)
+	return uid, hs, ok
+}
+
+// session is Session, and whether it renewed the session now (then its cookie is renewed too).
+func (a *Auth) session(token string) (uid int64, hs string, renewed, ok bool) {
 	if token == "" {
-		return 0, "", false
+		return 0, "", false, false
 	}
-	hs := h(token)
-	var uid, last int64
+	hs = h(token)
+	var last int64
 	if !db.Row(a.db, "SELECT user_id, last_seen FROM session WHERE hash = ?", []any{hs}, &uid, &last) {
-		return 0, "", false
+		return 0, "", false, false
 	}
 	t := time.Now().Unix()
 	if t-last > SessionDays*86400 {
 		db.Exec(a.db, "DELETE FROM session WHERE hash = ?", hs)
-		return 0, "", false
+		return 0, "", false, false
 	}
 	if t-last > 60 {
 		db.Exec(a.db, "UPDATE session SET last_seen = ? WHERE hash = ?", t, hs)
+		renewed = true
 	}
-	return uid, hs, true
+	return uid, hs, renewed, true
+}
+
+// alive says whether a session (by its hash) is still there, without renewing it.
+func (a *Auth) alive(hs string) bool {
+	return db.Exists(a.db, "SELECT 1 FROM session WHERE hash = ? AND last_seen >= ?", hs, time.Now().Unix()-SessionDays*86400)
 }
 
 func (a *Auth) Sessions(uid int64) []map[string]any {
@@ -565,6 +585,7 @@ func (a *Auth) Allow(ip string, limit int, window float64) bool {
 	if limit == 0 {
 		limit, window = 20, 300
 	}
+	ip = rateKey(ip)
 	t := now()
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -587,6 +608,20 @@ func (a *Auth) Allow(ip string, limit int, window float64) bool {
 	}
 	a.attempts[ip] = append(seen, t)
 	return true
+}
+
+// rateKey is the address attempts are counted by: an IPv4 address as it is, an IPv6 one by its /64
+// (one device or home has a whole /64, and would otherwise get a new budget with each address).
+func rateKey(ip string) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil || !addr.Is6() || addr.Is4In6() {
+		return ip
+	}
+	p, err := addr.Prefix(64)
+	if err != nil {
+		return ip
+	}
+	return p.String()
 }
 
 // Log is a line of the audit log; uid and detail may be nil.
@@ -693,7 +728,10 @@ func (a *Auth) CheckPassword(name, password, code, ip string) int64 {
 		}
 		step, stepOK = TOTPCheck(secret.String, code, lastStep)
 	}
-	if !(found && ok && stepOK) {
+	// the code's step is taken in the same statement that checks it was not taken: of two sign-ins
+	// with one code at once, one gets in
+	if !(found && ok && stepOK) ||
+		db.Changed(a.db, "UPDATE user SET totp_step = ? WHERE id = ? AND (totp_step IS NULL OR totp_step < ?)", step, uid, step) == 0 {
 		if found {
 			var ipv any
 			if ip != "" {
@@ -703,7 +741,6 @@ func (a *Auth) CheckPassword(name, password, code, ip string) int64 {
 		}
 		return 0
 	}
-	db.Exec(a.db, "UPDATE user SET totp_step = ? WHERE id = ?", step, uid)
 	return uid
 }
 

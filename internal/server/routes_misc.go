@@ -170,6 +170,7 @@ func (s *Server) miscRoutes() {
 		}
 		q.w.Header().Set("Content-Type", typ)
 		q.w.Header().Set("Cache-Control", cacheImmutable)
+		inert(q.w.Header(), typ)
 		q.w.Write(got.Data)
 		return done, nil
 	})
