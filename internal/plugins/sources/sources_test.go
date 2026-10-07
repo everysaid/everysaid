@@ -90,13 +90,13 @@ func TestManifests(t *testing.T) {
 	if plugins.StateWeight("iphone-backup", "muted") != 60 {
 		t.Fatal("muted")
 	}
-	for _, id := range []string{"android-adb", "viber-desktop", "carrier-notices", "im-logs"} {
+	for _, id := range []string{"android-adb", "carrier-notices", "im-logs"} {
 		if plugins.Get(id) == nil {
 			t.Fatal(id)
 		}
 	}
 	// every word the user reads of these plugins has its Greek
-	for _, id := range []string{"iphone-backup", "android-adb", "viber-desktop", "carrier-notices", "im-logs"} {
+	for _, id := range []string{"iphone-backup", "android-adb", "carrier-notices", "im-logs"} {
 		info := plugins.Get(id).Info()
 		words := append([]string{info.Name, info.Description}, info.Needs...)
 		for _, s := range info.Settings {
@@ -223,9 +223,5 @@ func TestTheOthers(t *testing.T) {
 	_, c = instance(t, "carrier-notices", M{"carriers": "xx"})
 	if err := (CarrierNotices{}).RunImport(c); err == nil {
 		t.Fatal("an unknown carrier")
-	}
-	_, c = instance(t, "viber-desktop", M{"export": filepath.Join(t.TempDir(), "none.db")})
-	if err := (ViberDesktop{}).RunImport(c); err != nil {
-		t.Fatal(err)
 	}
 }

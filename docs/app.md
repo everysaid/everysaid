@@ -104,13 +104,22 @@ the web cannot do on an iPhone: reply from a notification, or share into the app
 ## Sources, libraries, contacts
 
 All in Sources: add a plugin instance (an iPhone backup, an Android phone over adb, Telegram, the
-WhatsApp bridge, a Viber Desktop export, the carriers' notices; a folder or immich as the photo
+WhatsApp bridge, Signal, Viber Desktop, the carriers' notices; a folder or immich as the photo
 library; a CardDAV address book or a .vcf file for names and photos), set it up, import, and for
-Telegram and WhatsApp turn on the live connection. Each instance shows whether it is ready, what it
+Telegram, WhatsApp, Signal and Viber Desktop turn on the live connection. Viber Desktop is read and
+driven through Everysaid's bridge (`bridges/viber/`, Linux), a library loaded into the running Viber
+Desktop: its history, what arrives, and sending. Each instance shows whether it is ready, what it
 needs, and its log as it runs. Sending is possible where the plugin can (Telegram; WhatsApp through
 Everysaid's bridge, `bridges/whatsapp/`, started with `-send`, off by default: an unofficial client
 risks the account), answers to a message, mentions and files too: in a group "@" lists its members,
-and the clip sends a file with the text as its caption. Read receipts go out only where turned on
+and the clip sends a file with the text as its caption (Viber sends the file, then the text). A
+message's actions (its smiley button, or a long press on a touch screen) put the user's reaction (the
+service's quick ones, and any other emoji where it takes them: WhatsApp, Signal, Viber; Telegram's own
+list), change it, or take it back (also a tap on it), and edit the user's own message or delete it
+for everyone (asked first), within the time the service allows. A message deleted for everyone
+(by the user or its sender) is kept in the archive but shows as the service shows it, "deleted",
+what it was on a tap; search and the media pages leave it out (WhatsApp 15 minutes to edit and two
+days to delete, Signal a day for both, Telegram two days to edit). Read receipts go out only where turned on
 (the "Send read receipts" of the WhatsApp bridge and of Telegram, off by default), when a chat with
 something new from the others is read in the app while it is in view (a page in the background reads
 nothing). The user's messages show ✓ sent, ✓✓ delivered to all, coloured when read by all ("all" in

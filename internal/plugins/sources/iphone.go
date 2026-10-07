@@ -1,5 +1,5 @@
 // Package sources holds the source plugins that wrap the phones' extraction and the importers:
-// iphone-backup, android-adb, viber-desktop, carrier-notices, im-logs. Ports those classes of
+// iphone-backup, android-adb, carrier-notices, im-logs (viber-desktop: internal/viber). Ports those classes of
 // everysaid/plugins/sources.py (the live ones, WhatsApp and Telegram, have packages of their own).
 package sources
 
@@ -31,7 +31,6 @@ type IphoneBackup struct{}
 func init() {
 	plugins.Register(IphoneBackup{})
 	plugins.Register(AndroidAdb{})
-	plugins.Register(ViberDesktop{})
 	plugins.Register(CarrierNotices{})
 	plugins.Register(ImLogs{})
 }

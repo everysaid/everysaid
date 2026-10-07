@@ -1,0 +1,4 @@
+# Build artifacts (regenerate with make).
+inject/viber-bridge.so
+inject/moc_watch.cpp
+tools/probe.so

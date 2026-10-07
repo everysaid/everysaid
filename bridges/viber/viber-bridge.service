@@ -1,0 +1,23 @@
+# systemd user unit template for the Viber bridge. Copy to ~/.config/systemd/user/, adjust the path
+# and WorkingDirectory, then: systemctl --user daemon-reload && systemctl --user enable --now viber-bridge
+#
+# Start read-only first (no VIBER_ALLOW_SEND). Turn sending on deliberately, the way the WhatsApp
+# bridge's "-send" is the owner's to enable, by adding  Environment=VIBER_ALLOW_SEND=1  and restarting.
+[Unit]
+Description=Everysaid Viber bridge (headless Viber Desktop + inject)
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/everysaid/bridges/viber
+ExecStart=%h/everysaid/bridges/viber/run.sh
+Environment=VIBER_DISPLAY=:99
+# Environment=VIBER_ALLOW_SEND=1
+Restart=on-failure
+RestartSec=5
+# Viber ignores SIGTERM; SIGINT makes it quit cleanly and release the database.
+KillSignal=SIGINT
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

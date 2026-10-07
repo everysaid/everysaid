@@ -1,6 +1,7 @@
 package sources
 
-// Ports AndroidAdb, ViberDesktop, CarrierNotices and ImLogs of everysaid/plugins/sources.py.
+// Ports AndroidAdb, CarrierNotices and ImLogs of everysaid/plugins/sources.py (ViberDesktop is
+// internal/viber, the live Viber Desktop).
 
 import (
 	"strings"
@@ -44,41 +45,6 @@ func (AndroidAdb) RunImport(c *plugins.Context) error {
 		}},
 		{Label: "files", Run: func(a *archive.Archive, out func(string)) error {
 			return importers.Media(a, out, importers.Phones...)
-		}},
-	})
-	return err
-}
-
-// ViberDesktop is the `viber-desktop` source.
-type ViberDesktop struct{}
-
-func (ViberDesktop) Info() *plugins.Info {
-	return &plugins.Info{
-		ID: "viber-desktop", Name: "Viber Desktop export", Kind: "source",
-		Services:    []string{"viber"},
-		ServiceInfo: sourcekit.Looks("viber"),
-		Description: "The history Viber Desktop holds (synced from the phone it is linked to), decrypted with " +
-			"scripts/viber-desktop-export.cpp. Linux only: there is no official way.",
-		Platforms: []string{"linux"},
-		Needs:     []string{"Viber Desktop", "a decrypted export (viber-desktop-export.cpp)"},
-		Settings: []plugins.Setting{{Key: "export", Label: "Decrypted database", Type: "path", Required: true,
-			Default: nilIfEmpty(config.ViberDesktop)}},
-	}
-}
-
-// nilIfEmpty: a setting whose default config.toml does not give has none (Python's None).
-func nilIfEmpty(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
-}
-
-func (ViberDesktop) RunImport(c *plugins.Context) error {
-	path := config.ExpandUser(c.Str("export"))
-	_, _, err := sourcekit.RunImporters(c, []sourcekit.Step{
-		{Label: "Viber Desktop", Run: func(a *archive.Archive, out func(string)) error {
-			return importers.Viber(a, out, importers.ViberOptions{DesktopDB: path})
 		}},
 	})
 	return err

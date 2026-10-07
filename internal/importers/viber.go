@@ -152,29 +152,7 @@ func iphoneMarks(a *archive.Archive, iphone *sql.DB, src int64, convs map[int64]
 		if !ok || mid == 0 || !isList {
 			continue
 		}
-		text := str(r["ZTEXT"])
-		for _, e := range l {
-			em, isMap := e.(map[string]any)
-			if !isMap {
-				continue
-			}
-			if _, f, _, isNum := num(em["type"]); !isNum || f != 0 { // Python's == 0: a 0.0 or a false too
-				continue
-			}
-			who, wok := person.of(em["memberId"], nil)
-			if !wok {
-				continue
-			}
-			var said any
-			start, sInt := jsonInt(em["start"])
-			end, eInt := jsonInt(em["end"])
-			if sInt && eInt {
-				if s := utf16Slice(text, int(start), int(end)); s != "" {
-					said = s
-				}
-			}
-			a.Exec("INSERT OR IGNORE INTO mention VALUES (?, ?, ?)", mid, a.Address(who), said)
-		}
+		viberMentions(a, mid, str(r["ZTEXT"]), l, person)
 	}
 	for _, r := range maps(iphone, "SELECT Z_PK, ZGROUPID, ZLASTREADTOKEN, ZSEENSTATUSLASTTOKEN FROM ZCONVERSATION") {
 		pk := toInt(r["Z_PK"])
@@ -227,10 +205,37 @@ func jsonInt(v any) (int64, bool) {
 }
 
 // ViberOptions: IphoneDB "" is the default; DesktopDB "" is config [viber] desktop_export, and
-// NoDesktop leaves the desktop export out (Python's desktop_db=None).
+// NoDesktop leaves the desktop export out (Python's desktop_db=None); NoIphone leaves the iPhone out.
+// DesktopSource is the source the desktop's rows are of ("" the Android phone's export,
+// "<android device>/viber"), DesktopDevice the device whose time of use decides between its copy of a
+// message and the iPhone's ("" with a DesktopSource: none, the iPhone's is kept).
 type ViberOptions struct {
-	IphoneDB, DesktopDB string
-	NoDesktop           bool
+	IphoneDB, DesktopDB          string
+	NoDesktop, NoIphone          bool
+	DesktopSource, DesktopDevice string
+}
+
+const (
+	desktopDeleted = 72      // Messages.Type of a message deleted by its sender (Body and Info emptied)
+	desktopNotes   = 1 << 19 // ChatInfo.Flags of "My Notes"
+)
+
+// viberLike is one reaction event of the desktop: who (the user's own: Direction 1), and the
+// reaction, a quick one's number (PGIsLiked; 0 takes it back) or any emoji (SelfReaction).
+type viberLike struct {
+	mine  bool
+	who   any
+	quick int64
+	emoji string
+}
+
+// desktopFollow is what the desktop says now of a message: brought to it where the archive has it.
+type desktopFollow struct {
+	key, text       string
+	edited, deleted bool
+	reactions       []archive.Reaction
+	reactionsKnown  bool // the desktop says what they are (else they are left as they are)
+	mentions        any  // Info.textMetaInfo
 }
 
 // viberEdit is an edit event of the iPhone: the token of the message edited, and its new text.
@@ -253,6 +258,9 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 	if iphoneDB == "" {
 		iphoneDB = ViberIphoneDB()
 	}
+	if opt.NoIphone {
+		iphoneDB = ""
+	}
 	desktopDB := opt.DesktopDB
 	if opt.NoDesktop {
 		desktopDB = ""
@@ -260,7 +268,7 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 		desktopDB = config.ViberDesktop
 	}
 	var iphone, desktop *sql.DB
-	if exists(iphoneDB) {
+	if iphoneDB != "" && exists(iphoneDB) {
 		iphone = ro(iphoneDB)
 		defer iphone.Close()
 	}
@@ -278,10 +286,19 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 	}
 	person := viberPeople{viberPhones(iphone, desktop, a)}
 	own := a.Own()
-	src := map[string]int64{"iphone": a.Source(archive.Iphone()+"/viber", iphoneDB, archive.Iphone(), "")}
-	srcOrder := []string{"iphone"}
+	src := map[string]int64{}
+	var srcOrder []string
+	if iphoneDB != "" {
+		src["iphone"] = a.Source(archive.Iphone()+"/viber", iphoneDB, archive.Iphone(), "")
+		srcOrder = append(srcOrder, "iphone")
+	}
+	desktopDevice := opt.DesktopDevice
 	if desktopDB != "" {
-		src["desktop"] = a.Source(archive.Android()+"/viber", desktopDB, archive.Android(), "")
+		name := opt.DesktopSource
+		if name == "" {
+			name, desktopDevice = archive.Android()+"/viber", archive.Android()
+		}
+		src["desktop"] = a.Source(name, desktopDB, desktopDevice, "")
 		srcOrder = append(srcOrder, "desktop")
 	}
 	added, skipped := map[string]int{}, map[string]int{}
@@ -440,7 +457,7 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 			}
 		}
 		chats := map[any]int64{}
-		for _, c := range maps(desktop, "SELECT ChatID, Name, Token, PGType FROM ChatInfo") {
+		for _, c := range maps(desktop, "SELECT ChatID, Name, Token, PGType, Flags FROM ChatInfo") {
 			mem := chatMembers[c["ChatID"]]
 			pg, pgInt := c["PGType"].(int64)
 			switch {
@@ -449,7 +466,16 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 			case truthy(c["Token"]):
 				cid := titled(a, "viber", mem, "group:"+pyStr(c["Token"]), c["Name"])
 				chats[c["ChatID"]] = cid
-				a.Exec("UPDATE conversation SET is_group = 1 WHERE id = ?", cid)
+				// the notes are the iPhone's ZSUBTYPE 5, the same conversation: no group, the owner its member
+				notes := toInt(c["Flags"])&desktopNotes != 0
+				a.Exec("UPDATE conversation SET is_group = ? WHERE id = ?", archive.B2I(!notes), cid)
+				if notes {
+					for h := range own {
+						if h.Kind == "phone" {
+							a.Exec("INSERT OR IGNORE INTO conversation_member VALUES (?, ?)", cid, a.Address(h))
+						}
+					}
+				}
 			default:
 				if len(mem) == 0 {
 					mem = []archive.Handle{archive.H("id", "chat:"+pyStr(c["ChatID"]), "viber")}
@@ -457,20 +483,49 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 				chats[c["ChatID"]] = a.Conversation("viber", mem, "", "")
 			}
 		}
-		iph, android := archive.Iphone(), archive.Android()
+		// reactions are events of their own (Type 3), tied to their message's token by LikeRelation: the
+		// last of each person is theirs now
+		likeEvents := map[int64]bool{}
+		likes := map[string]map[string]viberLike{}
+		for _, r := range maps(desktop, "SELECT l.MessageToken, e.EventID, e.Direction, e.ContactID, m.PGIsLiked, "+
+			"m.SelfReaction FROM LikeRelation l JOIN Events e ON e.EventID = l.LikeEventID "+
+			"LEFT JOIN Messages m ON m.EventID = e.EventID ORDER BY e.TimeStamp, e.EventID") {
+			likeEvents[toInt(r["EventID"])] = true
+			target := pyStr(r["MessageToken"])
+			l := viberLike{mine: toInt(r["Direction"]) == 1, quick: toInt(r["PGIsLiked"]), emoji: str(r["SelfReaction"])}
+			who := "me"
+			if !l.mine {
+				l.who, who = r["ContactID"], pyStr(r["ContactID"])
+			}
+			if likes[target] == nil {
+				likes[target] = map[string]viberLike{}
+			}
+			likes[target][who] = l
+		}
+		var follows []desktopFollow
+		iph := archive.Iphone()
 		eachMap(desktop, "SELECT e.*, m.Type AS MessageType, m.Body, m.Info, m.Status, m.Subject, "+
-			"m.Flag, m.PayloadPath, m.ThumbnailPath, m.StickerID, m.PttID, m.Duration "+
-			"FROM Events e LEFT JOIN Messages m USING (EventID) ORDER BY e.EventID", nil, func(r row) {
+			"m.Flag, m.PayloadPath, m.ThumbnailPath, m.StickerID, m.PttID, m.Duration"+desktopReactionColumns(desktop)+
+			" FROM Events e LEFT JOIN Messages m USING (EventID) ORDER BY e.EventID", nil, func(r row) {
 			typ, typInt := r["Type"].(int64)
+			if likeEvents[toInt(r["EventID"])] {
+				return // a reaction: on its message
+			}
 			system := typInt && typ == desktopSystemEvent
 			key := ""
 			if truthy(r["Token"]) && !system {
 				key = pyStr(r["Token"])
 			}
+			info := jsonObj(r["Info"])
+			if edit, ok := info["edit"].(map[string]any); ok && truthy(edit["token"]) {
+				// an edit event: the message edited has the new text already (and an edit_token)
+				follows = append(follows, desktopFollow{key: pyStr(edit["token"]), text: str(r["Body"]), edited: true})
+				return
+			}
 			ts := toInt(r["TimeStamp"])
 			pk, inIphone := iphoneKeys[key]
 			inIphone = inIphone && key != ""
-			if inIphone && a.Keeper([]string{iph, android}, ts) != android {
+			if inIphone && (desktopDevice == "" || a.Keeper([]string{iph, desktopDevice}, ts) != desktopDevice) {
 				return // the iPhone's copy is the one kept
 			}
 			if inIphone && !takenFromIphone[pk] {
@@ -494,10 +549,27 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 			if !known {
 				panic(&db.Error{Query: "Events", Err: fmt.Errorf("KeyError: %v", r["ChatID"])})
 			}
-			add("desktop", pyStr(r["EventID"]), viberMsg{viberDesktopExtras(r), conv, ts, outgoing, sender, kind,
-				str(r["Body"]), key})
+			extra := viberDesktopExtras(r)
+			mt, _ := r["MessageType"].(int64)
+			deleted := mt == desktopDeleted
+			if deleted {
+				extra.Deleted, kind = true, "text"
+			}
+			if truthy(obj(info["desktop_info"])["edit_token"]) {
+				extra.Edited = true
+			}
+			rs, reactionsKnown := desktopReactions(r, likes[key], contact)
+			if reactionsKnown {
+				extra.Reactions = rs
+			}
+			add("desktop", pyStr(r["EventID"]), viberMsg{extra, conv, ts, outgoing, sender, kind, str(r["Body"]), key})
+			if key != "" && conv != 0 {
+				follows = append(follows, desktopFollow{key: key, text: str(r["Body"]), edited: extra.Edited,
+					deleted: deleted, reactions: rs, reactionsKnown: reactionsKnown, mentions: info["textMetaInfo"]})
+			}
 		})
 		events = fmt.Sprint(db.Int(desktop, "SELECT count(*) FROM Events"))
+		followDesktop(a, follows, person)
 	}
 
 	for _, pk := range iphoneOrder {
@@ -540,4 +612,32 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 		}
 	}
 	return nil
+}
+
+// viberMentions are the people a message names, from its textMetaInfo (type 0: a member, by id;
+// start and end in UTF-16 units of its text), on the iPhone and the desktop alike.
+func viberMentions(a *archive.Archive, mid int64, text string, info any, person viberPeople) {
+	l, _ := info.([]any)
+	for _, e := range l {
+		em, isMap := e.(map[string]any)
+		if !isMap {
+			continue
+		}
+		if _, f, _, isNum := num(em["type"]); !isNum || f != 0 { // Python's == 0: a 0.0 or a false too
+			continue
+		}
+		who, wok := person.of(em["memberId"], nil)
+		if !wok {
+			continue
+		}
+		var said any
+		start, sInt := jsonInt(em["start"])
+		end, eInt := jsonInt(em["end"])
+		if sInt && eInt {
+			if s := utf16Slice(text, int(start), int(end)); s != "" {
+				said = s
+			}
+		}
+		a.Exec("INSERT OR IGNORE INTO mention VALUES (?, ?, ?)", mid, a.Address(who), said)
+	}
 }

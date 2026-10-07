@@ -9,6 +9,7 @@ import (
 	_ "everysaid/internal/plugins/sources"
 	_ "everysaid/internal/signal"
 	_ "everysaid/internal/telegram"
+	_ "everysaid/internal/viber"
 	_ "everysaid/internal/whatsapp"
 )
 

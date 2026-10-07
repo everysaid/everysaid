@@ -183,6 +183,28 @@ func byOrigin(a *archive.Archive, sourceName string) map[string]int64 {
 	return out
 }
 
+// MediaViberDesktop: the files of a copy of Viber Desktop's database (source the plugin's own),
+// those Viber downloaded or sent (Messages.PayloadPath) and still has; a message by its token.
+func MediaViberDesktop(database, source string) MediaStep {
+	return func(a *archive.Archive, s *Store) {
+		if !exists(database) {
+			return
+		}
+		d := ro(database)
+		defer d.Close()
+		src := a.Source(source, database, "", "")
+		messages := byKey(a, "viber")
+		for _, r := range maps(d, "SELECT e.Token, m.PayloadPath FROM Messages m JOIN Events e USING (EventID) "+
+			"WHERE coalesce(m.PayloadPath, '') != '' ORDER BY e.EventID") {
+			path := str(r["PayloadPath"])
+			if !filepath.IsAbs(path) {
+				continue
+			}
+			s.Link(source, src, path, path, messages[pyStr(r["Token"])])
+		}
+	}
+}
+
 // MediaStep is one source's files, linked through the store.
 type MediaStep func(a *archive.Archive, s *Store)
 

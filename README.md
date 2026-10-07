@@ -32,6 +32,7 @@ history); nothing in the tracked documentation depends on it.
 | Looking inside a backup without extracting | working (`scripts/iphone-ls.py`) |
 | Android call log, SMS, MMS and blocked numbers over adb | working (`scripts/android-export.py`) |
 | Old Viber history through Viber Desktop (Linux) | working (`scripts/viber-desktop-export.cpp`) |
+| Live Viber through Viber Desktop (Linux): history, arriving, sending | working (`bridges/viber/`, `internal/viber`) |
 | Telegram through its API | working (`scripts/telegram-sync.py`) |
 | WhatsApp through a live bridge (whatsmeow) | read, for what came after the last backup |
 | Unified archive, deduplicated across sources | working (`everysaid`) |
@@ -41,7 +42,8 @@ history); nothing in the tracked documentation depends on it.
 | The core: chats, a person's stream across services, search ignoring accents, people, calls, media, statistics | working (`everysaid/core/`) |
 | Plugins: sources, photo libraries (folder, immich), contacts (CardDAV, .vcf), as instances | working (`everysaid/plugins/`) |
 | The app: passkeys, the messenger, search, media, people, sources, settings, push, PWA | working (`everysaid serve`, `web/`) |
-| Live Telegram and WhatsApp (bridge), sending where the plugin can | working |
+| Live Telegram, WhatsApp (bridge), Signal and Viber Desktop, sending where the plugin can | working |
+| Reactions, edits and deletions for everyone from the app (WhatsApp, Telegram, Signal, Viber) | working |
 | The MCP server | working (`everysaid mcp`) |
 | A demo archive of invented people | working (`everysaid demo`) |
 | The logs of Adium and Pidgin (Gaim): MSN, ICQ, AIM, Yahoo, Jabber/Google Talk, Skype, IRC, Facebook chat | working (`everysaid/imlogs.py`, `scripts/imlogs-import.py`) |
