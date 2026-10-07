@@ -448,3 +448,60 @@ def test_people_without_a_name_to_name(store):
     first = r["items"][0]
     changes.set_person(store, first["id"], name="The courier")
     assert first["id"] not in {p["id"] for p in queries.unnamed_people(store, limit=100)["items"]}
+
+
+def test_the_chat_list_filtered(store):
+    every = queries.chats(store, unnamed=True)
+    sizes = dict(store.read().execute("SELECT conversation_id, count(*) FROM message GROUP BY conversation_id"))
+    index, _ = queries._chat_index(store)
+    many = queries.chats(store, unnamed=True, min_messages=100)
+    assert many and len(many) < len(every)
+    assert all(sum(sizes.get(c, 0) for c in index[x["id"]]["conversations"]) >= 100 for x in many)
+    few = queries.chats(store, unnamed=True, max_messages=99)
+    assert {x["id"] for x in few} | {x["id"] for x in many} == {x["id"] for x in every}
+    assert not {x["id"] for x in few} & {x["id"] for x in many}
+    wa = queries.chats(store, unnamed=True, with_services=["whatsapp"])
+    assert wa and all("whatsapp" in x["services"] for x in wa)
+    no_wa = queries.chats(store, unnamed=True, without_services=["whatsapp"])
+    assert {x["id"] for x in wa} | {x["id"] for x in no_wa} == {x["id"] for x in every}
+    one = every[0]
+    if one["person_id"]:
+        assert [x["id"] for x in queries.chats(store, people_only={one["person_id"]})] == [one["id"]]
+
+
+def test_hidden_services_show_nowhere(store):
+    from everysaid.core import changes
+    before = queries.chats(store, unnamed=True)
+    assert any("whatsapp" in c["services"] for c in before)
+    assert queries.search(store, "καλημερα", service="whatsapp")["total"] > 0
+    changes.set_setting(store, "hidden_services", ["whatsapp"])
+    after = queries.chats(store, unnamed=True)
+    assert after and not any("whatsapp" in c["services"] for c in after)
+    assert queries.search(store, "καλημερα", service="whatsapp")["total"] == 0
+    assert queries.search(store, "καλημερα")["total"] > 0
+    assert all(c["service"] != "whatsapp" for c in queries.calls(store, limit=1000)["items"])
+    for c in after[:10]:
+        assert all(i.get("service") != "whatsapp" for i in queries.stream(store, c["id"])["items"])
+    changes.set_setting(store, "hidden_services", [])
+    assert len(queries.chats(store, unnamed=True)) == len(before)
+
+
+def test_notes_to_self_are_one_chat_across_services(store):
+    """Viber's notes and a Telegram chat with oneself (no one else in either, ever) are one chat;
+    a group everyone else left is not notes (others wrote in it)."""
+    index, conv_chat = queries._chat_index(store)
+    notes = next(c for c in index.values() if c["type"] == "conversation")
+    with store.write() as db:
+        tg = db.execute("SELECT id FROM service WHERE name = 'telegram'").fetchone()[0]
+        own = db.execute("SELECT address_id FROM account LIMIT 1").fetchone()[0]
+        cid = db.execute("INSERT INTO conversation (service_id, key, is_group) VALUES (?, 'saved', 0)", (tg,)).lastrowid
+        db.execute("INSERT INTO conversation_member VALUES (?, ?)", (cid, own))
+        kind = db.execute("SELECT id FROM message_kind WHERE name = 'text'").fetchone()[0]
+        db.execute("INSERT INTO message (service_id, conversation_id, ts, outgoing, kind_id, text) "
+                   "VALUES (?, ?, 1700000000000, 1, ?, 'a note')", (tg, cid, kind))
+    index, conv_chat = queries._chat_index(store)
+    assert conv_chat[cid] == notes["id"]
+    one = index[notes["id"]]
+    assert {"viber", "telegram"} <= one["services"]
+    assert queries.chat_title(store, one) in ("Notes", "Σημειώσεις")
+    assert any(i.get("text") == "a note" for i in queries.stream(store, notes["id"], limit=200)["items"])

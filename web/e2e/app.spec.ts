@@ -137,7 +137,7 @@ test("setup, chats, a chat, search, media, sources, settings", async ({ page }, 
   }
 
   // the order of name sources: the address book first, and it can move (and back)
-  await page.goto("/settings");
+  await page.goto("/settings?tab=names");
   const topName = page.getByText(/^1(Επαφές|Contacts|WhatsApp)/);
   await expect(topName).toHaveText(/Επαφές|Contacts/);
   await page.getByRole("button", { name: /^Κάτω$|^Down$/ }).first().click();
@@ -146,6 +146,7 @@ test("setup, chats, a chat, search, media, sources, settings", async ({ page }, 
   await expect(topName).toHaveText(/Επαφές|Contacts/);
 
   // dark theme
+  await page.goto("/settings");
   await page.getByRole("tab", { name: /Σκοτεινό|Dark/ }).click();
   await page.goto("/");
   if (tag === "desktop") await page.getByRole("tab", { name: /^(Όλες|All)$/ }).click();   // the list keeps its filter (Groups, above)
@@ -154,7 +155,7 @@ test("setup, chats, a chat, search, media, sources, settings", async ({ page }, 
   await page.screenshot({ path: `${SHOTS}/${tag}-17-dark-chat.png` });
 
   // sign out, then back in with the passkey
-  await page.goto("/settings");
+  await page.goto("/settings?tab=security");
   await page.getByRole("button", { name: /^Αποσύνδεση$|^Sign out$/ }).last().click();
   await expect(page.getByRole("button", { name: /Σύνδεση με passkey|Sign in with a passkey/ })).toBeVisible();
   await page.screenshot({ path: `${SHOTS}/${tag}-18-login.png` });

@@ -40,7 +40,7 @@ test("labels: one given by hand on a person's page, and taken away", async ({ pa
 
 test("labels: the lists are the user's: a tone added, renamed, merged into another", async ({ page }, info) => {
   await signedIn(page, info.project.name);
-  await page.goto("/settings");
+  await page.goto("/settings?tab=labels");
   const tones = page.locator("[data-list=tone]");
   await expect(tones.locator("[data-label=romantic]")).toBeVisible();
   await expect(tones.locator("[data-label=sexual]")).toHaveCount(0);

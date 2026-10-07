@@ -34,12 +34,17 @@ test("a chat keeps its unsent text and its place; the Chats tab comes back to it
 
   await page.goto(`/chat/${b}`);
   await expect(field).toHaveValue("");
-  await page.locator("[data-show-archived]").click();                // the list as it is left
+  const archivedSwitch = page.getByRole("switch", { name: /^(Αρχειοθετημένες συνομιλίες|Archived chats)$/ });
+  await page.locator("[data-chat-filters]").click();                // the list as it is left
+  await archivedSwitch.click();
+  await page.keyboard.press("Escape");
   await page.locator('nav a[href="/overview"]').click();
   await page.locator('nav a[aria-label="Συνομιλίες"], nav a[aria-label="Chats"]').click();
   await expect(page).toHaveURL(new RegExp(`/chat/${b}`));          // the chat open last
-  await expect(page.locator("[data-show-archived]")).toHaveAttribute("aria-pressed", "true");
-  await page.locator("[data-show-archived]").click();
+  await page.locator("[data-chat-filters]").click();
+  await expect(archivedSwitch).toHaveAttribute("aria-checked", "true");
+  await archivedSwitch.click();
+  await page.keyboard.press("Escape");
 
   await page.goto(`/chat/${a}`);
   await expect(field).toHaveValue("half written");
