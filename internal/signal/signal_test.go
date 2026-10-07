@@ -649,3 +649,161 @@ func TestLinkOnce(t *testing.T) {
 		t.Fatalf("first link: %v", err)
 	}
 }
+
+// linked: a plugin linked through the fake, its script the given events.
+func linked(t *testing.T, settings M, events []map[string]any) (*plugins.Context, *host) {
+	c, h, _ := newPlugin(t, settings)
+	c.DeleteSecret("passphrase")
+	os.RemoveAll(StoreDir(c))
+	instanceOf(c.ID).status = Status{}
+	if err := (Plugin{}).Action(c, "link"); err != nil {
+		t.Fatal(err)
+	}
+	writeScript(t, c, events)
+	return c, h
+}
+
+func waitFor(t *testing.T, what string, ok func() bool) {
+	for deadline := time.Now().Add(20 * time.Second); !ok(); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("waited in vain for", what)
+		}
+	}
+}
+
+// "Unlink this computer": what signal.db has goes into the archive, then the helper's store and
+// signal.db go (with the live connection stopped first), and a new link works.
+func TestUnlink(t *testing.T) {
+	c, _ := linked(t, nil, scriptEvents("none.jpg")[:3])
+	p := Plugin{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	live := make(chan error, 1)
+	go func() { live <- p.Live(ctx, c) }()
+	num := func(q string) int64 { return db.Int(c.Store().Read(), q) }
+	waitFor(t, "the live import", func() bool { return num("SELECT count(*) FROM message") == 1 })
+	if a := p.Info().Actions[2]; a.ID != "unlink" || !strings.Contains(a.Confirm, "the archive keeps everything") {
+		t.Fatalf("the action asks first: %+v", a)
+	}
+	if err := p.Action(c, "unlink"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-live:
+		if err != nil {
+			t.Fatal("live:", err)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("live did not stop")
+	}
+	for _, gone := range []string{StoreDir(c), dbPath(c)} {
+		if _, err := os.Stat(gone); !os.IsNotExist(err) {
+			t.Fatalf("%s is still there", gone)
+		}
+	}
+	if c.State["aci"] != "" || num("SELECT count(*) FROM message") != 1 {
+		t.Fatalf("state %v, or the archive lost what it had", c.State)
+	}
+	if got := p.IdleActions(c); strings.Join(got, ",") != "sync,unlink" {
+		t.Fatalf("idle %v", got)
+	}
+	if err := p.Action(c, "link"); err != nil {
+		t.Fatal("a new link:", err)
+	}
+	if c.State["aci"] != fakeOwn {
+		t.Fatal("linked again")
+	}
+}
+
+// Removed from the phone: Signal refuses the device; the card says so with the way out, nothing
+// connects again until "Unlink this computer".
+func TestRemovedFromThePhone(t *testing.T) {
+	c, _ := linked(t, nil, nil)
+	p := Plugin{}
+	os.WriteFile(filepath.Join(StoreDir(c), "unlinked"), nil, 0o600)
+	err := p.RunImport(c)
+	if !removed(c) {
+		t.Fatalf("not seen as removed (%v)", err)
+	}
+	if f := p.InfoFacts(c); !strings.Contains(f[0].Value, "removed from the phone") {
+		t.Fatalf("facts %v", f)
+	}
+	for what, err := range map[string]error{"import": p.RunImport(c), "link": p.Action(c, "link")} {
+		if err == nil || !strings.Contains(err.Error(), "Unlink this computer") {
+			t.Fatalf("%s: %v", what, err)
+		}
+	}
+	if err := p.Action(c, "unlink"); err != nil || removed(c) {
+		t.Fatal("unlink", err)
+	}
+}
+
+// A file that failed to come is asked again at the next receive, a few times; once it comes, it
+// joins its message, already in the archive.
+func TestFetchAgain(t *testing.T) {
+	msg := map[string]any{"event": "message", "chat": contact(anna), "sender": anna, "ts": time.Now().UnixMilli(),
+		"attachments": []any{map[string]any{"content_type": "image/jpeg", "error": "timed out"}}}
+	c, _ := linked(t, nil, []map[string]any{msg})
+	p := Plugin{}
+	os.WriteFile(filepath.Join(StoreDir(c), "fetch-fails"), nil, 0o600)
+	num := func(q string) int64 { return db.Int(c.Store().Read(), q) }
+	for range 4 {
+		if err := p.RunImport(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := len(lines(t, filepath.Join(StoreDir(c), "fetch.jsonl"))); got != fetchTries {
+		t.Fatalf("asked %d times", got)
+	}
+	if num("SELECT count(*) FROM message") != 1 || num("SELECT count(*) FROM attachment") != 0 {
+		t.Fatal("before")
+	}
+	// it comes at last
+	os.Remove(filepath.Join(StoreDir(c), "fetch-fails"))
+	st, _ := OpenStore(dbPath(c))
+	db.Exec(st.DB, "DELETE FROM fetch_try")
+	st.Close()
+	if err := p.RunImport(c); err != nil {
+		t.Fatal(err)
+	}
+	if num("SELECT count(*) FROM attachment") != 1 {
+		t.Fatal("the file did not join its message")
+	}
+}
+
+// Read here: always on the phone; read receipts to the others only where the user turned them on.
+func TestReadOnThePhone(t *testing.T) {
+	c, _ := linked(t, M{"read_receipts": false}, scriptEvents("none.jpg")[:3])
+	p := Plugin{}
+	ctx, cancel := context.WithCancel(context.Background())
+	live := make(chan error, 1)
+	go func() { live <- p.Live(ctx, c) }()
+	defer func() { cancel(); <-live }()
+	waitFor(t, "the live import", func() bool { return db.Int(c.Store().Read(), "SELECT count(*) FROM message") == 1 })
+	conv := plugins.Conversation{Key: anna}
+	db.Row(c.Store().Read(), "SELECT id FROM conversation WHERE key = ?", []any{anna}, &conv.ID)
+	if n, err := p.MarkRead(context.Background(), c, conv, 5000); err != nil || n != 1 {
+		t.Fatalf("marked %d %v", n, err)
+	}
+	read := lines(t, filepath.Join(StoreDir(c), "read.jsonl"))
+	if len(read) != 1 || read[0]["receipts"] != false {
+		t.Fatalf("read %v", read)
+	}
+}
+
+// A link that fails is said in the user's words (Signal's own in the log).
+func TestLinkFails(t *testing.T) {
+	c, _, _ := newPlugin(t, nil)
+	c.DeleteSecret("passphrase")
+	os.RemoveAll(StoreDir(c))
+	instanceOf(c.ID).status = Status{}
+	os.MkdirAll(StoreDir(c), 0o700)
+	os.WriteFile(filepath.Join(StoreDir(c), "link-fails"), nil, 0o600)
+	err := Plugin{}.Action(c, "link")
+	if err == nil || err.Error() != "Linking to Signal failed: try “Link this computer” again" {
+		t.Fatalf("link: %v", err)
+	}
+	if !strings.Contains(strings.Join(c.LastLines(10), "\n"), "provisioning socket closed") {
+		t.Fatal("Signal's words not in the log")
+	}
+}

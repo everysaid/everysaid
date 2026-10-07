@@ -61,11 +61,14 @@ func (Plugin) Info() *plugins.Info {
 			{Key: "device_name", Label: "This device's name on the phone", Default: "Everysaid"},
 			{Key: "media", Label: "Download pictures, videos and files", Type: "bool", Default: true},
 			{Key: "read_receipts", Label: "Send read receipts", Type: "bool", Default: false,
-				Help: "When a chat is opened here, the others see it read, and it is read on the phone too"},
+				Help: "When a chat is opened here, the others see it read (it is marked read on the phone in any case)"},
 		},
 		CanSend: true, CanReply: true, CanMention: true, CanMarkRead: true, CanSendFiles: true,
 		Actions: []plugins.Action{{ID: "link", Label: "Link this computer (QR code)"},
-			{ID: "sync", Label: "Ask the phone for its contacts"}},
+			{ID: "sync", Label: "Ask the phone for its contacts"},
+			{ID: "unlink", Label: "Unlink this computer", Confirm: "Unlink this computer from Signal? The link goes, and " +
+				"so does whatever waits unread on Signal's server for this computer; the archive keeps everything " +
+				"already brought in. If the phone still lists this computer, remove it there too."}},
 	}
 }
 
@@ -121,6 +124,8 @@ func (p Plugin) InfoFacts(c *plugins.Context) []plugins.Fact {
 	aci, _ := c.State["aci"].(string)
 	connection := "not connected to Signal"
 	switch {
+	case removed(c):
+		connection = "removed from the phone's linked devices: Unlink this computer, then link it again"
 	case url != "":
 		connection = "waiting for the phone to scan the code"
 	case aci == "" && !status.Linked:
@@ -148,20 +153,21 @@ func (p Plugin) IdleActions(c *plugins.Context) []string {
 	if aci, _ := c.State["aci"].(string); aci != "" {
 		return []string{"link"}
 	}
-	return []string{"sync"}
+	return []string{"sync", "unlink"}
 }
 
 // instance is what runs for a plugin instance: at most one helper at a time.
 type instance struct {
 	run sync.Mutex // held by whoever runs the helper (the live connection, or one piece of work)
 
-	mu      sync.Mutex
-	live    *conn  // the live connection's, while it runs
-	status  Status // the helper's last word on its account
-	linkURL string // a link waiting for the phone to scan it
-	linking bool   // a link asked of the helper, not yet answered
-	phase   string // "", linking, syncing (receiving what waited on the server), ready
-	linked  chan struct{}
+	mu        sync.Mutex
+	live      *conn  // the live connection's, while it runs
+	status    Status // the helper's last word on its account
+	linkURL   string // a link waiting for the phone to scan it
+	linking   bool   // a link asked of the helper, not yet answered
+	unlinking bool   // "Unlink this computer" under way: no helper is started
+	phase     string // "", linking, syncing (receiving what waited on the server), ready
+	linked    chan struct{}
 }
 
 // setPhase moves the instance on, said to the user's devices (the card shows it).
@@ -329,6 +335,9 @@ func (n *conn) event(name string, raw []byte) {
 			}
 			cancel()
 		}
+		if n.c.Bool("media") {
+			n.fetchAgain()
+		}
 		signal(n.queueEmpty)
 		signal(n.dirty)
 	case "contacts":
@@ -352,8 +361,14 @@ func (n *conn) event(name string, raw []byte) {
 	case "receive_ended":
 		var e struct {
 			Error *string `json:"error"`
+			Code  string  `json:"code"`
 		}
 		json.Unmarshal(raw, &e)
+		if e.Code == "unlinked" {
+			n.c.Log(removedText, nil)
+			n.c.SaveState(M{"unlinked": true})
+			n.k.setPhase(n.c, "")
+		}
 		select {
 		case n.ended <- deref(e.Error):
 		default:
@@ -376,18 +391,43 @@ func (n *conn) event(name string, raw []byte) {
 	}
 }
 
+// removedText says that the phone removed this computer from the account's linked devices, and the
+// way out.
+const removedText = "This computer was removed from Signal's linked devices on the phone: use “Unlink this computer”, then link it again"
+
+// removed: Signal's server refused this device (it was removed from the phone); nothing connects
+// again until it is unlinked here.
+func removed(c *plugins.Context) bool {
+	r, _ := c.State["unlinked"].(bool)
+	return r
+}
+
+// fetchAgain asks the helper again for the files that failed to come (each a few times, while
+// Signal's server may still have them); they come as their messages again.
+func (n *conn) fetchAgain() {
+	refs := n.store.FailedFiles(time.Now().Add(-fetchDays * 24 * time.Hour).UnixMilli())
+	if len(refs) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if _, err := n.h.Call(ctx, "fetch", map[string]any{"messages": refs}); err == nil {
+		n.c.Log("Files that had not come, asked again: {n}", map[string]any{"n": len(refs)})
+	}
+}
+
 // helperFor is the helper for a piece of work: the live connection's while it runs, else one
 // started for it (done stops it). It waits for another piece of work to end, until ctx does.
 func helperFor(ctx context.Context, c *plugins.Context) (*conn, func(), error) {
 	k := instanceOf(c.ID)
 	for {
 		k.mu.Lock()
-		live := k.live
+		live, unlinking := k.live, k.unlinking
 		k.mu.Unlock()
-		if live != nil {
+		if live != nil && !unlinking {
 			return live, func() {}, nil
 		}
-		if k.run.TryLock() {
+		if !unlinking && k.run.TryLock() {
 			break
 		}
 		select {
@@ -454,6 +494,9 @@ func (n *conn) drain(ctx context.Context) {
 // RunImport brings what waited on Signal's server (where the live connection does not run) and
 // what signal.db has into the archive.
 func (p Plugin) RunImport(c *plugins.Context) error {
+	if removed(c) {
+		return errs.Plugin(removedText, 0)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	n, done, err := helperFor(ctx, c)
@@ -484,7 +527,7 @@ func (p Plugin) RunImport(c *plugins.Context) error {
 // Not linked, it waits for “Link this computer” (which then goes through it).
 func (p Plugin) Live(ctx context.Context, c *plugins.Context) error {
 	k := instanceOf(c.ID)
-	for !k.run.TryLock() { // a piece of work under way ends first
+	for k.isUnlinking() || !k.run.TryLock() { // a piece of work under way ends first
 		select {
 		case <-ctx.Done():
 			return nil
@@ -506,6 +549,15 @@ func (p Plugin) Live(ctx context.Context, c *plugins.Context) error {
 		k.live = nil
 		k.mu.Unlock()
 	}()
+	if linked && removed(c) { // nothing connects: it waits for "Unlink this computer"
+		c.Log(removedText, nil)
+		select {
+		case <-n.h.Done():
+			return nil
+		case <-ctx.Done():
+			return nil
+		}
+	}
 	if !linked {
 		c.Log("Not linked to Signal yet: use “Link this computer” and scan the code with the phone", nil)
 		select {
@@ -542,8 +594,14 @@ func (p Plugin) Live(ctx context.Context, c *plugins.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-n.h.Done():
+			if k.isUnlinking() {
+				return nil
+			}
 			return ErrStopped
 		case why := <-n.ended:
+			if removed(c) {
+				return nil // again, to wait for "Unlink this computer"
+			}
 			if why == "" {
 				why = "the connection to Signal ended"
 			}
@@ -566,6 +624,9 @@ func (p Plugin) Live(ctx context.Context, c *plugins.Context) error {
 func (p Plugin) Action(c *plugins.Context, name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
+	if name == "unlink" {
+		return unlink(ctx, c)
+	}
 	n, done, err := helperFor(ctx, c)
 	if err != nil {
 		return err
@@ -593,6 +654,9 @@ func (p Plugin) Action(c *plugins.Context, name string) error {
 		switch {
 		case errors.As(err, &he) && he.Code == "already_linked":
 			done()
+			if removed(c) {
+				return errs.Plugin(removedText, 0)
+			}
 			return errs.Plugin("Already linked to Signal", 0)
 		case errors.Is(err, context.DeadlineExceeded):
 			n.k.setPhase(c, "")
@@ -607,6 +671,10 @@ func (p Plugin) Action(c *plugins.Context, name string) error {
 		case err != nil:
 			n.k.setPhase(c, "")
 			done()
+			if errors.As(err, &he) || errors.Is(err, ErrStopped) { // Signal's own words, for the log
+				c.Log("error: {e}", map[string]any{"e": err})
+				return errs.Plugin("Linking to Signal failed: try “Link this computer” again", 0)
+			}
 			return err
 		}
 		if err := n.setStatus(raw); err != nil {
@@ -638,6 +706,66 @@ func (p Plugin) Action(c *plugins.Context, name string) error {
 	}
 	done()
 	return errs.Plugin("unknown action", 0)
+}
+
+// unlink takes this computer off the account, as the user chose (the UI asked first): the helper
+// stops, everything signal.db has goes into the archive, then the helper's store (the device's keys,
+// what waits) and signal.db are removed; "Link this computer" works again. The files fetched stay.
+func unlink(ctx context.Context, c *plugins.Context) error {
+	k := instanceOf(c.ID)
+	k.mu.Lock()
+	if k.unlinking {
+		k.mu.Unlock()
+		return nil
+	}
+	k.unlinking = true
+	live := k.live
+	k.mu.Unlock()
+	defer func() {
+		k.mu.Lock()
+		k.unlinking = false
+		k.mu.Unlock()
+		c.Emit(M{"type": "changed"})
+	}()
+	if live != nil {
+		live.h.Close()
+	}
+	for !k.run.TryLock() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	defer k.run.Unlock()
+	if err := importNow(c); err != nil {
+		return err
+	}
+	store := StoreDir(c)
+	if config.Data == "" || filepath.Base(store) != fmt.Sprint(c.ID) || filepath.Base(filepath.Dir(store)) != "signal" {
+		return fmt.Errorf("not the helper's store: %s", store)
+	}
+	if err := os.RemoveAll(store); err != nil {
+		return err
+	}
+	for _, f := range []string{dbPath(c), dbPath(c) + "-wal", dbPath(c) + "-shm"} {
+		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	c.SaveState(M{"aci": "", "phone": "", "contacts_synced": false, "unlinked": false})
+	k.mu.Lock()
+	k.status, k.linkURL = Status{}, ""
+	k.mu.Unlock()
+	k.setPhase(c, "")
+	c.Log("Unlinked from Signal: if the phone still lists this computer, remove it there (Settings, Linked devices)", nil)
+	return nil
+}
+
+func (k *instance) isUnlinking() bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.unlinking
 }
 
 // linkWait is how long a link code waits for the phone.
@@ -719,6 +847,9 @@ func mentionsOut(c *plugins.Context, text string, ms []plugins.Mention, conversa
 // caption); what was sent comes into the archive as Signal's other messages do.
 func (p Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conversation, text string,
 	reply *plugins.Reply, mentions []plugins.Mention, file *plugins.File) (any, error) {
+	if removed(c) {
+		return nil, errs.Plugin(removedText, 0)
+	}
 	n, done, err := helperFor(ctx, c)
 	if err != nil {
 		return nil, err
@@ -789,12 +920,10 @@ func (p Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conve
 	return M{"id": Key(n.own, answer.TS)}, nil
 }
 
-// MarkRead sends read receipts for the others' messages of the conversation up to `until` (Unix ms),
-// where the user turned them on; it returns how many were marked.
+// MarkRead marks the others' messages of the conversation up to `until` (Unix ms) read, as Signal
+// Desktop does: on the owner's phone always (it tells no one else), with read receipts to their
+// authors where the user turned them on; it returns how many were marked.
 func (p Plugin) MarkRead(ctx context.Context, c *plugins.Context, conv plugins.Conversation, until int64) (int, error) {
-	if !c.Bool("read_receipts") {
-		return 0, nil
-	}
 	k := instanceOf(c.ID)
 	k.mu.Lock()
 	n := k.live
@@ -806,7 +935,7 @@ func (p Plugin) MarkRead(ctx context.Context, c *plugins.Context, conv plugins.C
 	if len(unread) == 0 {
 		return 0, nil
 	}
-	raw, err := n.h.Call(ctx, "mark_read", map[string]any{"messages": unread})
+	raw, err := n.h.Call(ctx, "mark_read", map[string]any{"messages": unread, "receipts": c.Bool("read_receipts")})
 	if err != nil {
 		return 0, notLinked(err)
 	}

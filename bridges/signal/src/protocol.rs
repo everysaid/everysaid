@@ -42,7 +42,15 @@ pub enum Command {
         download: bool,
     },
     Send(SendRequest),
+    /// Marks the others' messages read: always on the account's other devices (the phone), and with
+    /// read receipts to their authors where `receipts`.
     MarkRead {
+        messages: Vec<MessageRef>,
+        #[serde(default = "yes")]
+        receipts: bool,
+    },
+    /// Fetches again the files of messages the store holds, where they failed before.
+    Fetch {
         messages: Vec<MessageRef>,
     },
     /// What the store holds (what this device received since it was linked), sent after `since`.
@@ -179,7 +187,11 @@ mod tests {
     #[test]
     fn mark_read() {
         let r = parse(r#"{"id":8,"cmd":"mark_read","messages":[{"author":"a","ts":9}]}"#).unwrap();
-        assert_eq!(r.cmd, Command::MarkRead { messages: vec![MessageRef { author: "a".into(), ts: 9 }] });
+        assert_eq!(r.cmd, Command::MarkRead { messages: vec![MessageRef { author: "a".into(), ts: 9 }], receipts: true });
+        let r = parse(r#"{"id":9,"cmd":"mark_read","messages":[],"receipts":false}"#).unwrap();
+        assert_eq!(r.cmd, Command::MarkRead { messages: vec![], receipts: false });
+        let r = parse(r#"{"id":10,"cmd":"fetch","messages":[{"author":"a","ts":9}]}"#).unwrap();
+        assert_eq!(r.cmd, Command::Fetch { messages: vec![MessageRef { author: "a".into(), ts: 9 }] });
     }
 
     #[test]

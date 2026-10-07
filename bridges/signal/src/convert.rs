@@ -142,6 +142,7 @@ fn data_events(
     if let Some(d) = &dm.admin_delete {
         m.insert("target_author".into(), json!(aci(None, d.target_author_aci_binary.as_ref())));
         m.insert("target_ts".into(), json!(d.target_sent_timestamp));
+        m.insert("admin".into(), json!(true)); // honoured only from a group's admin (main.rs)
         return vec![Converted { event: event("delete", Value::Object(m)), attachments: vec![], group }];
     }
     let attachments = message_fields(&mut m, dm);
@@ -437,6 +438,12 @@ pub fn sent_event(own: &str, device: u32, chat: Value, dm: &DataMessage, ts: u64
     Converted { event: event("message", Value::Object(m)), attachments, group: None }
 }
 
+/// Whether a group's admin's deletion is to be kept: of the sender's own message always; of another's
+/// only when the sender is one of the group's admins (as the helper knows them; not known: no).
+pub fn admin_delete_allowed(sender: &str, target_author: &str, admins: Option<&[String]>) -> bool {
+    sender == target_author || admins.is_some_and(|a| a.iter().any(|x| x == sender))
+}
+
 /// A contact's names, (the address book's, their own). The book names only those whose number Signal
 /// shows: presage names the others, and anyone it saw a message of, after their profile (dropping the
 /// number), so a name without a number is the person's own.
@@ -650,6 +657,24 @@ mod tests {
         assert!(convert(&meta(ANNA), &ContentBody::DataMessage(pk), ME).is_empty());
         let typing = presage::proto::TypingMessage::default();
         assert!(convert(&meta(ANNA), &ContentBody::TypingMessage(typing), ME).is_empty());
+    }
+
+    #[test]
+    fn admin_deletes() {
+        let admins = vec![ANNA.to_string()];
+        assert!(admin_delete_allowed(ANNA, BOB, Some(&admins)));
+        assert!(!admin_delete_allowed(BOB, ANNA, Some(&admins)), "not an admin");
+        assert!(!admin_delete_allowed(BOB, ANNA, None), "admins not known");
+        assert!(admin_delete_allowed(BOB, BOB, None), "one's own message");
+        let d = DataMessage {
+            admin_delete: Some(data_message::AdminDelete {
+                target_author_aci_binary: Some(Uuid::parse_str(BOB).unwrap().as_bytes().to_vec()),
+                target_sent_timestamp: Some(800),
+            }),
+            ..Default::default()
+        };
+        let e = one(&meta(ANNA), ContentBody::DataMessage(d));
+        assert_eq!((e["event"].as_str(), e["target_author"].as_str(), e["admin"].as_bool()), (Some("delete"), Some(BOB), Some(true)));
     }
 
     #[test]

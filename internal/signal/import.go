@@ -391,6 +391,22 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 			files.Link(SourceName(own), src, filepath.Join(mediaDir, f), f, mid)
 		}
 	}
+	// files that came after their message was imported (fetched again)
+	db.Each(d, "SELECT l.author, l.ts, m.json FROM late_file l JOIN message m ON m.author = l.author AND m.ts = l.ts "+
+		"ORDER BY l.ts, l.author", nil, func(scan func(...any)) {
+		var r msgRow
+		scan(&r.author, &r.ts, &r.js)
+		mid, ok := a.MessageByKey(Service, Key(r.author, r.ts), 0)
+		var e event
+		if !ok || json.Unmarshal([]byte(r.js), &e) != nil {
+			return
+		}
+		for _, at := range e.Attachments {
+			if f := deref(at.File); f != "" && f == filepath.Base(f) && f != "." && f != ".." {
+				files.Link(SourceName(own), src, filepath.Join(mediaDir, f), f, mid)
+			}
+		}
+	})
 	n.Files = files.Added[SourceName(own)]
 
 	n.Changes += changes(a, d, p, own, ownSet, edits, deleted, root)
