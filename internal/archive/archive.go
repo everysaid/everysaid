@@ -28,6 +28,7 @@
 package archive
 
 import (
+	"context"
 	"crypto/sha1"
 	"database/sql"
 	_ "embed"
@@ -184,9 +185,11 @@ type pendingTapback struct {
 // Archive is the archive as the importers write it: one connection, statements inside a
 // transaction that opens by itself on the first change and ends at Commit.
 type Archive struct {
-	Path string
-	DB   *sql.DB
-	tx   *sql.Tx
+	Path  string
+	DB    *sql.DB // for reading what is committed; the importer's statements go through Exec and the rest
+	conn  *sql.Conn
+	inTx  bool
+	stmts map[string]*sql.Stmt
 
 	Service, AddressKind, MessageKind *Names
 	keyScoped                         map[int64]bool
@@ -210,7 +213,7 @@ func Open(path string) (a *Archive, err error) {
 	if err != nil {
 		return nil, err
 	}
-	d.SetMaxOpenConns(1)
+	d.SetMaxOpenConns(2) // the importer's own connection, and one for reading what is committed
 	if v := Version(d); v != 0 && v != SchemaVersion {
 		d.Close()
 		return nil, fmt.Errorf("%s has an unknown schema (v%d, known: v%d)", path, v, SchemaVersion)
@@ -219,7 +222,7 @@ func Open(path string) (a *Archive, err error) {
 		d.Close()
 		return nil, err
 	}
-	a = &Archive{Path: path, DB: d, addresses: map[Handle]int64{}, conversations: map[string]int64{}}
+	a = &Archive{Path: path, DB: d, stmts: map[string]*sql.Stmt{}, addresses: map[Handle]int64{}, conversations: map[string]int64{}}
 	a.seed()
 	a.Exec(fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion))
 	a.Service = a.names("service")
@@ -277,53 +280,80 @@ func (a *Archive) seed() {
 
 // --- statements ----------------------------------------------------------------------------------
 
-func (a *Archive) begin() *sql.Tx {
-	if a.tx == nil {
-		tx, err := a.DB.Begin()
+// begin opens a transaction on the archive's one connection, if none is open (as Python's sqlite3
+// does before a change), and gives that connection with its statements kept prepared: an importer
+// runs the same few statements millions of times.
+func (a *Archive) begin() db.Querier {
+	if a.conn == nil {
+		c, err := a.DB.Conn(context.Background())
 		if err != nil {
+			panic(&Error{Query: "connect", Err: err})
+		}
+		a.conn = c
+	}
+	if !a.inTx {
+		if _, err := a.conn.ExecContext(context.Background(), "BEGIN"); err != nil {
 			panic(&Error{Query: "BEGIN", Err: err})
 		}
-		a.tx = tx
+		a.inTx = true
 	}
-	return a.tx
+	return stmtConn{a}
 }
 
+func (a *Archive) q() db.Querier { return a.begin() }
+
+type stmtConn struct{ a *Archive }
+
+func (c stmtConn) stmt(q string) *sql.Stmt {
+	st, ok := c.a.stmts[q]
+	if !ok {
+		var err error
+		if st, err = c.a.conn.PrepareContext(context.Background(), q); err != nil {
+			panic(&Error{Query: q, Err: err})
+		}
+		c.a.stmts[q] = st
+	}
+	return st
+}
+
+func (c stmtConn) Exec(q string, args ...any) (sql.Result, error) { return c.stmt(q).Exec(args...) }
+func (c stmtConn) Query(q string, args ...any) (*sql.Rows, error) { return c.stmt(q).Query(args...) }
+func (c stmtConn) QueryRow(q string, args ...any) *sql.Row        { return c.stmt(q).QueryRow(args...) }
+
 // Exec runs a change (inside the open transaction).
-func (a *Archive) Exec(q string, args ...any) sql.Result { return db.Exec(a.begin(), q, args...) }
+func (a *Archive) Exec(q string, args ...any) sql.Result { return db.Exec(a.q(), q, args...) }
 
 // Query runs a question (inside the open transaction, which sees its own changes).
-func (a *Archive) Query(q string, args ...any) *db.Rows { return db.Query(a.begin(), q, args...) }
+func (a *Archive) Query(q string, args ...any) *db.Rows { return db.Query(a.q(), q, args...) }
 
 // Each calls fn for each row of a question.
 func (a *Archive) Each(q string, args []any, fn func(scan func(dest ...any))) {
-	db.Each(a.begin(), q, args, fn)
+	db.Each(a.q(), q, args, fn)
 }
 
 // Row is one row's values into dest; false when there is none.
-func (a *Archive) Row(q string, args []any, dest ...any) bool {
-	return db.Row(a.begin(), q, args, dest...)
-}
+func (a *Archive) Row(q string, args []any, dest ...any) bool { return db.Row(a.q(), q, args, dest...) }
 
 // Int is the first column of the first row, or 0 when there is none (or it is NULL).
-func (a *Archive) Int(q string, args ...any) int64 { return db.Int(a.begin(), q, args...) }
+func (a *Archive) Int(q string, args ...any) int64 { return db.Int(a.q(), q, args...) }
 
 // IntOK is the first column of the first row, and whether there was a row with a value.
-func (a *Archive) IntOK(q string, args ...any) (int64, bool) { return db.IntOK(a.begin(), q, args...) }
+func (a *Archive) IntOK(q string, args ...any) (int64, bool) { return db.IntOK(a.q(), q, args...) }
 
 // Ints is the first column of every row.
-func (a *Archive) Ints(q string, args ...any) []int64 { return db.Ints(a.begin(), q, args...) }
+func (a *Archive) Ints(q string, args ...any) []int64 { return db.Ints(a.q(), q, args...) }
 
 // Exists says whether the question has a row.
-func (a *Archive) Exists(q string, args ...any) bool { return db.Exists(a.begin(), q, args...) }
+func (a *Archive) Exists(q string, args ...any) bool { return db.Exists(a.q(), q, args...) }
 
 // Tx is the open transaction (opened if none is), for the db helpers.
-func (a *Archive) Tx() *sql.Tx { return a.begin() }
+func (a *Archive) Tx() db.Querier { return a.begin() }
 
 // Commit ends the open transaction, if any.
 func (a *Archive) Commit() {
-	if a.tx != nil {
-		err := a.tx.Commit()
-		a.tx = nil
+	if a.inTx {
+		_, err := a.conn.ExecContext(context.Background(), "COMMIT")
+		a.inTx = false
 		if err != nil {
 			panic(&Error{Query: "COMMIT", Err: err})
 		}
@@ -332,14 +362,20 @@ func (a *Archive) Commit() {
 
 // Rollback drops the open transaction's changes.
 func (a *Archive) Rollback() {
-	if a.tx != nil {
-		a.tx.Rollback()
-		a.tx = nil
+	if a.inTx {
+		a.conn.ExecContext(context.Background(), "ROLLBACK")
+		a.inTx = false
 	}
 }
 
 func (a *Archive) Close() error {
 	a.Rollback()
+	for _, st := range a.stmts {
+		st.Close()
+	}
+	if a.conn != nil {
+		a.conn.Close()
+	}
 	return a.DB.Close()
 }
 
