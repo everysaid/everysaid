@@ -113,3 +113,25 @@ func TestSpamOnlyForStrangers(t *testing.T) {
 	must(t, r.status == 200 && len(r.json()["reported"].([]any)) == 0, "without reporting: %d %s", r.status, r.body)
 	must(t, c.post(fmt.Sprintf("/api/people/%d/not-spam", named), nil).status == 200, "not spam")
 }
+
+// The page of those blocked decides many at once: some removed as spam, some not spam (listed apart,
+// each to be taken back); one that may not be removed is said and the rest go on.
+func TestApplySpam(t *testing.T) {
+	c := newServer(t)
+	c.login()
+	a, b, named := newSpammer(t, c, 1), newSpammer(t, c, 2), newSpammer(t, c, 3)
+	must(t, c.do("PATCH", fmt.Sprintf("/api/people/%d", named), M{"name": "Known"}, H).status == 200, "name")
+	r := c.post("/api/spam/apply", M{"remove": []int64{a, named}, "keep": []int64{b}, "report": false})
+	must(t, r.status == 200, "apply: %d %s", r.status, r.body)
+	out := r.json()
+	failed, _ := out["failed"].([]any)
+	must(t, fmt.Sprint(out["removed"]) == fmt.Sprintf("[%d]", a) && num(out["kept"]) == 1 && num(out["messages"]) == 2 &&
+		len(failed) == 1 && failed[0].(map[string]any)["name"] == "Known", "applied: %v", out)
+	list := c.getJSON("/api/spam")
+	kept := list["kept"].([]any)
+	must(t, len(kept) == 1 && num(kept[0].(map[string]any)["person_id"]) == b, "kept: %v", kept)
+	must(t, c.post(fmt.Sprintf("/api/people/%d/not-spam/undo", b), nil).status == 200, "undo")
+	must(t, len(c.getJSON("/api/spam")["kept"].([]any)) == 0, "still kept")
+	must(t, c.post(fmt.Sprintf("/api/people/%d/not-spam/undo", b), nil).status == 404, "undo twice")
+	must(t, c.post("/api/spam/apply", M{"remove": "x"}).status == 400, "a bad list")
+}

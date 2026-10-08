@@ -374,7 +374,10 @@ Online, for one owner, with the strongest protection that does not get in the wa
   The user may let them back (Settings → Names). Where a source can (`ReportSpam`), the service is
   told too: Telegram reports, blocks and deletes the chat; WhatsApp blocks. People blocked on a
   phone or a service (`blocked`: Android's export, Telegram's and WhatsApp's blocklists, as they
-  change) are suggested for removal on the People page, until the user says they are not spam.
+  change) are suggested for removal: one line on the People page leads to their page
+  (`/people/blocked`), where each is marked spam or not spam and all are applied together
+  (`POST /api/spam/apply`), after a dialog that adds up what goes. Those said not to be spam are
+  listed apart there, each can be suggested again.
 
 ## 10. The MCP server
 

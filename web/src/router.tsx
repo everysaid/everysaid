@@ -39,6 +39,7 @@ export const mediaRoute = createRoute({ getParentRoute: () => rootRoute, path: "
 const people = createRoute({ getParentRoute: () => rootRoute, path: "/people", component: lazyRouteComponent(() => import("./routes/PeoplePage"), "PeoplePage") });
 const unnamed = createRoute({ getParentRoute: () => rootRoute, path: "/people/unnamed", component: lazyRouteComponent(() => import("./routes/UnnamedPage"), "UnnamedPage") });
 const mergeReview = createRoute({ getParentRoute: () => rootRoute, path: "/people/merge", component: lazyRouteComponent(() => import("./routes/MergeReviewPage"), "MergeReviewPage") });
+const blockedReview = createRoute({ getParentRoute: () => rootRoute, path: "/people/blocked", component: lazyRouteComponent(() => import("./routes/BlockedReviewPage"), "BlockedReviewPage") });
 export const personRoute = createRoute({ getParentRoute: () => rootRoute, path: "/people/$personId", component: lazyRouteComponent(() => import("./routes/PersonPage"), "PersonPage") });
 export const sourcesRoute = createRoute({ getParentRoute: () => rootRoute, path: "/sources",
   validateSearch: (s: Record<string, unknown>): { tab?: string } => ({ tab: (s.tab as string) || undefined }), component: lazyRouteComponent(() => import("./routes/SourcesPage"), "SourcesPage") });
@@ -47,7 +48,7 @@ export const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path
 const overview = createRoute({ getParentRoute: () => rootRoute, path: "/overview", component: OverviewPage });
 const setup = createRoute({ getParentRoute: () => rootRoute, path: "/setup", component: () => <Outlet /> });
 
-const routeTree = rootRoute.addChildren([index, chatRoute, searchRoute, callsRoute, mediaRoute, people, mergeReview, unnamed, personRoute, sourcesRoute,
+const routeTree = rootRoute.addChildren([index, chatRoute, searchRoute, callsRoute, mediaRoute, people, mergeReview, blockedReview, unnamed, personRoute, sourcesRoute,
   settingsRoute, overview, setup]);
 
 export const router = createRouter({ routeTree, context: { queryClient: undefined! }, defaultPreload: "intent", scrollRestoration: true });

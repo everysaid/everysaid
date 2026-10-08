@@ -137,12 +137,28 @@ func TestSpamSuggestions(t *testing.T) {
 	if len(got) != 1 || i64(got[0]["person_id"]) != pid || fmt.Sprint(got[0]["where"]) != "[telegram]" {
 		t.Fatalf("suggestions: %v", got)
 	}
+	if p, _ := got[0]["person"].(core.M); p == nil || p["recent"] == nil {
+		t.Fatalf("without the person: %v", got[0])
+	}
 	if err := core.NotSpam(s, pid); err != nil {
 		t.Fatal(err)
 	}
 	if got := core.SpamSuggestions(s); len(got) != 0 {
 		t.Fatalf("suggested after the user said no: %v", got)
 	}
+	if kept := core.SpamKept(s); len(kept) != 1 || i64(kept[0]["person_id"]) != pid {
+		t.Fatalf("kept: %v", kept)
+	}
+	if err := core.UndoNotSpam(s, pid); err != nil {
+		t.Fatal(err)
+	}
+	if len(core.SpamKept(s)) != 0 || len(core.SpamSuggestions(s)) != 1 {
+		t.Fatal("not suggested again after the undo")
+	}
+	if err := core.UndoNotSpam(s, pid); !errors.Is(err, core.ErrNotFound) {
+		t.Fatalf("a second undo: %v", err)
+	}
+	core.NotSpam(s, pid)
 	if len(core.SpamRemoved(s)) != 0 {
 		t.Fatal("kept counted as removed")
 	}

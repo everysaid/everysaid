@@ -110,6 +110,44 @@ func (h *Host) RemoveSpam(ctx context.Context, pid int64, report bool, lang stri
 		"reported": reported, "failed": failed}, nil
 }
 
+// ApplySpam carries out the decisions of the page of those blocked: each of remove is removed as
+// spam (RemoveSpam), each of keep is not spam: {removed (those removed), kept, messages, calls,
+// chats, reported, failed: [{name, service?, error}]}; one that cannot be removed is said and the rest go on.
+func (h *Host) ApplySpam(ctx context.Context, remove, keep []int64, report bool, lang string) (M, error) {
+	removed := []int64{}
+	var kept, messages, calls, chats int
+	reported, failed := []string{}, []M{}
+	for _, pid := range remove {
+		name := core.PeopleOf(h.store).Name(pid)
+		out, err := h.RemoveSpam(ctx, pid, report, lang)
+		if err != nil {
+			failed = append(failed, M{"name": name, "error": i18n.Tr(err.Error(), lang)})
+			continue
+		}
+		removed = append(removed, pid)
+		messages += out["messages"].(int)
+		calls += out["calls"].(int)
+		chats += out["chats"].(int)
+		for _, svc := range out["reported"].([]string) {
+			if !contains(reported, svc) {
+				reported = append(reported, svc)
+			}
+		}
+		for _, f := range out["failed"].([]M) {
+			f["name"] = name
+			failed = append(failed, f)
+		}
+	}
+	for _, pid := range keep {
+		if err := core.NotSpam(h.store, pid); err != nil {
+			return nil, err
+		}
+		kept++
+	}
+	return M{"removed": removed, "kept": kept, "messages": messages, "calls": calls, "chats": chats,
+		"reported": reported, "failed": failed}, nil
+}
+
 func (s *Server) spamRoutes() {
 	h := s.handle
 
@@ -147,8 +185,40 @@ func (s *Server) spamRoutes() {
 		return M{"ok": true}, nil
 	})
 
+	h("POST /api/people/{pid}/not-spam/undo", bodyNone, func(q *req) (any, error) {
+		pid, err := q.pathInt("pid")
+		if err != nil {
+			return nil, err
+		}
+		if err := core.UndoNotSpam(s.Store, pid); err != nil {
+			return nil, is404(err, nil)
+		}
+		return M{"ok": true}, nil
+	})
+
 	h("GET /api/spam", bodyNone, func(q *req) (any, error) {
-		return M{"removed": core.SpamRemoved(s.Store), "suggestions": core.SpamSuggestions(s.Store)}, nil
+		return M{"removed": core.SpamRemoved(s.Store), "suggestions": core.SpamSuggestions(s.Store),
+			"kept": core.SpamKept(s.Store)}, nil
+	})
+
+	// remove: people to remove as spam; keep: people who are not; report: tell the services too
+	h("POST /api/spam/apply", bodyRequired, func(q *req) (any, error) {
+		remove, err := ints(q.get("remove"))
+		if err != nil {
+			return nil, failed(400, err.Error())
+		}
+		keep, err := ints(q.get("keep"))
+		if err != nil {
+			return nil, failed(400, err.Error())
+		}
+		out, err := s.Host.ApplySpam(q.r.Context(), remove, keep, truthy(q.get("report")), q.lang())
+		if err != nil {
+			return nil, is404(err, nil)
+		}
+		for _, pid := range out["removed"].([]int64) {
+			s.Auth.Log(&q.uid, "removed as spam", fmt.Sprint(pid))
+		}
+		return out, nil
 	})
 
 	h("POST /api/spam/{aid}/restore", bodyNone, func(q *req) (any, error) {
