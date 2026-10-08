@@ -283,7 +283,9 @@ func (a *Archive) seed() {
 
 // begin opens a transaction on the archive's one connection, if none is open (as Python's sqlite3
 // does before a change), and gives that connection with its statements kept prepared: an importer
-// runs the same few statements millions of times.
+// runs the same few statements millions of times. IMMEDIATE: one that began with a read and then
+// writes would fail (SQLITE_BUSY_SNAPSHOT, which busy_timeout does not wait out) when another
+// connection (the server's, another plugin's) committed in between.
 func (a *Archive) begin() db.Querier {
 	if a.conn == nil {
 		c, err := a.DB.Conn(context.Background())
@@ -293,8 +295,8 @@ func (a *Archive) begin() db.Querier {
 		a.conn = c
 	}
 	if !a.inTx {
-		if _, err := a.conn.ExecContext(context.Background(), "BEGIN"); err != nil {
-			panic(&Error{Query: "BEGIN", Err: err})
+		if _, err := a.conn.ExecContext(context.Background(), "BEGIN IMMEDIATE"); err != nil {
+			panic(&Error{Query: "BEGIN IMMEDIATE", Err: err})
 		}
 		a.inTx = true
 	}
