@@ -108,6 +108,29 @@ func readIphoneCalls(path string) []*callRec {
 	return recs
 }
 
+// androidBlocked: the numbers blocked on the phone, as its last export listed them (none where the
+// phone refused them to the shell: those recorded stay).
+func androidBlocked(a *archive.Archive, e archive.AndroidExport) {
+	d := ro(e.DB)
+	defer d.Close()
+	if !hasTable(d, "blocked") {
+		return
+	}
+	var handles []archive.Handle
+	var original []string
+	for _, r := range maps(d, "SELECT * FROM blocked ORDER BY CAST(_id AS INTEGER)") {
+		n := str(r["e164_number"])
+		if n == "" {
+			n = str(r["original_number"])
+		}
+		if n != "" {
+			handles = append(handles, address(n))
+			original = append(original, str(r["original_number"]))
+		}
+	}
+	a.SetBlocked(e.Device, handles, original)
+}
+
 func readAndroidCalls(path, device string) []*callRec {
 	d := ro(path)
 	defer d.Close()
@@ -199,6 +222,7 @@ func Calls(a *archive.Archive, out func(string), opt CallsOptions) (err error) {
 	var android []*callRec
 	for _, e := range exports {
 		android = append(android, readAndroidCalls(e.DB, e.Device)...)
+		androidBlocked(a, e)
 	}
 	pairs, used := pairCalls(iphone, android)
 	iph := archive.Iphone()
@@ -270,6 +294,7 @@ func Calls(a *archive.Archive, out func(string), opt CallsOptions) (err error) {
 	for _, s := range order {
 		a.Imported(sources[s])
 	}
+	a.PurgeSpam()
 	a.Commit()
 
 	var devices []string

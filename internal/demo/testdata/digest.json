@@ -193,6 +193,10 @@
    "rows": 5,
    "sha256": "1894de92dd9d97a45491c75eb1a6d31fdcc54d85b36b08331023935ba447fc58"
   },
+  "spam": {
+   "rows": 0,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
   "state_report": {
    "rows": 1,
    "sha256": "461e3ac6e8e83c2510fb0d55e5cdb6b80f62ecf9da61506aa31bcc5124e8693e"

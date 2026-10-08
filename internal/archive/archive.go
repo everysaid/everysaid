@@ -198,6 +198,7 @@ type Archive struct {
 	devices                           map[string][2]sql.NullInt64
 	pendingEdits                      [][2]any
 	pendingTapbacks                   []pendingTapback
+	pendingFiles                      []string // media files to delete once committed (PurgeSpam's)
 }
 
 // Open opens (making it if new) the archive at path.
@@ -357,6 +358,8 @@ func (a *Archive) Commit() {
 		if err != nil {
 			panic(&Error{Query: "COMMIT", Err: err})
 		}
+		RemoveMediaFiles(a.pendingFiles)
+		a.pendingFiles = nil
 	}
 }
 
@@ -365,6 +368,7 @@ func (a *Archive) Rollback() {
 	if a.inTx {
 		a.conn.ExecContext(context.Background(), "ROLLBACK")
 		a.inTx = false
+		a.pendingFiles = nil
 	}
 }
 
@@ -927,11 +931,13 @@ func (a *Archive) InitArchived() {
 	}
 }
 
-// Resolve, after an import: links replies to the messages they answer (keeping the quoted text only
-// where that is not in the archive), marks the messages that edit events edited, and turns
-// reactions sent as messages (tapbacks) into reactions on their message; and decides the app's own
-// "archived" for chats new to it (InitArchived).
+// Resolve, after an import: removes again what the sources brought of handles removed as spam
+// (PurgeSpam); links replies to the messages they answer (keeping the quoted text only where that is
+// not in the archive), marks the messages that edit events edited, and turns reactions sent as
+// messages (tapbacks) into reactions on their message; and decides the app's own "archived" for
+// chats new to it (InitArchived).
 func (a *Archive) Resolve() {
+	a.PurgeSpam()
 	a.InitArchived()
 	a.Exec("UPDATE message SET reply_to = (SELECT t.id FROM message t WHERE t.service_id = " +
 		"message.service_id AND t.key = message.reply_key AND t.key_scope IS message.key_scope) " +
@@ -947,6 +953,15 @@ func (a *Archive) Resolve() {
 		}
 	}
 	a.pendingEdits, a.pendingTapbacks = nil, nil
+}
+
+// PurgeSpam is PurgeSpam on what this import brought: its files are deleted once committed.
+func (a *Archive) PurgeSpam() {
+	p := PurgeSpam(a.q(), nil)
+	if p.Conversations > 0 {
+		a.conversations = map[string]int64{} // those cached may be gone
+	}
+	a.pendingFiles = append(a.pendingFiles, p.Files...)
 }
 
 // Call is a call to add.

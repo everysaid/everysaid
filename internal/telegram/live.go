@@ -508,6 +508,9 @@ func settle(ctx context.Context, c *plugins.Context, cn *conn, dialogs []dialog)
 	if err := noteReads(c, dialogReads(dialogs), false); err != nil {
 		return err
 	}
+	if err := noteBlocked(ctx, c, cn); err != nil { // a help for the user, not what the connection needs
+		c.Log("the blocked people could not be read: {e}", map[string]any{"e": err.Error()})
+	}
 	changed, err := catchUp(ctx, c, cn, dialogs)
 	if err != nil {
 		return err
@@ -612,6 +615,11 @@ func handlers(c *plugins.Context, cn *conn, d tg.UpdateDispatcher, members func(
 	})
 	d.OnDeleteChannelMessages(func(ctx context.Context, e tg.Entities, u *tg.UpdateDeleteChannelMessages) error {
 		return logged(noteDeleted(c, PeerID(&tg.PeerChannel{ChannelID: u.ChannelID}), u.Messages))
+	})
+
+	// someone blocked, or no longer, on any of the user's devices
+	d.OnPeerBlocked(func(ctx context.Context, e tg.Entities, u *tg.UpdatePeerBlocked) error {
+		return logged(peerBlocked(c, u))
 	})
 
 	// archived, pinned or muted on any of the user's devices

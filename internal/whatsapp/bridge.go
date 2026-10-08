@@ -302,9 +302,14 @@ func (b *Bridge) handle(client *whatsmeow.Client, store *MessageStore, evt any) 
 		handleReceipt(store, v, b.log)
 	case *events.JoinedGroup, *events.GroupInfo:
 		handleGroupEvent(client, store, v, b.log)
+	case *events.Blocklist:
+		handleBlocklist(client, store, v, b.log)
 	case *events.Connected, *events.Disconnected, *events.LoggedOut, *events.TemporaryBan,
 		*events.ConnectFailure, *events.StreamReplaced, *events.ClientOutdated:
 		handleStateEvent(store, v, b.log)
+		if _, ok := v.(*events.Connected); ok {
+			go refreshBlocklist(client, store, b.log) // not in the event handler: it waits for an answer
+		}
 		select {
 		case b.said <- v:
 		default:

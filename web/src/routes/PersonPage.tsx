@@ -12,6 +12,7 @@ import { Avatar, Button, Card, Center, Dialog, Field, Input, ServiceBadge, Spinn
 import { PageHeader } from "@/components/PageHeader";
 import { GuessLine, PersonLabels } from "@/components/Labels";
 import { usePeek } from "@/components/PersonPeek";
+import { SpamCard } from "@/components/Spam";
 
 export function PersonPage() {
   const { t } = useTranslation();
@@ -105,6 +106,7 @@ export function PersonPage() {
               </div>
             </Card>
           )}
+          <SpamCard personId={p.id} />
         </div>
       </div>
       <MergeDialog open={merging} onOpenChange={setMerging} person={p} onDone={refresh} />

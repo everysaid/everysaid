@@ -105,6 +105,9 @@ func (store *MessageStore) create() error {
 	if err := store.migrateReceipts(); err != nil {
 		return fmt.Errorf("failed to create receipt tables: %v", err)
 	}
+	if err := store.migrateBlocklist(); err != nil {
+		return fmt.Errorf("failed to create the blocklist table: %v", err)
+	}
 	return nil
 }
 

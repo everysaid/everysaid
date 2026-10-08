@@ -65,7 +65,7 @@ func (Plugin) Info() *plugins.Info {
 		CanSend: true, CanReply: true, CanMention: true, CanMarkRead: true, CanSendFiles: true,
 		// any emoji, the app's six quick ones first
 		CanReact: true, Reactions: []string{"👍", "❤️", "😂", "😮", "😢", "🙏"}, FreeReactions: true,
-		CanEdit: true, CanDelete: true, EditWindow: editWindow, DeleteWindow: deleteWindow,
+		CanEdit: true, CanDelete: true, EditWindow: editWindow, DeleteWindow: deleteWindow, CanReportSpam: true,
 		Actions: []plugins.Action{{ID: "link", Label: "Link a device (QR code)"},
 			{ID: "unblock", Label: "Allow sending again"}},
 	}
