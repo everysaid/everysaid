@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import { VirtuosoGrid } from "react-virtuoso";
 import { Archive, Check, CheckSquare, FileText, Images, Mic, Play, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
-import { api, qs, type MediaItem } from "@/lib/api";
+import { api, qs, thumbUrl, type MediaItem } from "@/lib/api";
 import { bytes, dateOnly } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Button, Empty, LoadingBar, MoreOnScroll, Segmented, Spinner, Switch } from "@/components/ui";
@@ -100,7 +100,7 @@ export function MediaPage() {
                 onClick={() => (selecting ? toggle(m.sha256) : setOpen(i))}
                 className={cn("relative block aspect-square w-full overflow-hidden rounded-md bg-panel-2", selected.has(m.sha256) && "ring-4 ring-accent ring-inset")}
               >
-                {m.available !== "gone" && <img src={`/api/media/${m.sha256}/thumb`} alt="" loading="lazy" className="size-full object-cover" />}
+                {m.available !== "gone" && <img src={thumbUrl(m.sha256)} alt="" loading="lazy" className="size-full object-cover" />}
                 {m.mime?.startsWith("video/") && <Play className="absolute bottom-1.5 left-1.5 size-4 text-white drop-shadow" />}
                 {m.decision && (
                   <span className={cn("absolute right-1 top-1 grid size-5 place-items-center rounded-full text-white", m.decision === "remove" ? "bg-danger" : m.decision === "library" ? "bg-accent" : "bg-ok")}>
