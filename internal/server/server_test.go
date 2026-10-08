@@ -302,6 +302,30 @@ func next(t *testing.T) asked {
 	return asked{}
 }
 
+// What was sent, as the chat shows it, where the plugin says what went (none where it cannot).
+func TestSendSaysWhatWent(t *testing.T) {
+	c := newServer(t)
+	c.login()
+	drain()
+	var group string
+	for _, x := range items(c.getJSON("/api/chats?kind=group")) {
+		group = x["id"].(string)
+	}
+	r := c.post("/api/chats/"+group+"/send", M{"text": "write: hello", "service": "whatsapp"})
+	must(t, r.status == 200, "send: %d %s", r.status, r.body)
+	next(t)
+	went := r.json()["messages"].([]any)
+	must(t, len(went) == 1, "messages: %v", went)
+	m := went[0].(map[string]any)
+	must(t, m["text"] == "write: hello" && m["outgoing"] == true && num(m["conversation_id"]) == num(r.json()["conversation_id"]) &&
+		strings.Contains(m["cursor"].(string), ":m:"), "message: %v", m)
+	r = c.post("/api/chats/"+group+"/send", M{"text": "unsaid", "service": "whatsapp"})
+	must(t, r.status == 200, "send: %d %s", r.status, r.body)
+	next(t)
+	went = r.json()["messages"].([]any)
+	must(t, len(went) == 0, "messages where the plugin cannot say: %v", went)
+}
+
 // A group's members to name with @, a file sent with its caption, who got and read the user's
 // messages, and the services told the chat was read: through a plugin that records what it is asked.
 func TestMentionsFilesReceiptsAndReadReceipts(t *testing.T) {

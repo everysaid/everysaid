@@ -266,7 +266,7 @@ func TestSendAndRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.(M)["id"] != 1001 {
+	if s := res.(plugins.Sent); len(s.Keys) != 1 || s.Keys[0] != "1001" {
 		t.Fatalf("%v", res)
 	}
 	req := f.requests[0].(*tg.MessagesSendMessageRequest)

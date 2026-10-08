@@ -1005,7 +1005,7 @@ func send(ctx context.Context, c *plugins.Context, conv plugins.Conversation, te
 		if _, err := storeMessages(c, chat, []sent{{msg, sender}}); err != nil {
 			return err
 		}
-		out = M{"id": msg.GetID()}
+		out = plugins.Sent{Keys: []string{strconv.Itoa(msg.GetID())}}
 		return nil
 	})
 	return out, err

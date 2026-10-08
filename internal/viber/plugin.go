@@ -140,9 +140,18 @@ func snapshot(ctx context.Context, c *plugins.Context) error {
 
 // runImport brings Viber Desktop's database as it is now into the archive.
 func runImport(ctx context.Context, c *plugins.Context) error {
+	return importUnless(ctx, c, nil)
+}
+
+// importUnless imports, unless done says (once the import before it has ended) that what is wanted
+// is already in.
+func importUnless(ctx context.Context, c *plugins.Context, done func() bool) error {
 	l := lockOf(c)
 	l.Lock()
 	defer l.Unlock()
+	if done != nil && done() {
+		return nil
+	}
 	if err := snapshot(ctx, c); err != nil {
 		return err
 	}
@@ -204,7 +213,7 @@ func follow(ctx context.Context, c *plugins.Context, every time.Duration) error 
 	kick := make(chan struct{}, 1)
 	ended := make(chan error, 1)
 	go func() {
-		ended <- subscribe(ctx, socket(c), func() {
+		ended <- subscribe(ctx, socket(c), func() {}, func(event) {
 			select {
 			case kick <- struct{}{}:
 			default:
@@ -420,7 +429,8 @@ func sentDir(c *plugins.Context) (string, error) {
 }
 
 // Send sends into a chat Viber Desktop has: a file (Viber sends it without a caption: the text
-// follows as a message), the text, a reply quoting a message, mentions of the group's people.
+// follows as a message), the text, a reply quoting a message, mentions of the group's people. What
+// went is known from the events Viber adds for it, and returned once it is in the archive.
 func (Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conversation, text string,
 	reply *plugins.Reply, ms []plugins.Mention, file *plugins.File) (any, error) {
 	if err := gate(c); err != nil {
@@ -430,6 +440,20 @@ func (Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Convers
 	if err != nil {
 		return nil, err
 	}
+	var wanted []func(event) bool // what each message sent looks like, in the order they go
+	if file != nil {
+		wanted = append(wanted, func(e event) bool { return e.Body == "" })
+	}
+	if text != "" {
+		wanted = append(wanted, func(e event) bool {
+			if len(ms) > 0 { // Viber writes the mentions its own way: @, the name between U+2068 and U+2069
+				return strings.ContainsRune(e.Body, '\u2068')
+			}
+			return strings.TrimSpace(e.Body) == strings.TrimSpace(text)
+		})
+	}
+	w := watchSent(ctx, c, chat, wanted)
+	defer w.stop()
 	if file != nil {
 		d, err := sentDir(c)
 		if err != nil {
@@ -477,8 +501,103 @@ func (Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Convers
 			return nil, failed(err)
 		}
 	}
-	settle(ctx, c)
-	return M{"chat": chat}, nil
+	keys := w.wait(ctx)
+	if keys == nil {
+		settle(ctx, c)
+		return M{"chat": chat}, nil
+	}
+	have := func() bool {
+		return db.Int(c.Store().Read(), "SELECT count(*) FROM message WHERE conversation_id = ? AND key IN ("+
+			db.Marks(len(keys))+")", append([]any{conv.ID}, db.Args(keys)...)...) == int64(len(keys))
+	}
+	if err := importUnless(context.WithoutCancel(ctx), c, have); err != nil {
+		c.Log("error: {e}", map[string]any{"e": err})
+	}
+	return plugins.Sent{Keys: keys}, nil
+}
+
+// sentWait is how long the events of what was sent are waited for, once it went.
+var sentWait = 5 * time.Second
+
+// sentWatch follows the events Viber adds, from before something is sent, for those of what goes.
+type sentWatch struct {
+	stop  func()
+	found chan []string // the tokens, once each wanted message has its event
+}
+
+// watchSent watches for the user's messages in chat that match wanted, one event each, in order; it
+// watches nothing where the bridge cannot be followed (what went is then not known).
+func watchSent(ctx context.Context, c *plugins.Context, chat int64, wanted []func(event) bool) *sentWatch {
+	ctx, stop := context.WithCancel(ctx)
+	w := &sentWatch{stop: stop, found: make(chan []string, 1)}
+	if len(wanted) == 0 {
+		return w
+	}
+	since := time.Now().Add(-2 * time.Second).UnixMilli() // a subscriber may first get some it had not
+	ready := make(chan bool, 1)
+	go func() {
+		var keys []string
+		err := subscribe(ctx, socket(c), func() { ready <- true }, func(e event) {
+			if len(keys) == len(wanted) || !e.Outgoing || e.Type != 0 || e.Chat != chat || e.TS < since ||
+				e.Token == "" || e.Token == "0" || !wanted[len(keys)](e) || !claim(e.Token) {
+				return
+			}
+			if keys = append(keys, e.Token); len(keys) == len(wanted) {
+				w.found <- keys
+			}
+		})
+		if err != nil {
+			c.Log("error: {e}", map[string]any{"e": err})
+		}
+		select { // no longer followed: not waited for
+		case w.found <- nil:
+		default:
+		}
+		select {
+		case ready <- false:
+		default:
+		}
+	}()
+	select { // sending waits until the events are followed (or cannot be)
+	case <-ready:
+	case <-ctx.Done():
+	case <-time.After(3 * time.Second):
+	}
+	return w
+}
+
+// claimed: the events already taken as some send's (each send sees them all: two of the same text
+// sent at once take one each), kept a minute.
+var claimed = struct {
+	sync.Mutex
+	at map[string]time.Time
+}{at: map[string]time.Time{}}
+
+// claim takes an event's token for a send; false where another took it.
+func claim(token string) bool {
+	claimed.Lock()
+	defer claimed.Unlock()
+	for k, at := range claimed.at {
+		if time.Since(at) > time.Minute {
+			delete(claimed.at, k)
+		}
+	}
+	if _, ok := claimed.at[token]; ok {
+		return false
+	}
+	claimed.at[token] = time.Now()
+	return true
+}
+
+// wait is the tokens of what was sent (nil where they did not all come in time).
+func (w *sentWatch) wait(ctx context.Context) []string {
+	select {
+	case keys := <-w.found:
+		return keys
+	case <-ctx.Done():
+	case <-time.After(sentWait):
+	}
+	return nil
 }
 
 // fileWait is how long a file may take to upload before its text goes anyway.

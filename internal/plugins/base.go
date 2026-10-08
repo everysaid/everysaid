@@ -257,9 +257,16 @@ type Ref struct {
 // Reply is the message answered.
 type Reply = Ref
 
-// Sender sends into a conversation; it returns what it said.
+// Sender sends into a conversation; it returns what it said: a Sent where it knows what went.
 type Sender interface {
 	Send(ctx context.Context, c *Context, conv Conversation, text string, reply *Reply, mentions []Mention, file *File) (any, error)
+}
+
+// Sent is what a Sender's message became in the archive, once it is there: the keys (message.key,
+// in the conversation sent to), or the ids where the plugin wrote the rows itself.
+type Sent struct {
+	Keys []string `json:"keys,omitempty"`
+	IDs  []int64  `json:"ids,omitempty"`
 }
 
 // Reactor puts the user's reaction on a message (emoji), in place of the one there was; "" takes it

@@ -13,7 +13,9 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -56,8 +58,17 @@ func call(ctx context.Context, sock, line string, timeout time.Duration) (string
 	return out, nil
 }
 
+// acting: one action at a time per bridge. Viber runs the bridge's commands on its main thread, but
+// compose lets Qt's events run while it opens the chat and types, and a command waiting is one of
+// them: it would run inside the compose (another compose typing into the same input, a snapshot
+// taking the time the chat has to open).
+var acting sync.Map
+
 // act is a command whose answer is "ok".
 func act(ctx context.Context, sock, line string) error {
+	l, _ := acting.LoadOrStore(sock, &sync.Mutex{})
+	l.(*sync.Mutex).Lock()
+	defer l.(*sync.Mutex).Unlock()
 	out, err := call(ctx, sock, line, 30*time.Second)
 	if err != nil {
 		return err
@@ -71,6 +82,39 @@ func act(ctx context.Context, sock, line string) error {
 // escapeLine writes text on one line as the bridge reads it back (\n, \t, \\).
 func escapeLine(s string) string {
 	return strings.NewReplacer(`\`, `\\`, "\n", `\n`, "\t", `\t`, "\r", "").Replace(s)
+}
+
+// unescapeLine reads back a column the bridge wrote on one line.
+func unescapeLine(s string) string {
+	return strings.NewReplacer(`\\`, `\`, `\n`, "\n", `\t`, "\t").Replace(s)
+}
+
+// event is a row of Viber's Events (with its message's body and info) as the bridge streams it.
+type event struct {
+	ID, Chat   int64
+	Outgoing   bool
+	Type       int
+	TS         int64 // Unix ms
+	Token      string
+	Body, Info string
+}
+
+// parseEvent reads a line of `events` or `subscribe`: EventID, ChatID, ContactID, Direction, Type,
+// TimeStamp, Token, IsRead, Body, Info.
+func parseEvent(line string) (event, bool) {
+	f := strings.Split(strings.TrimRight(line, "\r\n"), "\t")
+	if len(f) != 10 {
+		return event{}, false
+	}
+	id, err := strconv.ParseInt(f[0], 10, 64)
+	if err != nil {
+		return event{}, false
+	}
+	chat, _ := strconv.ParseInt(f[1], 10, 64)
+	typ, _ := strconv.Atoi(f[4])
+	ts, _ := strconv.ParseInt(f[5], 10, 64)
+	return event{ID: id, Chat: chat, Outgoing: f[3] == "1", Type: typ, TS: ts, Token: f[6],
+		Body: unescapeLine(f[8]), Info: unescapeLine(f[9])}, true
 }
 
 // part is a piece of what compose types: text, or a mention of a Viber contact.
@@ -94,9 +138,9 @@ func compose(ctx context.Context, sock string, c composition) error {
 	return act(ctx, sock, "compose "+string(b))
 }
 
-// subscribe calls each time Viber adds events (a new message, a reaction, an edit), until ctx ends
-// or the bridge goes away.
-func subscribe(ctx context.Context, sock string, each func()) error {
+// subscribe calls each with the events Viber adds (a new message, a reaction, an edit), until ctx
+// ends or the bridge goes away; ready, once the bridge has said it is subscribed.
+func subscribe(ctx context.Context, sock string, ready func(), each func(event)) error {
 	d := net.Dialer{Timeout: 2 * time.Second}
 	conn, err := d.DialContext(ctx, "unix", sock)
 	if err != nil {
@@ -125,8 +169,11 @@ func subscribe(ctx context.Context, sock string, each func()) error {
 			if strings.TrimSpace(line) != "subscribed" {
 				return &BridgeError{strings.TrimSpace(line)}
 			}
+			ready()
 			continue
 		}
-		each()
+		if e, ok := parseEvent(line); ok {
+			each(e)
+		}
 	}
 }

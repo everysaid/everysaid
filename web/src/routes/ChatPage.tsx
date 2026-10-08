@@ -26,6 +26,23 @@ import { avatarUrl } from "@/components/ChatList";
 const START = 1_000_000_000;
 const PAGE = 80;
 
+/** Placeholders of messages being sent, gone for the messages themselves among `real`: the one of the
+ * same text, else (its text written otherwise by the service: mentions, a file) the oldest of the
+ * conversation it went to; `since`: only those sent from then on (ms before the placeholder's time). */
+function withoutSent(items: StreamItem[], real: StreamItem[], since = Infinity): StreamItem[] {
+  const sent = items.filter((i): i is MessageItem => i.type === "message" && i.id < 0);
+  if (!sent.length) return items;
+  const gone = new Set<number>();
+  for (const f of real) {
+    if (f.type !== "message" || !f.outgoing || f.id < 0) continue;
+    const open = (i: MessageItem) => !gone.has(i.id) && f.ts >= i.ts - since;
+    const p = sent.find((i) => open(i) && (i.text ?? "") === (f.text ?? ""))
+      ?? sent.find((i) => open(i) && i.loose && i.conversation_id === f.conversation_id);
+    if (p) gone.add(p.id);
+  }
+  return gone.size ? items.filter((i) => !(i.type === "message" && gone.has(i.id))) : items;
+}
+
 export function ChatPage() {
   const { chatId } = chatRoute.useParams();
   const { m, ts, hide } = chatRoute.useSearch();
@@ -52,7 +69,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   const [lightbox, setLightbox] = useState<number | null>(null);
   const virt = useRef<VirtuosoHandle>(null);
   const scroller = useRef<HTMLElement | null>(null);
-  const busy = useRef({ older: false, newer: false });
+  const busy = useRef({ older: false, newer: false, again: false });
   const itemsRef = useRef(items);
   itemsRef.current = items;
   const sendable = detail.data?.sendable ?? [];
@@ -197,7 +214,11 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
 
   const loadNewer = useCallback(async (force = false) => {
     const cur = itemsRef.current;
-    if (busy.current.newer || (!hasNewer && !force) || !cur.length) return;
+    if (busy.current.newer) {
+      if (force) busy.current.again = true;    // once more when this one ends: what it asked for may be newer
+      return;
+    }
+    if ((!hasNewer && !force) || !cur.length) return;
     busy.current.newer = true;
     try {
       // after the newest the server knows (not a placeholder of a message being sent)
@@ -207,22 +228,16 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       setItems((prev) => {
         const seen = new Set(prev.map((i) => i.cursor));
         const fresh = page.items.filter((i) => !seen.has(i.cursor));
-        // a placeholder of a sent message goes once the message itself is here: the one of the same
-        // text, else (its text written otherwise by the service: mentions, a file) the oldest of the
-        // conversation it went to
-        const gone = new Set<number>();
-        const sent = prev.filter((i): i is MessageItem => i.type === "message" && i.id < 0 && i.status === "sent");
-        for (const f of fresh) {
-          if (f.type !== "message" || !f.outgoing) continue;
-          const p = sent.find((i) => !gone.has(i.id) && (i.text ?? "") === (f.text ?? ""))
-            ?? sent.find((i) => !gone.has(i.id) && i.loose && i.conversation_id === f.conversation_id);
-          if (p) gone.add(p.id);
-        }
-        return [...prev.filter((i) => !(i.type === "message" && gone.has(i.id))), ...fresh];
+        // a placeholder goes once the message itself is here, also before the answer to its sending
+        return [...withoutSent(prev, fresh), ...fresh];
       });
       if (!force) setHasNewer(page.has_newer);
     } finally {
       busy.current.newer = false;
+      if (busy.current.again) {
+        busy.current.again = false;
+        loadNewer(true);
+      }
     }
   }, [chatId, hasNewer]);
 
@@ -239,7 +254,8 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
     setTimeout(go, 250);
   };
   // sending: the message shows at once, at the end, as being sent (the field is free for the next
-  // one); it is replaced by itself when it arrives, or marked as not sent
+  // one); it is replaced by itself when it arrives, or by what the answer says went, or marked as
+  // not sent
   const send = useCallback(async (body: string, service: string | null, answered: MessageItem | null, mentions: Mentioned[], file: File | null) => {
     if (hasNewer) navigate({ to: "/chat/$chatId", params: { chatId }, search: { hide } });
     const id = -Date.now() - Math.random();
@@ -256,7 +272,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
     }]);
     try {
       const via = answered ? answered.service : service;
-      let went: { conversation_id: number };
+      let went: { conversation_id: number; messages: MessageItem[] };
       if (file) {
         const form = new FormData();
         form.append("text", body);
@@ -269,6 +285,13 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
         went = await api.post(`/api/chats/${chatId}/send`, { text: body, service: via, reply_to: answered?.id, mentions: mentions.length ? mentions : undefined });
       }
       mark("sent", went.conversation_id);
+      setItems((prev) => {
+        const seen = new Set(prev.map((i) => i.cursor));
+        const real = went.messages.filter((m) => !seen.has(m.cursor));
+        if (went.messages.length) return prev.flatMap((i) => (i.type === "message" && i.id === id ? real : [i]));
+        // where the service cannot say what went: the message itself, if it came before the answer
+        return withoutSent(prev, prev, 10_000);
+      });
       toEnd.current = true;
       await loadNewer(true);
     } catch (e) {

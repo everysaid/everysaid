@@ -15,6 +15,7 @@ import (
 	"everysaid/internal/archive"
 	"everysaid/internal/config"
 	"everysaid/internal/core"
+	"everysaid/internal/errs"
 	"everysaid/internal/importers"
 	"everysaid/internal/plugins"
 )
@@ -262,13 +263,25 @@ func (Sender) Send(ctx context.Context, c *plugins.Context, conv plugins.Convers
 		after(c, time.Second, func() error { return Receipt(h, mid, "delivered") })
 		after(c, 2500*time.Millisecond, func() error { return Receipt(h, mid, "read") })
 	}
-	if !strings.HasPrefix(text, "quiet:") { // the other side answers (a test may want silence)
+	// a test's words: "quiet:" no answer from the other side, "late:" the sending said done only
+	// a while after the message is in (as Viber Desktop's), "lost:" said failed though it went
+	if !strings.Contains(text, "quiet:") {
 		after(c, 1500*time.Millisecond, func() error {
 			_, err := Message(h, conv.ID, "↩ "+text, false, "", nil, nil)
 			return err
 		})
 	}
-	return core.M{"id": mid}, nil
+	if strings.Contains(text, "late:") {
+		select {
+		case <-time.After(1500 * time.Millisecond):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if strings.Contains(text, "lost:") {
+		return nil, errs.Plugin("Sending failed", 0)
+	}
+	return plugins.Sent{IDs: []int64{mid}}, nil
 }
 
 func (Sender) MarkRead(ctx context.Context, c *plugins.Context, conv plugins.Conversation, until int64) (int, error) {

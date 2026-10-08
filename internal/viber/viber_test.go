@@ -8,11 +8,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -75,14 +77,17 @@ INSERT INTO Messages (EventID, Type, Body, Info) VALUES (10, 1, 'hello all', '{}
 `
 
 // bridge answers as bridges/viber does: ping, snapshot (the database above), and "ok" to the
-// actions, each kept as said; fail, where set, is said in place of "ok".
+// actions, each kept as said; fail, where set, is said in place of "ok". What is sent is written
+// as Viber does, its event streamed to the subscribers before the "ok" (unless quiet).
 type bridge struct {
 	sock, data string
 	mu         sync.Mutex
 	said       []string
 	fail       string
+	quiet      bool
 	l          net.Listener
 	conns      []net.Conn
+	subs       []net.Conn
 }
 
 func newBridge(t *testing.T) *bridge {
@@ -146,8 +151,19 @@ func (b *bridge) serve(c net.Conn) {
 	case "ping":
 		io.WriteString(c, "pong\n")
 	case "subscribe":
+		b.mu.Lock()
+		b.subs = append(b.subs, c)
 		io.WriteString(c, "subscribed\n")
+		b.mu.Unlock()
 		io.Copy(io.Discard, c) // open until either side ends it
+		b.mu.Lock()
+		for i, s := range b.subs {
+			if s == c {
+				b.subs = append(b.subs[:i], b.subs[i+1:]...)
+				break
+			}
+		}
+		b.mu.Unlock()
 		return
 	case "snapshot":
 		in, _ := os.ReadFile(b.data)
@@ -161,8 +177,62 @@ func (b *bridge) serve(c net.Conn) {
 		if fail != "" {
 			io.WriteString(c, "error "+fail+"\n")
 		} else {
+			b.sent(cmd, rest)
 			io.WriteString(c, "ok\n")
 		}
+	}
+}
+
+// sent writes the user's message an action sends (a text, a file, a composed text) into Viber's
+// tables, and streams its event.
+func (b *bridge) sent(cmd, rest string) {
+	var chat int64
+	var body, path string
+	typ := 1
+	switch cmd {
+	case "send":
+		id, text, _ := strings.Cut(rest, " ")
+		chat, _ = strconv.ParseInt(id, 10, 64)
+		body = unescapeLine(text)
+	case "file":
+		id, p, _ := strings.Cut(rest, " ")
+		chat, _ = strconv.ParseInt(id, 10, 64)
+		path, typ = p, 2
+	case "compose":
+		var cmp composition
+		if json.Unmarshal([]byte(rest), &cmp) != nil || cmp.Edit != 0 {
+			return
+		}
+		chat = cmp.Chat
+		for _, p := range cmp.Parts {
+			if p.Text != nil {
+				body += *p.Text
+			} else {
+				body += "@\u2068someone\u2069" // as Viber writes a mention
+			}
+		}
+	default:
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.quiet {
+		return
+	}
+	d, err := db.Open(b.data)
+	if err != nil {
+		return
+	}
+	defer d.Close()
+	id := db.Int(d, "SELECT max(EventID) + 1 FROM Events")
+	ts := time.Now().UnixMilli()
+	token := time.Now().UnixNano() // unique, as Viber's are
+	db.Exec(d, "INSERT INTO Events (EventID, TimeStamp, Direction, Type, ChatID, ContactID, Token) VALUES (?, ?, 1, 0, ?, 1, ?)",
+		id, ts, chat, token)
+	db.Exec(d, "INSERT INTO Messages (EventID, Type, Status, Body, PayloadPath, Info) VALUES (?, ?, 130, ?, ?, '{}')",
+		id, typ, body, path)
+	for _, s := range b.subs {
+		fmt.Fprintf(s, "%d\t%d\t1\t1\t0\t%d\t%d\t1\t%s\t{}\n", id, chat, ts, token, escapeLine(body))
 	}
 }
 
@@ -216,24 +286,71 @@ func TestViberDesktop(t *testing.T) {
 		return plugins.Conversation{ID: db.Int(q, "SELECT id FROM conversation WHERE key = ?", key), Key: key, Service: "viber"}
 	}
 	group, maria, notes := conv("group:7701"), conv("+15557770001"), conv("group:5501")
+	maria.ID = db.Int(q, "SELECT conversation_id FROM message WHERE text = 'just us'")
 	ref := func(key string) plugins.Ref {
 		return plugins.Ref{ID: db.Int(q, "SELECT id FROM message WHERE key = ?", key), Key: key}
 	}
 	bob := db.Int(q, "SELECT id FROM address WHERE value = '+15557770002'")
 	ctx := t.Context()
 
-	_, err := (Plugin{}).Send(ctx, c, group, "two\nlines", nil, nil, nil)
+	// what went, known by its event and returned once it is in the archive
+	went := func(res any, conv plugins.Conversation, texts ...string) {
+		t.Helper()
+		s, ok := res.(plugins.Sent)
+		if !ok || len(s.Keys) != len(texts) {
+			t.Fatalf("sent: %#v", res)
+		}
+		for i, k := range s.Keys {
+			eq(t, "in the archive", db.Strs(q, "SELECT text FROM message WHERE conversation_id = ? AND key = ? AND outgoing",
+				conv.ID, k), []string{texts[i]})
+		}
+	}
+	res, err := (Plugin{}).Send(ctx, c, group, "two\nlines", nil, nil, nil)
 	must(t, err)
-	_, err = (Plugin{}).Send(ctx, c, maria, "hi", nil, nil, nil)
+	went(res, group, "two\nlines")
+	res, err = (Plugin{}).Send(ctx, c, maria, "hi", nil, nil, nil)
 	must(t, err)
-	_, err = (Plugin{}).Send(ctx, c, notes, "to me", nil, nil, nil)
+	went(res, maria, "hi")
+	res, err = (Plugin{}).Send(ctx, c, notes, "to me", nil, nil, nil)
 	must(t, err)
+	went(res, notes, "to me")
 	eq(t, "sent", b.take(), []string{`send 2 two\nlines`, "send 4 hi", "send 1 to me"})
 
+	// two of the same text at once: each its own
+	var wg sync.WaitGroup
+	keys := make([][]string, 2)
+	for i := range keys {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if res, err := (Plugin{}).Send(ctx, c, maria, "same", nil, nil, nil); err == nil {
+				keys[i] = res.(plugins.Sent).Keys
+			}
+		}()
+	}
+	wg.Wait()
+	if len(keys[0]) != 1 || len(keys[1]) != 1 || keys[0][0] == keys[1][0] {
+		t.Fatalf("the same text twice: %v", keys)
+	}
+	b.take()
+
+	// no event (an older bridge, Viber slow): sent all the same, what went not said
+	b.quiet, sentWait = true, 50*time.Millisecond
+	res, err = (Plugin{}).Send(ctx, c, maria, "unseen", nil, nil, nil)
+	must(t, err)
+	if _, ok := res.(plugins.Sent); ok {
+		t.Fatalf("quiet: %#v", res)
+	}
+	b.quiet, sentWait = false, 5*time.Second
+	b.take()
+
 	// a reply naming a member: typed in, the mention picked as in the list
-	_, err = (Plugin{}).Send(ctx, c, group, "@Bob look", &plugins.Reply{ID: ref("9001").ID, Key: "9001"},
+	res, err = (Plugin{}).Send(ctx, c, group, "@Bob look", &plugins.Reply{ID: ref("9001").ID, Key: "9001"},
 		[]plugins.Mention{{Start: 0, Length: 4, AddressID: bob}}, nil)
 	must(t, err)
+	if s, ok := res.(plugins.Sent); !ok || len(s.Keys) != 1 {
+		t.Fatalf("composed: %#v", res)
+	}
 	said := b.take()
 	if len(said) != 1 || !strings.HasPrefix(said[0], "compose ") {
 		t.Fatal(said)
@@ -244,8 +361,9 @@ func TestViberDesktop(t *testing.T) {
 		"parts": []any{map[string]any{"mention": 3.0}, map[string]any{"text": " look"}}})
 
 	// a file, then its text as a message of its own
-	_, err = (Plugin{}).Send(ctx, c, group, "a picture", nil, nil, &plugins.File{Data: []byte("x"), Filename: "p.png"})
+	res, err = (Plugin{}).Send(ctx, c, group, "a picture", nil, nil, &plugins.File{Data: []byte("x"), Filename: "p.png"})
 	must(t, err)
+	went(res, group, "", "a picture")
 	said = b.take()
 	if len(said) != 2 || !strings.HasPrefix(said[0], "file 2 ") || said[1] != "send 2 a picture" {
 		t.Fatal(said)
