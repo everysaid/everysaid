@@ -1,11 +1,12 @@
-# Everysaid in Go: building, running, developing
+# Everysaid: building, running, developing
 
 Everysaid is one program, `everysaid`, written in Go: the archive's core, the importers, the
 extraction from phones, the server with the interface inside it, the MCP server, and the live
-connections (Telegram, WhatsApp) all in one static binary, with no runtime to install. Signal is a
-helper program of its own (`everysaid-signal`, licensed AGPL-3.0 as the library it is built on).
-`docs/go-port.md` tells how the port from Python was made, `docs/go-ecosystem.md` which libraries it
-uses and why.
+connections (Telegram, WhatsApp) all in one static binary (`CGO_ENABLED=0`), with no runtime to
+install. Signal is a helper program of its own (`everysaid-signal`, Rust, under the AGPL-3.0 as
+the libraries it is built on): Everysaid starts it and speaks to it in JSON lines on its stdin and
+stdout, and links none of its code, so the AGPL covers the helper alone. `docs/design.md` tells
+how the app is built.
 
 ## Building
 
@@ -26,7 +27,8 @@ Signal's helper, only where Signal is wanted (Rust; it needs `protoc` and the Op
 cd bridges/signal && cargo build --release      # target/release/everysaid-signal
 ```
 
-Put it beside `everysaid`, or on the PATH, or name it in the Signal source's settings.
+Put it beside `everysaid`, or on the PATH, or name it in the Signal source's settings. Whoever
+distributes its binary offers its source under the AGPL.
 
 ## Running
 
@@ -41,16 +43,13 @@ everysaid demo --dir /tmp/demo --serve       # invented people, on port 8530
 everysaid iphone-sync | iphone-ls | iphone-verify | android-export | telegram-sync
 ```
 
-The folders, `config.toml`, the keyring's secrets and the archive are the same the Python used:
-the Go opens what it made, with nothing to convert. Telegram's session is carried over the first
-time (from `telegram-session` to `telegram-session-go`, the first left as it was); WhatsApp keeps
-its linked device (the same store folder). The assistant's configuration becomes:
+An assistant's configuration:
 
 ```json
 { "mcpServers": { "everysaid": { "command": "/path/to/everysaid", "args": ["mcp"] } } }
 ```
 
-and the systemd unit's `ExecStart=%h/.local/bin/everysaid serve`.
+and a systemd user unit's `ExecStart=%h/.local/bin/everysaid serve`.
 
 `EVERYSAID_NO_LIVE=1` starts the server without any live connection: for trying it on a copy of an
 archive whose accounts another server is connected with (two connections with one key can end the
@@ -73,3 +72,28 @@ cd web && EVERYSAID_CMD=/path/to/everysaid pnpm exec playwright test
 ```
 
 (without `EVERYSAID_CMD` the tests run `go run ./cmd/everysaid` from the repository's folder).
+
+## How the code is written
+
+- **Errors.** A failing SQL statement panics with `*db.Error`; entry points (`archive.Recover`,
+  `db.Recover`, the server's handlers, the importers' `Run`) turn it back into an error. A failure
+  the user is told about is `*errs.UserError`, returned, with a code the interface says in its own
+  words. Everything else returns `error` as Go does.
+- **Database.** `internal/db`: `db.Open`, `db.ReadOnly` (a source's databases: never written), and
+  helpers (`Exec`, `Each`, `Row`, `Int`, `Strs`, `Maps`, ...). Importers write through
+  `archive.Archive` (its statements open a transaction by themselves; `Commit` ends it). The core
+  reads with `store.Read()` and writes inside `store.Write(func(tx *sql.Tx) error)`.
+- **JSON.** API values are `core.M` (`map[string]any`) or structs with `json` tags; `nil` is null,
+  empty lists are `[]`.
+- **Words.** Every word the user reads is translated. Server and plugin words: English in code,
+  Greek in `internal/i18n/el_<area>.go` (`func init()` adding to `EL`), one file per area.
+  Command-line output too (`i18n.Say`), in the system locale's language. No Greek in Go code
+  outside `internal/i18n`. The interface's words are in `web/src/lib/i18n.ts`.
+- **Checks.** `go test ./internal/checks/` looks over the whole code: the interface's keys, error
+  codes with words, plugin words with Greek, no Greek string in Go code outside `internal/i18n`.
+  A new plugin package is added to `internal/all` (blank import) so that the checks and the binary
+  load it.
+- **Dependencies.** `go get` what is needed; never `go mod tidy`.
+- **Tests** sit next to the code they test and run on a demo archive or on fixtures made in the
+  test, never on a real archive. Live accounts (Telegram, WhatsApp, Signal) are never connected to
+  from tests: a second connection with the same key can end the account's session.

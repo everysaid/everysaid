@@ -1,9 +1,5 @@
-// Ports make_thumb of everysaid/server/app.py.
-//
-// The Python made WebP previews with Pillow; Go has no encoder of WebP worth trusting yet (see
-// docs/go-ecosystem.md, section 13), so the previews are JPEG (PNG where the picture has
-// transparency, as stickers do), in the same cache folder under names of their own: those the
-// Python made are left alone and made again.
+// Previews of pictures and videos. Go has no lossy WebP encoder worth trusting yet, so they are
+// JPEG (PNG where the picture has transparency, as stickers do), in the cache folder.
 package server
 
 import (

@@ -73,6 +73,39 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
     const item = row && itemsRef.current.find((i) => i.cursor === row.dataset.cursor);
     if (item) keepPlace(chatId, { ts: item.ts, cursor: item.cursor, offset: Math.round(edge - row.getBoundingClientRect().top) });
   }, [chatId]);
+  // the day at the top of the view, kept over the stream where its separator was (a separator that
+  // goes past the top hides, the pill shows its day); the next day's separator pushes it up. Done in
+  // the scroll event itself, not a frame later, so the two never show apart.
+  const dayPill = useRef<HTMLDivElement>(null);
+  const dayText = useRef<HTMLSpanElement>(null);
+  const placeDay = useCallback(() => {
+    const el = scroller.current;
+    const pill = dayPill.current;
+    if (!el || !pill || !dayText.current) return;
+    const edge = el.getBoundingClientRect().top;
+    const row = [...el.querySelectorAll<HTMLElement>("[data-cursor]")].find((r) => r.getBoundingClientRect().bottom > edge);
+    if (!row) return;
+    const label = dayLabel(Number(row.dataset.ts));
+    if (dayText.current.textContent !== label) dayText.current.textContent = label;
+    let next: HTMLElement | undefined;
+    for (const sep of el.querySelectorAll<HTMLElement>("[data-day-sep]")) {
+      const top = sep.getBoundingClientRect().top;
+      sep.style.visibility = top < edge ? "hidden" : "";
+      if (top >= edge && !next) next = sep;
+    }
+    const push = next ? Math.min(0, next.getBoundingClientRect().top - edge - pill.offsetHeight) : 0;
+    pill.style.transform = push ? `translateY(${push}px)` : "";
+    pill.style.right = `${el.offsetWidth - el.clientWidth}px`;   // centred over the messages, not the scrollbar
+    const own = row.querySelector<HTMLElement>("[data-day-sep]");   // its day's separator still in view (the chat's start)
+    pill.style.visibility = own && own.getBoundingClientRect().top >= edge ? "hidden" : "";
+  }, []);
+  useEffect(() => {
+    const el = scroller.current;
+    if (!ready || !el) return;
+    el.addEventListener("scroll", placeDay, { passive: true });
+    placeDay();
+    return () => el.removeEventListener("scroll", placeDay);
+  }, [ready, items.length > 0, placeDay]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => keepLastChat({ chatId, hide }), [chatId, hide]);
   useEffect(() => { if (ready) remember(); }, [ready, atBottom, hasNewer, remember]);
   const answer = useCallback((m: MessageItem) => {
@@ -390,7 +423,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
     const next = i < items.length - 1 ? items[i + 1] : null;
     const newDay = !prev || !sameDay(prev.ts, item.ts);
     const sep = newDay ? (
-      <div className="flex justify-center py-2">
+      <div data-day-sep className="flex justify-center py-2">
         <button
           onClick={() => document.dispatchEvent(new CustomEvent("everysaid:jumpdate"))}
           className="rounded-full bg-panel/90 px-3 py-1 text-xs font-medium text-muted shadow-sm backdrop-blur"
@@ -421,7 +454,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
         onEdit={own && item.text && within(editable?.[svc]) ? startEdit : undefined}
         onDelete={own && within(deletable?.[svc]) ? setDeleting : undefined} />;
     }
-    return <div data-cursor={item.cursor} className={cn(next ? "" : "pb-3")}>{sep}{body}</div>;
+    return <div data-cursor={item.cursor} data-ts={item.ts} className={cn(next ? "" : "pb-3")}>{sep}{body}</div>;
   }, [first, items, isGroup, highlight, openMedia, jump, replyable.join(), answer, detail.data, react, startEdit]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (error) return <Center><div className="space-y-2"><div className="font-semibold">{t("common.error")}</div><div className="text-sm text-muted">{error}</div></div></Center>;
@@ -431,7 +464,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       <div className="flex min-w-0 flex-1 flex-col">
         <ChatHeader chat={detail.data} wide={wide} onInfo={() => setInfoOpen((o) => !o)} onJumpDate={(d) => navigate({ to: "/chat/$chatId", params: { chatId }, search: { ts: d, hide } })}
           hidden={hide ? hide.split(",") : []} onHide={(list) => navigate({ to: "/chat/$chatId", params: { chatId }, search: { hide: list.join(",") || undefined }, replace: true })} />
-        <div data-stream className="chat-bg relative min-h-0 flex-1" onWheel={letGo} onTouchStart={letGo} onKeyDown={letGo} onMouseDown={letGo}>
+        <div data-stream className="chat-bg relative min-h-0 flex-1 overflow-hidden" onWheel={letGo} onTouchStart={letGo} onKeyDown={letGo} onMouseDown={letGo}>
           {!ready ? (
             <Center><Spinner className="size-7" /></Center>
           ) : items.length === 0 ? (
@@ -449,7 +482,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
               endReached={() => loadNewer()}
               atBottomStateChange={setAtBottom}
               totalListHeightChanged={() => { if (stick.current) scrollEnd(); }}
-              rangeChanged={() => { if (ready) requestAnimationFrame(remember); }}
+              rangeChanged={() => { if (ready) requestAnimationFrame(() => { remember(); placeDay(); }); }}
               isScrolling={(on) => { if (!on && ready) remember(); }}
               atBottomThreshold={120}
               increaseViewportBy={{ top: 800, bottom: 400 }}
@@ -461,6 +494,16 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
                 ),
               }}
             />
+          )}
+          {ready && items.length > 0 && (
+            <div ref={dayPill} data-day-pill style={{ visibility: "hidden" }} className="pointer-events-none absolute left-0 top-0 z-10 flex justify-center py-2">
+              <button
+                onClick={() => document.dispatchEvent(new CustomEvent("everysaid:jumpdate"))}
+                className="pointer-events-auto rounded-full bg-panel/90 px-3 py-1 text-xs font-medium text-muted shadow-sm backdrop-blur"
+              >
+                <span ref={dayText} />
+              </button>
+            </div>
           )}
           {ready && (!atBottom || hasNewer) && (
             <button

@@ -78,7 +78,7 @@ export function GroupParts({ chat }: { chat: ChatDetail }) {
           <div key={g.conversation_id} data-group-part className="flex items-center gap-2 px-3 py-2 text-sm">
             <span className="min-w-0 flex-1">
               <span className="block truncate">{g.title ?? chat.title}</span>
-              <span className="block text-xs text-muted">{number(g.messages)} {t("people.messages")}{g.last_ts ? ` · ${dateOnly(g.last_ts)}` : ""}</span>
+              <span className="block text-xs text-muted">{number(g.messages)} {t("people.messages")}{g.first_ts && g.last_ts ? ` · ${dateOnly(g.first_ts)} – ${dateOnly(g.last_ts)}` : ""}</span>
             </span>
             <ServiceBadge id={g.service} />
             {groups.length > 1 && (

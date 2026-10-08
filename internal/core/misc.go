@@ -2,8 +2,10 @@
 package core
 
 import (
+	"cmp"
 	"database/sql"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -237,7 +239,63 @@ type statRow struct {
 }
 
 type counted struct {
-	msgs, calls []statRow
+	msgs, calls      []statRow
+	lastID, messages int64 // the messages counted: up to this id, and how many
+}
+
+// countMessages is the messages per conversation, service and year. Only those added since the
+// last count are counted (a message's conversation, service and time never change, and the app
+// does not remove messages); when the total says otherwise, all of them are counted again.
+func countMessages(s *Store) counted {
+	var out counted
+	tx, err := s.Read().Begin() // the total and the rows counted from one state of the archive
+	if err != nil {
+		panic(&db.Error{Query: "BEGIN", Err: err})
+	}
+	defer tx.Rollback()
+	db.Row(tx, "SELECT count(*), coalesce(max(id), 0) FROM message", nil, &out.messages, &out.lastID)
+	base := s.counted
+	since := int64(0)
+	if base != nil && out.lastID >= base.lastID {
+		since = base.lastID
+	}
+	type key struct {
+		conv, sid int64
+		year      string
+	}
+	at := map[key]int{}
+	if since > 0 {
+		out.msgs = slices.Clone(base.msgs)
+		for i, r := range out.msgs {
+			at[key{r.conv.Int64, r.sid, r.year}] = i
+		}
+	}
+	var added int64
+	db.Each(tx, "SELECT conversation_id, service_id, "+yearOf(s, "ts")+", count(*), "+
+		"min(ts), max(ts) FROM message WHERE id > ? AND id <= ? GROUP BY 1, 2, 3", []any{since, out.lastID},
+		func(scan func(...any)) {
+			var r statRow
+			var year sql.NullString
+			scan(&r.conv, &r.sid, &year, &r.n, &r.lo, &r.hi)
+			r.year = year.String
+			added += r.n
+			if i, ok := at[key{r.conv.Int64, r.sid, r.year}]; ok {
+				o := &out.msgs[i]
+				o.n += r.n
+				o.lo, o.hi = min(o.lo, r.lo), max(o.hi, r.hi)
+				return
+			}
+			out.msgs = append(out.msgs, r)
+		})
+	if since > 0 && base.messages+added != out.messages { // removed meanwhile
+		tx.Rollback()
+		s.counted = nil
+		return countMessages(s)
+	}
+	slices.SortFunc(out.msgs, func(a, b statRow) int {
+		return cmp.Or(cmp.Compare(a.conv.Int64, b.conv.Int64), cmp.Compare(a.sid, b.sid), cmp.Compare(a.year, b.year))
+	})
+	return out
 }
 
 // Stats is counts over the archive; the archived chats left out unless asked for.
@@ -245,16 +303,9 @@ func Stats(s *Store, includeArchived bool) M {
 	return Cached(s, fmt.Sprintf("stats:%v", includeArchived), func() M {
 		// per conversation (or, for calls without one, per address): counts by service and year, and
 		// the first and last instant; summed below over the chats in view
-		c := Cached(s, "stats-counted", func() counted {
-			var out counted
-			db.Each(s.Read(), "SELECT conversation_id, service_id, "+yearOf(s, "ts")+", count(*), "+
-				"min(ts), max(ts) FROM message GROUP BY 1, 2, 3", nil, func(scan func(...any)) {
-				var r statRow
-				var year sql.NullString
-				scan(&r.conv, &r.sid, &year, &r.n, &r.lo, &r.hi)
-				r.year = year.String
-				out.msgs = append(out.msgs, r)
-			})
+		c := Cached(s, "stats-counted", func() counted { // one build at a time: s.counted is its own
+			out := countMessages(s)
+			s.counted = &out
 			db.Each(s.Read(), "SELECT conversation_id, address_id, service_id, count(*) FROM call GROUP BY 1, 2, 3", nil,
 				func(scan func(...any)) {
 					var r statRow
