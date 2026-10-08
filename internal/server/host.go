@@ -684,7 +684,9 @@ type SendRequest struct {
 	File           *plugins.File
 }
 
-// Send sends text in a chat through the plugin that reaches its service; it returns what it said.
+// Send sends text in a chat through the plugin that reaches its service; it returns what it said,
+// with the messages that went where the plugin knows them (to take the place of what the chat
+// showed while it was sent).
 // ReplyTo: then through its conversation, by a plugin that can reply. Mentions: members of the
 // group the text names (left out where the plugin cannot mention: the text says them anyway).
 // File: the text its caption, only through a plugin that can send files.
@@ -784,7 +786,26 @@ func (h *Host) Send(ctx context.Context, chatID string, r SendRequest) (out M, e
 		return nil, err
 	}
 	h.Emit(M{"type": "changed"})
-	return M{"service": o.service, "conversation_id": o.conv, "result": result}, nil
+	return M{"service": o.service, "conversation_id": o.conv, "messages": h.sent(o.conv, result), "result": result}, nil
+}
+
+// sent is what a plugin's Send says went, as the chat shows it (none where it cannot say).
+func (h *Host) sent(conv int64, result any) []M {
+	s, ok := result.(plugins.Sent)
+	if !ok {
+		return []M{}
+	}
+	q := h.store.Read()
+	var items []core.Item
+	for _, id := range s.IDs {
+		items = append(items, core.Item{Type: "m", ID: id})
+	}
+	for _, k := range s.Keys {
+		if id := db.Int(q, "SELECT id FROM message WHERE conversation_id = ? AND key = ?", conv, k); id != 0 {
+			items = append(items, core.Item{Type: "m", ID: id})
+		}
+	}
+	return core.Hydrate(h.store, items, nil)
 }
 
 // MessageAction is what the user does to one message: a reaction ("" takes the user's back), an

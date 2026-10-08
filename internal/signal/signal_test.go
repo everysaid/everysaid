@@ -452,7 +452,7 @@ func TestPlugin(t *testing.T) {
 	if att["bytes"] != "bytes" || att["filename"] != "a.txt" || att["content_type"] != "text/plain" {
 		t.Fatalf("file %v", att)
 	}
-	key := got.(M)["id"].(string)
+	key := got.(plugins.Sent).Keys[0]
 	if num("SELECT count(*) FROM message WHERE key = ? AND outgoing", key) != 1 {
 		t.Fatalf("what was sent is in the archive (%s)", key)
 	}

@@ -921,7 +921,7 @@ func (p Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conve
 		TS int64 `json:"ts"`
 	}
 	json.Unmarshal(raw, &answer)
-	return M{"id": Key(n.own, answer.TS)}, nil
+	return plugins.Sent{Keys: []string{Key(n.own, answer.TS)}}, nil
 }
 
 // MarkRead marks the others' messages of the conversation up to `until` (Unix ms) read, as Signal

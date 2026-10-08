@@ -210,7 +210,24 @@ func (testSource) Check(c *plugins.Context) (bool, string) { return true, "ready
 func (testSource) Send(ctx context.Context, c *plugins.Context, conv plugins.Conversation, text string, reply *plugins.Reply,
 	mentions []plugins.Mention, file *plugins.File) (any, error) {
 	askedCh <- asked{what: "send", service: conv.Service, text: text, mentions: mentions, file: file}
+	if strings.HasPrefix(text, "write:") { // as a source that has what it sent in the archive
+		return writeSent(c, conv, text)
+	}
 	return M{"id": 1}, nil
+}
+
+func writeSent(c *plugins.Context, conv plugins.Conversation, text string) (_ any, err error) {
+	a, err := archive.Open(c.Store().Path)
+	if err != nil {
+		return nil, err
+	}
+	defer a.Close()
+	defer archive.Recover(&err)
+	key := fmt.Sprint("sent-", time.Now().UnixNano())
+	a.AddMessage(a.Source("test/sent", "", "", ""), key, archive.Message{Service: conv.Service, ConversationID: conv.ID,
+		TS: time.Now().UnixMilli(), Outgoing: true, Kind: "text", Text: text, Key: key})
+	a.Commit()
+	return plugins.Sent{Keys: []string{key}}, nil
 }
 
 func (testSource) MarkRead(ctx context.Context, c *plugins.Context, conv plugins.Conversation, until int64) (int, error) {

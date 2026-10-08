@@ -521,10 +521,7 @@ func (p Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conve
 	if err := runImport(c); err != nil { // the bridge stores what it sent
 		c.Log("error: {e}", map[string]any{"e": err})
 	}
-	var out M
-	raw, _ := json.Marshal(answer)
-	json.Unmarshal(raw, &out)
-	return out, nil
+	return plugins.Sent{Keys: []string{answer.ID}}, nil
 }
 
 func (p Plugin) React(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref, emoji string) error {

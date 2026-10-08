@@ -102,7 +102,7 @@ func TestSenderSendsAndHearsBack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mid := out.(core.M)["id"].(int64)
+	mid := out.(plugins.Sent).IDs[0]
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		answered := db.Exists(r, "SELECT 1 FROM message WHERE conversation_id = ? AND text = '↩ hello' AND NOT outgoing", conv.ID)

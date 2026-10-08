@@ -3,7 +3,8 @@ import { signedIn } from "./demo";
 
 // A chat as messages come and go: sending (from the end, from higher up, while still typing) and
 // receiving (one, then another; at the end, or higher up). The demo's own source "sends" into the
-// demo archive after a moment and answers 1.5 s later (not when the text starts with "quiet:");
+// demo archive after a moment and answers 1.5 s later (not when the text has "quiet:"; with "late:"
+// the sending says it is done only 1.5 s after the message is in, with "lost:" it says it failed);
 // /api/demo/incoming brings a message from the other side whenever a test wants one.
 
 const SCROLLER = "[data-stream] [data-virtuoso-scroller]";
@@ -65,6 +66,32 @@ test("at the end, sending: it shows at once, once, and the chat stays at its end
   await expect(inStream(page, words)).toHaveCount(1);
   expect(await gap(page)).toBeLessThan(40);
   if (!phone) expect(await page.evaluate(() => document.activeElement?.tagName)).toBe("TEXTAREA");
+});
+
+test("the message in before the sending says done: shown once", async ({ page }, info) => {
+  const words = `quiet: late: ${Date.now()}`;
+  await send(page, words, info.project.name === "mobile");
+  await expect(inStream(page, words)).toBeVisible();
+  await page.waitForTimeout(2500);
+  await expect(page.locator("[data-stream]").getByText(/Αποστολή…|Sending…/)).toHaveCount(0);
+  await expect(inStream(page, words)).toHaveCount(1);
+});
+
+test("two of the same text at once: two, none left as being sent", async ({ page }, info) => {
+  const phone = info.project.name === "mobile";
+  const words = `quiet: twice ${Date.now()}`;
+  await send(page, words, phone);
+  await send(page, words, phone);
+  await expect(page.locator("[data-stream]").getByText(/Αποστολή…|Sending…/)).toHaveCount(0, { timeout: 10000 });
+  await expect(inStream(page, words)).toHaveCount(2);
+});
+
+test("said failed though it went: shown once, not as not sent", async ({ page }, info) => {
+  const words = `quiet: lost: ${Date.now()}`;
+  await send(page, words, info.project.name === "mobile");
+  await page.waitForTimeout(2500);
+  await expect(inStream(page, words)).toHaveCount(1);
+  await expect(page.locator("[data-stream]").getByText(/Αποστολή…|Sending…|Δεν στάλθηκε|Not sent/)).toHaveCount(0);
 });
 
 test("higher up, sending: the chat goes to its end", async ({ page }, info) => {
