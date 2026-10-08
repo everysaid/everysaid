@@ -77,11 +77,26 @@ Open in the running client, no decryption needed: `~/.ViberPC/<number>/viber.db`
 
 ## When Viber updates
 
-The bridge is only as stable as the Viber build it was checked on. The most fragile part is
-composing (replies, edits, mentions), which drives the QML input. After an update: run
-`bridges/viber/tools/probe.so` (it dumps every class's methods, signals and properties) and check
-the signatures named in `inject/viber-bridge.cpp`; then check a send, a reply and a reaction in My
-Notes. Updating Viber deliberately, not automatically, keeps this under control.
+Viber is updated as any other package, not held back: the bridge says itself what an update broke.
+Its `check` command looks up, on the classes Viber has (nothing is called), everything each command
+uses (the table above), and answers with Viber's version and, per capability (`read`, `live`,
+`send`, `file`, `compose`, `react`, `delete`, `read-receipts`), `ok` or what is missing. It runs
+once at Viber's start (its summary in the journal of `viber-bridge.service`) and whenever the
+source connects. The source then:
+
+- shows the version, and what this version cannot do, on its card; it is not ready without `read`
+  or `live`;
+- refuses an action that can no longer work with what is missing, before anything is sent;
+- keeps the version it saw, and says a new one (or something gone) in its log and as a
+  notification to the user's devices;
+- says, once until it works again, when live receiving stopped: the checks every interval bring
+  messages the bridge did not tell of, twice running.
+
+When something is missing: run `bridges/viber/tools/probe.so` (it dumps every class's methods,
+signals and properties), find what the call became, fix `inject/viber-bridge.cpp` (and its check),
+rebuild, and try a send, a reply and a reaction in My Notes. The most fragile part is composing
+(replies, edits, mentions), which drives the QML input. Until it is fixed, the version before can
+be put back from the package cache (Arch: `/var/cache/pacman/pkg/`, or the AUR helper's cache).
 
 Viber allows one linked Desktop client per account, so the bridge's Viber Desktop is that client.
 Sending is real, and is gated twice: the bridge's `VIBER_ALLOW_SEND=1` and the source's "Sending

@@ -31,6 +31,8 @@
 //   delete TARGET             -> delete the user's own message for everyone      [needs VIBER_ALLOW_SEND]
 //   snapshot PATH             -> a plain (decrypted) copy of viber.db at PATH (mode 600), for the importer
 //   input                     -> the text in the focused input (to check what compose typed)
+//   check                     -> "version V", then per capability "ok NAME [note]" or "missing NAME WHAT":
+//                                whether this Viber still has what each command calls (nothing done)
 //   quit                      -> Viber quits cleanly
 //
 // Reaction emoji codes follow the archive's convention: 1-5 = heart, laugh, wow, sad, angry.
@@ -65,6 +67,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#include <atomic>
+#include <map>
 #include <mutex>
 #include <set>
 #include <string>
@@ -97,6 +101,18 @@ static QList<QObject *> objectsOf(const char *cls) {
     return out;
 }
 
+// Every class seen, by name: meta-objects are static, so they stay valid when their objects are gone
+// (a chat's controller and input exist only while a chat is open). Kept by `check` and compose.
+static std::map<std::string, const QMetaObject *> g_classes;
+
+static void rememberClasses() {
+    std::lock_guard<std::mutex> g(g_mu);
+    for (QObject *o : *g_objs) {
+        const QMetaObject *mo = o->metaObject();
+        g_classes.emplace(mo->className(), mo);
+    }
+}
+
 static int methodByName(QObject *o, const char *name, int params = -1) {
     const QMetaObject *mo = o->metaObject();
     for (int i = 0; i < mo->methodCount(); ++i) {
@@ -122,14 +138,20 @@ static QString esc(const QString &s) {
 
 static QSqlDatabase viberDb() { return QSqlDatabase::database("viber.db", false); }
 
-// Fixed, parameterless-shape queries only — no caller-supplied SQL.
+// Fixed, parameterless-shape queries only — no caller-supplied SQL. `check` runs each with LIMIT 0.
+static const char *kEventsSql =
+    "SELECT e.EventID, e.ChatID, e.ContactID, e.Direction, e.Type, e.TimeStamp, e.Token, "
+    "e.IsRead, m.Body, m.Info FROM Events e LEFT JOIN Messages m ON m.EventID=e.EventID "
+    "WHERE e.EventID>? ORDER BY e.EventID LIMIT ?";
+static const char *kChatsSql = "SELECT ChatID, Name, Flags, Token, LastReadMessageToken, TimeStamp FROM ChatInfo";
+static const char *kTablesSql =
+    "SELECT name, sql FROM main.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND sql IS NOT NULL";
+
 static QString rowsEvents(qlonglong since, int limit) {
     QSqlDatabase db = viberDb();
     if (!db.isOpen()) return "error not-open\n";
     QSqlQuery q(db);
-    q.prepare("SELECT e.EventID, e.ChatID, e.ContactID, e.Direction, e.Type, e.TimeStamp, e.Token, "
-              "e.IsRead, m.Body, m.Info FROM Events e LEFT JOIN Messages m ON m.EventID=e.EventID "
-              "WHERE e.EventID>? ORDER BY e.EventID LIMIT ?");
+    q.prepare(kEventsSql);
     q.addBindValue(since);
     q.addBindValue(limit);
     if (!q.exec()) return "error " + esc(q.lastError().text()) + "\n";
@@ -316,7 +338,18 @@ static QObject *focusedText() {
 // What the user would type, typed into the chat's input and sent with Return: a quoted reply
 // (Chat::onMessageReply), an edit of the user's own message (Chat::editMessage puts it in the input),
 // mentions (InputBoxArea::mentionSelected after an "@", as when one is picked from the list).
+static bool g_busy = false;  // a compose or a check under way: Qt's events run inside it
+
+static QString compose(const QString &json);
+
 static QString actCompose(const QString &json) {
+    g_busy = true;
+    QString out = compose(json);
+    g_busy = false;
+    return out;
+}
+
+static QString compose(const QString &json) {
     QJsonParseError pe;
     QJsonObject o = QJsonDocument::fromJson(json.toUtf8(), &pe).object();
     if (pe.error != QJsonParseError::NoError) return "error bad-json\n";
@@ -339,6 +372,7 @@ static QString actCompose(const QString &json) {
         void *rv[] = {nullptr, &reply, &priv};
         QMetaObject::metacall(chat, QMetaObject::InvokeMetaMethod, ri, rv);
     }
+    rememberClasses();
     QList<QObject *> is = objectsOf("InputBoxArea");
     if (is.isEmpty()) return "error no-inputbox\n";
     QObject *in = is.first();
@@ -435,7 +469,7 @@ static QString snapshot(const QString &path) {
     // and types kept), and filled, in one transaction. Virtual tables (full-text indexes) and their
     // shadow tables are Viber's search, not data, and are left out.
     QStringList names, sqls, virt;
-    if (q.exec("SELECT name, sql FROM main.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND sql IS NOT NULL"))
+    if (q.exec(kTablesSql))
         while (q.next()) {
             names << q.value(0).toString();
             sqls << q.value(1).toString();
@@ -539,6 +573,145 @@ static QString actRead(qlonglong cid) {
     return "error no-setRead\n";
 }
 
+// ---- self-check -------------------------------------------------------------------------------
+
+// What each command needs of this Viber, looked up on the classes seen (nothing is called): after an
+// update that renamed or removed something, the source says what no longer works, before an action
+// fails. A chat's controller and input are known once a chat was open: else My Notes is opened (as
+// compose opens a chat), which sends nothing.
+static QString check() {
+    rememberClasses();
+    auto cls = [](const char *name) -> const QMetaObject * {
+        auto it = g_classes.find(name);
+        return it == g_classes.end() ? nullptr : it->second;
+    };
+    if (!cls("Chat") || !cls("InputBoxArea")) {
+        QSqlDatabase db = viberDb();
+        QSqlQuery q(db);
+        if (db.isOpen() && q.exec("SELECT ChatID FROM ChatInfo WHERE Flags & 524288 LIMIT 1") && q.next()) {
+            qlonglong notes = q.value(0).toLongLong();
+            openChat(notes);
+            QElapsedTimer t;
+            t.start();
+            do {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+                rememberClasses();
+            } while ((!cls("Chat") || !cls("InputBoxArea")) && t.elapsed() < 2000);
+        }
+    }
+    // what is missing of one capability, "" when nothing
+    struct Need {
+        QStringList missing;
+        void cls(const QMetaObject *mo, const char *name) { if (!mo) missing << name; }
+        void method(const QMetaObject *mo, const char *cls, const char *name, int params) {
+            if (!mo) return;
+            for (int i = 0; i < mo->methodCount(); ++i) {
+                QMetaMethod m = mo->method(i);
+                if (m.name() == name && m.parameterCount() == params) return;
+            }
+            missing << QString("%1::%2/%3").arg(cls, name).arg(params);
+        }
+        void signature(const QMetaObject *mo, const char *cls, std::initializer_list<const char *> sigs) {
+            if (!mo) return;
+            for (const char *s : sigs)
+                if (mo->indexOfMethod(QMetaObject::normalizedSignature(s)) >= 0) return;
+            missing << QString("%1::%2").arg(cls, *sigs.begin());
+        }
+    };
+    QString out = "version " + esc(QCoreApplication::applicationVersion()) + "\n";
+    auto say = [&](const char *name, const Need &n, const QString &note = QString()) {
+        if (n.missing.isEmpty()) out += QString("ok ") + name + (note.isEmpty() ? "" : " " + note) + "\n";
+        else out += QString("missing ") + name + " " + n.missing.join(',') + "\n";
+    };
+
+    Need read;
+    QSqlDatabase db = viberDb();
+    if (!db.isOpen()) read.missing << "viber.db";
+    else {
+        QSqlQuery q(db);
+        q.prepare(kEventsSql);
+        q.addBindValue(0);
+        q.addBindValue(0);
+        if (!q.exec()) read.missing << "events";
+        if (!q.exec(QString(kChatsSql) + " LIMIT 0")) read.missing << "chats";
+        if (!q.exec(QString(kTablesSql) + " LIMIT 0")) read.missing << "snapshot";
+    }
+    say("read", read);
+
+    Need live;
+    live.cls(cls("EventsStorage"), "EventsStorage");
+    live.signature(cls("EventsStorage"), "EventsStorage", {"eventsAdded(QList<EventData>)"});
+    say("live", live);
+
+    Need send;
+    int trays = objectsOf("TrayNotifier").size();
+    if (trays != 1) send.missing << QString("TrayNotifier(%1)").arg(trays);
+    send.signature(cls("TrayNotifier"), "TrayNotifier", {"sendMessage(ChatID,QString)"});
+    say("send", send);
+
+    Need file;
+    file.cls(cls("MainWidget"), "MainWidget");
+    file.signature(cls("MainWidget"), "MainWidget", {"sendFilesToChat(QList<QUrl>,ChatID)", "sendFilesToChat(QList<QUrl>,ChatID::type)"});
+    say("file", file);
+
+    Need compose;
+    compose.cls(cls("MainWidget"), "MainWidget");
+    compose.cls(cls("Chat"), "Chat");
+    compose.cls(cls("InputBoxArea"), "InputBoxArea");
+    compose.method(cls("MainWidget"), "MainWidget", "openChat", 2);
+    compose.method(cls("Chat"), "Chat", "editMessage", 1);
+    compose.method(cls("Chat"), "Chat", "onMessageReply", 2);
+    if (cls("Chat") && cls("Chat")->indexOfProperty("chatID") < 0) compose.missing << "Chat.chatID";
+    for (auto [name, n] : std::initializer_list<std::pair<const char *, int>>{
+             {"forceActiveFocus", 0}, {"replaceTextWith", 1}, {"insertEmoticon", 1}, {"mentionSelected", 1}})
+        compose.method(cls("InputBoxArea"), "InputBoxArea", name, n);
+    Need accept;
+    accept.method(cls("InputBoxArea"), "InputBoxArea", "accept", 0);
+    say("compose", compose, accept.missing.isEmpty() || !cls("InputBoxArea") ? QString() : "fallback-return");
+
+    Need react;
+    react.cls(cls("MessageActions"), "MessageActions");
+    react.cls(cls("ReactionsFeature"), "ReactionsFeature");
+    react.method(cls("MessageActions"), "MessageActions", "like", 2);
+    react.method(cls("MessageActions"), "MessageActions", "react", 3);
+    react.method(cls("ReactionsFeature"), "ReactionsFeature", "getReactionFromQuickType", 1);
+    react.method(cls("ReactionsFeature"), "ReactionsFeature", "getReactionFromEmojiCode", 1);
+    if (!QMetaType::fromName("Reaction").isValid()) react.missing << "Reaction(type)";
+    say("react", react);
+
+    Need del;
+    del.cls(cls("MessageActions"), "MessageActions");
+    del.signature(cls("MessageActions"), "MessageActions", {"deleteMessageForAll(EventID::type)", "deleteMessageForAll(EventID)"});
+    say("delete", del);
+
+    Need receipts;
+    bool any = false;
+    for (auto &[name, mo] : g_classes) any = any || mo->indexOfMethod("setRead(ChatID,bool)") >= 0;
+    if (!any) receipts.missing << "setRead(ChatID,bool)";
+    say("read-receipts", receipts);
+    return out;
+}
+
+static QString runCheck() {
+    g_busy = true;
+    QString out = check();
+    g_busy = false;
+    return out;
+}
+
+// Once, at the start: the check in the journal (viber-bridge.service), when Viber's objects are
+// there (asked again every two seconds until then, by startupChecks).
+static std::atomic<bool> g_startupChecked{false};
+
+static void startupCheck() {
+    if (g_startupChecked || g_busy || objectsOf("MainWidget").isEmpty() || objectsOf("EventsStorage").isEmpty())
+        return;
+    g_startupChecked = true;
+    QString out = runCheck();
+    fprintf(stderr, "viber-bridge check:\n%s", out.toUtf8().constData());
+    fflush(stderr);
+}
+
 // ---- command dispatch (runs on the main thread) -----------------------------------------------
 
 static QString runCommand(const QString &line, int fd, bool *keepOpen) {
@@ -549,7 +722,7 @@ static QString runCommand(const QString &line, int fd, bool *keepOpen) {
         QSqlDatabase db = viberDb();
         if (!db.isOpen()) return "error not-open\n";
         QSqlQuery q(db);
-        if (!q.exec("SELECT ChatID, Name, Flags, Token, LastReadMessageToken, TimeStamp FROM ChatInfo"))
+        if (!q.exec(kChatsSql))
             return "error " + esc(q.lastError().text()) + "\n";
         QString out;
         while (q.next()) {
@@ -570,6 +743,7 @@ static QString runCommand(const QString &line, int fd, bool *keepOpen) {
         return rowsEvents(id - 1, 1);
     }
     if (cmd == "snapshot") return snapshot(rest);
+    if (cmd == "check") return runCheck();
     if (cmd == "quit") {  // a clean end (the database closed), whatever signals the launcher left ignored
         QMetaObject::invokeMethod(QCoreApplication::instance(), "quit", Qt::QueuedConnection);
         return "ok\n";
@@ -619,10 +793,27 @@ struct Command : QEvent {
     Command(QString l, int f) : QEvent(QEvent::User), line(std::move(l)), fd(f) {}
 };
 
+static const QEvent::Type StartupCheck = QEvent::Type(QEvent::User + 1);
+
+struct Runner;
+static Runner *g_runner = nullptr;
+
 struct Runner : QObject {
     bool event(QEvent *e) override {
+        if (e->type() == StartupCheck) {
+            startupCheck();
+            return true;
+        }
         if (e->type() != QEvent::User) return QObject::event(e);
         auto *c = static_cast<Command *>(e);
+        // inside a compose or a check (their Qt events run commands waiting): one that acts, or
+        // copies the database, waits for it to end
+        static const QStringList waits{"send", "file", "reply", "compose", "react", "unreact", "delete", "read",
+                                       "snapshot", "check"};
+        if (g_busy && waits.contains(c->line.section(' ', 0, 0))) {
+            QCoreApplication::postEvent(g_runner, new Command(c->line, c->fd));
+            return true;
+        }
         bool keepOpen = false;
         QByteArray out = runCommand(c->line, c->fd, &keepOpen).toUtf8();
         writeAll(c->fd, out);
@@ -630,7 +821,6 @@ struct Runner : QObject {
         return true;
     }
 };
-static Runner *g_runner = nullptr;
 
 static std::string sockPath() {
     if (const char *p = getenv("VIBER_BRIDGE_SOCK")) return p;
@@ -658,6 +848,13 @@ static void serve() {
     }
 }
 
+static void startupChecks() {
+    for (int i = 0; i < 120 && !g_startupChecked; ++i) {
+        sleep(2);
+        QCoreApplication::postEvent(g_runner, new QEvent(StartupCheck));
+    }
+}
+
 // ---- hooks + init -----------------------------------------------------------------------------
 
 static void onAdd(QObject *o) {
@@ -668,6 +865,7 @@ static void onAdd(QObject *o) {
     if (!g_runner && app && QThread::currentThread() == app->thread()) {
         g_runner = new Runner;  // re-enters the hook; g_inHook keeps the Runner out of the registry
         std::thread(serve).detach();
+        std::thread(startupChecks).detach();
     }
     {
         std::lock_guard<std::mutex> g(g_mu);

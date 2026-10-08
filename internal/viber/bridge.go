@@ -64,11 +64,16 @@ func call(ctx context.Context, sock, line string, timeout time.Duration) (string
 // taking the time the chat has to open).
 var acting sync.Map
 
+func actionLock(sock string) *sync.Mutex {
+	l, _ := acting.LoadOrStore(sock, &sync.Mutex{})
+	return l.(*sync.Mutex)
+}
+
 // act is a command whose answer is "ok".
 func act(ctx context.Context, sock, line string) error {
-	l, _ := acting.LoadOrStore(sock, &sync.Mutex{})
-	l.(*sync.Mutex).Lock()
-	defer l.(*sync.Mutex).Unlock()
+	l := actionLock(sock)
+	l.Lock()
+	defer l.Unlock()
 	out, err := call(ctx, sock, line, 30*time.Second)
 	if err != nil {
 		return err
@@ -77,6 +82,42 @@ func act(ctx context.Context, sock, line string) error {
 		return &BridgeError{strings.TrimSpace(out)}
 	}
 	return nil
+}
+
+// checked is the bridge's check: Viber Desktop's version and, of each capability the bridge has,
+// what this version is missing ("" for nothing); Known false where the bridge is older than its check.
+type checked struct {
+	Known   bool
+	Version string
+	Missing map[string]string
+}
+
+// check asks the bridge whether this Viber still has what each of its commands calls (one action
+// at a time: it may open a chat, as compose does).
+func check(ctx context.Context, sock string) (checked, error) {
+	l := actionLock(sock)
+	l.Lock()
+	defer l.Unlock()
+	out, err := call(ctx, sock, "check", 30*time.Second)
+	var be *BridgeError
+	if errors.As(err, &be) && be.What == "unknown-command" {
+		return checked{}, nil
+	}
+	if err != nil {
+		return checked{}, err
+	}
+	ck := checked{Known: true, Missing: map[string]string{}}
+	for _, line := range strings.Split(out, "\n") {
+		word, rest, _ := strings.Cut(strings.TrimSpace(line), " ")
+		switch word {
+		case "version":
+			ck.Version = unescapeLine(rest)
+		case "missing":
+			name, what, _ := strings.Cut(rest, " ")
+			ck.Missing[name] = what
+		}
+	}
+	return ck, nil
 }
 
 // escapeLine writes text on one line as the bridge reads it back (\n, \t, \\).

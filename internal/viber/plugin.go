@@ -19,12 +19,14 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"everysaid/internal/archive"
 	"everysaid/internal/config"
 	"everysaid/internal/db"
 	"everysaid/internal/errs"
+	"everysaid/internal/i18n"
 	"everysaid/internal/importers"
 	"everysaid/internal/plugins"
 	"everysaid/internal/plugins/sourcekit"
@@ -89,6 +91,13 @@ func (Plugin) Check(c *plugins.Context) (bool, string) {
 	if !running(c) {
 		return false, notRunning
 	}
+	ck := checkOf(c)
+	if m := ck.lacks(nil, "read", "live"); m != "" {
+		return false, cannot + ": " + m
+	}
+	if m := ck.lacks(nil); m != "" {
+		return true, readyBut + ": " + m
+	}
 	return true, "ready"
 }
 
@@ -99,15 +108,145 @@ func (Plugin) NotSending(c *plugins.Context) string {
 	if !running(c) {
 		return notRunning
 	}
+	if m := checkOf(c).lacks(nil, "send"); m != "" {
+		return cannot + ": " + m
+	}
 	return ""
 }
 
 func (Plugin) InfoFacts(c *plugins.Context) []plugins.Fact {
-	state := "not running"
-	if running(c) {
-		state = "running"
+	if !running(c) {
+		return []plugins.Fact{{Label: "Viber Desktop", Value: "not running"}}
 	}
-	return []plugins.Fact{{Label: "Viber Desktop", Value: state}}
+	facts := []plugins.Fact{{Label: "Viber Desktop", Value: "running"}}
+	ck := checkOf(c)
+	switch {
+	case !ck.Known:
+		facts = append(facts, plugins.Fact{Label: "Viber Desktop version", Value: olderBridge})
+	default:
+		facts = append(facts, plugins.Fact{Label: "Viber Desktop version", Value: ck.Version})
+		if m := ck.lacks(func(s string) string { return i18n.Tr(s, c.Lang()) }); m != "" {
+			facts = append(facts, plugins.Fact{Label: "Missing in this version", Value: m})
+		}
+	}
+	return facts
+}
+
+// --- what this Viber Desktop can do (the bridge's check) ------------------------------------------
+
+const (
+	cannot      = "This version of Viber Desktop cannot"
+	readyBut    = "Ready, but this version of Viber Desktop cannot"
+	olderBridge = "unknown (a bridge older than its check: make -C bridges/viber/inject, then restart Viber)"
+)
+
+// capabilities are the bridge's, by its names, as the user is told them, in this order.
+var capabilities = []struct{ name, label string }{
+	{"read", "reading"}, {"live", "receiving live"}, {"send", "sending"}, {"file", "files"},
+	{"compose", "replies and edits"}, {"react", "reactions"}, {"delete", "deleting for everyone"},
+	{"read-receipts", "read receipts"},
+}
+
+// lacks is what of the named capabilities (all, with none named) this Viber is missing, as the user
+// is told it ("" for nothing), each word through say where given.
+func (ck checked) lacks(say func(string) string, names ...string) string {
+	var out []string
+	for _, cp := range capabilities {
+		if _, gone := ck.Missing[cp.name]; gone && (len(names) == 0 || contains(names, cp.name)) {
+			if say != nil {
+				out = append(out, say(cp.label))
+			} else {
+				out = append(out, cp.label)
+			}
+		}
+	}
+	return strings.Join(out, ", ")
+}
+
+func contains(names []string, name string) bool {
+	for _, n := range names {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
+// checkFor: how long the bridge's check is kept (a page of sources, each chat's composer ask it).
+var checkFor = 10 * time.Second
+
+var checks sync.Map // socket → keptCheck
+
+type keptCheck struct {
+	at time.Time
+	ck checked
+}
+
+// checkOf is the bridge's check, kept a moment; nothing missing where the bridge cannot say.
+func checkOf(c *plugins.Context) checked {
+	if k, ok := checks.Load(socket(c)); ok && time.Since(k.(keptCheck).at) < checkFor {
+		return k.(keptCheck).ck
+	}
+	return checkNow(context.Background(), c)
+}
+
+func checkNow(ctx context.Context, c *plugins.Context) checked {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	ck, err := check(ctx, socket(c))
+	if err != nil {
+		return checked{}
+	}
+	checks.Store(socket(c), keptCheck{time.Now(), ck})
+	return ck
+}
+
+// able refuses an action this Viber can no longer do, saying what is missing.
+func able(c *plugins.Context, names ...string) error {
+	if m := checkOf(c).lacks(nil, names...); m != "" {
+		return errs.Plugin(cannot+": "+m, 0)
+	}
+	return nil
+}
+
+// noticeVersion keeps the version of Viber Desktop and what it is missing; when either changes
+// (an update), it is said in the log and to the user's devices.
+func noticeVersion(ctx context.Context, c *plugins.Context) {
+	ck := checkNow(ctx, c)
+	if !ck.Known || ck.Version == "" {
+		return
+	}
+	var gone []string
+	for _, cp := range capabilities {
+		if _, ok := ck.Missing[cp.name]; ok {
+			gone = append(gone, cp.name)
+		}
+	}
+	missing := strings.Join(gone, ",")
+	was, _ := c.State["viber_version"].(string)
+	wasMissing, _ := c.State["viber_missing"].(string)
+	if was == ck.Version && wasMissing == missing {
+		return
+	}
+	c.SaveState(M{"viber_version": ck.Version, "viber_missing": missing})
+	if was == "" && missing == "" {
+		return // the first seen, all there
+	}
+	params := map[string]any{"from": was, "to": ck.Version, "version": ck.Version, "what": ck.lacks(nil)}
+	var text string
+	switch {
+	case was != "" && was != ck.Version && missing == "":
+		text = "Viber Desktop {from} → {to}: everything the bridge uses is there"
+	case was != "" && was != ck.Version:
+		text = "Viber Desktop {from} → {to}, missing: {what}"
+	case missing == "":
+		text = "Viber Desktop {version}: everything the bridge uses is there"
+	default:
+		text = "Viber Desktop {version}, missing: {what}"
+	}
+	c.Log(text, params)
+	params["what"] = ck.lacks(func(s string) string { return i18n.Tr(s, c.Lang()) })
+	c.Host().Alert("Viber Desktop", i18n.T(text, c.Lang(), params))
 }
 
 // --- reading -------------------------------------------------------------------------------------
@@ -174,10 +313,11 @@ func (Plugin) RunImport(c *plugins.Context) error { return runImport(context.Bac
 // Viber Desktop stopped (restarted, updated) is waited for here, and followed again when it is
 // back: not a failure, whose pauses would grow with each restart.
 func (Plugin) Live(ctx context.Context, c *plugins.Context) error {
-	every := time.Duration(max(10, int(c.Num("interval")))) * time.Second
+	every := max(minEvery, time.Duration(c.Num("interval"))*time.Second)
 	if c.Num("interval") == 0 {
 		every = time.Minute
 	}
+	w := &watchdog{every: every}
 	for ctx.Err() == nil {
 		if !running(c) {
 			c.Log(waiting, nil)
@@ -189,7 +329,8 @@ func (Plugin) Live(ctx context.Context, c *plugins.Context) error {
 				}
 			}
 		}
-		if err := follow(ctx, c, every); err != nil && ctx.Err() == nil {
+		noticeVersion(ctx, c)
+		if err := follow(ctx, c, every, w); err != nil && ctx.Err() == nil {
 			c.Log("error: {e}", map[string]any{"e": err})
 			select { // what failed is not tried again at once
 			case <-ctx.Done():
@@ -200,11 +341,56 @@ func (Plugin) Live(ctx context.Context, c *plugins.Context) error {
 	return nil
 }
 
-// liveWait is how often a stopped Viber Desktop is looked for.
-var liveWait = 5 * time.Second
+// liveWait is how often a stopped Viber Desktop is looked for; minEvery the shortest interval.
+var (
+	liveWait = 5 * time.Second
+	minEvery = 10 * time.Second
+)
+
+// watchdog tells when live receiving stopped working: the checks every interval bring new events
+// that the bridge did not tell of, twice running (said once, until it works again).
+type watchdog struct {
+	every time.Duration
+	heard atomic.Bool // the bridge told of events since the last check
+	last  int64       // the newest event at the last check
+	quiet int         // checks running that brought events not told of
+	said  bool
+}
+
+func (w *watchdog) checked(c *plugins.Context, newest int64) {
+	heard := w.heard.Swap(false)
+	switch {
+	case heard:
+		w.quiet = 0
+		if w.said {
+			w.said = false
+			c.Log("Receiving live from Viber Desktop works again", nil)
+		}
+	case w.last != 0 && newest > w.last:
+		w.quiet++
+	}
+	w.last = newest
+	if w.quiet >= 2 && !w.said {
+		w.said = true
+		text := "Receiving live from Viber Desktop does not work: new messages come only with the check every {every} seconds"
+		params := map[string]any{"every": int(w.every.Seconds())}
+		c.Log(text, params)
+		c.Host().Alert("Viber Desktop", i18n.T(text, c.Lang(), params))
+	}
+}
+
+// newestEvent is the newest of Viber's events in the last copy of its database.
+func newestEvent(c *plugins.Context) int64 {
+	q, err := db.ReadOnly(snapshotPath(c))
+	if err != nil {
+		return 0
+	}
+	defer q.Close()
+	return db.Int(q, "SELECT ifnull(max(EventID), 0) FROM Events")
+}
 
 // follow imports, then again as Viber adds events and every `every`, until the bridge goes away.
-func follow(ctx context.Context, c *plugins.Context, every time.Duration) error {
+func follow(ctx context.Context, c *plugins.Context, every time.Duration, w *watchdog) error {
 	if err := runImport(ctx, c); err != nil {
 		return err
 	}
@@ -214,6 +400,7 @@ func follow(ctx context.Context, c *plugins.Context, every time.Duration) error 
 	ended := make(chan error, 1)
 	go func() {
 		ended <- subscribe(ctx, socket(c), func() {}, func(event) {
+			w.heard.Store(true)
 			select {
 			case kick <- struct{}{}:
 			default:
@@ -221,6 +408,7 @@ func follow(ctx context.Context, c *plugins.Context, every time.Duration) error 
 		})
 	}()
 	for {
+		periodic := false
 		select {
 		case <-ctx.Done():
 			return nil
@@ -237,9 +425,12 @@ func follow(ctx context.Context, c *plugins.Context, every time.Duration) error 
 			default:
 			}
 		case <-time.After(every):
+			periodic = true
 		}
 		if err := runImport(ctx, c); err != nil {
 			c.Log("error: {e}", map[string]any{"e": err})
+		} else if periodic {
+			w.checked(c, newestEvent(c))
 		}
 	}
 }
@@ -434,6 +625,18 @@ func sentDir(c *plugins.Context) (string, error) {
 func (Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conversation, text string,
 	reply *plugins.Reply, ms []plugins.Mention, file *plugins.File) (any, error) {
 	if err := gate(c); err != nil {
+		return nil, err
+	}
+	var need []string
+	if file != nil {
+		need = append(need, "file")
+	}
+	if text != "" && (reply != nil || len(ms) > 0) {
+		need = append(need, "compose")
+	} else if text != "" {
+		need = append(need, "send")
+	}
+	if err := able(c, need...); err != nil {
 		return nil, err
 	}
 	chat, err := chatOf(ctx, c, conv)
@@ -647,6 +850,9 @@ func (Plugin) React(ctx context.Context, c *plugins.Context, conv plugins.Conver
 	if err := gate(c); err != nil {
 		return err
 	}
+	if err := able(c, "react"); err != nil {
+		return err
+	}
 	ev, err := eventOf(ctx, c, msg)
 	if err != nil {
 		return err
@@ -668,6 +874,9 @@ func (Plugin) Edit(ctx context.Context, c *plugins.Context, conv plugins.Convers
 	if err := gate(c); err != nil {
 		return err
 	}
+	if err := able(c, "compose"); err != nil {
+		return err
+	}
 	chat, err := chatOf(ctx, c, conv)
 	if err != nil {
 		return err
@@ -685,6 +894,9 @@ func (Plugin) Edit(ctx context.Context, c *plugins.Context, conv plugins.Convers
 
 func (Plugin) Delete(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref) error {
 	if err := gate(c); err != nil {
+		return err
+	}
+	if err := able(c, "delete"); err != nil {
 		return err
 	}
 	ev, err := eventOf(ctx, c, msg)
@@ -722,6 +934,9 @@ func markDeleted(c *plugins.Context, messageID int64) (err error) {
 func (Plugin) MarkRead(ctx context.Context, c *plugins.Context, conv plugins.Conversation, until int64) (int, error) {
 	if !c.Bool("read_receipts") || !c.Bool("send") {
 		return 0, nil
+	}
+	if err := able(c, "read-receipts"); err != nil {
+		return 0, err
 	}
 	chat, err := chatOf(ctx, c, conv)
 	if err != nil {

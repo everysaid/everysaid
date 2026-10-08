@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +26,7 @@ import (
 	"everysaid/internal/core"
 	"everysaid/internal/db"
 	"everysaid/internal/errs"
+	"everysaid/internal/i18n"
 	"everysaid/internal/plugins"
 )
 
@@ -36,7 +38,7 @@ func TestMain(m *testing.M) {
 	}
 	os.Setenv("EVERYSAID_KEYRING", "everysaid-test-viber")
 	config.Load()
-	settleAfter, fileWait, liveWait = 0, 0, 20*time.Millisecond
+	settleAfter, fileWait, liveWait, checkFor = 0, 0, 20*time.Millisecond, 0
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
@@ -46,11 +48,25 @@ type host struct {
 	store  *core.Store
 	mu     sync.Mutex
 	events []M
+	alerts []string
 }
 
 func (h *host) Store() *core.Store { return h.store }
 func (h *host) Emit(e M)           { h.mu.Lock(); h.events = append(h.events, e); h.mu.Unlock() }
-func (h *host) Alert(_, _ string)  {}
+func (h *host) Alert(title, body string) {
+	h.mu.Lock()
+	h.alerts = append(h.alerts, title+": "+body)
+	h.mu.Unlock()
+}
+
+// said is the alerts so far, taken.
+func (h *host) said() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := h.alerts
+	h.alerts = nil
+	return out
+}
 
 // Viber Desktop's tables, as much of them as the importer reads.
 const schema = `
@@ -76,15 +92,18 @@ INSERT INTO Messages (EventID, Type, Body, Info) VALUES (10, 1, 'hello all', '{}
   (12, 1, 'just us', '{}'), (13, 1, 'a note', '{}');
 `
 
-// bridge answers as bridges/viber does: ping, snapshot (the database above), and "ok" to the
-// actions, each kept as said; fail, where set, is said in place of "ok". What is sent is written
-// as Viber does, its event streamed to the subscribers before the "ok" (unless quiet).
+// bridge answers as bridges/viber does: ping, snapshot (the database above), check (version, and
+// what is missing), and "ok" to the actions, each kept as said; fail, where set, is said in place of
+// "ok". What is sent is written as Viber does, its event streamed to the subscribers before the "ok"
+// (unless quiet).
 type bridge struct {
 	sock, data string
 	mu         sync.Mutex
 	said       []string
 	fail       string
 	quiet      bool
+	version    string
+	missing    []string
 	l          net.Listener
 	conns      []net.Conn
 	subs       []net.Conn
@@ -96,7 +115,7 @@ func newBridge(t *testing.T) *bridge {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	b := &bridge{sock: filepath.Join(dir, "s"), data: filepath.Join(dir, "viber.db")}
+	b := &bridge{sock: filepath.Join(dir, "s"), data: filepath.Join(dir, "viber.db"), version: "27.3.0.2"}
 	d, err := db.Open(b.data)
 	if err != nil {
 		t.Fatal(err)
@@ -165,6 +184,18 @@ func (b *bridge) serve(c net.Conn) {
 		}
 		b.mu.Unlock()
 		return
+	case "check":
+		b.mu.Lock()
+		out := "version " + b.version + "\n"
+		for _, n := range []string{"read", "live", "send", "file", "compose", "react", "delete", "read-receipts"} {
+			if slices.Contains(b.missing, n) {
+				out += "missing " + n + " Something::gone/1\n"
+			} else {
+				out += "ok " + n + "\n"
+			}
+		}
+		b.mu.Unlock()
+		io.WriteString(c, out)
 	case "snapshot":
 		in, _ := os.ReadFile(b.data)
 		os.WriteFile(rest, in, 0o600)
@@ -463,4 +494,88 @@ func TestLiveWaitsForViber(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
+}
+
+// What this Viber Desktop can do, as the bridge's check says: the source ready or not, the facts,
+// an action it can no longer do refused with what is missing.
+func TestViberDesktopCheck(t *testing.T) {
+	b := newBridge(t)
+	c := instance(t, M{"socket": b.sock, "send": true, "read_receipts": true})
+	ok, why := (Plugin{}).Check(c)
+	eq(t, "all there", []any{ok, why}, []any{true, "ready"})
+	eq(t, "facts", (Plugin{}).InfoFacts(c), []plugins.Fact{{Label: "Viber Desktop", Value: "running"},
+		{Label: "Viber Desktop version", Value: "27.3.0.2"}})
+
+	b.missing = []string{"react", "compose"}
+	ok, why = (Plugin{}).Check(c)
+	eq(t, "some missing", []any{ok, why}, []any{true, readyBut + ": replies and edits, reactions"})
+	eq(t, "said", i18n.Tr(why, "el"), "Έτοιμο, αλλά αυτή η έκδοση του Viber Desktop δεν υποστηρίζει: απαντήσεις και διορθώσεις, αντιδράσεις")
+	eq(t, "facts", (Plugin{}).InfoFacts(c)[2], plugins.Fact{Label: "Missing in this version", Value: "replies and edits, reactions"})
+	must(t, (Plugin{}).RunImport(c))
+	q := c.Store().Read()
+	group := plugins.Conversation{ID: db.Int(q, "SELECT id FROM conversation WHERE key = 'group:7701'"), Key: "group:7701", Service: "viber"}
+	ref := plugins.Ref{ID: db.Int(q, "SELECT id FROM message WHERE key = '9001'"), Key: "9001"}
+	var ue *errs.UserError
+	if err := (Plugin{}).React(t.Context(), c, group, ref, "❤️"); !errors.As(err, &ue) || ue.Text != cannot+": reactions" {
+		t.Fatal(err)
+	}
+	if _, err := (Plugin{}).Send(t.Context(), c, group, "@Bob hi", nil, []plugins.Mention{{Start: 0, Length: 4, AddressID: 1}}, nil); !errors.As(err, &ue) || ue.Text != cannot+": replies and edits" {
+		t.Fatal(err)
+	}
+	eq(t, "sending plain text still", (Plugin{}).NotSending(c), "")
+	eq(t, "nothing reached the bridge", b.take(), []string(nil))
+
+	b.missing = []string{"live", "send"}
+	ok, why = (Plugin{}).Check(c)
+	eq(t, "not ready without live", []any{ok, why}, []any{false, cannot + ": receiving live"})
+	eq(t, "not sending", (Plugin{}).NotSending(c), cannot+": sending")
+}
+
+// An update of Viber Desktop is said once, with what it no longer has.
+func TestViberDesktopUpdateIsSaid(t *testing.T) {
+	b := newBridge(t)
+	c := instance(t, M{"socket": b.sock})
+	h := c.Host().(*host)
+	noticeVersion(t.Context(), c)
+	eq(t, "the first seen, all there", h.said(), []string(nil))
+	eq(t, "kept", c.State["viber_version"], "27.3.0.2")
+	noticeVersion(t.Context(), c)
+	eq(t, "the same", h.said(), []string(nil))
+
+	b.version = "27.4.0.1"
+	noticeVersion(t.Context(), c)
+	eq(t, "updated", h.said(), []string{"Viber Desktop: Viber Desktop 27.3.0.2 → 27.4.0.1: everything the bridge uses is there"})
+	b.version, b.missing = "27.5.0.0", []string{"react"}
+	noticeVersion(t.Context(), c)
+	eq(t, "updated, something missing", h.said(), []string{"Viber Desktop: Viber Desktop 27.4.0.1 → 27.5.0.0, missing: reactions"})
+	noticeVersion(t.Context(), c)
+	eq(t, "said once", h.said(), []string(nil))
+	eq(t, "kept", c.State["viber_missing"], "react")
+}
+
+// Live receiving that stopped (the checks every interval bring events the bridge did not tell of)
+// is said once, until it works again.
+func TestLiveReceivingThatStoppedIsSaid(t *testing.T) {
+	b := newBridge(t)
+	c := instance(t, M{"socket": b.sock, "interval": 1})
+	h := c.Host().(*host)
+	minEvery = 0
+	t.Cleanup(func() { minEvery = 10 * time.Second })
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- (Plugin{}).Live(ctx, c) }()
+	d, err := db.Open(b.data)
+	must(t, err)
+	defer d.Close()
+	id := int64(100)
+	alerted := func() bool { h.mu.Lock(); defer h.mu.Unlock(); return len(h.alerts) > 0 }
+	for end := time.Now().Add(15 * time.Second); !alerted() && time.Now().Before(end); time.Sleep(300 * time.Millisecond) {
+		id++ // a message Viber has that the bridge did not stream
+		db.Exec(d, "INSERT INTO Events VALUES (?, 1791000009000, 0, 0, 0, 0, 2, 2, ?)", id, 50000+id)
+		db.Exec(d, "INSERT INTO Messages (EventID, Type, Body, Info) VALUES (?, 1, 'unseen', '{}')", id)
+	}
+	time.Sleep(2500 * time.Millisecond) // more checks: not said again
+	cancel()
+	must(t, <-done)
+	eq(t, "said once", h.said(), []string{"Viber Desktop: Receiving live from Viber Desktop does not work: new messages come only with the check every 1 seconds"})
 }

@@ -69,6 +69,7 @@ Every action answers `ok` or `error <what>` (`error send-disabled` without `VIBE
 | `subscribe` | `subscribed`, then the same event rows live as they arrive | — |
 | `snapshot PATH` | a plain copy of `viber.db` at PATH (absolute; mode 600, moved into place when whole) | — |
 | `input` | `edit=on/off`, a tab, then the focused input's text (to check what `compose` typed) | — |
+| `check` | `version V`, then per capability (`read`, `live`, `send`, `file`, `compose`, `react`, `delete`, `read-receipts`) `ok NAME [note]` or `missing NAME WHAT,…`: whether this Viber still has what each command calls (nothing is called; My Notes may be opened, as `compose` opens a chat) | — |
 | `quit` | `ok`, and Viber quits cleanly | — |
 | `send CHATID TEXT` | TEXT with `\n`, `\t` and `\\` escaped | yes |
 | `file CHATID PATH` | sends the file | yes |
