@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "@tanstack/react-router";
 import { Check, CheckCheck, CornerUpLeft, FileText, Forward, ImageOff, MapPin, Pencil, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Plus, SmilePlus, Trash2, Video } from "lucide-react";
-import type { Attachment, CallItem, Mention, MessageItem, Receipts } from "@/lib/api";
+import { thumbUrl, type Attachment, type CallItem, type Mention, type MessageItem, type Receipts } from "@/lib/api";
 import { bytes, duration, time } from "@/lib/format";
 import { service } from "@/lib/services";
 import { cn } from "@/lib/utils";
@@ -88,7 +88,7 @@ export function Thumb({ a, onOpen, className }: { a: Attachment; onOpen?: () => 
   return (
     <button onClick={onOpen} className={cn("relative block overflow-hidden rounded-xl bg-black/10", className)} aria-label={isVideo ? t("kind.video") : t("kind.image")}>
       <img
-        src={`/api/media/${a.sha256}/thumb`}
+        src={thumbUrl(a.sha256)}
         alt=""
         loading="lazy"
         decoding="async"

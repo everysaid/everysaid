@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { ChevronRight, Images, Phone, Users, X } from "lucide-react";
 import { toast } from "sonner";
-import { api, qs, type ChatDetail, type MediaItem, type NameSources, type StateField } from "@/lib/api";
+import { api, qs, thumbUrl, type ChatDetail, type MediaItem, type NameSources, type StateField } from "@/lib/api";
 import { dateOnly, number } from "@/lib/format";
 import { service } from "@/lib/services";
 import { Avatar, Button, Input, Segmented, ServiceBadge, Textarea } from "./ui";
@@ -122,7 +122,7 @@ export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => 
           <div className="grid grid-cols-3 gap-1">
             {media.data!.items.map((m) => (
               <Link key={m.sha256} to="/chat/$chatId" params={{ chatId: chat.id }} search={{ m: m.message_id }} className="aspect-square overflow-hidden rounded-lg bg-panel-2">
-                <img src={`/api/media/${m.sha256}/thumb`} alt="" loading="lazy" className="size-full object-cover" />
+                <img src={thumbUrl(m.sha256)} alt="" loading="lazy" className="size-full object-cover" />
               </Link>
             ))}
           </div>

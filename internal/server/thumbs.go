@@ -50,10 +50,27 @@ func guessType(name string) string {
 	return t
 }
 
+// thumbEdge is the shorter side of a thumbnail: twice the most a chat or a grid shows it (for
+// screens of two pixels to the point). thumbRatio is the most its sides differ: a chat crops a
+// wider picture to 3:1 (and a taller one to 2:1), a grid to a square.
+const (
+	thumbEdge  = 640
+	thumbRatio = 3
+)
+
+// thumbName is a preview's name in the cache: a thumbnail's says how it was made, so that those of
+// an older way are not served.
+func thumbName(sha, size string) string {
+	if size == "thumb" {
+		return sha + "-thumb-cover"
+	}
+	return sha + "-" + size
+}
+
 // existingThumb is the preview made before, if any.
 func existingThumb(sha, size string) (string, string) {
 	for _, ext := range []string{".jpg", ".png"} {
-		p := filepath.Join(Thumbs(), sha+"-"+size+ext)
+		p := filepath.Join(Thumbs(), thumbName(sha, size)+ext)
 		if _, err := os.Stat(p); err == nil {
 			if ext == ".png" {
 				return p, "image/png"
@@ -73,10 +90,6 @@ func MakeThumb(path, sha, size string) (string, string) {
 	if err := os.MkdirAll(Thumbs(), 0o700); err != nil {
 		return "", ""
 	}
-	edge := 1600
-	if size == "thumb" {
-		edge = 360
-	}
 	var img image.Image
 	orientation := 1
 	if strings.HasPrefix(guessType(path), "video/") {
@@ -90,7 +103,12 @@ func MakeThumb(path, sha, size string) (string, string) {
 	if img == nil {
 		return "", ""
 	}
-	img = orient(fit(img, edge), orientation) // turned once small: far less to move
+	if size == "thumb" {
+		img = cover(img, thumbEdge, thumbRatio)
+	} else {
+		img = fit(img, 1600)
+	}
+	img = orient(img, orientation) // turned once small: far less to move
 	var buf bytes.Buffer
 	ext, typ := ".jpg", "image/jpeg"
 	if opaque(img) {
@@ -103,7 +121,7 @@ func MakeThumb(path, sha, size string) (string, string) {
 			return "", ""
 		}
 	}
-	out := filepath.Join(Thumbs(), sha+"-"+size+ext)
+	out := filepath.Join(Thumbs(), thumbName(sha, size)+ext)
 	tmp := out + ".part"
 	if err := os.WriteFile(tmp, buf.Bytes(), 0o600); err != nil {
 		return "", ""
@@ -171,6 +189,36 @@ func fit(img image.Image, edge int) image.Image {
 	} else {
 		nw = max(1, int(float64(w)*float64(edge)/float64(hgt)+0.5))
 	}
+	dst := image.NewNRGBA(image.Rect(0, 0, nw, nh))
+	xdraw.CatmullRom.Scale(dst, dst.Bounds(), img, b, xdraw.Src, nil)
+	return dst
+}
+
+// cover is the picture with its shorter side edge (never larger than it was), its longer one cut
+// in the middle to at most ratio times the shorter: a thumbnail shown cropped, as a chat and a grid
+// show it, sharp however wide or tall the picture is.
+func cover(img image.Image, edge, ratio int) image.Image {
+	b := img.Bounds()
+	w, hgt := b.Dx(), b.Dy()
+	if w > ratio*hgt {
+		x := b.Min.X + (w-ratio*hgt)/2
+		b = image.Rect(x, b.Min.Y, x+ratio*hgt, b.Max.Y)
+	} else if hgt > ratio*w {
+		y := b.Min.Y + (hgt-ratio*w)/2
+		b = image.Rect(b.Min.X, y, b.Max.X, y+ratio*w)
+	}
+	w, hgt = b.Dx(), b.Dy()
+	short := min(w, hgt)
+	if short <= edge {
+		if b == img.Bounds() {
+			return img
+		}
+		dst := image.NewNRGBA(image.Rect(0, 0, w, hgt))
+		draw.Draw(dst, dst.Bounds(), img, b.Min, draw.Src)
+		return dst
+	}
+	nw := max(1, int(float64(w)*float64(edge)/float64(short)+0.5))
+	nh := max(1, int(float64(hgt)*float64(edge)/float64(short)+0.5))
 	dst := image.NewNRGBA(image.Rect(0, 0, nw, nh))
 	xdraw.CatmullRom.Scale(dst, dst.Bounds(), img, b, xdraw.Src, nil)
 	return dst

@@ -58,6 +58,10 @@ export function qs(params: Record<string, string | number | boolean | undefined 
   return s ? `?${s}` : "";
 }
 
+/** A picture's or video's thumbnail. Served as immutable: `v` changes when the way they are made
+ *  does, so that a browser does not keep showing the old ones. */
+export const thumbUrl = (sha256: string) => `/api/media/${sha256}/thumb?v=2`;
+
 // ---- types ----------------------------------------------------------------------------------------
 
 export type ChatType = "person" | "group" | "conversation";
