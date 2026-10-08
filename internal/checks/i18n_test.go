@@ -5,8 +5,8 @@
 // (plugins, logs, notifications) are English in code with the Greek in internal/i18n. These tests
 // check what tsc cannot: that every key the code uses exists and none is left unused, that the
 // server's error codes and the archive's vocabularies have words, that no text in the interface
-// bypasses t(), that the plugins' words have Greek, and that no Greek is left in the Go code
-// outside the dictionaries.
+// bypasses t(), that the plugins' words have Greek and none of the Greek is left over, and that no
+// Greek is left in the Go code outside the dictionaries.
 package checks
 
 import (
@@ -24,6 +24,7 @@ import (
 
 	"everysaid/internal/all"
 	"everysaid/internal/archive"
+	"everysaid/internal/i18n"
 	"everysaid/internal/plugins"
 )
 
@@ -343,5 +344,60 @@ func TestNoGreekInTheGoCode(t *testing.T) {
 			}
 			return true
 		})
+	}
+}
+
+// constString is the value of a string literal, or of literals joined with +.
+func constString(e ast.Expr) (string, bool) {
+	switch x := e.(type) {
+	case *ast.BasicLit:
+		if x.Kind == token.STRING {
+			v, err := strconv.Unquote(x.Value)
+			return v, err == nil
+		}
+	case *ast.ParenExpr:
+		return constString(x.X)
+	case *ast.BinaryExpr:
+		if x.Op == token.ADD {
+			a, ok1 := constString(x.X)
+			b, ok2 := constString(x.Y)
+			return a + b, ok1 && ok2
+		}
+	}
+	return "", false
+}
+
+// The Greek of internal/i18n is for words the Go code says: one that nothing says any more is left
+// from code that changed, and only hides that its English is gone.
+func TestNoGreekWordIsUnused(t *testing.T) {
+	texts := map[string]bool{}
+	for rel, f := range goFiles(t) {
+		if strings.HasPrefix(rel, "internal/i18n/") {
+			continue
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			if e, ok := n.(ast.Expr); ok {
+				if s, ok := constString(e); ok {
+					texts[s] = true
+					if head, rest, ok := strings.Cut(s, ": "); ok { // "missing: X, Y", said by parts (i18n.Tr)
+						texts[head] = true
+						for _, part := range strings.Split(rest, ", ") {
+							texts[part] = true
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+	var unused []string
+	for k := range i18n.EL {
+		if !texts[k] {
+			unused = append(unused, k)
+		}
+	}
+	sort.Strings(unused)
+	for _, k := range unused {
+		t.Errorf("a Greek word nothing says: %.80q", k)
 	}
 }

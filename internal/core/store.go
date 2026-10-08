@@ -51,6 +51,8 @@ type Store struct {
 	cacheMu  sync.Mutex
 	cache    map[string]cacheEntry
 	building map[string]*sync.Mutex // one build of a key at a time
+
+	counted *counted // the last messages counted for Stats, brought up to date by the next count
 }
 
 type cacheEntry struct {

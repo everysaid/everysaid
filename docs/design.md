@@ -1,21 +1,20 @@
-# Everysaid: design of the core, the UI and the MCP server
+# Everysaid: how the app is built
 
-Agreed on 5 October 2026 and built the same day; section 12 has the owner's decisions, section 13
-where the build differs from this text. It builds on what existed (the archive, the importers, the
-scripts; see `README.md` and `docs/data-sources.md`). It was written and first built in Python; the
-app is now Go (`docs/go.md`, `docs/go-port.md`), and the Python files the early sections name are in
-the repository's history.
+The archive, the importers and the sources are described in `README.md` and
+`docs/data-sources.md`; `docs/go.md` tells how to build, run and develop the program, `docs/app.md`
+how to run the app.
 
 ## 1. What it is for
 
 One messenger for a person's whole history: each person shows the whole conversation across every
-service (SMS, iMessage, calls, Viber, WhatsApp, Telegram, Messenger...), old and new, in one
-stream. Like WhatsApp or Telegram in look and speed, like Pidgin in reach. Online, on desktop and
-mobile; light and dark; in the user's language; secure without getting in the way. An assistant
-reaches the same history through an MCP server.
+service (SMS, iMessage, RCS, phone and FaceTime calls, Viber, WhatsApp, Telegram, Signal, the old
+messengers of Adium and Pidgin logs), old and new, in one stream. Like WhatsApp or Telegram in look
+and speed, like Pidgin in reach. Online, on desktop and mobile; light and dark; in the user's
+language; secure without getting in the way. An assistant reaches the same history through an MCP
+server.
 
 What it is not: a backup tool (keeping the data safe is the user's concern), nor a replacement for
-the services themselves (it reads them; where a service allows, it may also send).
+the services themselves (it reads them; where a service allows, it also sends).
 
 ## 2. Shape
 
@@ -23,405 +22,370 @@ the services themselves (it reads them; where a service allows, it may also send
                 ┌──────────────── one process: everysaid serve ────────────────┐
   browser /     │  HTTP API (REST + WebSocket)  ←→  core  ←→  archive.db       │
   installed PWA ┤                                   ↑   ↑                      │
-                │  static PWA files                 │   └── media store         │
-  assistant ────┤  MCP server (same core)           │       + library plugin   │
+                │  the PWA's files (in the binary)  │   └── media store         │
+  assistant ────┤  MCP server (/mcp, same core)     │       + library plugins   │
                 │                         plugin host: plugin instances       │
                 └──────────────────────────────────┬──────────────────────────┘
                                                     │
-        iPhone backup · adb · Viber Desktop export · Telegram API · WhatsApp bridge · Meta export
+   iPhone backup · adb · Adium/Pidgin logs · Telegram API · WhatsApp (whatsmeow) ·
+   Viber Desktop (bridge) · Signal (helper) · CardDAV / .vcf · immich / folder · Ollama
 ```
 
-- **The core** (first the Python package `everysaid`, now `internal/core`): the only code that
-  reads or writes the archive. Queries (streams, search, people, calls, timelines, statistics),
-  changes (merge people, names, notes, decisions on media), and the import pipeline (normalise,
-  deduplicate, store). Plain functions and classes, no web framework inside, so the API, the MCP server, the CLI and tests all call the same
-  thing.
-- **The API**: a thin layer over the core. REST for queries and changes, one WebSocket per open
-  client for live events (new messages, sync progress, plugin status; typing indicators are out of scope).
-- **The plugin host**: runs plugin instances: imports on demand or on a schedule, live connectors
-  as long-running tasks; restarts them, reports their state.
-- **The UI**: a PWA served by the same process; it talks only to the API.
-- **The MCP server**: tools that call the core; runs in the same process (streamable HTTP) or as a
-  separate stdio process opening the archive read only.
-- **The CLI** stays: `everysaid import ...` and the other subcommands for imports and maintenance,
-  also calling the core.
+One program, `everysaid` (Go, one static binary, `CGO_ENABLED=0`; see `docs/go.md`):
 
-One process by default, so a single user runs `everysaid serve` (or one container) and nothing
-else. SQLite in WAL mode serves many readers and one writer, which fits: writes come from plugins
-and the user's edits, serialised through one writer queue in the core.
+- **The core** (`internal/core`): what the app, the MCP server and the tests read and change:
+  queries (chats, a person's stream, search, people, calls, the day's timeline, statistics, media)
+  and changes (merging and splitting people and groups, names, notes, labels, chat state, decisions
+  on media). Plain functions over a `Store`, no web framework inside, so every caller gets the same
+  answers.
+- **The archive** (`internal/archive`): the schema and the helpers the importers write through;
+  **the importers** (`internal/importers`) read each source's databases and files into it,
+  deduplicating as they go.
+- **The API** (`internal/server`): a thin layer over the core. REST for queries and changes, one
+  WebSocket per open client for live events (new messages, sync progress, plugin status; typing
+  indicators are out of scope).
+- **The plugin host** (`internal/server/host.go`): runs plugin instances: imports on demand, live
+  connections as long-running tasks; restarts them, reports their state.
+- **The UI** (`web/`): a PWA built into the binary (`internal/webui`), served by the same process;
+  it talks only to the API.
+- **The MCP server** (`internal/mcp`): tools that call the core; mounted in the server at `/mcp`
+  (streamable HTTP, with a token), or `everysaid mcp` over stdio for an assistant on the same
+  machine.
+- **The command line** (`cmd/everysaid`): `serve`, `user`, `mcp`, `demo`, `import`, and the extraction
+  commands (`iphone-sync`, `iphone-ls`, `iphone-verify`, `android-export`, `telegram-sync`).
+
+One process by default, so a single user runs `everysaid serve` and nothing else. SQLite in WAL
+mode serves many readers and one writer, which fits: the core reads through a pool of read-only
+connections and makes every change through one writer, one transaction at a time; imports hold a
+lock of their own while they write.
 
 ## 3. Plugins
 
-Plugins are of two kinds, under one system (manifest, instances, settings, secrets, setup):
+Plugins are of four kinds under one system (manifest, instances, settings, secrets, actions,
+logs): **source**, **library** (where kept pictures and videos go, 5), **contacts** (address books)
+and **analysis** (local models, 6). They are Go packages compiled into the binary, each registering
+itself, all loaded by `internal/all`; there are no plugins from others (they would need isolation,
+a subprocess with a narrow protocol).
 
-- **Source plugins** bring messages, calls, people and media. A source plugin is one **way of
-  reaching a service**, not a service: "WhatsApp from an iPhone backup", "WhatsApp live through a
-  bridge", "WhatsApp from an Android backup" are three plugins.
-- **Library plugins** are where kept pictures and videos go (5). In the first version: a folder on
-  disk, and immich.
+A source plugin is one **way of reaching a service**, not a service: "WhatsApp from an iPhone
+backup" and "WhatsApp live" are two plugins. The plugins today:
 
-What follows describes source plugins; library plugins share the manifest and the instances, with
-the interface of 5.
-
-Each plugin declares a manifest:
-
-| Field | Example |
+| Kind | Plugins |
 |---|---|
-| `id`, `name`, `service(s)` | `iphone-backup`, "iPhone backup", sms, imessage, calls, viber, whatsapp |
-| `mode` | `import` (runs, brings what is new, stops) or `live` (stays connected) |
-| `platforms` | linux, macos, windows (where its tools exist) |
-| `needs` | a cable and libimobiledevice; a backup password (secret); an API login; a file |
-| `settings` | a schema (JSON Schema) the UI turns into a form |
-| `can_send` | whether messages can be sent through it |
+| source | `iphone-backup`, `android-adb`, `carrier-notices`, `im-logs` (`internal/plugins/sources`); `telegram`, `whatsapp-bridge`, `signal`, `viber-desktop` (packages of their own) |
+| library | `folder`, `immich` (`internal/plugins/libraries`) |
+| contacts | `carddav`, `vcard-file` (`internal/plugins/contacts`) |
+| analysis | `ollama` (`internal/plugins/analysis`) |
 
-and implements a small interface:
+Each plugin declares a manifest (`plugins.Info`, `internal/plugins/base.go`): id, name, kind,
+services, description; `modes` (`import`: runs, brings what is new, stops; `live`: stays
+connected) and `live_default`; `platforms` (where its tools exist); `needs`, in plain words; its
+settings (typed fields the UI turns into a form; a `secret` field goes to the keyring through
+`internal/config`, never into the settings); what it can do (`can_send`, `can_reply`,
+`can_mention`, `can_mark_read`, `can_send_files`, `can_react`, `can_edit`, `can_delete`, with the
+service's time limits); extra actions (a QR link, an unlink); how its services look; and the
+weights of the names and the chat state it brings (7).
 
-- `setup(ctx)`: guided steps for what it needs (a login with a code, a password, pairing); secrets
-  go to the keyring through the core, never into settings.
-- `sync(ctx, since)` (import): yields **normalised records**: messages, calls, people/handles,
-  conversations, media references, each with its origin (`source`, `row_key`). Incremental: the
-  plugin keeps its own cursor in `ctx.state`.
-- `run(ctx)` (live): connects, yields the same records as they arrive; `send(ctx, conversation,
-  content)` where `can_send`.
-- `chats(ctx)`: the list of chats it can see, with kind and size, for the user's choice of what to
-  import and whose media to fetch (select all, deselect all, filters).
+Beyond the manifest a plugin implements only the interfaces it needs: `RunImport` (an import),
+`Live` (a connection), `Send`, `React`, `Edit`, `Delete`, `MarkRead`, `FetchMedia`, `Chats` (the
+chats it can see, with kind and size, for the user's choice of what to import and whose media to
+fetch; Telegram and Signal have it), `Asks` (what the user types for one run only, such as a backup
+password not kept), `Action`, `Check`; a library `Find`, `Store`, `Fetch`; a contacts plugin
+`Sync`.
 
-A plugin knows nothing about the archive's tables; the core knows nothing about backups, adb or
-Telethon. The importers of the time (`everysaid/sms.py`, `viber.py`, `whatsapp.py`, `telegram.py`, ...) and
-extract scripts (`iphone-sync.py`, `android-export.py`, `telegram-sync.py`) become plugins: their
-reading code moves, their writing code becomes the core's import pipeline.
+The source plugins run the extraction and the importers: an import extracts what is new (an iPhone
+backup, adb, Telegram's API) and runs the importers on it, which write through `internal/archive`;
+a live plugin keeps its own store (whatsmeow's, the Viber bridge's snapshot, Telegram's,
+Signal's) and imports from it as things arrive. Planned (README, "Plans"): importers that yield
+records for one import pipeline in the core.
 
-**Instances.** A plugin can be added many times: two iPhones, four Android phones, two Telegram
-accounts. Each instance has its own settings, secrets, state and device record. The user chooses
-which instances feed the same archive.
+The live sources:
 
-**Third-party plugins.** At first, plugins are packages inside the project (registered in
-`internal/all`). They run in the same process; plugins from others would need isolation (a subprocess with a narrow protocol) and are out of the first version.
+- **Telegram** (`internal/telegram`, gotd): in the process; on connecting it first brings what
+  arrived while it was not connected.
+- **WhatsApp** (`internal/whatsapp`, whatsmeow): in the process, linked as a device by a QR code.
+  Unofficial, so sending is a setting of the instance, off by default, with the risk to the account
+  stated where it is turned on, and turned off by itself when WhatsApp warns the account.
+- **Signal** (`internal/signal`): a separate helper program, `everysaid-signal` (`bridges/signal`,
+  Rust, on presage, AGPL-3.0), started by the plugin and spoken to in JSON lines on its stdin and
+  stdout; none of its code is linked into `everysaid`.
+- **Viber** (`internal/viber`): through the running Viber Desktop on Linux, driven from inside by
+  Everysaid's bridge (`bridges/viber`, an `LD_PRELOAD` library; `docs/viber-bridge.md`).
+
+**Instances.** A plugin can be added many times: two iPhones, several Android phones, two Telegram
+accounts. Each instance (`plugin_instance`) has its own label, settings, secrets, state (its
+cursors), log and device; the user chooses which instances feed the archive.
 
 ## 4. Data model
 
-The archive stays: it is general already. Changes:
+The schema is `internal/archive/schema.sql`, version 1 until the first release (until then it
+changes in place).
 
-- **Archive = bucket.** One user per installation in the first version, one archive; every plugin
-  instance writes into it. Built so that users can be added later without a rewrite (12): the
-  core takes the archive it works on as a parameter, never a global; sessions, plugin instances,
-  secrets and settings carry the user they belong to; each user's archive is a file of its own.
-- **`plugin_instance`** (new): id, plugin id, label, settings (JSON), state (JSON: cursors),
-  enabled, `device_id`. Replaces the fixed source names (`iphone/sms`): `source` rows hang from an
-  instance.
-- **Devices and periods**: `device.used_from`/`used_until` editable in the UI ("this phone was in
-  use from ... to ..."), and used by deduplication to choose which copy wins. Defaults: unknown,
-  newest source wins.
-- **Deduplication** in the core, per record kind, with the rules that exist now made general:
-  service key where there is one (Viber token, WhatsApp stanza id, iMessage guid, Telegram
-  chat/id); else a fingerprint (direction, counterpart, text, time within a tolerance); every
-  origin kept; the winning copy chosen by device period, then by richness (the copy with more
-  fields), then by first seen.
-- **People**: `person`, `person_address` (auto/manual), `account` stay. Suggested merges (same
-  number on two services, same contact) are shown to the user, never applied silently except where
-  certain (the same phone number). Contacts from a CardDAV address book (any provider) are linked
-  by `contact_uid`/`contact_url`; avatars from the contact, else from the service, else initials.
-- **Media**: see 5. A library is a plugin instance (kind `library`); `library_link` points to that
-  instance instead of a free-text name.
-- **Removed**: `review`, `media_date`, `media_judgement` (never used; the old review state stays in
-  its own files until the owner drops them), `viber_member` folded into person handles.
-- **Text search**: FTS5 over a normalised copy of the text (lower case, accents removed, final
-  sigma folded, Unicode NFKC), so `καλημερα` finds `καλημέρα`; a trigram index for CJK and for
-  substrings, if measured worth its size.
-- **Settings and UI state** that belong to the user (theme, language, pinned chats, muted chats)
-  in the archive too, so every device sees them.
+- **One archive per user.** The core takes the archive it works on as a parameter, never a global.
+  Users, passkeys, sessions, push subscriptions, MCP tokens and the audit log live in
+  `<data>/server.db`, apart from the archives; each user row names its archive, so a second user is
+  a second row and a second archive. One user per installation for now (planned: several, README).
+- **`plugin_instance`**: plugin, kind, label, settings (JSON), state (JSON), enabled, device,
+  whether it is the default library, last run and status. `source` rows (one database or folder
+  read) hang from an instance.
+- **Devices and periods**: `device.used_from`/`used_until`, editable in the app (Sources →
+  Devices: "this phone was in use from ... to ..."), choose which copy of a record found on two
+  devices is kept: the one in use at the time, else the newest device.
+- **Deduplication** by the importers, per record kind: the service's own key where there is one
+  (Viber token, WhatsApp stanza id, iMessage guid, Telegram chat and id); else a fingerprint (time,
+  direction, kind, text); every origin kept (`message_origin`, `call_origin`).
+- **People**: `address` (one handle), `person`, `person_address` (`auto`, or `manual` when the
+  user merged), `account` (the user's own handles), `handle_name` (every name a service showed for a
+  handle). Suggested merges are shown to the user, never applied by themselves; the same phone
+  number on two services is one address, so one person. Contacts from an address book (`contact`,
+  `contact_address`) are linked by `contact_uid`/`contact_url`; an avatar is the contact's photo,
+  else initials. Viber member ids are kept in `viber_member`.
+- **Media**: `media` (by content), `attachment`, `library_link` (pointing to a library instance),
+  `media_same` (a copy linked to the kept one), `media_decision` (5).
+- **Text search**: two contentless FTS5 indexes of folded text (`internal/text`: case folded,
+  accents and other marks removed, final sigma made σ, compatibility forms made one), so `καλημερα`
+  finds `Καλημέρα`: `message_fts` by words and `message_tri` by trigrams (parts of words). The
+  archive writes them as it adds a message, not a trigger, so that every connection that writes
+  needs no custom function; the snippet is made from the original text.
+- **The user's settings** shared by every device (theme, language, names' order, hidden services,
+  labels' settings) are in the archive (`setting`), and so is a chat's state the user chose
+  (`chat_state`).
 
-Scale: millions of messages, thousands of calls and people, a few GB. SQLite with the right
-indexes answers a person's stream page or a search in milliseconds at that size; nothing larger is
-needed.
+Scale: millions of messages, thousands of calls and people, a few GB. SQLite with the right indexes
+answers a person's stream page or a search in milliseconds at that size; nothing larger is needed.
 
 ## 5. Media
 
-- **The media store** holds the files the archive has, by content (`media/<ab>/<sha256><ext>`, as
-  now), in the **data** folder (not the cache: some files exist nowhere else once their source is
-  gone). Thumbnails and previews are made on demand into the cache.
-- **The library** is where kept pictures and videos go, and it is a **plugin** like the sources.
-  In the first version two: `folder` (a folder on disk, files named by date, the date written into
-  the file where it has none) and `immich` (API upload, as the separate picture tools did then). Others
-  (Nextcloud, PhotoPrism, ...) are later plugins. A library plugin answers "is it already there?"
-  (checksum; perceptual hash where the library allows; what it has from that day), stores a file
-  with its date and the camera make where the file has none, and returns a reference for
-  `library_link`. More than one library may be set up; the user chooses where each file goes, with
-  a default.
-- **Sorting**: some mechanism to choose what is kept, in the UI: a media view per person, chat or
-  date, with keep / remove / send to library, multi-select, filters by kind and size. The newest
-  decision on a file always wins. Local models (vision, faces) may help sort, as optional plugins;
-  private pictures never leave the machine without consent.
-- **Dates**: the file's own EXIF date, else the message date, else one the user gives.
-- **Media on demand**: "the last two pictures X sent on WhatsApp": the core finds them, marks them
-  wanted, checks the library, shows what is already there, stores only what the user approves.
-- **Media of live services** are fetched only where the user enabled them per chat.
+- **The media store** holds the archive's files by content (`media/<ab>/<sha256><ext>`), in the
+  **data** folder by default (config `[media] store`), not the cache: some files exist nowhere else
+  once their source is gone. Thumbnails are made on demand into `<cache>/thumbs`.
+- **Libraries** are plugins: `folder` (a folder on disk, year/month subfolders, files named by date
+  and service) and `immich` (upload through its API). A library answers "is it already there?" (by
+  checksum), stores a file with its date and the camera make written in where the file has none
+  (with exiftool), and returns a reference for `library_link`. More than one may be set up; a file
+  goes to the default one unless the user chooses another.
+- **Sorting** in the app: the media view (per person, chat or all, filters by kind) and the
+  lightbox: keep, remove, to the library, each checked against the library first. The newest
+  decision on a file wins (`media_decision`). Private pictures never leave the machine without
+  consent.
+- **Dates**: the file's own EXIF date, else one the user gives, else the message date.
+- **Media on demand**: "the last two pictures X sent on WhatsApp": the MCP server finds them
+  (`find_media`), checks the library and stores only what the user approves
+  (`send_media_to_library`); `download_media` may ask a live source for a file the archive never
+  had.
+- **Media of live services** are fetched as the instance's settings say, and for Telegram also per
+  chat.
 
 ## 6. The UI
 
 A PWA: one code base for desktop and mobile browsers, installable to the home screen, with push
-notifications. Recommended stack:
+notifications.
 
 | Need | Choice | Why |
 |---|---|---|
-| Language | TypeScript | types shared with the API (generated from its OpenAPI schema) |
-| Framework | React with Vite | the largest ecosystem for what a messenger needs: virtualised lists, rich components, accessibility; long-term safety |
+| Language | TypeScript | the API's types written by hand (`web/src/lib/api.ts`), checked by tsc |
+| Framework | React with Vite | the largest ecosystem for what a messenger needs: long lists, rich components, accessibility; long-term safety (over SvelteKit, Vue and Solid) |
 | Routing and server state | TanStack Router and TanStack Query | typed routes; caching, pagination and live updates of API data |
-| Components | shadcn/ui (Radix primitives) with Tailwind CSS | accessible, themeable (light/dark), owned code rather than a dependency |
-| Long lists | TanStack Virtual | chats of hundreds of thousands of messages, scrolled both ways |
-| i18n | i18next (or Lingui) | plurals, dates and numbers per locale; Greek and English first |
+| Components | Radix primitives with Tailwind CSS | accessible, themeable (light/dark), owned code rather than a dependency |
+| Long lists | react-virtuoso | chats of hundreds of thousands of messages, scrolled both ways, pages added above, following new output |
+| i18n | i18next | plurals, dates and numbers per locale; Greek and English |
 | PWA | vite-plugin-pwa (Workbox) | service worker, offline shell, install, push |
-| Tests | Vitest, Playwright | units and end-to-end in real browsers |
+| Tests | Vitest, Playwright (`web/e2e`) | units and end-to-end in real browsers, desktop and mobile |
 
-(React was chosen over SvelteKit, Vue and Solid; see 12.)
+Screens: the chat list; a chat (a person's unified stream: every service interleaved, each message
+marked by its service, calls inline, replies, reactions, edits, media, jump to date); search with
+filters (dates alone give everything of those days, calls too; like the chat list, in the archived
+chats or the others); calls; media; people (merge, split, names, notes, labels), the merge
+suggestions, the people without a name; overview; sources; settings.
 
-Screens: the people list (search, unread, pinned) and a person's unified stream (every service
-interleaved, each message marked by its service, calls inline, replies, reactions, media,
-jump to date); global search with filters (with dates alone, everything of those days, calls too; like the chat list, in the archived chats or in the others, as its archive button says); media views; people (merge, link to contact, names,
-notes); sources (add a plugin instance, its setup, its state, its chat list); settings. Keyboard
-shortcuts on desktop, gestures on mobile.
-
-What a PWA can and cannot do (checked for iOS 27 / Safari 27 and Android Chrome, October 2026):
+What a PWA can and cannot do (iOS 27 / Safari 27 and Android Chrome, as of October 2026):
 
 | | iPhone (installed to the Home Screen) | Android Chrome |
 |---|---|---|
-| Push notifications | yes, only once installed (since iOS 16.4) | yes, installed or not |
+| Push notifications | yes, only once installed | yes, installed or not |
 | Actions or inline reply in a notification | no: the user opens the app to reply | yes |
 | Badge with the unread count | yes (Badging API) | no programmatic badge (Android's own dot) |
 | Background sync or fetch | none; only a push wakes the service worker briefly | yes, limited |
 | Receiving shares from other apps | no | yes, installed |
 | Passkeys (Face ID, fingerprint) | yes | yes |
 | Local storage | durable once installed; a Safari tab is wiped after 7 days unused | durable |
-| Installing | since iOS 26 any site added to the Home Screen opens as an app, manifest or not | install prompt |
+| Installing | any site added to the Home Screen opens as an app | install prompt |
 
-So the design holds: the server keeps every live connection and pushes; the app is a window onto
-it, with no need for background work of its own; users are led to install it (on an iPhone, push
-works only then). What is lost on an iPhone: reply from the notification and sharing into the app.
-Apple has shown no sign of adding them; the UK's ruling on browser engines (due by 1 January 2027)
-and the EU's DMA have not changed it so far. If they matter, the same UI is wrapped with Capacitor
-(a native app with notification actions and a share extension), or Tauri on desktop, without
-rewriting it. Live SMS and calls of an Android phone need a small native Android app, which is a
-**plugin**, not the UI; on an iPhone that is not possible at all, and the backup stays.
+So the server keeps every live connection and pushes; the app is a window onto it, with no
+background work of its own; users are led to install it (on an iPhone, push works only then). What
+is lost on an iPhone: reply from the notification and sharing into the app. If they matter, the
+same UI can be wrapped with Capacitor (a native app with notification actions and a share
+extension), or Tauri on desktop, without rewriting it (planned only if wanted, README). Live SMS
+and calls of an Android phone need a small native Android app, which would be a **plugin**, not the
+UI (planned); on an iPhone that is not possible at all, and the backup stays.
 
-## 7. The API
+## 7. Behaviour
 
-- Python, **FastAPI** (or Litestar) with Pydantic models; OpenAPI schema → generated TypeScript
-  client; uvicorn. (So it was first built; now Go's `net/http`, `internal/server`, the same routes.)
-- REST, cursor-paginated: `/people`, `/people/{id}/stream?before=&after=`, `/conversations`,
-  `/search`, `/calls`, `/media`, `/plugins`, `/instances`, `/settings`.
-- WebSocket `/events`: new records, plugin status, import progress.
-- Server-side push (Web Push, VAPID) for new messages while the app is closed.
-
-## 8. Security
-
-Online, for one owner, with the strongest protection that does not get in the way:
-
-- **Login with passkeys** (WebAuthn: fingerprint, face, security key), more than one per user;
-  recovery codes printed once. Where a passkey cannot be made (some browsers or setups refuse it),
-  a password together with a TOTP code from any authenticator app, both required (built on
-  5 October 2026: the app must not depend on any one tool working).
-- **Sessions**: HttpOnly, Secure, SameSite=Strict cookies; short-lived with silent renewal; every
-  device listed and revocable.
-- **Transport**: HTTPS only. Recommended exposure: behind a reverse proxy with automatic
-  certificates (Caddy), or reachable only over a private network (WireGuard/Tailscale) for those
-  who prefer not to expose it at all.
-- **Hardening**: strict Content-Security-Policy, no inline scripts, CSRF protection on changes,
-  rate limits on login, an audit log of logins and deletions.
-- **Secrets** (backup passwords, service sessions, API keys) in the system keyring, as now; never
-  in the archive, never sent to the browser.
-- **Data at rest**: the archive and media are files of the user's; encryption at rest is the
-  disk's (LUKS, FileVault, BitLocker). SQLCipher is possible but costs speed and tooling (open
-  question 4).
-- **The MCP server** has its own token and a read-mostly tool set; the few actions it can take are
-  listed and confirmed.
-- **Deletion** only on the user's explicit confirmation, with the exact list; the archive's
-  records stay when files go.
-
-## 9. The MCP server
-
-Tools as calls into the core: search messages; a message with its context; a person (handles,
-services, counts, first and last contact); a person's stream for a period; calls; a day's timeline
-across services; statistics; media of a person. Harmless actions only (a note, a name), each
-confirmed. Built with the official MCP SDK (Python's first, now Go's, `internal/mcp`).
-
-## 10. Platforms and installation
-
-Linux first; macOS and Windows where the plugins' tools exist (each plugin says where it runs).
-For users one static binary per system (`docs/go.md`; first planned as a Python package) and a
-container image. The generality fixes found by the audit of October 2026 come first: time zones on Windows,
-safe SQLite paths, UTF-8 file I/O, the media store in the data folder, phone numbers without a
-region, messages through i18n.
-
-## 11. Order of work
-
-1. Generality fixes that do not depend on this design: done on 5 October 2026 (time zones on
-   Windows with `tzdata` and `tzlocal`, read-only SQLite paths through `config.read_only()`, UTF-8
-   for every text file and the output of child programs).
-2. The core as a library: queries and changes over the current archive, with tests; the plugin
-   interface; today's importers turned into plugins without changing what they store.
-3. The schema: `plugin_instance` (sources and libraries), device periods editable, the unused tables removed,
-   and search that folds accents and final sigma (the text normalised by the core as it writes,
-   not by a trigger: a trigger would need a Python function in every connection that writes); the
-   owner's archive brought to it once, with a check that nothing is lost.
-4. The API and the UI's first version: people, a person's stream, search, sources; passkey login.
-5. Live: Telegram, then WhatsApp; WebSocket events and push.
-6. Media: the store in the data folder, the folder and immich library plugins, the media views, media on
-   demand.
-7. The MCP server over the core (it can come earlier, being small).
-8. Sending, where plugins can; the Android companion app; Messenger.
-
-## 12. Decisions (5 October 2026)
-
-1. **Users**: one per installation in the first version; the core, the API and the stored state are
-   built so that several users (each with an archive of their own, fully apart) can be added later
-   without a rewrite.
-2. **Sending**: yes, through the plugins that can (`can_send`); it comes after reading, late in the
-   order of work.
-3. **Exposure**: both. The application is made safe to put on the internet (passkeys, HTTPS, strict
-   CSP, rate limits); each user chooses to expose it behind a reverse proxy or to keep it on a
-   private network (WireGuard, Tailscale). The documentation describes both.
-4. **Encryption at rest**: the disk's (LUKS, FileVault, BitLocker); the archive stays plain SQLite.
-5. **WhatsApp live** (whatsmeow): reading on; sending is a setting of the plugin instance, off by
-   default, with the risk to the account stated where it is turned on.
-
-6. **UI framework**: React (compared with SvelteKit, Vue and Solid: the chat list over hundreds of
-   thousands of messages, the components and the ecosystem decided it).
-
-## 13. As built (October 2026)
-
-Everything above is built, with these differences from the draft:
-
-- **Importers as plugins**: the source plugins wrap the existing extract scripts and importers
-  (which write through `Archive`); turning them into sources that yield records for a core
-  pipeline is still to do. Deduplication is the importers' own (keys, fingerprints, device
-  periods), now with device periods editable in the app.
-- **Chat streams** use react-virtuoso (reverse scrolling with prepended pages, follow-output) rather
-  than TanStack Virtual; the API's TypeScript types are written by hand (`web/src/lib/api.ts`)
-  rather than generated.
-- **Search** is a contentless FTS5 index of folded text (`internal/text`), written by the archive
-  as it adds a message; the snippet is made from the original text.
-- **Users, passkeys, sessions** live in `<data>/server.db`, apart from the archives; each user row
-  names its archive, so a second user is a second row and a second archive.
-- **Plugins' words** are English in the code, translated per language (`internal/i18n`).
-- **Choosing chats** is a plugin's `chats()`; Telegram has it (import and media per chat).
-- **Media on demand** is in the MCP server (`find_media`, `send_media_to_library`) and in the app
-  (the media view and the lightbox: keep, remove, to the library, each checked against it first).
-- **The MCP SDK** is version 2 (`MCPServer`).
 - **Nothing per service is fixed in the core or the interface**: each plugin declares it.
-  - `service_info` gives how a service looks: name, colour, its icon (an SVG path, shown where the
-    service is chosen to send through), whether it is calls only. A chat answers by default through
-    the service it was last active on; one nothing can send to now still shows, with a lock for Send.
-  - `name_weights` gives how much the names it brings are trusted. An address book declares
-    `contacts`, the highest by default.
-  - `can_send` and `sending(ctx)` say whether it can send now. By default it can when set up; a
-    plugin may add a setting for it.
+  - How a service looks (name, colour, short name, icon as an SVG path, whether it has messages or
+    only calls). A chat answers by default through the service it was last active on; one nothing
+    can send to now still shows, with a lock for Send.
+  - How much the names it brings are trusted (`name_weights`, by kind: its copy of the user's
+    address book, a chat's name, a name people chose); an address book declares `contacts`, the
+    highest by default.
+  - Whether it can send now: by default when set up; a plugin may add a setting for it.
   - The server combines these declarations (`/api/services`, `/api/names`, a chat's `sendable`).
-  - The user's own order of names (Settings → Names) overrides the weights, and can go back to them.
-  - Text shown to the user never names a plugin or a service as the way out.
-  - `live_default`: a plugin with a live connection may want it on by default. The host then starts
-    it once the plugin is set up, unless the user turned it off. Telegram, on connecting, first
-    brings what arrived while it was not connected.
-- **Names** come from sources (an address book, and each service's names by kind: its copy of the
-  user's address book, a chat's name, a name people chose); the plugins weigh them, the user orders
-  them (Settings → Names) or pins one source or handle for a person; every name seen is kept, with
-  when ("also known as"). Names shared across people are suggested merges (a contact listing both,
-  the same name in a service's address book copy, the same rare name, or names that sound the same
-  whatever the accents, word order or alphabet), never applied: the user sees them side by side
+    Text shown to the user never names a plugin or a service as the way out.
+  - A plugin with a live connection may want it on by default (`live_default`): the host starts it
+    once the plugin is set up, unless the user turned it off.
+- **Names**: the plugins weigh them, the user orders them (Settings → Names, which can go back to
+  the weights) or pins one source or handle for a person; every name seen is kept, with when ("also
+  known as"). Self-chosen names are marked (~) in groups.
+- **Merge suggestions**: names shared across people (a contact listing both, the same name in a
+  service's address book copy, the same rare name, or names that sound the same whatever the
+  accents, word order or alphabet), never applied by themselves: the user sees them side by side
   with a little of each one's history and ticks who is one, one suggestion at a time or all of them
-  on a page of their own (ticked, but for names that only sound alike; applied together); who is
-  left out, or a suggestion turned down, is not suggested with them again. Those pairs are listed
-  there too, each can be suggested again. The people no source names have a page of their own,
-  those with the most messages first, with a little of each one's history: a name for them, or
-  the person they are. Self-chosen names are marked (~) in groups. People no source names (only a
-  number or handle) and calls from hidden numbers stay out of the chat list, the calls and the people unless
-  the user asks for them (Settings → Names, `show_unnamed`, off by default); a search still finds
-  them, and a chat of theirs with an unread message still shows.
+  on a page of their own (ticked, but for names that only sound alike; applied together). Who is
+  left out, or a suggestion turned down, is not suggested with them again; those pairs are listed
+  there too, and each can be suggested again.
+- **People without a name** (only a number or handle) always show, after all the named ones, in
+  the chats, calls and people. They have a page of their own, those with the most messages first,
+  with a little of each one's history: a name for them, or the person they are. **Names found** for
+  them, from their handles (an email's or a user name's words, where one is a first name the
+  archive knows: `first.last@…` is "First Last") and from the local analysis, are shown there and on
+  the person's page, accepted with a click or turned down for good; never applied by themselves.
 - **Labels** describe people: the tone of their chats (friendly, professional, romantic…, many to
   a person) and who they are to the user (friend, relative, client…, one). The lists are the
   user's (Settings → Labels): the app starts them with a few, in its languages by key, and the user
-  renames, adds, orders, merges ("sexual" into "romantic") and removes them. Each label has a
-  meaning, which is what the local models read to judge by (none: given only by the user), and may
-  be sensitive. A person's label is the user's (yes; or no: never suggested again) or the models'
-  (suggested, with their votes and a line of the chat), and the models' never touch the user's. On a
-  merge the labels go over and the person is read again; on a split, too. The models' labels show
-  only when the user asks (`show_tone`), the assistant sees labels only when allowed (`mcp_labels`);
-  "forget the analysis" takes away all the models said and keeps the user's.
-- Labels show on the list of people too (the user's, and the models' where shown), which is
-  filtered by one with a click.
-- **Back**: every page reached from another has a way back to it, on every screen size; one opened
-  from the app's menu has none (the menu is the way on), and one opened directly goes back to its
-  section (a person's page to People, the calls or media of a chat to the chat). On a wide screen
-  a chat shows back only when it was opened from another page (the list is beside it).
-- **The chat list's filters**, in a small panel kept on the device: the archived chats, people
-  without a name (as Settings say, or not), at least or at most so many messages (a slider in
-  growing steps: 0, 1, 2, 3, 5, 10, 20, 50, 100 … 5000), each service as must have, must not have
-  or either, and a label.
+  renames, adds, orders, merges and removes them. Each label has a meaning, which is what the local
+  models read to judge by (none: given only by the user), and may be sensitive. A person's label is
+  the user's (yes; or no: never suggested again) or the models' (suggested, with their votes and a
+  line of the chat), and the models' never touch the user's. On a merge the labels go over and the
+  person is read again; on a split, too. The models' labels show only when the user asks
+  (`show_tone`), the assistant sees labels only when allowed (`mcp_labels`); "forget the analysis"
+  takes away all the models said and keeps the user's. Labels show on the list of people too,
+  which is filtered by one with a click.
+- **Local analysis** (`ollama`, kind `analysis`): Ollama on this computer or its own network
+  (another address is refused), one model or two or three that vote. It reads a little of each chat
+  (the first lines, lines spread over all of it, lines that name someone), largest chats first, in
+  the background while turned on, and again when a chat grows by half. A name counts only where its
+  words are in what it read (in any case, with or without a surname, as one), never an email, a
+  handle or the owner's; a tone needs most of the models, a sensitive one two of them each with a
+  line copied from the chat. The prompt is built from the user's lists, so a new label is judged by
+  its meaning; those read by another list are read again when the user asks. **Analyse now**, in a
+  person's chat info, reads their chat at once (a run with the action `person:<id>`).
+- **The chat list's filters**, in a small panel kept on the device: the archived chats, at least
+  or at most so many messages (a slider in growing steps: 0, 1, 2, 3, 5, 10, 20, 50, 100 … 5000),
+  each service as must have, must not have or either, and a label.
 - **Hidden services** (Settings → Services, `hidden_services`): nothing of them shows anywhere
   (chats, streams, calls, search, media, the day's timeline); the archive keeps all of it.
+- **Hidden accounts** (`hidden_accounts`), where the user has several on a service (several MSN
+  accounts): the chats held only by the hidden ones show nowhere; a chat also on an account shown
+  stays. Which account a chat was on is the user's address among its members (the Adium and Pidgin
+  importer writes it, from the log folder of each account).
 - **Short numbers** (five digits or fewer: carriers, banks, services) stay out of the chats, calls
   and people unless the user shows them (Settings → Names, `show_short_numbers`, off by default); a
   person is left out only when every handle of theirs is one; a search still finds them.
 - **Groups with no one else** (everyone left, or the source listed no members) stay out of the chat
-  list unless the user shows them (Settings → Names, `hide_empty_groups`, on by default); a search
-  still finds them, and one with an unread message still shows.
-- **Hidden accounts** (`hidden_accounts`), where the user has several on a service (several MSN
-  accounts): the chats held only by the hidden ones show nowhere; a chat also on an account shown
-  stays. Which account a chat was on is the owner's address among its members (the Adium and
-  Pidgin importer writes it, from the log folder of each account).
-- **Analyse now**, in a person's chat info, where a local analysis is on: their chat read at once
-  (a run of the analysis instance with the action `person:<id>`), the suggestions there when done.
-- **Settings** are in tabs: general, names, labels, services, security.
-- **Where a chat was being read** is kept for the session (this tab, a reload included), not
-  across sessions; a chat opened afresh stays at its end while what is drawn grows to its real
-  height (pictures, previews), until the user scrolls.
-- **Sources** are in tabs by kind (messages, pictures, contacts, analysis, devices); the local
-  analysis has a start and pause button, and an action shows only when it has something to do.
-- **Names found** for people without one: from their handles (an email's or a user name's words,
-  where one is a first name the archive knows: `first.last@…` is "First Last"), and
-  from the local analysis. Shown on the page of those without a name and on the person's page,
-  accepted with a click or turned down for good; never applied by themselves.
-- **Local analysis** is a plugin of its own kind (`analysis`): Ollama on this computer or its own
-  network (another address is refused), one model or two or three that vote. It reads a little of
-  each chat (the first lines, lines spread over all of it, lines that name someone), largest chats
-  first, in the background while turned on, and again when a chat grows by half. A name counts
-  only where its words are in what it read (a name in any case, with or without a surname, as one),
-  never an email, a handle or the owner's; a tone needs most of the models, a sensitive one two of
-  them each with a line copied from the chat. The prompt is built from the user's lists, so a new
-  label is judged by its meaning; those read by another list are read again when the user asks.
+  list unless the user shows them (`hide_empty_groups`, on by default); a search still finds them,
+  and one with an unread message still shows.
 - **Nothing empty is shown**: the chat list leaves out chats with no message and no call, and the
   people list people with nothing in the archive (a source may leave such: a chat it lists with
   nothing in it, a handle no message came from), so a stray row of an import never reaches the user.
 - **A chat's state**: muted, pinned and read up to come from what the sources report
-  (`state_report`: the iPhone's WhatsApp, the bridge's store, Telegram live as it changes) and what
-  the user chose (`chat_state`). Between services the plugins' weights decide; between the user
-  and the services the later change wins, unless the user chose "always". Chat info shows what
-  each service says. **Archived is the app's own**: decided once, when the app first sees a chat,
-  from what the services say then (`Archive.init_archived`: a person's chat archived only if every
-  conversation a service reports on is archived there, one in view keeping them in view; a chat no
-  service reports on, not archived), and from then on only the user changes it. New messages do
-  not: an archived chat gets them like any other, without notifications.
-  When two people are merged, the chat is archived only if both were; an address split off keeps
-  the archived of the chat it left.
+  (`state_report`: the iPhone's WhatsApp, the live sources as it changes) and what the user chose
+  (`chat_state`). Between services the plugins' weights decide; between the user and the services
+  the later change wins, unless the user chose "always". Chat info shows what each service says.
+  **Archived is the app's own**: decided once, when the app first sees a chat, from what the
+  services say then (`Archive.InitArchived`: a person's chat archived only if every conversation a
+  service reports on is archived there, one in view keeping them in view; a chat no service reports
+  on, not archived), and from then on only the user changes it. New messages do not: an archived
+  chat gets them like any other, without notifications. When two people are merged, the chat is
+  archived only if both were; an address split off keeps the archived of the chat it left.
 - **Merged groups**: the user can merge group chats (the same people on two services, or a group
   made again) into one chat, `c<id>` of the first, its name the latest one's (`group_link`); the
   app suggests groups with mostly the same members, or the same name and someone in both. A group
   can leave again, archived as the chat it left; if it is the one whose id the chat has, the others
   keep the chat and the user's choices under the latest one's id. Archived after a merge as for
   people.
-- **Changing the ways in** (a password, a passkey, recovery codes, an MCP token) needs a setup link,
-  or a session that signed in within the last 15 minutes. A stolen session cannot add its own way in.
-  Failed password sign-ins lock that address only, so whoever knows the name cannot lock the user
-  out.
+- **Back**: every page reached from another has a way back to it, on every screen size; one opened
+  from the app's menu has none (the menu is the way on), and one opened directly goes back to its
+  section (a person's page to People, the calls or media of a chat to the chat). On a wide screen
+  a chat shows back only when it was opened from another page (the list is beside it).
+- **Where a chat was being read** is kept for the session (this tab, a reload included), not
+  across sessions; a chat opened afresh stays at its end while what is drawn grows to its real
+  height (pictures, previews), until the user scrolls.
+- **Settings** are in tabs: general, names, labels, services, security. **Sources** are in tabs by
+  kind (sources, libraries, contacts, analysis) and devices; the local analysis has a start and
+  pause button, and an action shows only when it has something to do.
 - **Words**: every word the user reads is translated (Greek and English). The interface's words
-  are in `web/src/lib/i18n.ts`; the server's errors are codes (`UserError`) said by the interface;
-  what the server says by itself (logs, statuses, notifications, a plugin's errors) is English in
-  code, said in the language the user last chose (setting `language`, or the request's `X-Lang`)
-  through `internal/i18n`. `internal/checks` and tsc keep it so.
-- **A demo or a test** keeps its secrets apart (`EVERYSAID_KEYRING`), so it never connects to the
-  user's accounts.
+  are in `web/src/lib/i18n.ts`; the server's errors are codes (`internal/errs`, `UserError`) said
+  by the interface; what the server says by itself (logs, statuses, notifications, a plugin's
+  errors, the command line) is English in code, said in the language the user last chose (setting
+  `language`, or the request's `X-Lang`) through `internal/i18n`. `internal/checks` and tsc keep it
+  so.
+- **A demo or a test** keeps its secrets apart (`EVERYSAID_KEYRING`) and its folders apart
+  (`EVERYSAID_DATA`, `EVERYSAID_CACHE`, `EVERYSAID_CONFIG`), so it never touches the user's archive
+  or accounts. `everysaid demo` makes an archive of invented people.
 
-Where things are: `internal/core/` (store, names, queries, changes, labels), `internal/plugins/` and
-the packages of the live sources (`internal/telegram`, `internal/whatsapp`, `internal/signal`,
-`internal/viber`), `internal/server/` (routes, auth, host, push, users), `internal/mcp`,
-`internal/demo`, `cmd/everysaid` (the binary), `web/` (the PWA); tests beside the code they test,
-`internal/checks` over the whole code, and `web/e2e/`. `docs/app.md` tells how to run it.
+## 8. The API
+
+- Go's `net/http` (`internal/server`), JSON under `/api`: `/api/chats`, `/api/chats/{id}/stream`,
+  `/api/people`, `/api/search`, `/api/calls`, `/api/media`, `/api/plugins`, `/api/devices`,
+  `/api/labels`, `/api/settings`, `/api/auth/...` and the rest; long lists are paginated. Every
+  call the interface makes is checked against the routes by the server's tests.
+- WebSocket `/api/events`: new records, plugin status, import progress; a ping every 25 seconds.
+- Web Push (VAPID) for new messages while the app is closed.
+
+## 9. Security
+
+Online, for one owner, with the strongest protection that does not get in the way:
+
+- **Login with passkeys** (WebAuthn: fingerprint, face, security key), more than one per user. The
+  first is made through a one-time setup link printed on the terminal (`everysaid serve` while there
+  is no user, `everysaid user link` any time). Ten recovery codes, each once. Where a passkey cannot
+  be made (some browsers or setups refuse it), a password together with a TOTP code from any
+  authenticator app, both required, so that the app does not depend on any one tool working.
+- **Changing the ways in** (a password, a passkey, recovery codes, an MCP token) needs a setup
+  link, or a session that signed in within the last 15 minutes, so a stolen session cannot add its
+  own way in. Failed password sign-ins lock that address only, so whoever knows the name cannot lock
+  the user out.
+- **Sessions**: a random token in an HttpOnly, SameSite=Strict cookie (Secure over HTTPS), only its
+  hash stored; every device listed and revocable; idle ones end after 30 days.
+- **Transport**: the server listens on plain HTTP, on localhost by default; HTTPS comes from a
+  reverse proxy with automatic certificates (Caddy), or the app stays on a private network
+  (WireGuard, Tailscale) for those who prefer not to expose it at all. Both are described in
+  `docs/app.md`.
+- **Hardening**: the Host must name this server (no DNS rebinding); a strict Content-Security-Policy
+  (only the server's own scripts), no framing, no referrer, HSTS over HTTPS; changes need the header
+  `X-Everysaid: 1` and this server's Origin (with SameSite cookies, no CSRF); login attempts limited
+  per address; an audit log of logins, changes to the ways in and removals.
+- **Secrets** (backup passwords, service sessions, API keys) in the system keyring, or in files of
+  mode 600 under the config folder where there is none; never in the archive, never sent to the
+  browser.
+- **Data at rest**: the archive stays plain SQLite; encryption at rest is the disk's (LUKS,
+  FileVault, BitLocker), as SQLCipher would cost speed and tooling.
+- **The MCP server** over HTTP needs its own token (`Authorization: Bearer`); reading is free, and
+  the few changes it can make are listed (10).
+- **Deletion** only on the user's explicit confirmation, with the exact list; the archive's records
+  stay when files go.
+
+## 10. The MCP server
+
+Tools as calls into the core, with the official Go SDK (`github.com/modelcontextprotocol/go-sdk`,
+`internal/mcp`): search messages, list and read chats, a message with its context, find people, a
+person (handles, services, counts, first and last contact), a person's direct chat, the last
+interaction, messages and calls of a period, a day's timeline across services, statistics, media
+(`find_media`, `download_media`). The changes it can make are a person's name and note and storing
+a file in the photo library (`send_media_to_library`), each with the user's approval. Times are
+given in the user's time zone.
+
+## 11. Platforms and installation
+
+Linux first; macOS and Windows where the plugins' tools exist (each plugin says where it runs; the
+Viber bridge is Linux only). For users one static binary per system, built for Linux, macOS and
+Windows on amd64 or arm64 (`docs/go.md`), and, where Signal is wanted, its helper beside it.
+
+## 12. Where things are
+
+`internal/core/` (store, names, queries, changes, labels), `internal/archive/` (schema, writing),
+`internal/importers/`, `internal/plugins/` and the packages of the live sources
+(`internal/telegram`, `internal/whatsapp`, `internal/signal`, `internal/viber`), `bridges/` (the
+Signal helper, the Viber bridge), `internal/server/` (routes, auth, host, push, events),
+`internal/mcp`, `internal/demo`, `cmd/everysaid` (the binary), `web/` (the PWA); tests beside the
+code they test, `internal/checks` over the whole code, and `web/e2e/`.

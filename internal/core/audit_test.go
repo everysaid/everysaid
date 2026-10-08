@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -435,4 +436,37 @@ func TestACacheWithAnAge(t *testing.T) {
 	if n != 2 {
 		t.Fatalf("built %d times", n)
 	}
+}
+
+// The statistics count only the messages added since they were last counted: what they say after
+// messages come (in a new year too) or go is what a count of the whole archive says.
+func TestStatsCountedSinceAreTheWholeCount(t *testing.T) {
+	s := store(t)
+	whole := func() core.M {
+		fresh, err := core.Open(s.Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer fresh.Close()
+		return core.Stats(fresh, true)
+	}
+	same := func(when string) {
+		t.Helper()
+		if got, want := core.Stats(s, true), whole(); !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s:\n%v\n%v", when, got, want)
+		}
+	}
+	same("at first")
+	later := time.Now().AddDate(3, 0, 0).UnixMilli()
+	write(t, s, func(tx *sql.Tx) {
+		for _, at := range []int64{db.Int(tx, "SELECT max(ts) FROM message") + 1, later} {
+			db.Exec(tx, "INSERT INTO message (service_id, conversation_id, ts, outgoing, kind_id, text) "+
+				"SELECT service_id, conversation_id, ?, 1, kind_id, 'x' FROM message GROUP BY conversation_id", at)
+		}
+	})
+	same("after messages came")
+	write(t, s, func(tx *sql.Tx) {
+		db.Exec(tx, "DELETE FROM message WHERE text = 'x' AND ts < ?", later) // the newest stay
+	})
+	same("after messages went")
 }

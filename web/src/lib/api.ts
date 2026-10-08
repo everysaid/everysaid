@@ -185,7 +185,7 @@ export interface ChatDetail {
   state_user: Partial<Record<StateField, { value: number; set_at: number; always: number }>>;
   person?: Person;
   members?: Member[];
-  groups?: { conversation_id: number; service: string; title: string | null; messages: number; last_ts: number | null }[];   // a group: those it is made of
+  groups?: { conversation_id: number; service: string; title: string | null; messages: number; first_ts: number | null; last_ts: number | null }[];   // a group: those it is made of
 }
 
 export interface Member {

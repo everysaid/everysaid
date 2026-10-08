@@ -1,8 +1,9 @@
 # The app: running, reaching it, the assistant
 
 `everysaid serve` is the whole app in one process: the API over the core, the live connections
-(Telegram, WhatsApp through a bridge), the PWA (the web/mobile interface) and push notifications.
-`everysaid mcp` gives an assistant the same archive. `docs/design.md` explains how it is built.
+(Telegram, WhatsApp, Signal, Viber Desktop), the PWA (the web/mobile interface) and push
+notifications. `everysaid mcp` gives an assistant the same archive. `docs/design.md` explains how it
+is built.
 
 ## Building and running
 
@@ -13,7 +14,7 @@ CGO_ENABLED=0 go build -o everysaid ./cmd/everysaid
 ./everysaid serve                                # http://localhost:8520
 ```
 
-`docs/go.md` has the rest of the building (other systems, Signal's helper).
+`docs/go.md` has the rest of the building (other systems, Signal's helper) and the other commands.
 
 The first start prints a one-time setup link (`.../setup#...`, valid for an hour). Open it, give a
 name, and choose how you will sign in:
@@ -105,33 +106,47 @@ the web cannot do on an iPhone: reply from a notification, or share into the app
 
 ## Sources, libraries, contacts
 
-All in Sources: add a plugin instance (an iPhone backup, an Android phone over adb, Telegram, the
-WhatsApp bridge, Signal, Viber Desktop, the carriers' notices; a folder or immich as the photo
-library; a CardDAV address book or a .vcf file for names and photos), set it up, import, and for
-Telegram, WhatsApp, Signal and Viber Desktop turn on the live connection. Viber Desktop is read and
-driven through Everysaid's bridge (`bridges/viber/`, Linux), a library loaded into the running Viber
-Desktop: its history, what arrives, and sending. Each instance shows whether it is ready, what it
-needs, and its log as it runs. Sending is possible where the plugin can (Telegram; WhatsApp through
-Everysaid's bridge, `bridges/whatsapp/`, started with `-send`, off by default: an unofficial client
-risks the account), answers to a message, mentions and files too: in a group "@" lists its members,
-and the clip sends a file with the text as its caption (Viber sends the file, then the text). A
-message's actions (its smiley button, or a long press on a touch screen) put the user's reaction (the
-service's quick ones, and any other emoji where it takes them: WhatsApp, Signal, Viber; Telegram's own
-list), change it, or take it back (also a tap on it), and edit the user's own message or delete it
-for everyone (asked first), within the time the service allows. A message deleted for everyone
-(by the user or its sender) is kept in the archive but shows as the service shows it, "deleted",
-what it was on a tap; search and the media pages leave it out (WhatsApp 15 minutes to edit and two
-days to delete, Signal a day for both, Telegram two days to edit). Read receipts go out only where turned on
-(the "Send read receipts" of the WhatsApp bridge and of Telegram, off by default), when a chat with
-something new from the others is read in the app while it is in view (a page in the background reads
-nothing). The user's messages show ✓ sent, ✓✓ delivered to all, coloured when read by all ("all" in
-a group: whoever the service said got the user's messages there about then), where the service tells (WhatsApp; Telegram in a person's chat, read
-but not when; Viber from the iPhone, where the other lets it be seen); a tap on them says who got and
-read the message, and when. The bridge
-sends only into chats where the other side has written, within limits a minute, an hour and a day,
-and never the same longer text into many chats; when WhatsApp warns the account (a temporary ban, a
-logout) it blocks sending until it is cleared at the bridge, and the app turns its own sending off
-and tells the user's devices.
+All in Sources: add a plugin instance, set it up, import, and for the live services turn on the
+live connection. Each instance shows whether it is ready, what it needs, and its log as it runs.
+
+- **Sources:** an iPhone backup, an Android phone over adb, Viber Desktop, WhatsApp, Telegram,
+  Signal, the carriers' missed-call notices, Adium and Pidgin logs.
+- **Photo libraries:** a folder, or immich.
+- **Names and photos:** a CardDAV address book, or a .vcf file.
+- **Local analysis:** Ollama.
+
+The live services: Telegram and WhatsApp run inside `everysaid serve` (WhatsApp as a device linked
+from the phone with a QR code: the source's "Link a device"); Signal through its helper
+(`bridges/signal/`, `docs/go.md`); Viber Desktop through Everysaid's bridge (`bridges/viber/`,
+Linux), a library loaded into the running Viber Desktop.
+
+**Sending** is off until turned on in the source's settings ("Sending messages"); WhatsApp also
+needs `[whatsapp] send = true` in `config.toml` (an unofficial client risks the account), Viber its
+bridge started with `VIBER_ALLOW_SEND=1`. Then the app sends text, answers to a message, mentions
+(in a group "@" lists its members) and files (the clip sends a file with the text as its caption;
+Viber sends the file, then the text). A message's actions (its smiley button, or a long press on a
+touch screen) put the user's reaction (the service's quick ones, and any other emoji where it takes
+them: WhatsApp, Signal, Viber; Telegram's own list), change it, or take it back (also a tap on it),
+and edit the user's own message or delete it for everyone (asked first), within the time the
+service allows (WhatsApp 15 minutes to edit and two days to delete, Signal a day for both, Telegram
+two days to edit).
+
+A message deleted for everyone (by the user or its sender) is kept in the archive but shows as the
+service shows it, "deleted", what it was on a tap; search and the media pages leave it out.
+
+**Read receipts** go out only where the source's "Send read receipts" is on (off by default), when
+a chat with something new from the others is read in the app while it is in view (a page in the
+background reads nothing). The user's messages show ✓ sent, ✓✓ delivered to all, coloured when read
+by all ("all" in a group: whoever the service said got the user's messages there about then), where
+the service tells (WhatsApp, Signal; Telegram in a person's chat, read but not when; Viber from the
+iPhone, where the other lets it be seen); a tap on them says who got and read the message, and when.
+
+**WhatsApp's safeguards:** it sends only into chats where the other side has written, within limits
+a minute, an hour and a day (`[whatsapp] send_per_minute`, `send_per_hour`, `send_per_day`: 6, 60,
+300), and never the same longer text into more than `send_same_text` (3) chats an hour. When
+WhatsApp warns the account (a temporary ban, a logout) sending is blocked until the user clears it
+(the source's "Allow sending again"), and the app turns the source's sending off and tells the
+user's devices.
 
 Secrets (passwords, API keys, the Telegram session) go to the system keyring, never to the archive
 or the browser. The iPhone's backup password is asked for at each import by default, used for that
@@ -145,22 +160,26 @@ source's card lists them, each opened whole.
 
 ## The assistant (MCP)
 
+On the same machine, over stdio:
+
 ```json
 { "mcpServers": { "everysaid": { "command": "/path/to/everysaid", "args": ["mcp"] } } }
 ```
 
-Tools: search messages, list and read chats, a message in context, people, calls, a day's timeline,
-statistics; and, confirmed by the user, a person's name or note. It reads the same archive as the
-app.
+From another machine, over HTTP: the server's `/mcp` (e.g. `https://everysaid.example.org/mcp`),
+with `Authorization: Bearer <token>`, a token made in Settings or by `everysaid user mcp-token`
+(`everysaid user mcp-tokens` lists them, `everysaid user mcp-token --revoke ID` ends one).
+
+Tools: search messages, list and read chats, a message in context, people, a person's direct chat
+and last interaction, calls, a day's timeline, statistics, a chat's files and a file itself; and,
+only with the user's approval, a person's name or note, or a file sent to the photo library. It
+reads the same archive as the app.
 
 ## Developing
 
-```
-go test ./...                                          # every package (on demo archives and fixtures)
-cd web && pnpm dev                                     # the interface with hot reload, /api proxied to :8520
-EVERYSAID_EXTRA_ORIGINS=http://localhost:5173 everysaid serve    # so passkeys work on the dev port
-cd web && EVERYSAID_CMD=/path/to/everysaid pnpm exec playwright test   # end to end, desktop and mobile, against the demo (web/e2e)
-```
+`docs/go.md` has the tests and the end-to-end run on the demo. For the interface with hot reload:
 
-The end-to-end tests expect the demo served on port 8530 (`everysaid demo --dir /tmp/chr-demo
---serve`, by the same binary); without `EVERYSAID_CMD` they run `go run ./cmd/everysaid`.
+```
+cd web && pnpm dev                                               # /api proxied to :8520
+EVERYSAID_EXTRA_ORIGINS=http://localhost:5173 everysaid serve    # so passkeys work on the dev port
+```

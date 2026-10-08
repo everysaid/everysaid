@@ -1,29 +1,30 @@
 # Everysaid Viber bridge
 
-Live send **and** receive on the owner's own Viber account, by driving the running Viber Desktop
-(Linux, Qt 6.10) from inside — Viber has no client API. This folder is the **bridge side** (the part
-that talks to Viber), analogous to `bridges/whatsapp/`. The **core side** is the `viber-desktop` source
-in `internal/viber/` (import, live, sending), reading through `snapshot` with the Viber importer.
+Live send and receive on the user's own Viber account, by driving the running Viber Desktop (Linux)
+from inside: Viber has no client API. This folder is the bridge (the part loaded into Viber). The
+Everysaid side is the `viber-desktop` source in `internal/viber/` (import, live, sending).
+`docs/viber-bridge.md` explains the method and every mechanism the bridge calls.
 
-The feasibility study, the method, and every mechanism (with how each was verified) are in
-`docs/viber-bridge.md`. Read that first. This README is how to build, run, and talk to the bridge.
+## How it works
 
-## How it works (one paragraph)
+An `LD_PRELOAD` library (`inject/viber-bridge.so`) loads into Viber and installs Qt's `qtHookData`
+object create/destroy hooks (the mechanism GammaRay uses) to keep a live registry of Viber's
+`QObject`s. It calls their methods by name through the meta-object system, the same entry points
+Viber's QML UI uses, so nothing depends on a binary offset. Reads come from the SQLite connections
+Viber has already unlocked (no decryption). It answers a small line-based Unix socket of named
+commands only (no generic SQL or method call).
 
-An `LD_PRELOAD` library (`inject/viber-bridge.so`) loads into Viber and installs Qt's own
-`qtHookData` object create/destroy hooks — the mechanism GammaRay uses — to keep a live registry of
-Viber's `QObject`s. It calls their methods by name through the meta-object system
-(`QMetaObject::metacall`), the same entry points Viber's QML UI uses, so nothing depends on a binary
-offset. Reads come from the SQLite connections Viber has already unlocked (no decryption). It exposes
-a small line-based Unix socket of **named** commands only (no generic SQL/method surface).
+The library hooks only the process `/opt/viber/Viber` (not Viber's helper processes), so Viber
+Desktop must be installed there.
 
 ## Build
 
-Needs the system Qt 6 headers (QtCore/QtSql/QtGui) and `moc`.
+Needs the system Qt 6 headers (QtCore/QtSql/QtGui) and `moc`; it links against Viber's bundled Qt in
+`/opt/viber/lib` (`make QT=... MOC=... VIBERLIB=...` to change the paths).
 
 ```
 make -C inject          # -> inject/viber-bridge.so
-make -C tools           # -> tools/probe.so   (dev meta-object dumper, optional)
+make -C tools           # -> tools/probe.so   (meta-object dumper, optional)
 ```
 
 The library is written beside and moved into place: a running Viber has the old file mapped, and
@@ -32,102 +33,100 @@ writing into it brings that Viber down. A new build takes effect when Viber is s
 ## Run
 
 ```
-# read-only
-./run.sh
-# with sending enabled (the owner's deliberate choice, like WhatsApp's -send)
-VIBER_ALLOW_SEND=1 ./run.sh
+./run.sh                       # read-only
+VIBER_ALLOW_SEND=1 ./run.sh    # with sending (and reactions, edits, deletions, read receipts)
 ```
 
-`run.sh` starts Viber headless under an Xvfb display (the reply path drives the real QML input, so it
-needs a window) with the bridge preloaded. For a permanent service, adapt `viber-bridge.service`.
-Viber ignores SIGTERM but quits cleanly on **SIGINT**, or on the bridge's `quit`; it is the account's
-single linked Desktop client. A program started in the background of a shell without job control has
-SIGINT ignored from the start, and Viber then never quits on it: `run.sh` starts it with
-`env --default-signal=INT`.
+`run.sh` starts Viber with the bridge preloaded, headless on an Xvfb display (composing drives the
+real QML input, so it needs a window) and on a D-Bus session of its own (so Viber puts no tray icon
+or notifications on the desktop). It needs Xvfb, `xdpyinfo` and `dbus-run-session`. Viber must not
+already be running: a second start hands over to the first.
 
-Env: `VIBER_BRIDGE_SOCK` (default `$XDG_RUNTIME_DIR/viber-bridge.sock`, mode 600), `VIBER_ALLOW_SEND`
-(`1` to allow actions), `VIBER_DISPLAY` (Xvfb display, default `:99`), `VIBER_BIN`.
+Viber ignores SIGTERM but quits cleanly on SIGINT, or on the bridge's `quit`. A program started in
+the background of a shell without job control has SIGINT ignored from the start, so `run.sh` starts
+Viber with `env --default-signal=INT`. For a permanent service, copy `viber-bridge.service` to
+`~/.config/systemd/user/`, adjust its paths, and `systemctl --user enable --now viber-bridge` (it
+stops Viber with SIGINT).
+
+Environment: `VIBER_BRIDGE_SOCK` (default `$XDG_RUNTIME_DIR/viber-bridge.sock`, else
+`/tmp/viber-bridge.sock`; mode 600), `VIBER_ALLOW_SEND` (`1` to allow actions), `VIBER_DISPLAY`
+(the Xvfb display, default `:99`), `VIBER_BIN` (default `/opt/viber/Viber`), `VIBER_BRIDGE_DRY`
+(below).
 
 ## Socket protocol
 
-One command per line; the reply is lines terminated by the server closing the connection (except
+One command per line; the reply is lines, ended by the bridge closing the connection (except
 `subscribe`, which streams until the client disconnects). `TEXT`/`PATH` is the rest of the line and
 may contain spaces. `Body`/`Info` are escaped (`\t`, `\n`, `\\`) so one event is always one line.
+Every action answers `ok` or `error <what>` (`error send-disabled` without `VIBER_ALLOW_SEND=1`).
 
 | Command | Reply | Needs send |
 |---|---|---|
 | `ping` | `pong` | — |
 | `chats` | `id⇥name⇥flags⇥token⇥lastReadToken⇥timestampMs` per chat | — |
-| `events SINCE [LIMIT]` | per event `id`>SINCE: `id⇥chat⇥contact⇥dir⇥type⇥ts⇥token⇥read⇥body⇥info` | — |
+| `events SINCE [LIMIT]` | per event with `id` > SINCE (LIMIT default 1000, at most 5000): `id⇥chat⇥contact⇥dir⇥type⇥ts⇥token⇥read⇥body⇥info` | — |
 | `message EVENTID` | that one event, same columns | — |
 | `subscribe` | `subscribed`, then the same event rows live as they arrive | — |
-| `send CHATID TEXT` | `ok` / `error …` | yes |
-| `file CHATID PATH` | `ok` / `error …` | yes |
-| `reply CHATID TARGET TEXT` | `ok` / `error …` | yes |
-| `react TARGET CODE` | `ok` / `error …` (CODE = `1`-`5` = ❤️😂😮😢😡, or `like`) | yes |
-| `unreact TARGET` | `ok` / `error …` | yes |
-| `read CHATID` | `ok` / `error …` | yes |
-| `compose JSON` | `ok` / `error …` (`{"chat":ID,"reply":EVENT,"edit":EVENT,"parts":[{"text":…},{"mention":CONTACTID}]}`) | yes |
-| `delete TARGET` | `ok` / `error …` (the user's own message, for everyone) | yes |
-| `snapshot PATH` | `ok` / `error …`: a plain copy of `viber.db` at PATH (mode 600) | — |
-| `input` | `edit=on/off`, then the focused input's text (to check what `compose` typed) | — |
+| `snapshot PATH` | a plain copy of `viber.db` at PATH (absolute; mode 600, moved into place when whole) | — |
+| `input` | `edit=on/off`, a tab, then the focused input's text (to check what `compose` typed) | — |
 | `quit` | `ok`, and Viber quits cleanly | — |
+| `send CHATID TEXT` | TEXT with `\n`, `\t` and `\\` escaped | yes |
+| `file CHATID PATH` | sends the file | yes |
+| `reply CHATID TARGET TEXT` | a quoted reply (a `compose` with one text part) | yes |
+| `compose JSON` | `{"chat":ID,"reply":EVENT,"edit":EVENT,"parts":[{"text":…},{"mention":CONTACTID}]}` | yes |
+| `react TARGET CODE` | CODE: `like`, a quick reaction number (1-5 = ❤️😂😮😢😡), or any emoji | yes |
+| `unreact TARGET` | takes the user's reaction back | yes |
+| `delete TARGET` | the user's own message, deleted for everyone | yes |
+| `read CHATID` | marks the chat read | yes |
 
-`send`'s TEXT has `\n`, `\t` and `\\` escaped. `react`'s CODE is a quick reaction (1-5), `like`, or any
-emoji. `compose` types into the chat's input (`InputBoxArea::replaceTextWith`/`insertEmoticon`,
-`mentionSelected` after an "@") and sends it with `InputBoxArea::accept()`, which does not depend on
-which window has the focus (a synthetic Return did not commit an edit while the desktop was in use).
-With `VIBER_BRIDGE_DRY=1` it types and stops before sending, for checking with `input`.
+`compose` opens the chat, types into its input (`InputBoxArea::replaceTextWith`/`insertEmoticon`,
+`mentionSelected` after an "@") and sends with `InputBoxArea::accept()`, which does not depend on
+which window has the focus. `mentionSelected` replaces all the text before the cursor, so the parts
+are typed from the last to the first, each at the beginning. Before sending it checks the input
+(each text part there, an "@" for each mention), types again after a moment where a chat still
+opening lost a piece, and otherwise sends nothing (`error compose-mismatch`). With
+`VIBER_BRIDGE_DRY=1` it types and stops before sending (`ok dry`), for checking with `input`.
 
-`dir`: 0 incoming, 1 outgoing. Reactions arrive as their own `type 3` events, linked through
-`LikeRelation` (`MessageToken`: the message reacted to); the event's `Messages.PGIsLiked` is the quick
-reaction (0: taken back), `SelfReaction` any other emoji, `ContactID` who. `Messages.MembersReactions`/
-`AdminsReactions` hold the counts (`{"1":2,"🙏":1}`). An edit rewrites the message (`Info.desktop_info.
-edit_token`) and adds an event whose `Info.edit.token` is the message edited. A deletion for everyone
-makes the message `Messages.Type` 72 with `Body` and `Info` emptied . A message deleted from the
-history only (on any device of the account) leaves Viber Desktop's database altogether, with its
-reactions' events: an import cannot tell that from history it never had, and the archive keeps it.
-The source also marks its own deletions for everyone in the archive at once. Any emoji as a reaction is `PGIsLiked` 7 with the emoji in `SelfReaction`; My
-Notes takes only the quick ones. "My Notes" is the chat whose
-`ChatInfo.Flags` has bit 19 (524288). Quotes and file metadata are JSON in `Messages.Info`
-(`quote{token,text}`, `fileInfo{ContentType,…}`); mentions are `textMetaInfo` (type 0, `memberId`,
-UTF-16 `start`/`end`), as on the iPhone.
+### What the database keeps
+
+`dir`: 0 incoming, 1 outgoing. "My Notes" is the chat whose `ChatInfo.Flags` has bit 19 (524288).
+
+- Reactions arrive as their own `type 3` events, linked through `LikeRelation` (`MessageToken`: the
+  message reacted to); the event's `Messages.PGIsLiked` is the quick reaction (0: taken back), 7 with
+  the emoji in `SelfReaction` for any other emoji, `ContactID` who. `Messages.MembersReactions`/
+  `AdminsReactions` hold the counts (`{"1":2,"🙏":1}`). My Notes takes only the quick ones.
+- An edit rewrites the message (`Info.desktop_info.edit_token`) and adds an event whose
+  `Info.edit.token` is the message edited.
+- A deletion for everyone makes the message `Messages.Type` 72, with `Body` and `Info` emptied. A
+  message deleted from the history only (on any device of the account) leaves Viber Desktop's
+  database altogether, with its reactions' events: an import cannot tell that from history it never
+  had, so the archive keeps it.
+- Quotes and file metadata are JSON in `Messages.Info` (`quote{token,text}`,
+  `fileInfo{ContentType,…}`); mentions are `textMetaInfo` (type 0, `memberId`, UTF-16
+  `start`/`end`), as on the iPhone.
 
 Quick check (read-only):
 
 ```
 python3 - <<'PY'
-import socket
-s=socket.socket(socket.AF_UNIX); s.connect("/run/user/$(id -u)/viber-bridge.sock")
+import os, socket
+s = socket.socket(socket.AF_UNIX)
+s.connect(os.environ.get("VIBER_BRIDGE_SOCK") or os.path.join(os.environ["XDG_RUNTIME_DIR"], "viber-bridge.sock"))
 s.sendall(b"ping\n"); print(s.makefile().read())
 PY
 ```
 
-## Verified
+## The Everysaid side
 
-All of the following were exercised against the live client (see `docs/viber-bridge.md` for details):
-send text, send image (uploads as a PIC), receive both by polling and live via `subscribe`, quoted
-reply (the sent message carries the quote), set reaction (heart via `like`; any of 1-5 via `react`),
-and reading chats/events/reactions/quotes. Both outward actions were confirmed in a group chat.
-
-Two name-traps found and avoided: the send-on-Enter is a real key event to the window, **not**
-`InputBoxArea::onKeyRelease`; and `Statistics::MessageEvents::messageQuickReaction` is a telemetry
-logger, **not** the reaction action (`MessageActions::like`/`react` is). Behaviour is the test, not the
-method name.
-
-## The core side
-
-`internal/viber` (the `viber-desktop` source): an import is a `snapshot` into the cache read by
-`importers.Viber` (no iPhone, source `viber-desktop/viber`) and its files (`PayloadPath`); live, the
-same again whenever `subscribe` says Viber added events, and every minute for what changes without
-one. Sending maps the archive's conversation to a `ChatID` (a group's or the notes' token, a person's
-number) and a message to its `EventID` (by token), on the last copy, or a fresh one where it is not
-there. It is gated by the source's "Sending messages" and by `VIBER_ALLOW_SEND` here.
-
-Mentions were checked on a group: `mentionSelected` replaces all the
-text before the cursor, so `compose` types from the end to the start, each piece at the beginning,
-and checks the input (each text piece there, an "@" for each mention) before sending, typing again
-after a moment where a chat still opening lost a piece, else sending nothing.
+`internal/viber` (the `viber-desktop` source; its setting "The bridge's socket" defaults to the
+bridge's). An import is a `snapshot` into the cache, read by the Viber importer (source
+`viber-desktop/viber`) and its files (`PayloadPath`). Live, it imports again whenever `subscribe`
+says Viber added events, and every `interval` seconds (default 60) for what changes without one (a
+deletion); a stopped Viber is waited for. Sending maps the archive's conversation to a `ChatID` (a
+group's or the notes' token, a person's number) and a message to its `EventID` (by token), on the
+last copy, or a fresh one where it is not there. It uses `send`, `file`, `compose`, `react`/`unreact`,
+`delete` and `read`, gated by the source's "Sending messages" (and, for `read`, "Send read
+receipts") and by `VIBER_ALLOW_SEND=1` here.
 
 ## Layout
 
@@ -135,7 +134,8 @@ after a moment where a chat still opening lost a piece, else sending nothing.
 inject/viber-bridge.cpp   the resident LD_PRELOAD bridge
 inject/watch.h            QObject slot for EventsStorage::eventsAdded (moc)
 inject/Makefile
-run.sh                    headless launcher (Xvfb + preload)
+run.sh                    headless launcher (Xvfb, D-Bus session, preload)
 viber-bridge.service      systemd user unit template
-tools/probe.cpp           meta-object dumper for re-checking signatures after a Viber update
+tools/probe.cpp           meta-object dumper, for re-checking signatures after a Viber update
+tools/Makefile
 ```

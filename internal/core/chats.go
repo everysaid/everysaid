@@ -1098,15 +1098,15 @@ func GetChat(s *Store, chatID string) M {
 	out["members"] = members
 	if c.Type == "group" { // the groups it is made of (more than one when the user merged them)
 		groups := []M{}
-		db.Each(q, "SELECT c.id, c.service_id, c.title, count(m.id), max(m.ts) FROM conversation c "+
+		db.Each(q, "SELECT c.id, c.service_id, c.title, count(m.id), min(m.ts), max(m.ts) FROM conversation c "+
 			"LEFT JOIN message m ON m.conversation_id = c.id WHERE c.id IN ("+db.Marks(len(convs))+") "+
 			"GROUP BY c.id ORDER BY max(m.ts) DESC", db.Args(convs), func(scan func(...any)) {
 			var id, sid, n int64
 			var title sql.NullString
-			var last sql.NullInt64
-			scan(&id, &sid, &title, &n, &last)
+			var first, last sql.NullInt64
+			scan(&id, &sid, &title, &n, &first, &last)
 			groups = append(groups, M{"conversation_id": id, "service": lk.Service[sid], "title": nullString(title),
-				"messages": n, "last_ts": nullInt(last)})
+				"messages": n, "first_ts": nullInt(first), "last_ts": nullInt(last)})
 		})
 		out["groups"] = groups
 	}

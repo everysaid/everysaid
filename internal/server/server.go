@@ -249,6 +249,14 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		ErrorLog:    slog.NewLogLogger(s.log.Handler(), slog.LevelWarn),
 		BaseContext: func(net.Listener) context.Context { return ctx }}
 	s.Start(ctx)
+	go func() { // the statistics counted once at the start (seconds on a large archive); later only what comes
+		defer func() {
+			if r := recover(); r != nil {
+				s.log.Error("stats", "panic", r)
+			}
+		}()
+		core.Stats(s.Store, false)
+	}()
 	errc := make(chan error, 1)
 	go func() { errc <- hs.Serve(ln) }()
 	select {

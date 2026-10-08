@@ -50,8 +50,8 @@ var info = &plugins.Info{
 	ServiceInfo:  sourcekit.Looks("telegram"),
 	NameWeights:  []plugins.Weight{{Key: "telegram/profile", Weight: 40}}, // chosen by each person
 	StateWeights: map[string]int{"muted": 60, "pinned": 0},
-	Description: "Every chat but channels and bots, through Telegram's API with the user's own account " +
-		"(Telethon): the whole history, then live.",
+	Description: "Every chat but channels and bots, through Telegram's API with the user's own account: " +
+		"the whole history, then live.",
 	Modes:       []string{"import", "live"},
 	LiveDefault: true,
 	Needs:       []string{"api_id and api_hash from my.telegram.org", "a login (a code that arrives in Telegram)"},

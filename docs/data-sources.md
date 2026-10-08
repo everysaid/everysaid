@@ -3,12 +3,13 @@
 This document describes, source by source, how Everysaid gets at each piece of personal data: the
 first acquisition, how it is refreshed, what is incremental and what is not, and how each obstacle
 that keeps a user from their own data is got round (encrypted backups, an encrypted desktop
-database, providers without an export, text hidden in binary blobs). It is written from the code as
-it stands (October 2026); where the code and the README disagree, the code is described and the
-difference noted in section 13.
+database, providers without an export, text hidden in binary blobs). It describes the code as it
+stands.
 
-`README.md` is the overview. This file is the "how". Notes about one installation (its devices,
-paths, history and numbers) belong in a local, untracked `LOCAL.md`, not here.
+`README.md` is the overview (it also covers Telegram, Signal and the Adium and Pidgin logs, which
+are not repeated here); `docs/go.md` tells how to build, run and develop. This file is the "how".
+Notes about one installation (its devices, paths, history and numbers) belong in a local, untracked
+`LOCAL.md`, not here.
 
 Placeholders: `<data>`, `<cache>` and `<config>` are Everysaid's folders (README, "Folders and
 configuration"); `<backup_root>` is `[iphone] backup_root`; `<export>` is `[android] export`, with
@@ -46,12 +47,13 @@ Contents:
                                                    viber-media/, whatsapp-media/
  Android phone ──adb── content query/read ─────► <export>/<device>/android.db (+ *.txt.gz, mms-parts/)
                ──adb pull Android/data/com.viber.voip/files ──► a folder of Viber media
- Viber Desktop (linked to a phone) ── LD_PRELOAD bridge, snapshot ──► <cache>/…/viber.db (plain copy)
- WhatsApp bridge (bridges/whatsapp, live) ──────► <data>/whatsapp-bridge/messages.db, whatsapp.db, media/
+ Viber Desktop (linked to a phone) ── LD_PRELOAD bridge, snapshot ──► <cache>/viber/<instance>/desktop.db
+ WhatsApp source (internal/whatsapp, live) ──────► <data>/whatsapp-bridge/messages.db, whatsapp.db, media/
+ Telegram API ── everysaid telegram-sync ────────► <cache>/telegram/telegram.db, media/
 
                      everysaid import sms calls viber whatsapp telegram voip media   (or the sources in the app)
                                                           ▼
-                     <data>/archive.db  +  <cache>/media/<ab>/<sha256><ext>
+                     <data>/archive.db  +  <data>/media/<ab>/<sha256><ext>   ([media] store)
                                                           │
                      the user's decisions (the app; separate picture tools for the backlog)
                                                           ▼
@@ -62,9 +64,9 @@ Three layers, each rebuildable from the one before it:
 
 | Layer | Where | Written by | Rebuildable from |
 |---|---|---|---|
-| Raw acquisition | `<backup_root>/`, `<export>/<device>/` | `idevicebackup2`, `everysaid android-export`, `adb pull`, the Viber bridge's snapshot | the devices only (an encrypted iPhone backup is the only copy of the phone's call history) |
+| Raw acquisition | `<backup_root>/`, `<export>/<device>/`, the live sources' stores | `idevicebackup2`, `everysaid android-export`, `adb pull`, the Viber bridge's snapshot, the WhatsApp source | the devices only (an encrypted iPhone backup is the only copy of the phone's call history) |
 | Decrypted extracts | `<cache>/iphone/` | `everysaid iphone-sync` | the encrypted backup |
-| Unified archive | `<data>/archive.db`, `<cache>/media/` | `everysaid import`, the sources | the extracts; but see section 13: once media are pruned, the archive is the only record |
+| Unified archive | `<data>/archive.db`, `<data>/media/` | `everysaid import`, the sources | the extracts; but see section 13: once media are pruned, the archive is the only record |
 
 An Android export may be removed once everything in it is in the archive (9.1, "Both origins of a
 pair"); the importers run without it.
@@ -79,7 +81,7 @@ pair"); the importers run without it.
 - **The encrypted backup is precious.** `<backup_root>/` is modified only by
   `idevicebackup2 backup`. Every other tool opens it read only. Pruning media never touches it.
 - **Private on disk.** Everything that writes decrypted data does so as folders 700 and files 600
-  (`iphone-sync`, the archive, the demo).
+  (`iphone-sync`, `android-export`, the archive, the demo); the binary runs with umask 077.
 - **Atomic replacement.** Files are written as `NAME.part` and then renamed over the old
   one, so an interrupted run never leaves a half-written database in place. This covers the
   extracts, the media files, the password file and the MMS parts.
@@ -87,10 +89,10 @@ pair"); the importers run without it.
   row_key)`, its id in that source, and is skipped if already present. A message's service-wide id
   (`message.key`) stops the same message arriving twice from two sources.
 - **One origin per record.** A record found on two devices is stored once, from the device that was
-  in use at the time (`device.used_from`/`used_until` in the archive, `Archive.keeper()`): an
+  in use at the time (`device.used_from`/`used_until` in the archive, `Archive.Keeper`): an
   Android phone during its period of use, the iPhone otherwise (the newest device carries the
   history copied from phone to phone). `message_origin` / `call_origin` record which source row
-  became which record; the source row itself is not kept (9.1), so the extracts must stay.
+  became which record; the source row itself is not kept (9.1).
 - **No channels.** Viber channels and WhatsApp channels/status are never imported (5.7, 6.4).
 - **Local processing only for private media.** Classification, similarity and hashing run on this
   machine. Sending anything to an outside model needs the user's consent each time.
@@ -107,21 +109,24 @@ pair"); the importers run without it.
 
 ### 3.1 Transport and pairing
 
-- `libimobiledevice`: `idevicepair`, `ideviceinfo`, `idevicebackup2`.
+- `libimobiledevice`: `idevicepair`, `ideviceinfo`, `idevicebackup2`, `idevice_id`.
 - `usbmuxd` is started by udev when the phone is plugged in. Everysaid uses the cable; Wi-Fi sync
   and iCloud backup play no part.
 - Pairing creates a lockdown pairing record (host certificate and keys) on both sides; the phone
   shows "Trust this computer". To check it:
   - `idevicepair validate`
   - `ideviceinfo -q com.apple.mobile.backup` (must show `WillEncrypt: true`)
-- Device: its UDID, set in `config.toml` (`[iphone] udid`); without it the
-  commands take the only backup in `[iphone] backup_root`, else the only phone on the cable.
+- Device: its UDID, set in `config.toml` (`[iphone] udid`) or with `--udid`; without it the
+  commands take the only backup in `[iphone] backup_root` (or `--backup-root`), else the only
+  phone on the cable (`idevice_id -l`).
 
 ### 3.2 Why encrypted, and what that protects
 
 - iOS chooses the backup's content by whether it is encrypted. Only an encrypted backup contains
   **call history** (`CallHistory.storedata`), the keychain, Health and Safari history.
 - So encryption must stay on. Turning it off would silently drop the calls from every later backup.
+  A backup that is not encrypted is refused, with a message to turn encryption on
+  (`idevicebackup2 encryption on`) and back up again.
 - The password is a setting of the phone, not of a single backup. It cannot be removed or changed
   without the old one.
 - If the password is unknown, the only way out is
@@ -152,26 +157,28 @@ pair"); the importers run without it.
   backup in place.
 - **Later runs are incremental.** The phone sends only files whose content changed, and tells the
   host which to delete; `Manifest.db` is rewritten. An incremental run takes a few minutes.
-- **`--full`** forces a complete backup.
+- **`--full`** forces a complete backup; **`--no-backup`** only decrypts the backup already there.
 - **Passcode.** The phone may ask for its own passcode to start.
 - **Failure.** If `idevicebackup2` returns non-zero, the command stops before touching the
-  extracts, and says that they did not change.
+  extracts, and says why where it can tell (the phone locked, no phone found).
 - The backup is complete only once `Manifest.plist` exists. `--no-backup` and `--save-password`
   refuse to run without it.
 
 ### 3.4 Decrypting: how the encryption is opened
 
-Decryption is done by `internal/iphone` (a port of the Python library `iphone_backup_decrypt`).
-This is the standard iOS backup scheme, in outline:
+Decryption is done by `internal/iphone`, in Go, with no outside tool. This is the standard iOS
+backup scheme, in outline:
 
 1. **Unlocking the keybag.** The password unlocks the `BackupKeyBag` in `Manifest.plist`.
    - The key is derived with PBKDF2-SHA256, using the keybag's `DPSL` salt and `DPIC` iterations,
-     then PBKDF2-SHA1 with `SALT` and `ITER`.
+     then PBKDF2-SHA1 with `SALT` and `ITER`. Iteration counts far above what iOS uses are refused
+     as unsafe.
    - This is deliberately slow: a few seconds per attempt. That is why a wrong password takes a
      while to be rejected.
    - The derived key unwraps the class keys (AES key wrap, RFC 3394).
 2. **Opening `Manifest.db`.** The `ManifestKey` (prefixed with its protection class) is unwrapped
-   with that class key, and `Manifest.db` is decrypted with it (AES-256-CBC) into a temporary file.
+   with that class key, and `Manifest.db` is decrypted with it (AES-256-CBC) into a temporary
+   folder, removed when the backup is closed.
 3. **Opening each file.** Every file's `EncryptionKey`, found in its `file` plist, is unwrapped with
    the key of its protection class. The content is then decrypted with AES-256-CBC and the padding
    removed.
@@ -187,17 +194,19 @@ decrypted on its own.
   in a file.
   - The folder `<config>` is created as 700.
   - The file is written with mode 600 to `.part` and then renamed into place.
+  - `--move-to-keyring` moves an existing file into the keyring.
 - **Every later run.**
   - A password file readable by group or others is refused ("chmod 600 and again"; not checked on
     Windows, where the mode does not say).
   - A wrong stored password stops the run with a message to save it again.
-  - Without a file, the password is asked for interactively before anything else, so the rest of
+  - Without a stored password, it is asked for interactively before anything else, so the rest of
     the run is unattended.
+  - `--password-stdin` reads it from the standard input for one run, without storing it.
 - `iphone-verify` and `iphone-ls` read it the same way, or ask.
 
 ### 3.6 Extracting the databases
 
-**Databases** (`internal/iphone`, `iphone-sync`):
+**Databases** (`internal/iphone`, `iphone-sync`), into `<cache>/iphone/` (`-o` for another folder):
 
 | Output | Domain | Path in the backup |
 |---|---|---|
@@ -209,7 +218,8 @@ decrypted on its own.
 | `whatsapp-calls.sqlite` | same | `CallHistory.sqlite` (WhatsApp's call log) |
 
 `--only NAME...` decrypts only the named databases and stops before the media (e.g.
-`everysaid iphone-sync --no-backup --only whatsapp-calls.sqlite`).
+`everysaid iphone-sync --no-backup --only whatsapp-calls.sqlite`); a name not in the table is
+refused.
 
 **Refresh:**
 
@@ -223,9 +233,9 @@ decrypted on its own.
 `everysaid iphone-ls '%' '%sms.db%'` and likewise for the others). iOS checkpoints them into the main file
 before backing up, so the single file is complete.
 
-**Found in the backup but not extracted yet:**
+**Found in the backup but not extracted:**
 
-- `HomeDomain Library/CallHistoryDB/CallHistoryTemp.storedata` (0.1 MB);
+- `HomeDomain Library/CallHistoryDB/CallHistoryTemp.storedata`;
 - `MediaDomain Library/SMS/Attachments/...`, the SMS/iMessage attachments.
 
 ### 3.7 Extracting media (incremental)
@@ -241,28 +251,31 @@ How a refresh works:
 
 1. List `Files WHERE flags = 1 AND domain = ?` from `Manifest.db` and keep the paths with those
    prefixes.
-2. Skip a path whose output file already exists. Media files have unique names and never change
+2. Keep only files that belong to a message, as the databases just extracted name them
+   (`ZWAMEDIAITEM.ZMEDIALOCALPATH`, `ZATTACHMENT.ZNAME`): thumbnails, favicons and link previews
+   beside them are not copied.
+3. Skip a path whose output file already exists. Media files have unique names and never change
    once written, so existence is enough: no hashing, no dates.
-3. Skip a path the archive has already taken.
+4. Skip a path the archive has already taken.
    - It opens `archive.db` **read only** and collects `attachment.source_path` for the sources
      `iphone/whatsapp` and `iphone/viber`.
    - The archive keeps these rows after the file has gone to immich or been removed. So pruned
      media do not come back, while media that arrive late for old messages are still picked up.
-   - This replaced an earlier date watermark, which would have lost late arrivals.
-4. Otherwise decrypt to `.part`, chmod 600, rename. Folders are created with mode 700 at every
-   level.
+5. Otherwise decrypt to `.part`, chmod 600, rename. Folders are created with mode 700 at every
+   level. A manifest path that would lead out of the output folder is ignored.
 
 What this means for deletions:
 
-- Files deleted on the phone disappear from the next backup. Copies already in `Data/` stay; the
-  archive only ever adds.
+- Files deleted on the phone disappear from the next backup. Copies already in `<cache>/iphone/`
+  stay; the archive only ever adds.
 - The encrypted backup itself keeps whatever the phone currently has. Pruning acts only on the
   decrypted copies.
 
 ### 3.8 Looking without extracting, and verifying
 
 - **`everysaid iphone-ls DOMAIN_LIKE [PATH_LIKE] [--depth N]`** lists without extracting anything.
-  - It groups `Files` rows by domain and the first N path components, with counts and sizes.
+  - It groups `Files` rows by domain and the first N path components (3 by default), with counts
+    and sizes, largest first.
   - The size comes from the `Size` in each row's `file` plist (`$objects[1]`).
 - **`everysaid iphone-verify`** checks the whole backup.
   - It decrypts every `flags = 1` file in memory and compares the length
@@ -296,17 +309,21 @@ On the phone:
 
 Before that, a phone exposes only MTP and mass storage. `adb devices -l` shows its serial.
 
-- The `shell` user may query the telephony providers. `content query` runs as `shell`; on the
-  phone this was written against it could read the call log, SMS and MMS providers (vendors may
-  restrict this).
+- The `shell` user may query the telephony providers. `content query` runs as `shell`, and can
+  usually read the call log, SMS and MMS providers (vendors may restrict this). The blocked
+  numbers often belong to the default dialer and may be refused.
 - It can also read `/sdcard/Android/data/<pkg>` with `adb pull`. That folder is hidden from apps
   since Android 11, but is still accessible to `shell`.
-- No root and no backup app was needed.
+- No root and no backup app are needed.
 
 **If adb hangs:** a stuck adb server is fixed by `adb kill-server` and `adb start-server`. Long
 transfers must not be wrapped in a short timeout, which kills a run half way.
 
 ### 4.2 `everysaid android-export`
+
+The phone is the only one adb sees, or the one given with `-s SERIAL`. Everything goes to
+`<export>/<device>/`, the device named by its maker, model and the last 4 characters of its serial
+(e.g. `acme-phone1-1a2b`).
 
 | Table | Provider URI |
 |---|---|
@@ -314,13 +331,14 @@ transfers must not be wrapped in a short timeout, which kills a run half way.
 | `sms` | `content://sms` |
 | `mms` | `content://mms` |
 | `mms_part` | `content://mms/part` |
-| `blocked` | `content://com.android.blockednumber/blocked` |
+| `blocked` | `content://com.android.blockednumber/blocked` (optional: a refusal leaves it for a later run) |
 | `mms_addr` | `content://mms/<id>/addr`, one query per MMS |
 
 **How each table is read:**
 
 1. **Columns.** An unrestricted `adb exec-out content query --uri URI`. The column names are parsed
    from the `Row: 0 ` line (`(?:^Row: 0 |, )([A-Za-z0-9_]+)=`); duplicate or missing names abort.
+   A provider with no rows makes no table; a later run looks again.
 2. **Rows.** The same query with `--projection col1:col2:...`, so the column order is known and
    fixed.
 3. **Parsing.** The text format is `Row: N col=value, col=value, ...` with no escaping.
@@ -340,7 +358,7 @@ transfers must not be wrapped in a short timeout, which kills a run half way.
    are skipped.
 7. **MMS parts.** For each `mms_part` row with `_data` not NULL, the binary part is read with
    `adb exec-out content read --uri content://mms/part/<_id>` and written to `mms-parts/<_id>`
-   (`.part`, then renamed).
+   (`.part`, then renamed). A part the phone cannot read is not saved; a later run tries it again.
    - A part may come back empty (a placeholder part, or a file the provider no longer returns).
      Such parts are skipped at import because their size is 0.
 
@@ -350,7 +368,7 @@ transfers must not be wrapped in a short timeout, which kills a run half way.
   To refresh one, drop it (or write to a new database) and run again.
 - **MMS parts are per file.** A part already in `mms-parts/` is not read again, nor one the
   archive has already taken from that export (`attachment.source_path` of the source
-  `<folder>/mms`), so parts removed after review do not come back.
+  `<device>/mms`), so parts removed after review do not come back.
 - **A retired phone** needs no refresh: its export is a fixed snapshot.
 
 ### 4.4 Times and codes (Android)
@@ -371,8 +389,8 @@ transfers must not be wrapped in a short timeout, which kills a run half way.
   - the gallery folders where Viber saves pictures and videos.
 - **Where they come from.** The media Viber restored from its Google Drive backup, plus what the
   phone kept.
-- **Copied by hand**, once, while Viber is still installed: the app folder goes with the app.
-- Linking the files to messages is in 5.5.
+- **Copied by hand** while Viber is still installed: the app folder goes with the app.
+- No importer links them to messages yet; how it can be done is in 5.5.
 
 ---
 
@@ -396,8 +414,8 @@ transfers must not be wrapped in a short timeout, which kills a run half way.
    - It needs a fresh profile. An existing one, linked to the iPhone, can be set aside (its history
      is the iPhone's `viber.sqlite`).
    - The desktop then syncs the whole history from the phone.
-4. Read the desktop's database. It is encrypted; see 5.3.
-5. Pull the media from the Android phone with `adb pull`; the desktop does not sync media.
+4. Read the desktop's database through the Viber bridge; see 5.3.
+5. Pull the media from the Android phone with `adb pull`; the desktop does not sync old media.
 
 Afterwards Viber can be moved back to the iPhone and the desktop linked to it again.
 
@@ -414,9 +432,7 @@ Afterwards Viber can be moved back to the iPhone and the desktop linked to it ag
 Desktop works through Viber's own unlocked connection. Everysaid's Viber bridge (`bridges/viber/`,
 its README, and `docs/viber-bridge.md`) does so: its `snapshot` writes a plain copy of the whole
 database (mode 600), which the Viber importer reads, and the same bridge follows what arrives and
-sends. Before the bridge, a one-off `LD_PRELOAD` exporter did the same through Viber's
-`QSqlQuery` after its `PRAGMA hexkey` (`ATTACH` of a plain database, then a copy of every table);
-a copy made so can still be named in `[viber] desktop_export`.
+sends. Linux only. Any other plain copy of the database can be named in `[viber] desktop_export`.
 
 A later copy of the same profile is a superset of an earlier one.
 
@@ -424,39 +440,39 @@ A later copy of the same profile is a superset of an earlier one.
 
 | Table | Columns used |
 |---|---|
-| `Events` | `EventID`, `TimeStamp` (Unix ms), `Direction` (0 in, 1 out), `ChatID`, `ContactID`, `Token`, `Type` (3 = system event) |
-| `Messages` | by `EventID`: `Type` (1 text, 2 image, 3 video, 4 sticker, 5 location, 6 voice, 9 text, 10 contact, 11 file, 15 system), `Body`, `Info` (JSON: `fileInfo.FileSize`, `fileInfo.Duration`, `fileInfo.mediaInfo.Width/Height`), `PayloadPath`, `ThumbnailPath`, `StickerID`, `PttID`, `Duration` |
-| `ChatInfo` | `ChatID`, `Name`, `Token` (non-empty for groups) |
+| `Events` | `EventID`, `TimeStamp` (Unix ms), `Direction` (0 in, 1 out), `ChatID`, `ContactID`, `Token`, `Type` (3 = system event, also a reaction) |
+| `Messages` | by `EventID`: `Type` (1 text, 2 image, 3 video, 4 sticker, 5 location, 6 voice, 9 text, 10 contact, 11 file, 15 system, 72 deleted by its sender), `Body`, `Info` (JSON: `fileInfo.FileSize`, `fileInfo.Duration`, `fileInfo.mediaInfo.Width/Height`, edits, mentions), `Subject`, `PayloadPath` (the file Viber Desktop has), `ThumbnailPath`, `StickerID`, `PttID`, `Duration`, `PGIsLiked`, `SelfReaction` |
+| `LikeRelation` | `MessageToken`, `LikeEventID`: a reaction event and the message it is on |
+| `ChatInfo` | `ChatID`, `Name`, `Token` (non-empty for groups), `PGType` (3 = channel), `Flags` (bit 19: "My Notes") |
 | `ChatRelation` | `ChatID`, `ContactID` (members) |
 | `Contact` | `ContactID`, `MID` (Viber member id), `Number` |
-| `DownloadFile` | `EventID`, `DownloadID` (`0-02-05-<64 hex>`, the server's media id) |
+| `DownloadFile` | `EventID`, `DownloadID` (`0-02-05-<64 hex>`, the server's media id; not read by the importer, see 5.5) |
 
 `Calls` is empty: Viber calls are not on the desktop.
 
-### 5.5 Android Viber media → messages (retired)
+### 5.5 Android Viber media → messages (no step yet)
 
-How an Android phone's Viber media were linked to their messages. The tool that did it is retired;
-this is the record of the method, for whoever writes the step again.
+No importer links an Android phone's Viber media to their messages. What is known about the files,
+for whoever writes the step:
 
 **The primary key.**
 
 - The 32 hex digits in Android's file names are `md5(DownloadFile.DownloadID)`. The names look like
   `IMG-<hex>-V.jpg`, `video-<hex>-V.mp4` or `<hex>.vptt`.
 - The iPhone's `ZATTACHMENT.ZID` holds the same DownloadID.
-- A name therefore maps to its events with certainty. Method `downloadid`, confidence `certain`;
-  the pictures' aspect ratio agrees with the recorded one in all but a handful of cases.
+- A name therefore maps to its events with certainty; the pictures' aspect ratio agrees with the
+  recorded one in all but a handful of cases.
 
 **Other matching steps:**
 
-1. **Byte-identical copies** of a linked file, by content MD5 (mostly the gallery copies), inherit
-   its events. Method `content-dup:<file>`, confidence `certain`.
+1. **Byte-identical copies** of a linked file, by content MD5 (mostly the gallery copies), can
+   inherit its events with the same certainty.
 2. **Fallback** for the rest: exact size plus aspect ratio against media events not yet linked.
    - The size is `fileInfo.FileSize`, or `fileInfo.Duration` when the size is missing.
    - The aspect ratio must agree within 0.01, either orientation, against `mediaInfo` Width/Height.
-   - One candidate means `probable`, several mean `ambiguous`, none means `unmatched`.
-   - The false-positive rate is measured by running the fallback on files whose true event is
-     known (under 2% when it was measured).
-   - Files left `unmatched` tend to be the phone's own sent originals.
+   - One candidate is probable, several are ambiguous; neither is safe to import unreviewed.
+   - Run on files whose true event is known, the fallback is wrong for under 2% of them.
+   - Files with no candidate tend to be the phone's own sent originals.
 
 **What does not work as a key:**
 
@@ -465,37 +481,27 @@ this is the record of the method, for whoever writes the step again.
 - **`FileHash`** is the MD5 of the encrypted upload.
 - **`EncParams`** is a random per-file key, so it cannot be checked against the files either.
 
-**Output and review.** `viber-media/links.tsv` had the columns `file`, `method`, `confidence` and
-`event_ids`. Only `certain` rows were imported. The uncertain ones were reviewed by hand on a
-review page.
-
-**Re-running.**
-
-- The file could carry hand work (rows of deleted files removed, renamed files).
-- So the tool kept every existing row exactly as it was. It linked only files that had no row,
-  and appended them.
-- With nothing new it wrote nothing. Otherwise it wrote `links.tsv.part` and renamed it over the
-  old file.
-- It read the same desktop export that the Viber importer imported (`[viber] desktop_export`).
-- Byte-identical copies inherited only from `certain` rows.
+A linked file would come into the archive by its desktop `EventID` (`message_origin`), else its
+token (`message.key`).
 
 ### 5.6 The iPhone's Viber database (`viber.sqlite`, Core Data)
 
 | Table | Columns used |
 |---|---|
-| `ZVIBERMESSAGE` | `Z_PK`, `ZDATE` (s since 2001), `ZTOKEN`, `ZTEXT`, `ZSTATE` (`received` / `delivered` / `send`; outgoing = not `received`; "delivered" is on every message sent, its `ZSTATEDATE` the sending time: it says nothing of delivery), `ZMETADATA` (JSON; `textMetaInfo` type 0: a mention, `memberId` and where the text names them, `start`/`end` in UTF-16 units, the text holding `\u202a@Name\u202c`), `ZSYSTEMTYPE` (`''`/`url`/`formatted` = text, `customLocation`, `systemCallLog`, other = system), `ZATTACHMENT`, `ZCONVERSATION`, `ZPHONENUMINDEX` (sender) |
+| `ZVIBERMESSAGE` | `Z_PK`, `ZDATE` (s since 2001), `ZTOKEN`, `ZTEXT`, `ZSTATE` (`received` / `delivered` / `send`; outgoing = not `received`; "delivered" is on every message sent, its `ZSTATEDATE` the sending time: it says nothing of delivery), `ZMETADATA` (JSON; `textMetaInfo` type 0: a mention, `memberId` and where the text names them, `start`/`end` in UTF-16 units, the text holding `‪@Name‬`), `ZSYSTEMTYPE` (`''`/`url`/`formatted` = text, `customLocation`, `systemCallLog`, other = system), `ZATTACHMENT`, `ZCONVERSATION`, `ZPHONENUMINDEX` (sender) |
 | `ZATTACHMENT` | `Z_PK`, `ZTYPE` (`picture`, `gif`, `video`, `audio`, `file`, `sticker`, `customLocation`), `ZNAME` (the file name in `Documents/...`), `ZID` (DownloadID) |
-| `ZCONVERSATION` | `Z_PK`, `ZGROUPID` (groups), `ZNAME`, `ZLASTREADTOKEN` (the owner read up to this message), `ZSEENSTATUSLASTTOKEN` (in a person's chat, they saw the owner's messages up to this one; where they let it be seen) |
+| `ZCONVERSATION` | `Z_PK`, `ZGROUPID` (groups), `ZNAME`, `ZSUBTYPE` (3 channel, 5 "My Notes"), `ZLASTREADTOKEN` (the owner read up to this message), `ZSEENSTATUSLASTTOKEN` (in a person's chat, they saw the owner's messages up to this one; where they let it be seen) |
 | `ZMEMBER` | `Z_PK`, `ZMEMBERID`, `ZDISPLAYFULLNAME` |
 | `ZPHONENUMBER` | `ZMEMBER`, `ZCANONIZEDPHONENUM`, `ZPHONE` |
 | `Z_5PHONENUMINDEXES` | `Z_5CONVERSATIONS`, `Z_10PHONENUMINDEXES` (conversation members) |
+| `ZRECENT`, `ZRECENTSLINE` | the recents: Viber calls (8.4) |
 
 ### 5.7 Import (`internal/importers/viber.go`)
 
-**Key.** The message token is the same id on every device. This was checked: every message matching
-on text and time within 5 s also matches on token, and none matches on text with a different token.
-`message.key = str(token)`. System events (`Events.Type` 3) get no key, because tokens can repeat
-among them.
+**Key.** The message token is the same id on every device: every message that matches on text and
+time within 5 s also matches on token, and none matches on text with a different token.
+`message.key` is the token as text. System events (`Events.Type` 3) get no key, because tokens can
+repeat among them.
 
 **Time.**
 
@@ -506,10 +512,12 @@ among them.
 
 **People.**
 
-- The importer builds Viber member id → number from the desktop's `Contact` and the iPhone's
-  `ZMEMBER` + `ZPHONENUMBER`, with the desktop first.
+- The importer builds Viber member id → number from the desktop's `Contact`, then the archive's
+  `viber_member` (what earlier imports learnt), then the iPhone's `ZMEMBER` + `ZPHONENUMBER` for
+  members neither knows, and writes what it knows back to `viber_member`, so a number outlives
+  its source.
 - A person is stored as a normalised phone address where a number is known, so they meet their SMS
-  and calls. Otherwise the person is stored as `('viber', MID)`.
+  and calls. Otherwise the person is stored as a Viber `id` address, the member id.
 - The user (`[owner] numbers`) is left out of member lists.
 
 **Conversations.**
@@ -519,16 +527,18 @@ among them.
 - One-to-one chats are keyed by their member, with the fallbacks `conversation:<Z_PK>` / `chat:<ChatID>`.
 
 **Channels are skipped:** iPhone `ZCONVERSATION.ZSUBTYPE` 3, desktop `ChatInfo.PGType` 3 (`CHANNEL`).
-The notes-to-self chat (a nameless group of the user alone) is kept: it may matter a lot, so check
-it before removing anything that belongs to it. On the iPhone it is the conversation with `ZSUBTYPE` 5 (its
-`ZMETADATA` has `myNotesCheckboxCounter`); a group whose members all left looks the same in the
-archive, but has messages of others.
+The notes-to-self chat is kept, as a chat of the user alone (not a group): it may matter a lot, so
+check it before removing anything that belongs to it. On the iPhone it is the conversation with
+`ZSUBTYPE` 5 (its `ZMETADATA` has `myNotesCheckboxCounter`), on the desktop the chat whose `Flags`
+has bit 19.
 
 **Extras** (`internal/importers/extras.go`, desktop and iPhone): reactions (codes 1-5 as ❤️😂😮😢😡,
 every code also in `reaction.code` as `viber:N`, the emoji NULL for 6 and later; one-to-one
 reactions without a type `viber:?`, and the counterpart resolved as `"peer"`), replies, edits,
-forwards, links and pins (`subtype_code` `viber:9`/`viber:url`, `viber:15`/`viber:systemPinnedMessageCreated`),
-and the sender's position (`sender_lat`, `sender_lon`).
+deletions, forwards, links and pins (`subtype_code` `viber:9`/`viber:url`,
+`viber:15`/`viber:systemPinnedMessageCreated`), and the sender's position (`sender_lat`,
+`sender_lon`). What the desktop says now of a message already in the archive (edited, deleted,
+reactions) is brought to it.
 
 **Marks** (iPhone only): mentions into `mention` (the token as the text has it);
 `ZLASTREADTOKEN` as the chat's `read_until`; `ZSEENSTATUSLASTTOKEN`, in a person's chat, as
@@ -539,14 +549,15 @@ receipts of the owner's messages up to it (`read_at` 0: read, when not known).
 1. Read all iPhone rows into memory, indexed by token.
 2. Stream the desktop events. A token also on the iPhone, at a time when the desktop's device (the
    Android phone, `[android] device`) was not the one in use, is skipped: the iPhone copy wins.
-   Otherwise the desktop copy wins, and the iPhone row is marked as taken.
+   Otherwise the desktop copy wins, and the iPhone row is marked as taken; its `Z_PK` is recorded
+   as a second origin of the same message.
 3. Add the iPhone rows not marked as taken.
 4. A row is skipped in these cases (the last two are counted and said as already there):
    - its `(source, row_key)` exists;
    - its token is already in `message` for Viber, whatever source it came from;
    - it has no token (some system events) and the same conversation already has a keyless Viber
      message at the same millisecond with the same text. The desktop's `EventID` is local to one
-     profile, so without this an export from another profile would bring them again. To test it,
+     profile, so without this a copy from another profile would bring them again. To test it,
      import into a copy of the archive with the desktop source renamed, so that every `EventID`
      looks new: no rows should be added.
 
@@ -559,15 +570,16 @@ receipts of the owner's messages up to it (`read_at` 0: read, when not known).
   after `calls`); the row key is `Z_PK`, and the token
   dedupes against the desktop rows.
 
-**Desktop (Android history).**
+**Viber Desktop.**
 
-- A copy made before the bridge is a fixed snapshot, named by `[viber] desktop_export`.
-- With the bridge, the Viber Desktop source reads a new snapshot at each import. For a copy made
-  otherwise:
-  - point `[viber] desktop_export` at it (media would need a new linking step: the one of 5.5 is
-    retired);
-  - keep the source name `<device>/viber` only if it is the same history, otherwise add a new
-    source name;
+- The Viber Desktop source in the app (`internal/viber`) has the bridge write a new snapshot,
+  `<cache>/viber/<instance>/desktop.db`, at each import, and reads it as the source
+  `viber-desktop/viber` (desktop rows only; the iPhone's are another source's). Its media step
+  links the files Viber Desktop itself has (`Messages.PayloadPath`), by token.
+- A copy named in `[viber] desktop_export` is read by `everysaid import viber` together with the
+  iPhone, as the source `<[android] device>/viber` (so the choice of origin in 5.7 applies). For a
+  new copy:
+  - keep the source name only if it is the same history, otherwise give it another;
   - tokens and the keyless-row rule (5.7) keep what is already there from coming in twice.
 
 ---
@@ -581,14 +593,15 @@ receipts of the owner's messages up to it (`read_at` 0: read, when not known).
   to phone.
   - Media are there only as far as the phone still has them: older years are often mostly missing,
     since a move between phones does not carry old files.
-- **The WhatsApp bridge** (`bridges/whatsapp/`, its own README; its store folder is
-  `<data>/whatsapp-bridge/` unless `[whatsapp] bridge` in `config.toml` names another; optional:
-  without it only the iPhone is read).
-  - It is a whatsmeow client linked as a companion device, running live; it began as
-    whatsapp-mcp's bridge.
+- **The WhatsApp source** (`whatsapp-bridge`, `internal/whatsapp`): a whatsmeow client inside the
+  app, linked as a companion device, running live. Its store folder is `<data>/whatsapp-bridge/`
+  unless `[whatsapp] bridge` in `config.toml` names another; `everysaid import whatsapp` reads the
+  store only when that key is set (otherwise only the iPhone). `bridges/whatsapp/` is the same
+  client as a separate program with a REST API, writing the same store; the two must never run on
+  the same store at once.
   - `messages.db` has the tables `messages` (`id`, `chat_jid`, `sender`, `content`, `timestamp`
-    ISO, `is_from_me`, `media_type`) and `chats` (`jid`, `name`). Everysaid's bridge adds, with
-    nothing removed (an older bridge, whatsapp-mcp's, still imports as before):
+    ISO, `is_from_me`, `media_type`) and `chats` (`jid`, `name`), the format of whatsapp-mcp's
+    bridge, which still imports. Everysaid's client adds, with nothing removed:
     - in `messages`: `kind` (text, image, video, audio, voice, document, sticker, location, contact,
       poll), `subtype` (gif, video_note, link, live_location, view_once), `reply_to` and
       `reply_text` (the stanza id and text quoted), `forwarded`, `edited`, `deleted` (marked when the
@@ -602,32 +615,39 @@ receipts of the owner's messages up to it (`read_at` 0: read, when not known).
       (`group_jid`, `jid` as the group names them, `phone`, `lid`, admin flags): the groups' members,
       read at each start and when they change. A member's `phone` and `lid` also map LIDs to numbers.
     - `media_path`: the file it downloaded, relative to its store (`media/<chat>/<id><ext>`), or
-      `media_error`; files are downloaded as messages arrive (not view-once ones).
+      `media_error`; files are downloaded as messages arrive (not view-once ones; `[whatsapp]
+      download`).
     - `reactions` (`chat_jid`, `message_id`, `sender`, `is_from_me`, `emoji`, `timestamp`): each
       person's latest reaction, `''` once taken back.
     - `calls` and `call_participants`: the call-log message every device gets after a call
-      (`source` 'log': outcome, duration, video, participants), and the call signalling the bridge
+      (`source` 'log': outcome, duration, video, participants), and the call signalling the client
       sees itself (`source` 'event': offered, `accepted_at`, `ended_at`, `end_reason`).
-    - `bridge_state` (`connection`, `send_enabled`, `send_blocked`, `ban_until`), `bridge_events`
-      (what WhatsApp said about the connection), `sent` (what it sent, for its limits).
-  - `whatsapp.db`, whatsmeow's store, has `whatsmeow_lid_map` (`lid`, `pn`).
-  - The bridge fills the gap between the last iPhone backup and now.
+    - `bridge_state` (key/value: `connection`, `send_enabled`, `send_blocked`, `ban_until`),
+      `bridge_events` (what WhatsApp said about the connection), `sent` (what it sent, for its
+      limits).
+  - `whatsapp.db`, whatsmeow's store, has `whatsmeow_lid_map` (`lid`, `pn`) and
+    `whatsmeow_contacts` (names).
+  - The store fills the gap between the last iPhone backup and now.
 - **Not Android.** WhatsApp on Android keeps its database encrypted (`msgstore.db.crypt15`); it is
-  not read yet. Its media folder goes with the app when it is uninstalled.
+  not read. Its media folder goes with the app when it is uninstalled.
 
 ### 6.2 Keys and people
 
-**Key.** `ZWAMESSAGE.ZSTANZAID` on the iPhone, and `messages.id` in the bridge. Both are the stanza
-id WhatsApp sends, the same on every device, so most of the bridge's messages are already present
+**Key.** `ZWAMESSAGE.ZSTANZAID` on the iPhone, and `messages.id` in the store. Both are the stanza
+id WhatsApp sends, the same on every device, so most of the store's messages are already present
 from the iPhone.
 
-**LIDs** (`<n>@lid`) are WhatsApp's privacy ids; they are not numbers. `People` maps them with:
+**LIDs** (`<n>@lid`) are WhatsApp's privacy ids; they are not numbers. They are mapped with:
 
 - the iPhone contacts: `ZWAADDRESSBOOKCONTACT.ZLID` → `ZWHATSAPPID`;
-- the bridge: `whatsmeow_lid_map` (`lid` → `pn`). The iPhone takes precedence.
+- the store: `whatsmeow_lid_map` (`lid` → `pn`). The iPhone takes precedence.
 
-A set of every LID seen anywhere tells LIDs apart from numbers among the bridge's bare senders.
-Unmapped LIDs are stored as `('whatsapp', '<n>@lid')`.
+A set of every LID seen anywhere tells LIDs apart from numbers among the store's bare senders.
+Unmapped LIDs are stored as WhatsApp `id` addresses, `<n>@lid`.
+
+**Names** go to `handle_name` by kind: `book` (`ZWAADDRESSBOOKCONTACT.ZFULLNAME`,
+`whatsmeow_contacts.full_name`), `chat` (`ZWACHATSESSION.ZPARTNERNAME`, the store's `chats.name`),
+`profile` (`ZWAPROFILEPUSHNAME`, `whatsmeow_contacts.push_name`).
 
 **Conversations.**
 
@@ -637,8 +657,8 @@ Unmapped LIDs are stored as `('whatsapp', '<n>@lid')`.
 
 ### 6.3 Message types and hidden text (iPhone)
 
-**Types.** `ZMESSAGETYPE` was identified from the files each type carries (`file`, `ffprobe`) and
-from the metadata:
+**Types.** `ZMESSAGETYPE`, as told by the files each type carries (`file`, `ffprobe`) and by the
+metadata:
 
 | Kind | Types |
 |---|---|
@@ -650,66 +670,69 @@ from the metadata:
 | location | 5 |
 | file | 8 |
 | sticker | 15 |
-| business messages | 19, 20, 25, 30, 31, 41 |
-| deleted | 14 |
-| system | everything else (6 group event, 10 notice, 59 call, 66 poll, …) |
+| text (business messages) | 19, 20, 25, 30, 31, 41 |
+| system | everything else (6 group event, 10 notice, 14 deleted, 59 call, 66 poll, …) |
 
-`message.subtype` names them (`extras.WHATSAPP_SUBTYPES`): 7 link, 11 gif, 14 deleted, 54 video
-note, 6 group event, 10 notice, 59 call, 66 poll.
+`message.subtype` names them (`whatsappSubtypes` in `extras.go`): 7 link, 11 gif, 14 deleted (also
+`deleted = 1`), 54 video note, 6 group event, 10 notice, 59 call, 66 poll.
 
-**Extras** (`extras.whatsapp`): from `ZWAMEDIAITEM.ZMETADATA` field 5 the quoted stanza id, 6 its
-sender, 19 its text, 46 the forward score; from `ZWAMESSAGEINFO.ZRECEIPTINFO` field 7 the reactions
-(1/2 the jid, 3 the emoji; no jid means the user). Edits and polls were looked for and not found.
+**Extras** (`whatsappExtras`): from `ZWAMEDIAITEM.ZMETADATA` field 5 the quoted stanza id, 19.1 its
+text, 46 the forward score; from `ZWAMESSAGEINFO.ZRECEIPTINFO` field 7 the reactions (2 the jid,
+3 the emoji; no jid means the user); `ZSTARRED`; a location's `ZLATITUDE`, `ZLONGITUDE`, `ZTITLE`;
+a shared contact's `ZVCARDNAME` and number. Edits and polls are not found in the iPhone's database.
 `ZRECEIPTINFO` field 2 also holds one entry per recipient of the owner's messages (1 to 2 in a
 person's chat, a few in groups), with second counts after the sending (4, 5, sub-messages 9 and 10)
 and field 3 the sending time (Unix s); the recipient (2.1, 8 or 9 bytes starting 0x8C) is not
-decoded yet, so these receipts are not read (looked at on 6 October 2026).
+decoded, so these receipts are not read.
 
 **Business messages** (templates, buttons) have `ZTEXT` NULL. Their text is only in
 `ZWAMEDIAITEM.ZMETADATA`, a protobuf blob.
 
-- `protobuf_strings()` is a schema-less decoder. It walks varint keys and handles wire types 0, 1, 2
+- `protobufStrings` is a schema-less decoder. It walks varint keys and handles wire types 0, 1, 2
   and 5; any other wire type means "not a protobuf", and decoding stops.
 - Length-delimited fields are tried first as nested messages, up to depth 8. If that fails they are
   read as UTF-8 and kept when printable.
-- `metadata_text()` keeps sentences: strings with a space or non-ASCII. It drops URLs, `/v/` paths
+- `metadataTextOf` keeps sentences: strings with a space or non-ASCII. It drops URLs, `/v/` paths
   and jids, and removes repeats.
 
 ### 6.4 Import order (`internal/importers/whatsapp.go`)
 
 Channels (`...@newsletter`) and status (`status@broadcast`, and each contact's own, `...@status` and
-`...@lid.status`) are skipped (`CHANNELS`). A bare id longer than 15 digits is no phone number (a
+`...@lid.status`) are skipped (`waChannels`). A bare id longer than 15 digits is no phone number (a
 channel's id without its domain) and makes no handle.
 
 1. iPhone first. Each row is skipped if `(source, Z_PK)` is present, or if its stanza id is already
    a WhatsApp `message.key`.
-2. The bridge next, in `timestamp` order. The row key is `<chat_jid>/<id>`. Only stanza ids the
-   archive does not have yet are added.
-   - The kind comes from `kind` (`BRIDGE_KINDS`), or, in an older bridge, from `media_type`: `''`
-     text, `image`, `video`, `audio`, `document`. Anything else is file.
-   - `extras.whatsapp_bridge` reads the rest: subtype (`whatsmeow:<subtype>` as its code), the
+2. The store next, in `timestamp` order, as the source `whatsapp-bridge`. The row key is
+   `<chat_jid>/<id>`. Only stanza ids the archive does not have yet are added.
+   - The kind comes from `kind` (`bridgeKinds`), or, in a store without it, from `media_type`:
+     `''` text, `image`, `video`, `audio`, `document`, `sticker`. Anything else is file.
+   - `whatsappBridgeExtras` reads the rest: subtype (`whatsmeow:<subtype>` as its code), the
      quoted message, forwarded, edited, deleted, place, a contact's text, and its reactions.
-3. What the bridge saw happen to messages already in the archive (`bridge_changes`): edits and
+3. What the store saw happen to messages already in the archive (`bridgeChanges`): edits and
    deletions are marked, the text staying as the archive first had it; reactions follow the
-   bridge, one per person (changed, added, removed once taken back).
-   Then the groups' members (`bridge_members`: added to their conversations, never removed) and
-   whom each message names with @ (`bridge_mentions`, into `mention`, also on the iPhone's copy of
-   a message), who got and read the owner's messages (`bridge_receipts`, into `receipt`), and how
+   store, one per person (changed, added, removed once taken back).
+   Then the groups' members (`bridgeMembers`: added to their conversations, never removed) and
+   whom each message names with @ (`bridgeMentions`, into `mention`, also on the iPhone's copy of
+   a message), who got and read the owner's messages (`bridgeReceipts`, into `receipt`), and how
    far the owner read each chat (`read_at` → `state_report` read_until).
-4. Its calls (`voip.bridge_calls`, also from the plugin's import): the log's, then the signalling's
-   for calls no log message came for; one call in both, or already in from the iPhone, is kept
-   once (same person and direction within a minute).
+4. Its calls (`BridgeCalls` in `voip.go`, run by the `voip` importer and by the source's own
+   import): the log's, then the signalling's for calls no log message came for; one call in both,
+   or already in from the iPhone, is kept once (same person and direction within a minute).
 
-Because the iPhone is read first, a message present in both always gets the iPhone's richer row.
-The bridge contributes only the tail.
+When one run reads both, a message present in both gets the iPhone's richer row, and the store
+contributes only the tail. The WhatsApp source in the app imports its store on its own, without the
+iPhone: a message it brought before the next iPhone backup stays as the store had it, and the
+iPhone's copy is then skipped by its stanza id.
 
 ### 6.5 Refresh
 
 - iPhone: `everysaid iphone-sync`, then `everysaid import whatsapp calls voip media` (`voip` for the calls, after `calls`).
-- Bridge: nothing to do. It fills `messages.db` while running, and the next `whatsapp` import picks
-  up the new rows.
-- Bridge media: the bridge downloads them as messages arrive, and the plugin's import links them
-  (`media.whatsapp_bridge`, 10.1).
+- Store: nothing to do. The WhatsApp source fills `messages.db` while it runs and imports it at its
+  interval; `everysaid import whatsapp voip media` does the same by hand where `[whatsapp] bridge`
+  is set.
+- Store media: downloaded as messages arrive, and linked by the source's import
+  (`MediaWhatsAppBridge`, 10.1).
 
 ---
 
@@ -720,7 +743,7 @@ The bridge contributes only the tail.
 **Tables.**
 
 - `message`: `ROWID`, `guid`, `date`, `is_from_me`, `service`, `text`, `attributedBody`, `handle_id`,
-  `cache_has_attachments`, `associated_message_type`, `item_type`.
+  `cache_has_attachments`, `associated_message_type`, `associated_message_guid`, `item_type`.
 - `handle`: `id` is the number or address.
 - `chat` (`style` 43 = group), `chat_message_join`, `chat_handle_join`.
 - `attachment` and `message_attachment_join`, for the mime type of the first attachment.
@@ -730,19 +753,21 @@ The bridge contributes only the tail.
 
 **Service.**
 
-- `SMS`, `iMessage` or `RCS` as given.
+- `SMS`, `iMessage` or `RCS` as given. Any other service name is taken as SMS, with its name kept
+  as `subtype_code` (`sms.db:<service>`).
 - SMS with attachments, or in a group chat, is recorded as `mms`.
 
 **Kind.**
 
-- `associated_message_type` ≠ 0 means a reaction (tapback).
+- `associated_message_type` ≠ 0 means a reaction (tapback). 2000-2006 are tapbacks (2006 with its
+  own emoji), 3000-3006 take them back; a tapback taken back is removed from its message.
 - `item_type` ≠ 0 means a system message (group renames and the like).
 - Otherwise the kind comes from the attachment's mime (image, video, audio → voice, other → file),
   or is text.
 
 **Hidden text: `attributedBody`.** On newer iOS many messages have `text` NULL. Their text is only
 in `attributedBody`, an `NSAttributedString` archived with NeXTSTEP *typedstream* (`streamtyped`),
-not a keyed archive. `attributed_text()`:
+not a keyed archive. `attributedText`:
 
 1. Find the class name `NSString`.
 2. Find the next `\x84\x01+` (a string object marker followed by `+`, the C-string type tag).
@@ -750,7 +775,7 @@ not a keyed archive. `attributed_text()`:
    follows; `0x82` means a 4-byte one.
 4. Decode that many bytes as UTF-8.
 
-`clean()` then removes U+FFFC, the object replacement character that marks an attachment's place,
+`cleanText` then removes U+FFFC, the object replacement character that marks an attachment's place,
 and trims.
 
 **Keys.** `guid` is the row key. iMessages also get `message.key = guid`. SMS/MMS have no global id,
@@ -773,24 +798,24 @@ so `key` is NULL.
 
 Phones carry the same history, copied from phone to phone at each change.
 
-1. **`collapse()`** drops exact repeats within one source: same service, direction, sender, text
+1. **`collapse`** drops exact repeats within one source: same service, direction, sender, text
    and second. An iPhone's inherited history can hold such rows, with a different guid each.
-2. **`pair()`** matches one to one, greedily, in iPhone time order.
+2. **`pairSMS`** matches one to one, greedily, in iPhone time order.
    - It takes iPhone `sms`/`mms` rows only. iMessage and RCS have no Android twin.
    - The Android index is keyed by (direction, text). The nearest unused Android row within 2 s
-     wins.
+     (`pairMS`) wins.
    - SMS and MMS are paired together, because Android stores many long or link-bearing texts as
      MMS that the iPhone has as SMS.
 3. **Choice.** For a pair, the Android row is kept if the Android phone was the device in use at
-   its time (`Archive.keeper()`), the iPhone row otherwise. Unpaired rows from both sides are added
+   its time (`Archive.Keeper`), the iPhone row otherwise. Unpaired rows from both sides are added
    as they are.
 4. **Conversations.** SMS and MMS share one conversation per counterpart (service `sms`); a group is
    keyed by its sorted member addresses.
 5. **Sources.** `iphone/sms`, `<device>/sms` and `<device>/mms` are separate sources, with the row
-   keys `guid`, `_id` and `_id`. Every Android export is read (`archive.android_exports()`): one
-   folder per phone, `<export>/<device>/android.db`, the folder's name being the device; and the
-   earlier single export, `<export>/<[android] device>.db`. Repeats are dropped within each phone;
-   two Android phones are not paired with each other. Any of them may be missing.
+   keys `guid`, `_id` and `_id`. Every Android export is read (`archive.AndroidExports`): one
+   folder per phone, `<export>/<device>/android.db`, the folder's name being the device; and an
+   export kept as one file, `<export>/<[android] device>.db`. Repeats are dropped within each
+   phone; two Android phones are not paired with each other. Any of them may be missing.
 
 ### 7.4 Refresh
 
@@ -808,15 +833,15 @@ Phones carry the same history, copied from phone to phone at each change.
 ### 8.1 iPhone `CallHistory.storedata` (Core Data)
 
 - **`ZCALLRECORD`**:
-  - `ZDATE` (s since 2001), `ZDURATION` (s), `ZORIGINATED` (1 out), `ZANSWERED`;
+  - `ZDATE` (s since 2001), `ZDURATION` (s), `ZORIGINATED` (1 out), `ZANSWERED`, `ZCALLTYPE`;
   - `ZADDRESS` (the number, in any format);
   - `ZSERVICE_PROVIDER`: `com.apple.Telephony` → phone, `com.apple.FaceTime` → facetime; an app's
-    bundle id (with or without its team id in front) → its service (`calls.SERVICES`: WhatsApp,
-    Viber, Telegram, Signal, Messenger, Teams, Skype, Zoom, Meet, Discord, Slack, LINE, WeChat); an
-    unknown app keeps its bundle id as the service name;
+    bundle id (with or without its team id in front) → its service (`callServices` in
+    `calls.go`: WhatsApp, Viber, Telegram, Signal, Messenger, Teams, Skype, Zoom, Meet, Discord,
+    Slack, LINE, WeChat); an unknown app keeps its bundle id as the service name;
   - `ZUNIQUE_ID`, used as the row key.
 - **Missing `ZADDRESS`.** Some records, mostly app calls, have it NULL. The number is then taken
-  from `Z_2REMOTEPARTICIPANTHANDLES` → `ZHANDLE.ZVALUE` (`_participant`).
+  from `Z_2REMOTEPARTICIPANTHANDLES` → `ZHANDLE.ZVALUE`.
 - **"Answered".** For outgoing calls it is defined as `duration > 0`, since `ZANSWERED` is not
   meaningful for them. For incoming calls it is `ZANSWERED`.
 - **Retention.** iOS does not seem to prune old calls. An iPhone's history may still start late,
@@ -829,14 +854,15 @@ Phones carry the same history, copied from phone to phone at each change.
 
 ### 8.3 Pairing and refresh
 
-- **Pairing** (`internal/importers/calls.go`) works as for SMS. The key is (normalised address, direction),
-  and the nearest call within 2 s wins.
+- **Pairing** (`pairCalls` in `internal/importers/calls.go`) works as for SMS. The key is
+  (normalised address, direction), and the nearest call within 2 s wins.
   - It applies only to the iPhone's `phone` service.
   - Pairs occur only where the two phones' histories overlap (the months a move carried over).
-- **Choice.** The device in use at the time (`Archive.keeper()`): the Android phone in its period,
+- **Choice.** The device in use at the time (`Archive.Keeper`): the Android phone in its period,
   the iPhone otherwise.
+- **Sources.** `iphone/calls` and `<device>/calls`.
 - **Refresh.** `everysaid iphone-sync`, then `everysaid import calls voip`. The row key is `ZUNIQUE_ID`.
-- **Detail** (`extras.call`): Android `type` 3 missed, 5 rejected, 6 blocked (`detail_code`
+- **Detail** (`callExtras`): Android `type` 3 missed, 5 rejected, 6 blocked (`detail_code`
   `android:3`...); iPhone `ZCALLTYPE` 8 (video) sets `video` (FaceTime video calls).
 
 ### 8.4 App calls and carrier notices (`internal/importers/voip.go`, importer `voip`)
@@ -845,16 +871,18 @@ Phones carry the same history, copied from phone to phone at each change.
 |---|---|---|
 | `iphone/whatsapp-calls` | `whatsapp-calls.sqlite`, WhatsApp's call log | its call id |
 | `iphone/whatsapp` | call bubbles in the chats (`ZMESSAGETYPE` 59; metadata field 87: 1.1 video, 1.2 outcome, 1.3 duration, 1.5 participants) | the bubble's `Z_PK` |
-| `iphone/viber-calls` | `viber.sqlite` `ZRECENT` (recents) | its `Z_PK` |
+| `whatsapp-bridge/calls`, `whatsapp-bridge/call-events` | the WhatsApp store's `calls` (`source` 'log' and 'event') and `call_participants` | its call id |
+| `iphone/viber-calls` | `viber.sqlite` `ZRECENT` (recents), the number in `ZRECENTSLINE` | its `Z_PK` |
 | `sms-alerts` | the carrier's missed-call SMS in the archive itself, read by the parsers enabled in `[import] carrier_notices` (`internal/importers/carriers.go`; `gr`: Greek carriers, Latin look-alike letters normalised, Athens time) | `<message_id>/<i>` |
 
 - The WhatsApp log and the bubbles describe the same calls: they are matched by time window and
   direction, the person taken from the chat, the creator jid as fallback (the log uses LIDs).
 - A call already in the archive from **another** source, for the same service, the same person and
-  the same direction, within 60 s, is not added again; calls without a known person are never merged (it only fills in video, group, detail and key); calls of the
-  same source are never merged with each other, except a carrier notice sent twice (same number,
-  same minute). A call log that says answered keeps no "missed" or "busy" from a notice. The carrier notices thus give way to the phone's
-  own call log where it has the call.
+  the same direction, within 60 s, is not added again (it only fills in video, group, detail and
+  key); calls without a known person are never merged; calls of the same source are never merged
+  with each other, except a carrier notice sent twice (same number, same minute). A call log that
+  says answered keeps no "missed" or "busy" from a notice. The carrier notices thus give way to the
+  phone's own call log where it has the call.
 - **Video.** The log (`ZVIDEO`) and the bubbles (field 1.1) agree on whether a call was a video
   call wherever both describe it.
 - Calls get `detail` (missed, unanswered, busy, failed; WhatsApp's outcome 4 is missed and 5
@@ -872,7 +900,7 @@ Phones carry the same history, copied from phone to phone at each change.
 
 ## 9. The unified archive
 
-### 9.1 Schema (`internal/archive`)
+### 9.1 Schema (`internal/archive`, `schema.sql`)
 
 `PRAGMA user_version` is 1 until the first release; until then the schema changes in place, without
 migrations.
@@ -903,7 +931,7 @@ migrations.
 | `merge_dismissed` | pairs of people the user said are not one (`a` < `b`, `at`): that suggestion is not shown again |
 | `group_link` | groups the user merged: each conversation shown as part of the chat of `into_id` (`c<into_id>`, itself never linked) |
 | `group_dismissed` | pairs of groups (their chats' conversations, `a` < `b`, `at`) the user said are not one |
-| `person_address` | `address_id` PK, `person_id`, `how` (`auto`: one person per new address; `number`: a service id whose number is known; `manual`: merged by the user) |
+| `person_address` | `address_id` PK, `person_id`, `how` (`auto`: one person per new address; `manual`: merged by the user, or by an import from the user's own groupings) |
 | `account` | the user's own handles: `address_id`, `service_id` (NULL: every service), `label`; seeded from `[owner] numbers` |
 | `device` | `name` (iphone, an Android device's name, whatsapp-bridge...), `kind`, `used_from`, `used_until` (Unix ms) |
 | `source` | `name` (`<device>/sms`...), `path`, `imported_at`, `device_id`, `media_root` (the folder `attachment.source_path` is relative to; `{cache}` and `{data}` stand for those folders), `instance_id` (the plugin instance that reads it) |
@@ -912,13 +940,13 @@ migrations.
 | `state_report` | what a source says about a conversation: `conversation_id`, `instance_id`, `field` (`archived`, which only starts the app's own in `chat_state`; `muted`, `pinned`, `read_until`), `value` (muted: until, Unix ms, -1 for ever), `observed_at` (when the source's data was so), `changed_at` (when it became so) |
 | `chat_state` | what the user chose in the app per chat (`p<person>`, `c<conversation>`): `field`, `value`, `set_at`, `always`; `internal/core` combines it with the reports (see `docs/design.md`) |
 | `setting` | the user's settings shared by every device (JSON values), e.g. `unread_since`, `push_preview` |
-| `label` | the words people are described by: `kind` (`tone`, many to a person; `relation`, one), `key` (one the app brings, its words in the app's languages; NULL: the user's), `name` (the user's), `meaning` (what the local models read; NULL: the app's own; '': never theirs), `sensitive`, `position`; the app's are put in once (`archive.LABELS`, setting `labels_seeded`) |
+| `label` | the words people are described by: `kind` (`tone`, many to a person; `relation`, one), `key` (one the app brings, its words in the app's languages; NULL: the user's), `name` (the user's), `meaning` (what the local models read; NULL: the app's own; '': never theirs), `sensitive`, `position`; the app's are put in once (`archive.Labels`, setting `labels_seeded`) |
 | `person_label` | a person's labels: `state` (`yes`, `no`: the user's; `suggested`: the models'), `votes` of `models`, `evidence` (a line of the chat), `at` |
 | `name_guess` | a name found for someone without one: `how` (`models`, `handle`), `name`, `votes` of `models`, `evidence`, `dismissed` (the user said it is wrong) |
 | `analysis` | the people the local analysis read: `messages` then, `labels` (a digest of the lists it judged by), `models`, `at` |
 
 A number is one `address` whatever the service, so its SMS, calls, Viber and WhatsApp meet in one
-person; the migration made one person per address, which is how the archive behaved before.
+person; a new address starts as a person of its own, until the user merges it.
 
 **History:**
 
@@ -936,7 +964,7 @@ person; the migration made one person per address, which is how the archive beha
 | `call_origin` | as `message_origin` |
 | `viber_member` | Viber member id → number, as the sources said |
 | `blocked` | `address_id`, `phone` (the device), `original`: numbers blocked on a phone |
-| `message_fts` | contentless FTS5 (`contentless_delete=1`) over the text folded by `internal/text` (lower case, combining marks removed in every script, final sigma as sigma, NFKC), rowid = `message.id`; written by `Archive.add_message()` (a trigger cannot fold); a query is folded the same way (`text.query()`) |
+| `message_fts`, `message_tri` | contentless FTS5 tables (`contentless_delete=1`), by words (`unicode61`) and by trigrams (parts of words), over the text folded by `text.Fold` (Unicode case folding, which also makes a final sigma σ; combining marks removed in every script; compatibility forms brought to one), rowid = `message.id`; written by `Archive.AddMessage` (a trigger cannot fold); a query is folded the same way (`text.Query`) |
 
 **Media:**
 
@@ -948,31 +976,33 @@ person; the migration made one person per address, which is how the archive beha
 | `media_same` | `sha256` PK, `same_as`, `method`, `score`, `linked_at`: a file removed as the same picture as one the archive keeps |
 | `media_decision` | `sha256` PK, `decision` (keep, remove, library), `date_ms` (a date the user gave), `at`: the user's sorting in the app; the newest decision is the one that counts. |
 
-**Connection settings:** WAL journal, `foreign_keys = ON`, `umask 077`.
+**Connection settings:** WAL journal, `foreign_keys = ON`, a 30 s busy timeout; the binary runs with
+umask 077.
 
 **Extras.** `internal/importers/extras.go` turns each source row into the extra columns and reactions
-(`add_message(..., extras=)`); `Archive.resolve()` then links replies by `reply_key` (within the
-conversation where keys are per chat), applies edit events and iMessage tapbacks. A position on a
-message that is not a location is the sender's (Viber only, `sender_lat`). iMessage's
-`reply_to_guid` is not a reply (it points to the previous message) and is not used.
+(`archive.Extras`, given to `Archive.AddMessage`); `Archive.Resolve` then links replies by
+`reply_key` (within the conversation where keys are per chat), applies edit events and iMessage
+tapbacks. A position on a message that is not a location is the sender's (Viber only,
+`sender_lat`). iMessage's `reply_to_guid` is not a reply (it points to the previous message) and is
+not used.
 
 **No raw rows.** The source rows are not kept in the archive: what matters from each is in the
-columns above, and the extracted sources are the way back to a source row. (Early archives held
-each row as JSON in `*_origin.raw`; a one-time migration moved what mattered into columns and
-dropped it.)
+columns above, and the extracted sources are the way back to a source row. Anything new worth
+keeping from a source goes into a column.
 
 **Both origins of a pair.** A record found on both phones is kept once, but both source rows are in
-`message_origin` / `call_origin`, pointing to the same row (`Archive.record_pairs()`; for Viber, the
-iPhone's copies of messages kept from the Android phone). Later imports skip the iPhone's copy by
-its own row key, without reading the Android export again; that is what makes it possible to remove
-an Android export once it is imported.
-Which copy is kept: `Archive.keeper()`, the device in use at the time by its period in `device`,
+`message_origin` / `call_origin`, pointing to the same row (`Archive.RecordPairs` for SMS and calls;
+for Viber, the iPhone's `Z_PK` of a message kept from the desktop, 5.7). Later imports skip the
+iPhone's copy by its own row key, without reading the Android export again; that is what makes it
+possible to remove an Android export once it is imported.
+Which copy is kept: `Archive.Keeper`, the device in use at the time by its period in `device`,
 else the one in use most recently, else the first named (the iPhone).
 
-**Location.** `DB` = `<data>/archive.db`; `MEDIA_ROOT` = `[media] store`, `<data>` by default (the media, under `media/`);
-`IPHONE_DATA` = `<cache>/iphone`. Tools that read the archive use the same path.
+**Location.** `archive.DB()` = `<data>/archive.db`; `archive.MediaRoot()` = `[media] store`,
+`<data>` by default (the media, under `media/`); `archive.IphoneData()` = `<cache>/iphone`.
+`everysaid import --db PATH` reads another archive.
 
-### 9.2 Address normalisation (`address()`)
+### 9.2 Address normalisation (`archive.Address`)
 
 | Input | Result |
 |---|---|
@@ -980,26 +1010,22 @@ else the one in use most recently, else the first named (the iPhone).
 | a URI (`sip:...`; `tel:` is read as a number) | `uri`, lower-cased |
 | not digits after removing spaces, `-`, `(`, `)`, `.` | `sender` (sender names such as bank ids) |
 | `00…` | `+…` |
-| a valid number as written, a national one read in `[owner] region` (`phonenumbers`) | E.164, `+…` |
+| a valid number as written, a national one read in `[owner] region` (libphonenumber's rules, `nyaruka/phonenumbers`) | E.164, `+…` |
 | a valid number once a `+` is put before it (`306912345678`, `4915112345678`) | E.164 |
 | otherwise, fewer than 10 digits | the bare digits. Short codes: the iPhone adds a `+`, Android does not |
 | otherwise | `+digits` |
 
 Without `[owner] region` a national number cannot be read: it is kept as `+digits`.
-A dry run of the rule against an existing archive (a separate tool, not part of the app) lists the
-addresses that would be renamed or merged, and compares the numbers as the iPhone's databases and
-`viber_member` write them.
 
 **A spurious country code on an iPhone.** An SMS history inherited from older phones can have
 short codes and foreign numbers with the home country code in front (e.g. `+3015551234567` for
 `+15551234567`). No general rule can strip it: the code followed by a national-length number is a
-valid number, and some short codes really start with those digits; `phonenumbers` does not either
+valid number, and some short codes really start with those digits; libphonenumber does not either
 (such a number is not valid, and is kept as it is). Where an Android copy of the same SMS has the
-address without the prefix, the pair shows the right value; a one-time step used that once, and
-the import does not need it.
+address without the prefix, the pair shows the right value.
 
-Contact names are not taken from any phone. They are meant to come from the user's address book
-(CardDAV), matched by number.
+Contact names are not taken from any phone. They come from the user's address books (a contacts
+source, CardDAV or .vcf), matched by number and email.
 
 ### 9.3 Running
 
@@ -1008,9 +1034,11 @@ everysaid import [--db PATH] [sms calls viber whatsapp telegram voip media]
 ```
 
 - **Registry.** `importers.Names` in `internal/importers/importers.go`, in the order they run. Without names, the
-  ones `[import] importers` lists, else all. Every source is optional: an importer whose sources are
-  missing says so and adds nothing. The carrier notices are read only by the parsers
-  `[import] carrier_notices` enables (`internal/importers/carriers.go`, one parser per carrier or country).
+  ones `[import] importers` lists, else all; an unknown name is refused. Every source is optional:
+  an importer whose sources are missing says so and adds nothing. The carrier notices are read only
+  by the parsers `[import] carrier_notices` enables (`internal/importers/carriers.go`, one parser
+  per carrier or country). The Adium and Pidgin logs have no importer name: their source in the app
+  imports them.
 
 - **Order matters.** The `media` importer resolves messages through `message.key` and
   `message_origin`, so the message importers must have run first; `voip` reads the carrier notices
@@ -1028,11 +1056,10 @@ everysaid import [--db PATH] [sms calls viber whatsapp telegram voip media]
 | Calls | `ZUNIQUE_ID` / `_id` | address + direction + ≤ 2 s; the device in use decides |
 | App calls, notices | call id / `Z_PK` / `<message>/<i>` | another source within 60 s |
 | Viber | `Z_PK` / `EventID` | token (`message.key`); the device in use decides |
-| WhatsApp | `Z_PK` / `<jid>/<id>` | stanza id (`message.key`); iPhone first |
+| WhatsApp | `Z_PK` / `<jid>/<id>` | stanza id (`message.key`); iPhone first within one run |
 | Media | `(source, source_path, message)` | content sha256 (`media`) |
 | Services with ids per chat (Telegram) | `(source, row_key)` | (`message.key`, `key_scope`) |
-| Sources without ids (Messenger's export) | `(source, row_key)` | `message.fingerprint` within the conversation |
-| Adium and Pidgin logs | `<file>#<index>` as `row_key` | `message.fingerprint` within the conversation (the README, "Adium and Pidgin"; the two programs ran by turns, so none is expected) |
+| Adium and Pidgin logs (no ids) | `<file>#<index>` as `row_key` | `message.fingerprint` within the conversation (README, "Adium and Pidgin") |
 
 ---
 
@@ -1040,31 +1067,34 @@ everysaid import [--db PATH] [sms calls viber whatsapp telegram voip media]
 
 ### 10.1 Into the archive (`internal/importers/media.go`)
 
-**Storage.** Each file is stored once by content: `<cache>/media/<sha256[:2]>/<sha256><ext>`.
+**Storage.** Each file is stored once by content: `<media root>/media/<sha256[:2]>/<sha256><ext>`,
+the media root being `[media] store`, `<data>` by default (some files exist nowhere else once their
+source is gone).
 
-- It is a **hard link** to the source file: same file system, no extra space. Across file systems
-  it is a copy.
+- It is a **hard link** to the source file: same file system, no extra space. Across file systems,
+  or where hard links cannot be made, it is a copy.
 - The `mime` is guessed from the extension.
 
 **Links per source:**
 
 | Step | Source file | Message found by |
 |---|---|---|
-| `whatsapp` | `whatsapp-media/<ZMEDIALOCALPATH minus "Media/">` | stanza id → `message.key` |
-| `viber_iphone` | `viber-media/{Attachments,FileMessages,VoiceMessages}/<ZATTACHMENT.ZNAME>` | token → `message.key`, else `Z_PK` → `message_origin` |
-| `mms_android` | `<export folder>/mms-parts/<part _id>` (empty ones skipped) | MMS `_id` → `message_origin`; if the iPhone's copy was kept instead, the single SMS/MMS message with the same direction within ±2 s |
-| `telegram.media` | `<telegram media>/<chat>/<message><ext>` | `<chat>/<id>` → `message_origin` |
-| `whatsapp_bridge` | `<bridge store>/<messages.media_path>` | `<chat_jid>/<id>` → `message_origin`, else the id → `message.key` (the iPhone's copy) |
+| `MediaWhatsApp` | `whatsapp-media/<ZMEDIALOCALPATH minus "Media/">` | stanza id → `message.key` |
+| `MediaViberIphone` | `viber-media/{Attachments,FileMessages,VoiceMessages}/<ZATTACHMENT.ZNAME>` | token → `message.key`, else `Z_PK` → `message_origin` |
+| `MediaMMSAndroid` | `<export folder>/mms-parts/<part _id>` (empty ones skipped) | MMS `_id` → `message_origin`; if the iPhone's copy was kept instead, the single SMS/MMS message with the same direction within ±2 s |
+| `TelegramMedia` | `<cache>/telegram/media/<chat>/<message><ext>` | `<chat>/<id>` → `message_origin` |
+| `MediaWhatsAppBridge` | `<store>/<messages.media_path>` (only files within the store) | `<chat_jid>/<id>` → `message_origin`, else the id → `message.key` (the iPhone's copy) |
+| `MediaViberDesktop` (the Viber Desktop source only) | `Messages.PayloadPath` (absolute paths Viber Desktop has) | token → `message.key` |
 
-Viber media pulled from an Android phone have no step at present: one existed for a `links.tsv`
-of 5.5 (`certain` rows only: desktop `EventID` → `message_origin`, else its token → `message.key`)
-and was removed with the files it served.
+`everysaid import media` runs every step but the last (the store's only where `[whatsapp] bridge`
+is set); each source in the app runs its own. Viber media pulled from an Android phone have
+no step (5.5).
 
 **Incremental.**
 
 - An existing `(source, path, message)` link is skipped.
 - A file already linked from the same source path reuses its recorded sha256 and is not hashed
-  again.
+  again, as long as it is still the stored file (same size and time).
 - Files missing on disk, for example pruned ones, are counted as without a file and skipped. This is
   harmless.
 
@@ -1079,7 +1109,7 @@ The archive keeps the record, but not the file.
 
 ### 10.3 The separate picture tools
 
-The backlog of chat pictures was worked through with tools kept separately, outside this
+A backlog of chat pictures can be worked through with tools kept separately, outside this
 repository; they are not part of the app. They index the immich library (read only), match the chat
 pictures against it (checksum, perceptual hashes, image embeddings, capture dates), have local
 vision models say what the rest show, offer review pages that only mark the user's decisions, and
@@ -1091,11 +1121,11 @@ in section 14. The app's own way is its media view and the library plugins (fold
 
 - The database is `<data>/archive.db`. The data folder should be covered by the user's backups
   (best from a snapshot, so the copy is consistent); backing it up is not Everysaid's job.
-- The archive's media wait in `<cache>/media/` (`MEDIA_ROOT`) as hard links to the files
-  `iphone-sync` copied into `<cache>/iphone/`; both must be on the same file system for the links
-  to work (otherwise they are copies). The cache is meant to be left out of backups: everything
-  there can be made again from the encrypted iPhone backup (media the archive already took, with
-  one of the separate tools).
+- The archive's media wait in `<data>/media/` (`[media] store`) until they go to the photo library
+  or are removed. They are hard links to the files `iphone-sync` copied into `<cache>/iphone/` (and
+  to the other sources' files) where both are on the same file system, copies otherwise. The cache
+  is meant to be left out of backups: everything there can be made again from the encrypted iPhone
+  backup and the sources.
 
 ---
 
@@ -1106,11 +1136,12 @@ With the iPhone on the cable:
 ```
 # 1. back up and extract (password from the keyring; the phone may ask for its passcode)
 everysaid iphone-sync
-# 2. bring everything new into the archive (bridge rows come in with `whatsapp`)
+# 2. bring everything new into the archive (store rows come in with `whatsapp` where [whatsapp] bridge is set)
 everysaid import sms calls viber whatsapp telegram voip media
 ```
 
-(The iPhone source in the app does both.) The photo-library work is done with the separate tools
+(The iPhone source in the app does both; the WhatsApp, Viber Desktop and Telegram sources import on
+their own.) The photo-library work is done in the app's media view, or with the separate tools
 (10.3).
 
 **Occasionally:**
@@ -1121,10 +1152,9 @@ everysaid import sms calls viber whatsapp telegram voip media
 
 **One-off sources (a retired Android phone), final once done:**
 
-- `everysaid android-export`;
-- `adb pull` of the Viber media;
-- Viber Desktop's history, through the bridge;
-- the linking of the Viber media (retired: 5.5).
+- `everysaid android-export` (or the Android source in the app);
+- `adb pull` of the Viber media (not linked to messages yet: 5.5);
+- Viber Desktop's history, through the bridge (5.2, 5.3).
 
 ---
 
@@ -1134,8 +1164,8 @@ everysaid import sms calls viber whatsapp telegram voip media
 |---|---|---|---|
 | `idevicebackup2 backup` | full (or `--full`) | phone sends changed files, deletes removed ones | file |
 | database extraction | decrypt 6 DBs | decrypt them again in full, replace atomically (`--only` for some) | whole file |
-| media extraction | all files | only names not on disk and not in the archive's `attachment` | file |
-| `everysaid android-export` | all tables, all parts | skips existing tables, existing part files | table / part |
+| media extraction | all files of messages | only names not on disk and not in the archive's `attachment` | file |
+| `everysaid android-export` | all tables, all parts | skips existing tables, existing part files and parts the archive took | table / part |
 | Viber Desktop snapshot (the bridge) | full copy | a new full copy | whole DB |
 | `everysaid import` | everything | rows whose `(source, row_key)` is new and whose `key` is not yet present | row |
 | `everysaid import voip` | everything | calls whose source row is new and that no other source has (same service, person, ±60 s) | call |
@@ -1145,27 +1175,28 @@ everysaid import sms calls viber whatsapp telegram voip media
 
 ## 13. Known gaps, pitfalls and inconsistencies
 
-Found while writing this, from the code:
-
-1. **The desktop export is named once,** `[viber] desktop_export` in `config.toml`.
+1. **Two ways to Viber Desktop's history.** The Viber Desktop source reads its own snapshot as
+   `viber-desktop/viber`, without the iPhone; a copy named in `[viber] desktop_export` is read by
+   `everysaid import viber` as `<[android] device>/viber`, with the iPhone and the choice of origin
+   of 5.7. Tokens keep a message from coming in twice either way.
 2. **SMS and call pairing is greedy and recomputed on every run.** As long as the Android data are
    fixed and new iPhone rows are after the Android phone's period of use, earlier choices stay
-   stable. Changing `PAIR_MS`, `collapse()` or the devices' periods, then re-running on an existing
+   stable. Changing `pairMS`, `collapse` or the devices' periods, then re-running on an existing
    archive, could add the other side of pairs already imported. Rebuild the archive instead.
 3. **Source rows live only in the extracts.** No source row is kept in the archive (9.1), neither
    the chosen one nor the copy not chosen. An iPhone row is read again from what each sync
    extracts; a removed Android export's rows survive only as what the archive took from them (both
    origins of each pair).
 4. **The acquired data need a copy of their own.** The encrypted iPhone backup is the only copy of
-   the phone's call history, and a Viber Desktop export may be the only readable copy of an Android
+   the phone's call history, and a Viber Desktop copy may be the only readable copy of an Android
    phone's Viber history. Keeping them safe is the user's job, with whatever backup they use.
-5. **Not extracted yet from the iPhone backup:**
+5. **Not extracted from the iPhone backup:**
    - SMS/iMessage attachments (`MediaDomain Library/SMS/Attachments`);
    - `CallHistoryTemp.storedata`.
    Messenger keeps its messages out of the backup; Teams is on the server; Discord leaves only
    avatars.
-6. **Bridge media are not in the archive.** Viber calls older than the iPhone's recents are lost
-   (they are not in the desktop database).
+6. **Viber calls older than the iPhone's recents are lost** (they are not in the desktop database),
+   and an Android phone's Viber media are not linked to their messages (5.5).
 7. **The separate tools' immich index lags** when it is made from immich's nightly dump: something
    uploaded today is invisible to their matching until tomorrow.
 8. **Short codes and alphanumeric senders** are stored without a country code by design. Two
@@ -1181,12 +1212,16 @@ Found while writing this, from the code:
 
 | Path | Contents | Mode | In backups? |
 |---|---|---|---|
-| `<backup_root>/<UDID>/` | encrypted iPhone backup | as written by idevicebackup2 | the user's to back up: the only copy of the call history |
+| `<backup_root>/<UDID>/` | encrypted iPhone backup (`<data>/iphone-backup` by default) | as written by idevicebackup2 | the user's to back up: the only copy of the call history |
 | `<cache>/iphone/` | decrypted DBs and new media (`iphone-sync`) | 700/600 | no: made again from the backup |
-| `<cache>/media/` | the archive's media until they go to immich | 700/600 | no: from the backup (with one of the separate tools) |
+| `<export>/<device>/` | Android exports (`<data>/android` by default) | 700/600 | yes, while they are not all in the archive |
+| `<data>/whatsapp-bridge/` | the WhatsApp store: `messages.db`, `whatsapp.db` (the session's keys), `media/` | the folder's | yes |
+| `<cache>/viber/<instance>/desktop.db` | Viber Desktop snapshot | 700/600 | no: made again by the bridge |
+| `<cache>/telegram/` | `telegram.db`, `media/` (`telegram-sync`) | 700/600 | no: read again from the API |
+| `<data>/media/` | the archive's media until they go to the photo library (`[media] store`) | 700/600 | yes, with the data folder: some exist nowhere else |
 | `<data>/archive.db` | the archive | 600 | yes, with the data folder |
-| `<config>/config.toml` | settings (README, "Folders and configuration") | 600 | yes |
-| keyring, service `everysaid` | `backup-password`, `immich-key` | the keyring's | the keyring's |
+| `<config>/config.toml` | settings (README, "Folders and configuration") | the user's | yes |
+| keyring, service `everysaid` | `backup-password`, `immich-key` and the other secrets | the keyring's | the keyring's |
 | `<config>/backup-password`, `immich-key` | the same secrets where there is no keyring (or until moved with `--move-to-keyring`) | 600, folder 700 | opened only by Everysaid's code |
 | `<cache>/immich.db` | immich index (the separate tools, as the rows below) | 600 | rebuildable |
 | `<cache>/immich-thumbs/` | immich's small previews, through the API | 700/600 | rebuildable |
@@ -1198,7 +1233,8 @@ Found while writing this, from the code:
 
 The rule is:
 
-- `<cache>` holds only what can be rebuilt (the extracts, the immich index and the match results).
-  Backups are expected to skip it.
-- `<data>` holds what cannot be rebuilt, or would cost hours to remake: the archive, the model
-  answers and the user's decisions. The user's backups should cover it.
+- `<cache>` holds only what can be rebuilt (the extracts, the snapshots, the immich index and the
+  match results). Backups are expected to skip it.
+- `<data>` holds what cannot be rebuilt, or would cost hours to remake: the archive and its media,
+  the backups and exports, the live sources' stores, the model answers and the user's decisions.
+  The user's backups should cover it.
