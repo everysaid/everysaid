@@ -360,6 +360,7 @@ var bridgeOutcomes = map[string]string{"MISSED": "missed", "FAILED": "failed", "
 func BridgeCalls(a *archive.Archive, calls *CallSet, bridgeDB, storeDB string) (err error) {
 	defer archive.Recover(&err)
 	bridgeCalls(a, calls, bridgeDB, storeDB)
+	a.PurgeSpam()
 	return nil
 }
 
@@ -588,6 +589,7 @@ func VoIP(a *archive.Archive, out func(string), opt VoIPOptions) (err error) {
 	for _, c := range enabled {
 		carrierAlerts(a, calls, c)
 	}
+	a.PurgeSpam()
 	a.Commit()
 	var services []string
 	for s := range calls.Added {

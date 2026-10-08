@@ -35,6 +35,9 @@ func init() {
 		"The message is no longer on Telegram":                                                "Το μήνυμα δεν υπάρχει πια στο Telegram",
 		"{chat}: Telegram did not give its members ({e})":                                     "{chat}: το Telegram δεν έδωσε τα μέλη της ομάδας ({e})",
 		"{chat}: Telegram gave {n} of its {count} members":                                    "{chat}: το Telegram έδωσε {n} από τα {count} μέλη της ομάδας",
+		"Only a chat with one person can be reported as spam":                                 "Μόνο μια συνομιλία με ένα πρόσωπο μπορεί να αναφερθεί ως spam",
+		"Telegram does not know this person any more":                                         "Το Telegram δεν γνωρίζει πια αυτό το πρόσωπο",
+		"the blocked people could not be read: {e}":                                           "δεν διαβάστηκαν οι αποκλεισμένοι: {e}",
 	} {
 		EL[k] = v
 	}

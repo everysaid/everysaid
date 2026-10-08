@@ -30,6 +30,7 @@ func (s *Server) routes() {
 	s.authRoutes()
 	s.chatRoutes()
 	s.peopleRoutes()
+	s.spamRoutes()
 	s.miscRoutes()
 	s.pluginRoutes()
 	s.mux.HandleFunc("GET /api/events", s.events)

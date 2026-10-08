@@ -102,6 +102,20 @@ func bridgeMembers(a *archive.Archive, bridge *sql.DB, person *waPeople, own map
 	}
 }
 
+// bridgeBlocked: the people the account blocked on WhatsApp, as the bridge last heard.
+func bridgeBlocked(a *archive.Archive, bridge *sql.DB, person *waPeople, own map[archive.Handle]bool) {
+	if !hasTable(bridge, "blocklist") {
+		return
+	}
+	var handles []archive.Handle
+	for _, r := range maps(bridge, "SELECT jid FROM blocklist ORDER BY jid") {
+		if p, ok := person.of(str(r["jid"])); ok && !own[p] {
+			handles = append(handles, p)
+		}
+	}
+	a.SetBlocked("whatsapp", handles, nil)
+}
+
 // bridgeMentions: whom each message names with @, also on the messages the archive has from the
 // iPhone.
 func bridgeMentions(a *archive.Archive, bridge *sql.DB, person *waPeople) {
@@ -816,6 +830,7 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 		bridgeMembers(a, bridge, person, own)
 		bridgeMentions(a, bridge, person)
 		bridgeReceipts(a, bridge, person, own)
+		bridgeBlocked(a, bridge, person, own)
 	} else {
 		updated = map[string]int{}
 	}

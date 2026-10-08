@@ -207,11 +207,17 @@ CREATE TABLE IF NOT EXISTS viber_member (    -- Viber member id -> phone number,
     mid TEXT PRIMARY KEY,
     number TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS blocked (   -- numbers the owner blocked on a phone
+CREATE TABLE IF NOT EXISTS blocked (   -- handles the owner blocked on a phone or a service
     address_id INTEGER NOT NULL REFERENCES address,
-    phone TEXT NOT NULL,                -- the device it was blocked on
+    phone TEXT NOT NULL,                -- the device it was blocked on, or the service ('telegram', 'whatsapp')
     original TEXT,                      -- as the phone wrote it
     UNIQUE (address_id, phone)
+);
+CREATE TABLE IF NOT EXISTS spam (     -- the user's word on a handle: removed as spam, or not spam
+    address_id INTEGER PRIMARY KEY REFERENCES address,
+    decision TEXT NOT NULL CHECK (decision IN ('removed', 'kept')),  -- kept: not suggested for removal again
+    name TEXT,                          -- the name it had when removed, for the list of those removed
+    at INTEGER NOT NULL                 -- Unix seconds
 );
 CREATE TABLE IF NOT EXISTS media (
     sha256 TEXT PRIMARY KEY,

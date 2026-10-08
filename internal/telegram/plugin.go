@@ -61,7 +61,7 @@ var info = &plugins.Info{
 			Help: "When a chat is opened here, the others see it read, and it is read on the phone too"},
 	},
 	CanSend: true, CanReply: true, CanMention: true, CanMarkRead: true, CanSendFiles: true,
-	CanReact: true, Reactions: reactions, CanEdit: true, CanDelete: true,
+	CanReact: true, Reactions: reactions, CanEdit: true, CanDelete: true, CanReportSpam: true,
 	// Telegram's edit_time_limit (its apps offer no edit after it, but in Saved Messages); deleting
 	// for everyone has had no limit in private chats and groups since 2019
 	EditWindow: 48 * time.Hour,

@@ -83,11 +83,13 @@ connected) and `live_default`; `platforms` (where its tools exist); `needs`, in 
 settings (typed fields the UI turns into a form; a `secret` field goes to the keyring through
 `internal/config`, never into the settings); what it can do (`can_send`, `can_reply`,
 `can_mention`, `can_mark_read`, `can_send_files`, `can_react`, `can_edit`, `can_delete`, with the
-service's time limits); extra actions (a QR link, an unlink); how its services look; and the
+service's time limits, `can_report_spam`); extra actions (a QR link, an unlink); how its services look; and the
 weights of the names and the chat state it brings (7).
 
 Beyond the manifest a plugin implements only the interfaces it needs: `RunImport` (an import),
-`Live` (a connection), `Send`, `React`, `Edit`, `Delete`, `MarkRead`, `FetchMedia`, `Chats` (the
+`Live` (a connection), `Send`, `React`, `Edit`, `Delete`, `MarkRead`, `FetchMedia`, `ReportSpam`
+(report, block and delete the chat on the service), `Forget` (drop its own copy of a chat removed
+as spam), `Chats` (the
 chats it can see, with kind and size, for the user's choice of what to import and whose media to
 fetch; Telegram and Signal have it), `Asks` (what the user types for one run only, such as a backup
 password not kept), `Action`, `Check`; a library `Find`, `Store`, `Fetch`; a contacts plugin
@@ -364,6 +366,15 @@ Online, for one owner, with the strongest protection that does not get in the wa
   the few changes it can make are listed (10).
 - **Deletion** only on the user's explicit confirmation, with the exact list; the archive's records
   stay when files go.
+- **Spam**: someone the user has not named and no contact lists may be removed as spam, after a
+  dialog that says what goes (`core/spam.go`): their one-to-one chats with every message and file
+  only they used, their calls, the names services showed for them; what they wrote in groups stays,
+  as do their address and person, recorded in `spam`, so that every import removes again what the
+  sources bring of them (`archive.PurgeSpam`, in `Resolve` and at the end of the call importers).
+  The user may let them back (Settings → Names). Where a source can (`ReportSpam`), the service is
+  told too: Telegram reports, blocks and deletes the chat; WhatsApp blocks. People blocked on a
+  phone or a service (`blocked`: Android's export, Telegram's and WhatsApp's blocklists, as they
+  change) are suggested for removal on the People page, until the user says they are not spam.
 
 ## 10. The MCP server
 

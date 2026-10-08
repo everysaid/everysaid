@@ -10,6 +10,7 @@ import { keepPeoplePlace, peoplePlace, type PeoplePlace } from "@/lib/memory";
 import { Avatar, Empty, LoadingBar, Spinner } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { MergeSuggestion, WHY, type Suggestion } from "@/components/MergeSuggestion";
+import { SpamSuggestions } from "@/components/Spam";
 import { labelName, useLabels } from "@/components/Labels";
 import { cn } from "@/lib/utils";
 import type { LabelKind } from "@/lib/api";
@@ -113,6 +114,7 @@ export function PeoplePage() {
           </div>
         </div>
       )}
+      {!dq && !label && <SpamSuggestions />}
       <MergeSuggestion s={open} onClose={() => setOpen(null)} />
       <div className="relative min-h-0 flex-1 bg-panel">
         <LoadingBar active={list.isFetching} />

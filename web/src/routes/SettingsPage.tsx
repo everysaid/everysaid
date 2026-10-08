@@ -19,6 +19,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { passkeyFailed, RecoveryCodes } from "./Auth";
 import { PasswordSetup } from "@/components/PasswordSetup";
 import { LabelLists } from "@/components/Labels";
+import { SpamRemoved } from "@/components/Spam";
 
 let installEvent: any = null;
 window.addEventListener("beforeinstallprompt", (e) => {
@@ -188,6 +189,7 @@ export function SettingsPage() {
                   onChange={(v) => api.put("/api/settings", { hide_empty_groups: v }).then(() => qc.invalidateQueries(), (e) => toast.error(e.message))} />
               </Line>
             </Card>
+            <SpamRemoved />
           </Section>
           )}
 

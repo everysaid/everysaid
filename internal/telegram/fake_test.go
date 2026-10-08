@@ -60,6 +60,7 @@ type fake struct {
 	nextID   int
 	noPhotos bool                    // sendMedia refuses photos (PHOTO_INVALID_DIMENSIONS)
 	refused  string                  // a reaction sendReaction refuses (REACTION_INVALID)
+	blocked  []int64                 // the users blocked, in the order blocked
 	asked    func(input bin.Encoder) // called at each request, before its answer
 }
 
@@ -337,6 +338,32 @@ func (f *fake) answer(input bin.Encoder) (bin.Encoder, error) {
 			out.Participants = append(out.Participants, &tg.ChannelParticipant{UserID: id})
 		}
 		return out, nil
+	case *tg.MessagesReportSpamRequest:
+		f.calls = append(f.calls, "reportSpam")
+		return &tg.BoolBox{Bool: &tg.BoolTrue{}}, nil
+	case *tg.ContactsBlockRequest:
+		f.calls = append(f.calls, "block")
+		if u, ok := r.ID.(*tg.InputPeerUser); ok && !slices.Contains(f.blocked, u.UserID) {
+			f.blocked = append(f.blocked, u.UserID)
+		}
+		return &tg.BoolBox{Bool: &tg.BoolTrue{}}, nil
+	case *tg.MessagesDeleteHistoryRequest:
+		f.calls = append(f.calls, "deleteHistory")
+		if c := f.chat(inputToPeer(r.Peer, f.self.ID)); c != nil {
+			if len(c.messages) > 100 { // a part at a time, as Telegram deletes a long chat
+				c.messages = sortedDesc(c.messages)[100:]
+				return &tg.MessagesAffectedHistory{Offset: 1}, nil
+			}
+			c.messages = nil
+		}
+		return &tg.MessagesAffectedHistory{}, nil
+	case *tg.ContactsGetBlockedRequest:
+		f.calls = append(f.calls, "getBlocked")
+		var page []tg.PeerBlocked
+		for _, id := range f.blocked[min(r.Offset, len(f.blocked)):min(r.Offset+r.Limit, len(f.blocked))] {
+			page = append(page, tg.PeerBlocked{PeerID: &tg.PeerUser{UserID: id}})
+		}
+		return &tg.ContactsBlockedBox{Blocked: &tg.ContactsBlockedSlice{Count: len(f.blocked), Blocked: page, Users: f.users}}, nil
 	case *tg.ChannelsDeleteMessagesRequest:
 		f.calls = append(f.calls, "channels.deleteMessages")
 		f.requests = append(f.requests, r)

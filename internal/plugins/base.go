@@ -156,8 +156,10 @@ type Info struct {
 	// EditWindow, DeleteWindow: how long after it was sent the service lets a message be edited,
 	// deleted for everyone (0: no limit).
 	EditWindow, DeleteWindow time.Duration
-	Actions                  []Action
-	ServiceInfo              map[string]ServiceInfo
+	// CanReportSpam: can tell the service someone is spam (SpamReporter): report and block them there.
+	CanReportSpam bool
+	Actions       []Action
+	ServiceInfo   map[string]ServiceInfo
 	// The names it brings for people, and how much they are trusted by default: "<service>/<kind>"
 	// (kind: book, chat, profile), or "contacts" for an address book. A list: between equal weights,
 	// the order they are declared in decides.
@@ -274,6 +276,18 @@ type Editor interface {
 // Deleter deletes the user's own message for everyone in the conversation.
 type Deleter interface {
 	Delete(ctx context.Context, c *Context, conv Conversation, msg Ref) error
+}
+
+// SpamReporter tells the service that the other person of a one-to-one conversation is spam: it
+// reports them where the service lets it, blocks them, and deletes the chat with them there.
+type SpamReporter interface {
+	ReportSpam(ctx context.Context, c *Context, conv Conversation) error
+}
+
+// Forgetter drops what the instance keeps of a conversation outside the archive (its own copy of
+// the service's messages), once the user removed it as spam.
+type Forgetter interface {
+	Forget(c *Context, conv Conversation) error
 }
 
 // SendingChecker says why the instance may not send now ("" when it may); without it, it may when

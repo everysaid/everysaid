@@ -622,6 +622,8 @@ receipts of the owner's messages up to it (`read_at` 0: read, when not known).
     - `calls` and `call_participants`: the call-log message every device gets after a call
       (`source` 'log': outcome, duration, video, participants), and the call signalling the client
       sees itself (`source` 'event': offered, `accepted_at`, `ended_at`, `end_reason`).
+    - `blocklist` (`jid`): the people the account blocked, as WhatsApp gives them on connecting and
+      as they change.
     - `bridge_state` (key/value: `connection`, `send_enabled`, `send_blocked`, `ban_until`),
       `bridge_events` (what WhatsApp said about the connection), `sent` (what it sent, for its
       limits).
@@ -963,7 +965,8 @@ person; a new address starts as a person of its own, until the user merges it.
 | `call_member` | `call_id`, `address_id`, `outcome`, `outcome_code` (group calls) |
 | `call_origin` | as `message_origin` |
 | `viber_member` | Viber member id → number, as the sources said |
-| `blocked` | `address_id`, `phone` (the device), `original`: numbers blocked on a phone |
+| `blocked` | `address_id`, `phone` (the device, or `telegram`, `whatsapp`), `original`: handles blocked on a phone (its export) or a service (its blocklist, kept as it changes) |
+| `spam` | `address_id` PK, `decision` (`removed`: removed as spam, and removed again from what each import brings; `kept`: not spam, not suggested again), `name` (the name it had), `at` |
 | `message_fts`, `message_tri` | contentless FTS5 tables (`contentless_delete=1`), by words (`unicode61`) and by trigrams (parts of words), over the text folded by `text.Fold` (Unicode case folding, which also makes a final sigma σ; combining marks removed in every script; compatibility forms brought to one), rowid = `message.id`; written by `Archive.AddMessage` (a trigger cannot fold); a query is folded the same way (`text.Query`) |
 
 **Media:**

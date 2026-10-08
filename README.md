@@ -44,6 +44,7 @@ history); nothing in the tracked documentation depends on it.
 | The app: passkeys, the messenger, search, media, people, sources, settings, push, PWA | working (`everysaid serve`, `internal/server`, `web/`) |
 | Live Telegram, WhatsApp (bridge), Signal and Viber Desktop, sending where the plugin can | working |
 | Reactions, edits and deletions for everyone from the app (WhatsApp, Telegram, Signal, Viber) | working |
+| Strangers removed as spam (reported and blocked on Telegram, blocked on WhatsApp); those blocked on a phone or a service suggested | working (`internal/core/spam.go`) |
 | The MCP server | working (`everysaid mcp`) |
 | A demo archive of invented people | working (`everysaid demo`) |
 | The logs of Adium and Pidgin (Gaim): MSN, ICQ, AIM, Yahoo, Jabber/Google Talk, Skype, IRC, Facebook chat | working (`internal/importers/imlogs.go`, the "Adium and Pidgin logs" source) |
@@ -375,7 +376,7 @@ Schema (`internal/archive`):
   (what each source says about a chat: hidden, muted, pinned, read up to) and `chat_state` (what the
   user chose), `setting` (the user's, shared by every device), `media_decision` (keep, remove, to the
   library; the newest counts), `message.status` (messages sent from the app). Also: mentions,
-  receipts, blocked numbers, the user's merges of people and groups, labels and name guesses
+  receipts, blocked handles and those removed as spam (`spam`), the user's merges of people and groups, labels and name guesses
   (`label`, `person_label`, `name_guess`), and a trigram index (`message_tri`) for parts of words.
   Until the first
   release the schema changes in place, without migrations.
@@ -473,3 +474,6 @@ pages) are separate, outside this repository and not part of the app.
 5. **Names written back to the address book**: from the people without a name, a new contact, or a
    handle added to an existing one, in the user's CardDAV address book (today contacts are only
    read), so that a name lives there and not only in the app.
+## License
+
+Everysaid is free software under the GNU Affero General Public License, version 3 (`LICENSE`).

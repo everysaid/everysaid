@@ -5,7 +5,7 @@ Everysaid's WhatsApp connection runs inside `everysaid serve`: the `whatsapp-bri
 account as a device (like WhatsApp Web), with its settings in the source and in `config.toml`
 (`[whatsapp]`). This folder is the same client as a program of its own, with a REST API on
 127.0.0.1. It began as the bridge of [whatsapp-mcp](https://github.com/lharries/whatsapp-mcp)
-(MIT, © Luke Harries).
+(MIT, © Luke Harries; its license is in `LICENSE`).
 
 Nothing runs it: it is a Go module of its own (`everysaid/whatsapp-bridge`), outside the app's
 build (`go build ./...` and `go test ./...` of the repository do not reach it). What still ties the

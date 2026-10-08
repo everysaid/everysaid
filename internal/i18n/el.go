@@ -51,6 +51,8 @@ var EL = map[string]string{
 	"Sending is off in this source's settings": "Η αποστολή είναι κλειστή στις ρυθμίσεις αυτής της πηγής",
 	"Unknown person to mention":                "Άγνωστο πρόσωπο για αναφορά με @",
 	"read receipts: {e}":                       "αποδείξεις ανάγνωσης: {e}",
+	"reported as spam: {chat}":                 "αναφέρθηκε ως spam: {chat}",
+	"could not drop its copy of {chat}: {e}":   "δεν σβήστηκε το αντίγραφό της για το {chat}: {e}",
 	"Send read receipts":                       "Αποστολή αποδείξεων ανάγνωσης",
 	"When a chat is opened here, the others see it read, and it is read on the phone too": "Όταν ανοίγει μια συνομιλία εδώ, οι άλλοι τη βλέπουν διαβασμένη, και διαβάζεται και στο κινητό",
 	"Sending failed":              "Η αποστολή απέτυχε",
