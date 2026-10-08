@@ -146,7 +146,8 @@ func RestoreSpam(s *Store, addressID int64) error {
 
 // SpamSuggestions is the people blocked on a phone or a service whom the user may remove as spam:
 // not named, in no contact, with something in the archive, and not said either way yet:
-// [{person_id, name, where}] (where: the devices and services they are blocked on).
+// [{person_id, name, where, person}] (where: the devices and services they are blocked on; person:
+// Person, with their latest messages).
 func SpamSuggestions(s *Store) []M {
 	ppl := PeopleOf(s)
 	act := active(s)
@@ -177,7 +178,42 @@ func SpamSuggestions(s *Store) []M {
 	})
 	out := []M{}
 	for _, pid := range order {
-		out = append(out, M{"person_id": pid, "name": ppl.Name(pid), "where": where[pid]})
+		p := Person(s, pid)
+		p["recent"] = recentOf(s, pid, 2)
+		out = append(out, M{"person_id": pid, "name": ppl.Name(pid), "where": where[pid], "person": p})
 	}
 	return out
+}
+
+// SpamKept is the people the user said are not spam, the latest first: [{person_id, name, at}].
+func SpamKept(s *Store) []M {
+	ppl := PeopleOf(s)
+	out := []M{}
+	seen := map[int64]bool{}
+	db.Each(s.Read(), "SELECT address_id, at FROM spam WHERE decision = 'kept' ORDER BY at DESC, address_id", nil, func(scan func(...any)) {
+		var aid, at int64
+		scan(&aid, &at)
+		pid, ok := ppl.PersonOf[aid]
+		if !ok || seen[pid] {
+			return
+		}
+		seen[pid] = true
+		out = append(out, M{"person_id": pid, "name": ppl.Name(pid), "at": at})
+	})
+	return out
+}
+
+// UndoNotSpam takes back the user's word that the person is not spam: if blocked, they are suggested again.
+func UndoNotSpam(s *Store, pid int64) error {
+	ppl := PeopleOf(s)
+	addrs := ppl.Addresses(pid)
+	if len(addrs) == 0 {
+		return ErrNotFound
+	}
+	return s.Write(func(tx *sql.Tx) error {
+		if db.Changed(tx, "DELETE FROM spam WHERE decision = 'kept' AND address_id IN ("+db.Marks(len(addrs))+")", db.Args(addrs)...) == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
 }

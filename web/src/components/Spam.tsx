@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ShieldBan, Undo2, X } from "lucide-react";
+import { ChevronRight, ShieldBan, Undo2 } from "lucide-react";
 import { toast } from "sonner";
-import { api } from "@/lib/api";
+import { api, type Person } from "@/lib/api";
 import { dateOnly, number } from "@/lib/format";
 import { service } from "@/lib/services";
-import { Avatar, Button, Card, Dialog, ServiceBadge, Switch } from "@/components/ui";
+import { Button, Card, Dialog, ServiceBadge, Switch } from "@/components/ui";
 
 /** What removing someone as spam takes (GET /api/people/{id}/spam). refused: why they may not be
  * removed ("" when they may): someone the user named, an address book lists, or the user. */
@@ -19,9 +19,16 @@ export interface SpamCheck {
 
 interface SpamResult { messages: number; calls: number; chats: number; reported: string[]; failed: { service: string; error: string }[] }
 
-interface Blocked { person_id: number; name: string; where: string[] }
+/** One blocked on a phone or a service whom the user may remove as spam (GET /api/spam). */
+export interface Blocked {
+  person_id: number; name: string; where: string[];
+  person: Person & { recent: { ts: number; outgoing: boolean; text: string }[] };
+}
 
 interface Removed { address_id: number; label: string; kind: string; service: string | null; name: string | null; at: number }
+
+/** GET /api/spam: those blocked, to decide; those removed; those the user said are not spam. */
+export interface SpamList { suggestions: Blocked[]; removed: Removed[]; kept: { person_id: number; name: string; at: number }[] }
 
 const REFUSED: Record<string, string> = { me: "spam.refused.me", named: "spam.refused.named", contact: "spam.refused.contact" };
 
@@ -89,41 +96,21 @@ export function SpamDialog({ personId, onClose, onDone }: { personId: number | n
   );
 }
 
-/** The people blocked on a phone or a service, offered for removal as spam; one the user says is
- * not spam is not offered again. */
+/** The people blocked on a phone or a service, offered for removal as spam: one line on the list of
+ * people, to the page where they are decided (BlockedReviewPage). */
 export function SpamSuggestions() {
   const { t } = useTranslation();
-  const qc = useQueryClient();
-  const list = useQuery({ queryKey: ["spam"], queryFn: () => api.get<{ suggestions: Blocked[]; removed: Removed[] }>("/api/spam") });
-  const keep = useMutation({
-    mutationFn: (pid: number) => api.post(`/api/people/${pid}/not-spam`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["spam"] }),
-    onError: (e: Error) => toast.error(e.message),
-  });
-  const [open, setOpen] = useState<number | null>(null);
-  const items = list.data?.suggestions ?? [];
-  if (!items.length) return null;
+  const list = useQuery({ queryKey: ["spam"], queryFn: () => api.get<SpamList>("/api/spam") });
+  const n = list.data?.suggestions.length ?? 0;
+  if (!n) return null;
   return (
-    <div className="border-b border-line bg-panel px-4 pb-3 md:px-6" data-spam-suggestions>
-      <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted">
+    <div className="border-b border-line bg-panel px-4 pb-3 md:px-6">
+      <Link to="/people/blocked" className="flex items-center gap-1.5 rounded-xl py-1 text-xs font-semibold uppercase tracking-wide text-muted hover:text-fg"
+        data-spam-suggestions>
         <ShieldBan className="size-3.5" />{t("spam.blocked")}
-      </div>
-      <div className="flex gap-2 overflow-x-auto pb-1">
-        {items.map((b) => (
-          <div key={b.person_id} className="flex shrink-0 items-center rounded-2xl border border-line text-sm">
-            <button onClick={() => setOpen(b.person_id)} data-spam-suggestion className="flex items-center gap-2 rounded-l-2xl py-2 pl-3 pr-2 text-left hover:bg-panel-2">
-              <Avatar name={b.name} size={28} />
-              <span>
-                {b.name}
-                <span className="block text-[11px] text-muted">{t("spam.blockedOn", { where: b.where.map((w) => service(w).name).join(", ") })}</span>
-              </span>
-            </button>
-            <button className="self-stretch rounded-r-2xl px-2 text-muted hover:bg-panel-2 hover:text-fg" title={t("spam.notSpam")}
-              aria-label={t("spam.notSpam")} onClick={() => keep.mutate(b.person_id)}><X className="size-4" /></button>
-          </div>
-        ))}
-      </div>
-      <SpamDialog personId={open} onClose={() => setOpen(null)} />
+        <span className="rounded-full bg-panel-2 px-2 py-0.5 tabular-nums normal-case tracking-normal">{number(n)}</span>
+        <ChevronRight className="ml-auto size-4" />
+      </Link>
     </div>
   );
 }
@@ -133,7 +120,7 @@ export function SpamSuggestions() {
 export function SpamRemoved() {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const list = useQuery({ queryKey: ["spam"], queryFn: () => api.get<{ suggestions: Blocked[]; removed: Removed[] }>("/api/spam") });
+  const list = useQuery({ queryKey: ["spam"], queryFn: () => api.get<SpamList>("/api/spam") });
   const restore = useMutation({
     mutationFn: (aid: number) => api.post(`/api/spam/${aid}/restore`),
     onSuccess: () => { qc.invalidateQueries(); toast.success(t("spam.restored")); },
