@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gotd/td/tg"
 
@@ -38,40 +39,43 @@ func TestMedia(t *testing.T) {
 		video(301, peer, 78, "application/x-tgsticker", &tg.DocumentAttributeSticker{Stickerset: &tg.InputStickerSetEmpty{}}),
 		video(302, peer, 79, "audio/ogg", &tg.DocumentAttributeAudio{Voice: true}))
 	f.files[77] = []byte("video bytes")
+	f.files[78] = []byte("sticker")
 	f.files[79] = []byte("voice")
 	var out bytes.Buffer
 	if err := syncRun(newTestCtx(), f.conn(), en(&out)); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if err := mediaRun(newTestCtx(), nil, true, nil, en(&out)); err != nil {
+	if err := mediaRun(newTestCtx(), nil, true, mediaSel{}, en(&out)); err != nil {
 		t.Fatal(err)
 	}
-	if out.String() != "2 files, 0.00 GB, in 1 chats\n" {
+	if out.String() != "3 files, 0.00 GB, in 1 chats\n" {
 		t.Fatalf("%q", out.String())
 	}
 	out.Reset()
-	if err := mediaRun(newTestCtx(), f.conn(), false, map[int64]bool{2: true}, en(&out)); err != nil {
+	if err := mediaRun(newTestCtx(), f.conn(), false, mediaSel{only: map[int64]bool{2: true}}, en(&out)); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(filepath.Join(MediaPath(), "2", "300.mp4"))
 	if err != nil || string(got) != "video bytes" {
 		t.Fatalf("%v %q", err, got)
 	}
-	if _, err := os.Stat(filepath.Join(MediaPath(), "2", "302.ogg")); err != nil {
-		t.Fatal(err)
+	for _, f := range []string{"301", "302.ogg"} { // a sticker of an unknown type keeps no extension
+		if _, err := os.Stat(filepath.Join(MediaPath(), "2", f)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	d, _ := db.ReadOnly(DBPath())
 	defer d.Close()
-	if files := db.Strs(d, "SELECT file FROM message WHERE file IS NOT NULL ORDER BY id"); !reflect.DeepEqual(files, []string{"2/300.mp4", "2/302.ogg"}) {
+	if files := db.Strs(d, "SELECT file FROM message WHERE file IS NOT NULL ORDER BY id"); !reflect.DeepEqual(files, []string{"2/300.mp4", "2/301", "2/302.ogg"}) {
 		t.Fatalf("%v", files)
 	}
-	if !strings.HasSuffix(out.String(), "2 downloaded into "+MediaPath()+"\n") {
+	if !strings.HasSuffix(out.String(), "3 downloaded into "+MediaPath()+"\n") {
 		t.Fatalf("%q", out.String())
 	}
 	// none in other chats asked for
 	out.Reset()
-	mediaRun(newTestCtx(), nil, true, map[int64]bool{-10: true}, en(&out))
+	mediaRun(newTestCtx(), nil, true, mediaSel{only: map[int64]bool{-10: true}}, en(&out))
 	if out.String() != "0 files, 0.00 GB, in 0 chats\n" {
 		t.Fatalf("%q", out.String())
 	}
@@ -81,9 +85,9 @@ func TestWantedAndFiles(t *testing.T) {
 	for js, want := range map[string][2]any{
 		`{"media":{"_":"MessageMediaPhoto","photo":{"_":"Photo","sizes":[{"_":"PhotoSize","size":10},{"_":"PhotoSizeProgressive","sizes":[5,900]}]}}}`: {true, int64(900)},
 		`{"media":{"_":"MessageMediaPhoto","photo":null}}`: {false, int64(0)},
-		`{"media":{"_":"MessageMediaDocument","document":{"mime_type":"image/webp","size":4,"attributes":[{"_":"DocumentAttributeSticker"}]}}}`: {false, int64(0)},
+		`{"media":{"_":"MessageMediaDocument","document":{"mime_type":"image/webp","size":4,"attributes":[{"_":"DocumentAttributeSticker"}]}}}`: {true, int64(4)},
 		`{"media":{"_":"MessageMediaDocument","document":{"mime_type":"video/mp4","size":4,"attributes":[{"_":"DocumentAttributeAnimated"}]}}}`: {true, int64(4)},
-		`{"media":{"_":"MessageMediaDocument","document":{"mime_type":"application/pdf","size":4,"attributes":[]}}}`:                            {false, int64(0)},
+		`{"media":{"_":"MessageMediaDocument","document":{"mime_type":"application/pdf","size":4,"attributes":[]}}}`:                            {true, int64(4)},
 		`{"media":null}`: {false, int64(0)},
 	} {
 		var m map[string]any
@@ -370,7 +374,7 @@ func TestLiveHandlers(t *testing.T) {
 	c := in.ctx()
 	cn := account().conn()
 	d := tg.NewUpdateDispatcher()
-	handlers(c, cn, d, func(int64) {})
+	handlers(c, cn, d, func(int64) {}, newFileQueue())
 	bob := user(2, "Bob", 22)
 	call := &tg.MessageService{ID: 9, PeerID: &tg.PeerUser{UserID: 2}, Date: 1600000000,
 		Action: &tg.MessageActionPhoneCall{CallID: 5}}
@@ -386,5 +390,76 @@ func TestLiveHandlers(t *testing.T) {
 	}
 	if got := c.LastLines(20); !strings.Contains(strings.Join(got, "\n"), "new message in Bob") {
 		t.Fatalf("%q", got)
+	}
+}
+
+// The live connection's files: a new message's queued and downloaded, then brought into the
+// archive and the chats told; at connecting, those of the last week still without one, not of a
+// chat left out; none with the setting off.
+func TestLiveFiles(t *testing.T) {
+	in := newInstance(t, M{"skip_chats": []any{-10}})
+	imported := 0
+	old := importMedia
+	t.Cleanup(func() { importMedia = old })
+	importMedia = func(*archive.Archive, func(string)) error { imported++; return nil }
+	c := in.ctx()
+	f := account()
+	peer := &tg.PeerUser{UserID: 2}
+	fresh := video(300, peer, 77, "video/mp4")
+	f.chats[0].messages = append(f.chats[0].messages, fresh)
+	f.files[77] = []byte("video bytes")
+	cn := f.conn()
+	if _, err := cn.dialogs(newTestCtx()); err != nil {
+		t.Fatal(err)
+	}
+	files := newFileQueue()
+	d := tg.NewUpdateDispatcher()
+	handlers(c, cn, d, func(int64) {}, files)
+	err := d.Handle(newTestCtx(), &tg.Updates{Users: []tg.UserClass{user(2, "Bob", 22)}, Updates: []tg.UpdateClass{
+		&tg.UpdateNewMessage{Message: fresh},
+		&tg.UpdateNewMessage{Message: text(301, peer, 0, 1600000000, "no file", false)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(files.msgs, map[int64]map[int]bool{2: {300: true}}) {
+		t.Fatalf("%v", files.msgs)
+	}
+	if err := fetchQueued(newTestCtx(), c, cn, files.msgs); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(MediaPath(), "2", "300.mp4")); err != nil || string(got) != "video bytes" {
+		t.Fatalf("%v %q", err, got)
+	}
+	if imported != 1 || !reflect.DeepEqual(in.h.events[len(in.h.events)-1], M{"type": "changed"}) {
+		t.Fatalf("%d %v", imported, in.h.events)
+	}
+	// downloaded already: nothing again
+	if err := fetchQueued(newTestCtx(), c, cn, map[int64]map[int]bool{2: {300: true}}); err != nil || imported != 1 {
+		t.Fatal(err, imported)
+	}
+
+	now := int(time.Now().Unix())
+	bob, group := user(2, "Bob", 22), &tg.Chat{ID: 10, Title: "Left out"}
+	_, err1 := storeMessages(c, bob, []sent{
+		{video(400, peer, 80, "image/jpeg"), nil}, {video(401, peer, 81, "image/jpeg"), nil}})
+	_, err2 := storeMessages(c, group, []sent{{video(402, &tg.PeerChat{ChatID: 10}, 82, "image/jpeg"), nil}})
+	if err1 != nil || err2 != nil {
+		t.Fatal(err1, err2)
+	}
+	store, _ := openStore(DBPath())
+	db.Exec(store, "UPDATE message SET date = ? WHERE id IN (400, 402)", now-86400)
+	db.Exec(store, "UPDATE message SET date = ? WHERE id = 401", now-8*86400)
+	store.Close()
+	files = newFileQueue()
+	if err := files.recent(c); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(files.msgs, map[int64]map[int]bool{2: {400: true}}) {
+		t.Fatalf("%v", files.msgs)
+	}
+
+	off := newInstance(t, M{"media": false})
+	if downloads(off.ctx()) || !downloads(c) {
+		t.Fatal("the setting")
 	}
 }

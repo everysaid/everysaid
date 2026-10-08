@@ -61,6 +61,8 @@ var stdin io.Reader = os.Stdin
 type SyncOptions struct {
 	SaveCredentials, Login, Survey, Media, DryRun bool
 	Chats                                         []int64 // with Media: only these chats (nil: all)
+	Skip                                          []int64 // with Media: not these chats
+	Since                                         int64   // with Media: only messages sent since (Unix seconds; 0: all)
 	Lang                                          string  // of what it says ("": the system's, as on the command line)
 }
 
@@ -112,15 +114,18 @@ func Sync(ctx context.Context, o SyncOptions, w io.Writer) error {
 	if o.SaveCredentials {
 		return saveCredentials(out)
 	}
-	var only map[int64]bool
+	sel := mediaSel{skip: map[int64]bool{}, since: o.Since}
 	if o.Chats != nil {
-		only = map[int64]bool{}
+		sel.only = map[int64]bool{}
 		for _, c := range o.Chats {
-			only[c] = true
+			sel.only[c] = true
 		}
 	}
+	for _, c := range o.Skip {
+		sel.skip[c] = true
+	}
 	if o.Media && o.DryRun {
-		return mediaRun(ctx, nil, true, only, out)
+		return mediaRun(ctx, nil, true, sel, out)
 	}
 	store := &keyringSession{}
 	if _, _, ok := credentials(); !ok {
@@ -131,7 +136,7 @@ func Sync(ctx context.Context, o SyncOptions, w io.Writer) error {
 		case o.Survey:
 			return survey(ctx, c, out)
 		case o.Media:
-			return mediaRun(ctx, c, false, only, out)
+			return mediaRun(ctx, c, false, sel, out)
 		}
 		return syncRun(ctx, c, out)
 	}

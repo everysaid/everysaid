@@ -132,7 +132,7 @@ func TestFollow(t *testing.T) {
 	done := make(chan error)
 	reconnected, again := make(chan struct{}, 1), make(chan struct{}, 1)
 	ended := make(chan error)
-	go func() { ended <- follow(newTestCtx(), c, cn, &mgr, done, reconnected, again) }()
+	go func() { ended <- follow(newTestCtx(), c, cn, &mgr, done, reconnected, again, newFileQueue()) }()
 	reconnected <- struct{}{}
 	again <- struct{}{}
 	time.Sleep(200 * time.Millisecond)
@@ -169,7 +169,7 @@ func TestMediaOneFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if err := mediaRun(newTestCtx(), f.conn(), false, nil, en(&out)); err != nil {
+	if err := mediaRun(newTestCtx(), f.conn(), false, mediaSel{}, en(&out)); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "2/300.mp4: not downloaded") || !strings.Contains(out.String(), "2 downloaded") {
@@ -446,7 +446,7 @@ func TestDeletedEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := tg.NewUpdateDispatcher()
-	handlers(c, account().conn(), d, func(int64) {})
+	handlers(c, account().conn(), d, func(int64) {}, newFileQueue())
 	err := d.Handle(newTestCtx(), &tg.Updates{Updates: []tg.UpdateClass{
 		&tg.UpdateDeleteMessages{Messages: []int{5, 99}},
 		&tg.UpdateDeleteChannelMessages{ChannelID: 30, Messages: []int{5}}}})

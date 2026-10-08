@@ -56,7 +56,8 @@ var info = &plugins.Info{
 	LiveDefault: true,
 	Needs:       []string{"api_id and api_hash from my.telegram.org", "a login (a code that arrives in Telegram)"},
 	Settings: []plugins.Setting{
-		{Key: "media", Label: "Download pictures and videos", Type: "bool", Default: false},
+		{Key: "media", Label: "Download pictures, videos and files", Type: "bool", Default: true,
+			Help: "Of the messages that arrive, and of those of the last week when it connects. A chat's whole history: its Media column in the chats"},
 		{Key: "read_receipts", Label: "Send read receipts", Type: "bool", Default: false,
 			Help: "When a chat is opened here, the others see it read, and it is read on the phone too"},
 	},
@@ -110,11 +111,21 @@ func (Plugin) RunImport(c *plugins.Context) error {
 	steps := []sourcekit.Step{{Label: "Telegram", Run: func(a *archive.Archive, out func(string)) error {
 		return importTelegram(a, out, nil, skip)
 	}}}
+	// the files: of the recent messages, as the live connection brings them, and the whole history
+	// of the chats chosen for it
 	mediaChats := ids(c.Settings["media_chats"])
-	if c.Bool("media") || len(mediaChats) > 0 {
+	if len(mediaChats) > 0 {
 		if err := runSync(ctx, c, SyncOptions{Media: true, Chats: mediaChats}); err != nil {
 			return err
 		}
+	}
+	if c.Bool("media") {
+		since := time.Now().Add(-mediaBackfill).Unix()
+		if err := runSync(ctx, c, SyncOptions{Media: true, Since: since, Skip: ids(c.Settings["skip_chats"])}); err != nil {
+			return err
+		}
+	}
+	if c.Bool("media") || len(mediaChats) > 0 {
 		steps = append(steps, sourcekit.Step{Label: "files", Run: importMedia})
 	}
 	_, _, err := sourcekit.RunImporters(c, steps)
