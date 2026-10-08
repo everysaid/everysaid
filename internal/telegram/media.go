@@ -15,22 +15,23 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
 
+	"everysaid/internal/archive"
 	"everysaid/internal/config"
 	"everysaid/internal/db"
 	"everysaid/internal/plugins"
 )
 
-// wanted says whether a stored message's media is one --media downloads, and its size.
+// wanted says whether a stored message carries a file that is downloaded (a picture, or any
+// document: video, voice, sticker, a file sent as such), and its size.
 func wanted(m map[string]any) (bool, int64) {
 	media, _ := m["media"].(map[string]any)
-	if media == nil {
-		media = map[string]any{}
-	}
 	class, _ := media["_"].(string)
 	if photo, ok := media["photo"].(map[string]any); class == "MessageMediaPhoto" && ok && truthy(photo) {
 		var best int64
@@ -48,29 +49,28 @@ func wanted(m map[string]any) (bool, int64) {
 		}
 		return true, best
 	}
-	doc, _ := media["document"].(map[string]any)
-	if class != "MessageMediaDocument" || !truthy(doc) {
-		return false, 0
-	}
-	attrs, _ := doc["attributes"].([]any)
-	has := map[string]bool{}
-	voice := false
-	for _, a := range attrs {
-		a, _ := a.(map[string]any)
-		name, _ := a["_"].(string)
-		has[name] = true
-		if v, _ := a["voice"].(bool); name == "DocumentAttributeAudio" && v {
-			voice = true
-		}
-	}
-	if has["DocumentAttributeSticker"] {
-		return false, 0
-	}
-	mime, _ := doc["mime_type"].(string)
-	if strings.HasPrefix(mime, "image/") || strings.HasPrefix(mime, "video/") || voice || has["DocumentAttributeAnimated"] {
+	if doc, _ := media["document"].(map[string]any); class == "MessageMediaDocument" && truthy(doc) {
 		return true, num(doc["size"])
 	}
 	return false, 0
+}
+
+// carries says whether a message just received has a file wanted would choose (not a link's
+// preview).
+func carries(m tg.MessageClass) bool {
+	msg, ok := m.(*tg.Message)
+	if !ok {
+		return false
+	}
+	switch media := msg.Media.(type) {
+	case *tg.MessageMediaPhoto:
+		_, ok := media.Photo.(*tg.Photo)
+		return ok
+	case *tg.MessageMediaDocument:
+		_, ok := media.Document.(*tg.Document)
+		return ok
+	}
+	return false
 }
 
 func truthy(m map[string]any) bool { return len(m) > 0 }
@@ -253,11 +253,21 @@ func download(ctx context.Context, api *tg.Client, m tg.MessageClass, dest strin
 	return err == nil, err
 }
 
-// mediaRun is the sync's --media: the files of the stored messages not downloaded yet. only: the
-// chats whose media are wanted (the app's choice per chat); then config's `media = false` and
-// `no_media` do not apply, the choice being explicit. c nil: dryRun only.
-func mediaRun(ctx context.Context, c *conn, dryRun bool, only map[int64]bool, out *printer) error {
-	if only == nil && !config.Bool("telegram", "media", true) {
+// mediaSel is which stored messages' files a media run downloads.
+type mediaSel struct {
+	only  map[int64]bool // these chats only (nil: all)
+	skip  map[int64]bool // not these
+	since int64          // sent since (Unix seconds; 0: all)
+}
+
+// explicit: the app's choice (some chats, or the recent days); then config's `media = false` and
+// `no_media` do not apply.
+func (s mediaSel) explicit() bool { return s.only != nil || s.since != 0 }
+
+// mediaRun is the sync's --media: the files of the stored messages not downloaded yet, of the
+// messages sel chooses. c nil: dryRun only.
+func mediaRun(ctx context.Context, c *conn, dryRun bool, sel mediaSel, out *printer) error {
+	if !sel.explicit() && !config.Bool("telegram", "media", true) {
 		return fmt.Errorf("%s", out.say("[telegram] media = false in config: no media are downloaded", nil))
 	}
 	store, err := openStore(DBPath())
@@ -266,7 +276,10 @@ func mediaRun(ctx context.Context, c *conn, dryRun bool, only map[int64]bool, ou
 	}
 	defer store.Close()
 	skip := map[int64]bool{}
-	if only == nil {
+	for id := range sel.skip {
+		skip[id] = true
+	}
+	if !sel.explicit() {
 		if vs, ok := config.Get("telegram", "no_media").([]any); ok {
 			for _, v := range vs {
 				if n, err := strconv.ParseInt(fmt.Sprint(v), 10, 64); err == nil {
@@ -278,12 +291,12 @@ func mediaRun(ctx context.Context, c *conn, dryRun bool, only map[int64]bool, ou
 	todo := map[int64][]int{}
 	var order []int64
 	var size int64
-	db.Each(store, "SELECT chat_id, id, json FROM message WHERE file IS NULL", nil, func(scan func(...any)) {
+	db.Each(store, "SELECT chat_id, id, json FROM message WHERE file IS NULL AND date >= ?", []any{sel.since}, func(scan func(...any)) {
 		var chatID int64
 		var id int
 		var js string
 		scan(&chatID, &id, &js)
-		if skip[chatID] || (only != nil && !only[chatID]) {
+		if skip[chatID] || (sel.only != nil && !sel.only[chatID]) {
 			return
 		}
 		var m map[string]any
@@ -312,55 +325,69 @@ func mediaRun(ctx context.Context, c *conn, dryRun bool, only map[int64]bool, ou
 	}
 	done := 0
 	for _, chatID := range order {
-		ids := todo[chatID]
-		peer, err := c.inputPeer(chatID)
+		err := fetchFiles(ctx, c, store, chatID, todo[chatID], func() {
+			done++
+			fmt.Fprintf(out, "\r%d/%d", done, total)
+		}, func(rel string, err error) {
+			fmt.Fprintf(out, "\n%s\n", out.say("{file}: not downloaded ({e})", map[string]any{"file": rel, "e": err.Error()}))
+		})
 		if err != nil {
 			return err
-		}
-		folder := filepath.Join(MediaPath(), strconv.FormatInt(chatID, 10))
-		if err := os.MkdirAll(folder, 0o700); err != nil {
-			return err
-		}
-		for i := 0; i < len(ids); i += 100 { // fetched again: the file references expire
-			msgs, err := c.byIDs(ctx, peer, ids[i:min(i+100, len(ids))])
-			if err != nil {
-				return err
-			}
-			for _, m := range msgs {
-				if m == nil {
-					continue // deleted since
-				}
-				p, d := fileOf(m)
-				if p == nil && d == nil {
-					continue // no longer carries it
-				}
-				rel := fmt.Sprintf("%d/%d%s", chatID, m.GetID(), fileExt(p, d))
-				dest := filepath.Join(MediaPath(), filepath.FromSlash(rel))
-				wrote, err := download(ctx, c.api, m, dest+".part")
-				if err != nil {
-					if _, flood := tgerr.AsFloodWait(err); flood || ctx.Err() != nil {
-						return err
-					}
-					// one file Telegram will not give does not keep the others back; it is tried again
-					// the next time
-					os.Remove(dest + ".part")
-					fmt.Fprintf(out, "\n%s\n", out.say("{file}: not downloaded ({e})", map[string]any{"file": rel, "e": err.Error()}))
-					continue
-				}
-				if !wrote {
-					continue // a picture without a size to download
-				}
-				if err := os.Rename(dest+".part", dest); err != nil {
-					return err
-				}
-				db.Exec(store, "UPDATE message SET file = ? WHERE chat_id = ? AND id = ?", rel, chatID, m.GetID())
-				done++
-				fmt.Fprintf(out, "\r%d/%d", done, total)
-			}
 		}
 	}
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, out.say("{n} downloaded into {folder}", map[string]any{"n": done, "folder": MediaPath()}))
+	return nil
+}
+
+// fetchFiles downloads the files of a chat's messages into the media folder and records each in
+// the store (telegram.db); wrote is told of each file written, failed of each one Telegram would
+// not give, which does not keep the others back (it is tried again another time). A flood wait or
+// the end of ctx stops it.
+func fetchFiles(ctx context.Context, c *conn, store *sql.DB, chatID int64, ids []int, wrote func(),
+	failed func(rel string, err error)) error {
+	peer, err := c.peer(ctx, chatID)
+	if err != nil {
+		return err
+	}
+	folder := filepath.Join(MediaPath(), strconv.FormatInt(chatID, 10))
+	if err := os.MkdirAll(folder, 0o700); err != nil {
+		return err
+	}
+	for i := 0; i < len(ids); i += 100 { // fetched again: the file references expire
+		msgs, err := c.byIDs(ctx, peer, ids[i:min(i+100, len(ids))])
+		if err != nil {
+			return err
+		}
+		for _, m := range msgs {
+			if m == nil {
+				continue // deleted since
+			}
+			p, d := fileOf(m)
+			if p == nil && d == nil {
+				continue // no longer carries it
+			}
+			rel := fmt.Sprintf("%d/%d%s", chatID, m.GetID(), fileExt(p, d))
+			dest := filepath.Join(MediaPath(), filepath.FromSlash(rel))
+			ok, err := download(ctx, c.api, m, dest+".part")
+			if err != nil {
+				if _, flood := tgerr.AsFloodWait(err); flood || ctx.Err() != nil {
+					return err
+				}
+				os.Remove(dest + ".part")
+				failed(rel, err)
+				continue
+			}
+			if !ok {
+				continue // a picture without a size to download
+			}
+			if err := os.Rename(dest+".part", dest); err != nil {
+				return err
+			}
+			db.Exec(store, "UPDATE message SET file = ? WHERE chat_id = ? AND id = ?", rel, chatID, m.GetID())
+			wrote()
+		}
+	}
 	return nil
 }
 
@@ -427,4 +454,135 @@ func (Plugin) FetchMedia(ctx context.Context, c *plugins.Context, messageID int6
 	}
 	db.Exec(store, "UPDATE message SET file = ? WHERE chat_id = ? AND id = ?", rel, chatID, id)
 	return dest, nil
+}
+
+// mediaBackfill is how far back the files not downloaded yet are looked for, at each connection
+// and each import (as the WhatsApp bridge does).
+const mediaBackfill = 7 * 24 * time.Hour
+
+// downloads says whether the files of new messages are downloaded: the setting as it is now, on
+// unless turned off.
+func downloads(c *plugins.Context) bool {
+	on, set := currentSettings(c)["media"].(bool)
+	return on || !set
+}
+
+// fileQueue downloads the files of the messages the live connection stores, apart from it (a
+// video takes a while), and brings them into the archive.
+type fileQueue struct {
+	mu   sync.Mutex
+	msgs map[int64]map[int]bool
+	wake chan struct{}
+}
+
+func newFileQueue() *fileQueue {
+	return &fileQueue{msgs: map[int64]map[int]bool{}, wake: make(chan struct{}, 1)}
+}
+
+func (q *fileQueue) add(chat int64, id int) {
+	q.mu.Lock()
+	if q.msgs[chat] == nil {
+		q.msgs[chat] = map[int]bool{}
+	}
+	q.msgs[chat][id] = true
+	q.mu.Unlock()
+	select {
+	case q.wake <- struct{}{}:
+	default:
+	}
+}
+
+// recent queues the stored messages of the last mediaBackfill whose files are not downloaded yet,
+// of the chats imported: what arrived while not connected, or failed before.
+func (q *fileQueue) recent(c *plugins.Context) (err error) {
+	if !downloads(c) {
+		return nil
+	}
+	defer db.Recover(&err)
+	store, err := openStore(DBPath())
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	skip := idSet(currentSettings(c)["skip_chats"])
+	db.Each(store, "SELECT chat_id, id, json FROM message WHERE file IS NULL AND date >= ?",
+		[]any{time.Now().Add(-mediaBackfill).Unix()}, func(scan func(...any)) {
+			var chat int64
+			var id int
+			var js string
+			scan(&chat, &id, &js)
+			var m map[string]any
+			dec := json.NewDecoder(strings.NewReader(js))
+			dec.UseNumber()
+			if skip[chat] || dec.Decode(&m) != nil {
+				return
+			}
+			if ok, _ := wanted(m); ok {
+				q.add(chat, id)
+			}
+		})
+	return nil
+}
+
+// run downloads what is queued until ctx ends; a failure is logged, the connection goes on.
+func (q *fileQueue) run(ctx context.Context, c *plugins.Context, cn *conn) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-q.wake:
+		}
+		q.mu.Lock()
+		todo := q.msgs
+		q.msgs = map[int64]map[int]bool{}
+		q.mu.Unlock()
+		if err := fetchQueued(ctx, c, cn, todo); err != nil && ctx.Err() == nil {
+			c.Log("error: {e}", map[string]any{"e": err.Error()})
+		}
+	}
+}
+
+// fetchQueued downloads the files of the queued messages still without one, then brings those
+// downloaded into the archive, where the chats shown take them.
+func fetchQueued(ctx context.Context, c *plugins.Context, cn *conn, todo map[int64]map[int]bool) error {
+	done := 0
+	err := func() (err error) {
+		defer db.Recover(&err)
+		store, err := openStore(DBPath())
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		chats := make([]int64, 0, len(todo))
+		for chat := range todo {
+			chats = append(chats, chat)
+		}
+		sort.Slice(chats, func(i, j int) bool { return chats[i] < chats[j] })
+		for _, chat := range chats {
+			var ids []int
+			for id := range todo[chat] {
+				var none int
+				if db.Row(store, "SELECT 1 FROM message WHERE chat_id = ? AND id = ? AND file IS NULL", []any{chat, id}, &none) {
+					ids = append(ids, id)
+				}
+			}
+			sort.Ints(ids)
+			if len(ids) == 0 {
+				continue
+			}
+			if err := fetchFiles(ctx, cn, store, chat, ids, func() { done++ }, func(rel string, err error) {
+				c.Log("{file}: not downloaded ({e})", map[string]any{"file": rel, "e": err.Error()})
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}()
+	if done > 0 {
+		if err := withArchive(c, func(a *archive.Archive) error { return importMedia(a, func(string) {}) }); err != nil {
+			return err
+		}
+		c.Emit(M{"type": "changed"})
+	}
+	return err
 }

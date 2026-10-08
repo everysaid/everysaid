@@ -175,8 +175,9 @@ answers a person's stream page or a search in milliseconds at that size; nothing
   (`find_media`), checks the library and stores only what the user approves
   (`send_media_to_library`); `download_media` may ask a live source for a file the archive never
   had.
-- **Media of live services** are fetched as the instance's settings say, and for Telegram also per
-  chat.
+- **Media of live services** are fetched as the instance's settings say: the files of new
+  messages as they arrive, and on connecting those of the last week still missing; for Telegram
+  also a chat's whole history, per chat.
 
 ## 6. The UI
 

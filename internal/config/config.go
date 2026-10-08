@@ -27,8 +27,8 @@
 //	bridge = "..."                  # the WhatsApp store folder (messages.db, whatsapp.db)
 //
 //	[telegram]
-//	media = true                    # false: telegram-sync --media downloads nothing
-//	no_media = [-100123]            # chats whose media are not wanted
+//	media = true                    # false: telegram-sync --media downloads nothing (the app's source has its own setting)
+//	no_media = [-100123]            # chats whose media telegram-sync --media leaves out
 //
 //	[immich]
 //	url = "http://host:2283"

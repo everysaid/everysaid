@@ -283,8 +283,12 @@ each time, the API works for any user and brings only what is new.
 - `--survey`: every chat with its kind, size and dates, no content, in `<cache>/telegram/survey.tsv`.
 - With no option: every chat but channels and bots into `<cache>/telegram/telegram.db`, each message
   whole (as JSON); later runs bring only what is new.
-- `--media [--dry-run]`: pictures, videos, GIFs, video notes and voice messages, into
-  `<cache>/telegram/media/` (`[telegram] media`, `no_media`).
+- `--media [--dry-run]`: the files of the messages (pictures, videos, voice messages, stickers,
+  documents), into `<cache>/telegram/media/` (`[telegram] media`, `no_media`).
+
+The source in the app downloads the files of new messages as they arrive, and at each connection
+and import those of the last week still missing (its setting, on by default); a chat's whole
+history only where its Media column is ticked.
 
 `telegram-sync` only reads: nothing is sent, nothing is marked read (the live source, in the app,
 can send). Secret chats are on the devices only and cannot be had.
@@ -471,7 +475,13 @@ pages) are separate, outside this repository and not part of the app.
    iPhone are wanted.
 4. **Several users** on one server: the auth database and the core already take the archive per
    user; what is left is the UI to add a user and the per-user plugin host.
-5. **Names written back to the address book**: from the people without a name, a new contact, or a
+5. **When the sources' files are cleaned up.** Every file a source downloads (Telegram's,
+   Signal's, the WhatsApp bridge's, the iPhone's in the cache) is copied into the media store when
+   imported (a hard link where both are on one file system), so it is kept twice, and the store,
+   in the data folder, grows without limit. To decide: when a source's copy goes once the archive
+   holds the file, how the store gives way to the photo library (only with the user's approval),
+   and what happens to the files no one keeps.
+6. **Names written back to the address book**: from the people without a name, a new contact, or a
    handle added to an existing one, in the user's CardDAV address book (today contacts are only
    read), so that a name lives there and not only in the app.
 ## License

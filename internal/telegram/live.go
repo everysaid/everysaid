@@ -466,9 +466,10 @@ func live(ctx context.Context, c *plugins.Context) error {
 		c.Log("connected to Telegram", nil)
 		ctx, stop := context.WithCancel(ctx)
 		defer stop()
-		queue := newMemberQueue()
+		queue, files := newMemberQueue(), newFileQueue()
 		go queue.run(ctx, c, cn)
-		handlers(c, cn, d, queue.add)
+		go files.run(ctx, c, cn)
+		handlers(c, cn, d, queue.add, files)
 		liveConn.Store(cn)
 		defer liveConn.Store(nil)
 		started := make(chan struct{})
@@ -481,10 +482,10 @@ func live(ctx context.Context, c *plugins.Context) error {
 		case err := <-done:
 			return err
 		}
-		if err := settle(ctx, c, cn, dialogs); err != nil { // after the handlers: nothing falls between the two
+		if err := settle(ctx, c, cn, dialogs, files); err != nil { // after the handlers: nothing falls between the two
 			return err
 		}
-		return follow(ctx, c, cn, mgr, done, reconnected, again)
+		return follow(ctx, c, cn, mgr, done, reconnected, again, files)
 	}, onState)
 	if ctx.Err() != nil {
 		return nil
@@ -499,9 +500,10 @@ func live(ctx context.Context, c *plugins.Context) error {
 	return err
 }
 
-// settle brings the chats' states, how far they were read, what arrived while not connected, and
-// the members of the groups where they changed meanwhile or were not asked for a while.
-func settle(ctx context.Context, c *plugins.Context, cn *conn, dialogs []dialog) error {
+// settle brings the chats' states, how far they were read, what arrived while not connected (and
+// its files), and the members of the groups where they changed meanwhile or were not asked for a
+// while.
+func settle(ctx context.Context, c *plugins.Context, cn *conn, dialogs []dialog, files *fileQueue) error {
 	if err := reportStates(c, dialogStates(dialogs)); err != nil {
 		return err
 	}
@@ -513,6 +515,9 @@ func settle(ctx context.Context, c *plugins.Context, cn *conn, dialogs []dialog)
 	}
 	changed, err := catchUp(ctx, c, cn, dialogs)
 	if err != nil {
+		return err
+	}
+	if err := files.recent(c); err != nil {
 		return err
 	}
 	stale, err := staleMembers(dialogs)
@@ -532,7 +537,7 @@ func settle(ctx context.Context, c *plugins.Context, cn *conn, dialogs []dialog)
 // update, or a quarter of an hour); when Telegram says the gap is too long to fill (again), it reads
 // the chats again as on connecting.
 func follow(ctx context.Context, c *plugins.Context, cn *conn, mgr telegram.UpdateHandler, done <-chan error,
-	reconnected, again <-chan struct{}) error {
+	reconnected, again <-chan struct{}, files *fileQueue) error {
 	for {
 		select {
 		case err := <-done:
@@ -544,7 +549,7 @@ func follow(ctx context.Context, c *plugins.Context, cn *conn, mgr telegram.Upda
 		case <-again:
 			dialogs, err := cn.dialogs(ctx)
 			if err == nil {
-				err = settle(ctx, c, cn, dialogs)
+				err = settle(ctx, c, cn, dialogs, files)
 			}
 			if err != nil {
 				return err
@@ -554,8 +559,9 @@ func follow(ctx context.Context, c *plugins.Context, cn *conn, mgr telegram.Upda
 }
 
 // handlers are what the connection does with what Telegram pushes. One bad update must not stop
-// the connection: its error is logged. members is told of a group whose members changed.
-func handlers(c *plugins.Context, cn *conn, d tg.UpdateDispatcher, members func(chat int64)) {
+// the connection: its error is logged. members is told of a group whose members changed, files of
+// the messages with a file to download.
+func handlers(c *plugins.Context, cn *conn, d tg.UpdateDispatcher, members func(chat int64), files *fileQueue) {
 	logged := func(err error) error {
 		if err != nil {
 			c.Log("error: {e}", map[string]any{"e": err.Error()})
@@ -590,6 +596,9 @@ func handlers(c *plugins.Context, cn *conn, d tg.UpdateDispatcher, members func(
 		}
 		if changesMembers(m) {
 			members(chatID)
+		}
+		if n > 0 && carries(m) && downloads(c) {
+			files.add(chatID, m.GetID())
 		}
 		if n > 0 {
 			c.Log("new message in {chat}", map[string]any{"chat": chatLabel(chat)})

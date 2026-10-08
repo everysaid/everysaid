@@ -191,7 +191,7 @@ func TestLiveMembers(t *testing.T) {
 	}
 	var told []int64
 	d := tg.NewUpdateDispatcher()
-	handlers(c, cn, d, func(chat int64) { told = append(told, chat) })
+	handlers(c, cn, d, func(chat int64) { told = append(told, chat) }, newFileQueue())
 	joined := &tg.MessageService{ID: 6, PeerID: &tg.PeerChat{ChatID: 10}, Date: 1600000006,
 		Action: &tg.MessageActionChatAddUser{Users: []int64{4}}}
 	joined.SetFromID(&tg.PeerUser{UserID: 2})

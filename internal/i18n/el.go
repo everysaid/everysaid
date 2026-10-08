@@ -113,7 +113,6 @@ var EL = map[string]string{
 	"WhatsApp warned the account":                           "Το WhatsApp προειδοποίησε τον λογαριασμό",
 	"WhatsApp calls (bridge)":                               "Κλήσεις WhatsApp (γέφυρα)",
 	"Check every (seconds)":                                 "Έλεγχος κάθε (δευτερόλεπτα)",
-	"Download pictures and videos":                          "Λήψη φωτογραφιών και βίντεο",
 	"Carriers":                                              "Πάροχοι",
 	"e.g. gr":                                               "π.χ. gr",
 	"Camera make (where missing)":                           "Κατασκευαστής κάμερας (όπου λείπει)",
