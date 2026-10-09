@@ -97,17 +97,17 @@ func telegramNotice(a *archive.Archive, m map[string]any, person *tgPeople, own 
 	case "MessageActionTopicCreate":
 		return groupNotice(by, map[string]any{"type": "topic", "created": true, "title": pyStr(action["title"])})
 	case "MessageActionTopicEdit":
-		x := map[string]any{"type": "topic"}
+		var actions []map[string]any // renamed, closed or opened again (or both)
 		if truthy(action["title"]) {
-			x["title"] = pyStr(action["title"])
+			actions = append(actions, map[string]any{"type": "topic", "title": pyStr(action["title"])})
 		}
 		if c, ok := action["closed"].(bool); ok {
-			x["closed"] = c
+			actions = append(actions, map[string]any{"type": "topic", "closed": c})
 		}
-		if _, ok := x["title"]; !ok && x["closed"] == nil {
+		if len(actions) == 0 {
 			return nil // an icon changed, a topic hidden: nothing said
 		}
-		return groupNotice(by, x)
+		return groupNotice(by, actions...)
 	case "MessageActionChatEditTitle":
 		return groupNotice(by, map[string]any{"type": "title", "title": pyStr(action["title"])})
 	case "MessageActionChatEditPhoto":

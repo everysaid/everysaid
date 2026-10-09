@@ -1,4 +1,5 @@
 import type { TFunction } from "i18next";
+import { loc } from "./format";
 
 /** What a notice says (the archive's `notice` table; the codes are in docs/design.md): its code and
  *  values, a person in them as {address, name, person_id, me} or the owner as {self: true}. */
@@ -80,7 +81,7 @@ export function noticeLines(n: Notice, t: TFunction): string[] {
     case "group_call":
       if (typeof a.seconds === "number" && a.seconds > 0) return [t("notice.group_callLasted", { duration: durationWords(a.seconds, t) })];
       if (typeof a.scheduled === "number" && a.scheduled > 0)
-        return [t("notice.group_callScheduled", { date: new Date(a.scheduled * 1000).toLocaleString() })];
+        return [t("notice.group_callScheduled", { date: new Date(a.scheduled * 1000).toLocaleString(loc(), { dateStyle: "medium", timeStyle: "short" }) })];
       return [say("group_call")];
     case "group_call_invite":
       return [say("group_call_invite", undefined, { who: (Array.isArray(a.who) ? (a.who as Person[]) : []).map(name).join(", ") })];
