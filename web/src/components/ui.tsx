@@ -265,7 +265,8 @@ export function ServiceDot({ id, className }: { id: string; className?: string }
   return <span title={s.name} className={cn("inline-block size-2 shrink-0 rounded-full", className)} style={{ background: s.color }} />;
 }
 
-export function ServiceBadge({ id, className }: { id: string; className?: string }) {
+/** A service's name in its colour; compact: its short name on a narrow screen. */
+export function ServiceBadge({ id, className, compact }: { id: string; className?: string; compact?: boolean }) {
   const s = service(id);
   return (
     <span
@@ -273,7 +274,7 @@ export function ServiceBadge({ id, className }: { id: string; className?: string
       style={{ background: `color-mix(in oklab, ${s.color} 16%, transparent)`, color: `color-mix(in oklab, ${s.color} 75%, var(--fg))` }}
     >
       <span className="size-1.5 rounded-full" style={{ background: s.color }} />
-      {s.name}
+      {compact ? <><span className="md:hidden">{s.short}</span><span className="hidden md:inline">{s.name}</span></> : s.name}
     </span>
   );
 }
