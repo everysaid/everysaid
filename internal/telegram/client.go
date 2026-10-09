@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"sync"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
 
+	"everysaid/internal/db"
 	"everysaid/internal/errs"
 )
 
@@ -187,10 +189,13 @@ type conn struct {
 	api *tg.Client
 
 	mu       sync.Mutex
-	entities map[int64]any // marked id -> *tg.User, *tg.Chat, *tg.Channel, ...
+	entities map[int64]any  // marked id -> *tg.User, *tg.Chat, *tg.Channel, ...
+	unknown  map[int64]bool // ids the dialogs were read again for, in vain: not again
 }
 
-func newConn(api *tg.Client) *conn { return &conn{api: api, entities: map[int64]any{}} }
+func newConn(api *tg.Client) *conn {
+	return &conn{api: api, entities: map[int64]any{}, unknown: map[int64]bool{}}
+}
 
 // seen keeps the users and chats of an answer; it returns them by marked id (those of this answer).
 func (c *conn) seen(users []tg.UserClass, chats []tg.ChatClass) map[int64]any {
@@ -232,16 +237,57 @@ func (c *conn) inputPeer(id int64) (tg.InputPeerClass, error) {
 	return nil, fmt.Errorf("could not find the input entity for %d", id)
 }
 
-// peer is inputPeer, reading the dialogs again for a chat not met yet (new since they were read,
-// or a connection shared before it read them).
+// peer is inputPeer, else as telegram.db keeps the chat (a chat left or deleted is no longer among
+// the dialogs), else reading the dialogs again for a chat not met yet (new since they were read, or a
+// connection shared before it read them): once for each id, as reading them all is many requests.
 func (c *conn) peer(ctx context.Context, id int64) (tg.InputPeerClass, error) {
 	if p, err := c.inputPeer(id); err == nil {
 		return p, nil
 	}
-	if _, err := c.dialogs(ctx); err != nil {
-		return nil, err
+	if p, ok := storedPeer(id); ok {
+		return p, nil
+	}
+	c.mu.Lock()
+	tried := c.unknown[id]
+	c.mu.Unlock()
+	if !tried {
+		if _, err := c.dialogs(ctx); err != nil {
+			return nil, err
+		}
+		c.mu.Lock()
+		c.unknown[id] = true
+		c.mu.Unlock()
 	}
 	return c.inputPeer(id)
+}
+
+// storedPeer is a chat or user as telegram.db keeps it, as an input peer.
+func storedPeer(id int64) (p tg.InputPeerClass, ok bool) {
+	if _, err := os.Stat(DBPath()); err != nil {
+		return nil, false // no store yet
+	}
+	store, err := db.ReadOnly(DBPath())
+	if err != nil {
+		return nil, false
+	}
+	defer func() { // a store that cannot be read: not known
+		if recover() != nil {
+			p, ok = nil, false
+		}
+	}()
+	defer store.Close()
+	for _, q := range []string{"SELECT json FROM chat WHERE id = ?", "SELECT json FROM entity WHERE id = ?"} {
+		raw := db.Str(store, q, id)
+		if raw == "" {
+			continue
+		}
+		if o, err := Load([]byte(raw)); err == nil && EntityID(o) == id {
+			if p, ok := InputPeer(o); ok {
+				return p, true
+			}
+		}
+	}
+	return nil, false
 }
 
 // --- dialogs ---------------------------------------------------------------------------------------
@@ -259,6 +305,9 @@ type dialog struct {
 }
 
 const maxChunk = 100
+
+// historyPause is the wait between a long history's pages (none in tests).
+var historyPause = time.Second
 
 type dialogKey struct {
 	channel int64
@@ -428,7 +477,14 @@ func (c *conn) history(ctx context.Context, peer tg.InputPeerClass, minID int, f
 	}
 	req := &tg.MessagesGetHistoryRequest{Peer: peer, Limit: maxChunk, OffsetID: offset, AddOffset: -maxChunk}
 	last := 0
-	for {
+	for page := 0; ; page++ {
+		if page >= 30 { // a long history: a second between pages, as Telethon (fewer flood waits)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(historyPause):
+			}
+		}
 		r, err := c.api.MessagesGetHistory(ctx, req)
 		if err != nil {
 			return err

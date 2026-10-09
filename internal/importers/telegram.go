@@ -98,7 +98,14 @@ func telegramKindOf(m map[string]any) tgKind {
 	if pyStr(m["_"]) == "MessageService" {
 		action := obj(m["action"])
 		name := pyStr(action["_"])
-		return tgKind{kind: "system", subtype: telegramActions[name], code: "telegram:" + name, text: action["title"]}
+		text := action["title"]
+		switch name { // what a bot or an app wrote as the service message
+		case "MessageActionCustomAction":
+			text = action["message"]
+		case "MessageActionWebViewDataSent":
+			text = action["text"]
+		}
+		return tgKind{kind: "system", subtype: telegramActions[name], code: "telegram:" + name, text: text}
 	}
 	media := obj(m["media"])
 	name, _ := media["_"].(string)
@@ -132,6 +139,22 @@ func telegramKindOf(m map[string]any) tgKind {
 			k.text = t
 		}
 		return k
+	}
+	// what the official apps show of kinds with no file: as text, so that it is kept and found
+	switch name {
+	case "MessageMediaDice":
+		return tgKind{kind: "text", code: code, text: joinTruthy(" ", media["emoticon"], media["value"])}
+	case "MessageMediaToDo":
+		todo := obj(media["todo"])
+		lines := []any{textOf(todo["title"])}
+		for _, it := range list(todo["list"]) {
+			lines = append(lines, "- "+pyStr(textOf(obj(it)["title"])))
+		}
+		return tgKind{kind: "text", code: code, text: joinTruthy("\n", lines...)}
+	case "MessageMediaGame":
+		return tgKind{kind: "text", code: code, text: obj(media["game"])["title"]}
+	case "MessageMediaInvoice":
+		return tgKind{kind: "text", code: code, text: joinTruthy("\n", media["title"], media["description"])}
 	}
 	if name != "MessageMediaDocument" || !truthy(media["document"]) {
 		return tgKind{kind: "file", code: code}
@@ -409,6 +432,16 @@ func telegramReads(a *archive.Archive, dbPath string, chats map[int64]bool) {
 func telegramCall(a *archive.Archive, src int64, rowKey string, m map[string]any, peer archive.Handle, ts int64) int {
 	action := obj(m["action"])
 	if a.HasOrigin(src, rowKey, "call_origin") {
+		// a conference call is one message, edited when it ends: how it went, as it is now
+		if pyStr(action["_"]) == "MessageActionConferenceCall" && action["call_id"] != nil {
+			duration := toInt(action["duration"])
+			detail := any(nil)
+			if truthy(action["missed"]) {
+				detail = "missed"
+			}
+			a.Exec("UPDATE call SET answered = ?, duration = ?, detail = coalesce(?, detail) WHERE service_id = ? AND key = ?",
+				archive.B2I(duration > 0), duration, detail, a.Service.ID("telegram"), pyStr(action["call_id"]))
+		}
 		return 0
 	}
 	key := "" // no call id: no key (the Python keyed it "None")
@@ -426,7 +459,9 @@ func telegramCall(a *archive.Archive, src int64, rowKey string, m map[string]any
 	duration := toInt(action["duration"])
 	outgoing := truthy(m["out"])
 	detail := telegramCallDetail[reason]
-	if reason == "PhoneCallDiscardReasonMissed" || (duration == 0 && reason == "PhoneCallDiscardReasonHangup") {
+	// a conference call says it was missed (no reason)
+	if reason == "PhoneCallDiscardReasonMissed" || (duration == 0 && reason == "PhoneCallDiscardReasonHangup") ||
+		truthy(action["missed"]) {
 		detail = "missed"
 		if outgoing {
 			detail = "unanswered"
@@ -548,7 +583,8 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 			}
 			ts := date * 1000
 			outgoing := truthy(m["out"])
-			if pyStr(m["_"]) == "MessageService" && pyStr(obj(m["action"])["_"]) == "MessageActionPhoneCall" && kind == "user" {
+			if act := pyStr(obj(m["action"])["_"]); pyStr(m["_"]) == "MessageService" && kind == "user" &&
+				(act == "MessageActionPhoneCall" || act == "MessageActionConferenceCall") {
 				calls += telegramCall(a, src, rowKey, m, person.of(c.id, true), ts)
 			}
 			from, fromOK := peerID(m["from_id"])
@@ -597,11 +633,16 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 				x.Subtype, x.SubtypeCode = k.subtype, k.code
 			}
 			reply := obj(m["reply_to"])
-			if truthy(reply["reply_to_msg_id"]) && !truthy(reply["reply_to_peer_id"]) {
+			switch {
+			// in a forum, a message of a topic names the topic's start: no reply, unless to another
+			case truthy(reply["forum_topic"]) && !truthy(reply["reply_to_top_id"]):
+			case truthy(reply["reply_to_msg_id"]) && !truthy(reply["reply_to_peer_id"]):
 				x.ReplyKey = pyStr(reply["reply_to_msg_id"])
 				if truthy(reply["quote_text"]) {
 					x.ReplyText = pyStr(reply["quote_text"])
 				}
+			case truthy(reply["reply_to_peer_id"]) && truthy(reply["quote_text"]): // another chat's: what it quotes
+				x.ReplyText = pyStr(reply["quote_text"])
 			}
 			if truthy(m["edit_date"]) && !truthy(m["edit_hide"]) {
 				x.Edited = true
@@ -760,15 +801,27 @@ func telegramChanges(a *archive.Archive, src int64, rowKey string, m map[string]
 			updated[c]++
 		}
 	}
-	if truthy(m["edit_date"]) && !truthy(m["edit_hide"]) {
+	if truthy(m["edit_date"]) { // edit_hide only hides that it was edited (a bot's, a live location's)
+		k := telegramKindOf(m)
 		var t string // the text as the import makes it: a poll's or a contact's, else the message's
-		if k := telegramKindOf(m); k.text != nil {
+		if k.text != nil {
 			t = pyStr(k.text)
 		} else if truthy(m["message"]) {
 			t = pyStr(m["message"])
 		}
-		for _, c := range ApplyChange(a, mid, Change{Text: &t, Edited: true}) {
+		for _, c := range ApplyChange(a, mid, Change{Text: &t, Edited: !truthy(m["edit_hide"])}) {
 			updated[c]++
+		}
+		// what it is may change too (a picture replaced by a video, a live location moving)
+		var sub, code any
+		if k.subtype != "" {
+			sub, code = k.subtype, k.code
+		}
+		if r, _ := a.Exec("UPDATE message SET kind_id = ?, subtype = ?, subtype_code = ?, lat = ?, lon = ?, place = ? "+
+			"WHERE id = ? AND (kind_id, subtype, subtype_code, lat, lon, place) IS NOT (?, ?, ?, ?, ?, ?)",
+			a.MessageKind.ID(k.kind), sub, code, floatOrNil(k.lat), floatOrNil(k.lon), archive.NullStr(k.place), mid,
+			a.MessageKind.ID(k.kind), sub, code, floatOrNil(k.lat), floatOrNil(k.lon), archive.NullStr(k.place)).RowsAffected(); r > 0 {
+			updated["kind"]++
 		}
 	}
 	var want []archive.Reaction
@@ -801,4 +854,12 @@ func TelegramMedia(a *archive.Archive, s *Store) {
 		rel := str(r["file"])
 		s.Link(telegramSource, src, filepath.Join(media, rel), rel, origins[fmt.Sprintf("%v/%v", r["chat_id"], r["id"])])
 	}
+}
+
+// floatOrNil is a number as a column's value, nil for none.
+func floatOrNil(v any) any {
+	if p := floatPtr(v); p != nil {
+		return *p
+	}
+	return nil
 }

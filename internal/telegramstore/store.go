@@ -58,6 +58,15 @@ CREATE TABLE IF NOT EXISTS chat_member_list ( -- when each group's members were 
     count INTEGER,                      -- how many Telegram says the group has
     fetched_at INTEGER NOT NULL         -- Unix s
 );
+CREATE TABLE IF NOT EXISTS read_through (   -- each chat's history read with no gap up to this message
+    chat_id INTEGER PRIMARY KEY,            -- (live messages do not move it: one may have been missed below)
+    id INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS migrated (       -- the basic group each supergroup was (0: none), as Telegram said
+    channel_id INTEGER PRIMARY KEY,         -- the supergroup's marked id
+    chat_id INTEGER NOT NULL,               -- the basic group's id (unmarked), 0 if none
+    max_id INTEGER NOT NULL                 -- its last message
+);
 CREATE TABLE IF NOT EXISTS poll (           -- which message has each poll (a vote's update names only the poll)
     poll_id INTEGER NOT NULL,
     chat_id INTEGER NOT NULL,
@@ -84,7 +93,9 @@ func Open(path string) (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	d, err := db.Open(path, "journal_mode(WAL)")
+	// transactions begin as writers': one that reads, then writes (a deletion, a read) while the live
+	// connection or a sync writes, waits rather than fails
+	d, err := db.OpenTxImmediate(path, "journal_mode(WAL)")
 	if err != nil {
 		return nil, err
 	}
@@ -92,6 +103,14 @@ func Open(path string) (*sql.DB, error) {
 	if _, err := d.Exec(Schema); err != nil {
 		d.Close()
 		return nil, err
+	}
+	// a store made before there were marks (messages, no mark at all): each chat read up to its last
+	// message, as was taken then
+	if !db.Exists(d, "SELECT 1 FROM read_through") && db.Exists(d, "SELECT 1 FROM message") {
+		if _, err := d.Exec("INSERT OR IGNORE INTO read_through SELECT chat_id, max(id) FROM message GROUP BY chat_id"); err != nil {
+			d.Close()
+			return nil, err
+		}
 	}
 	if !hadPolls { // the polls of a store made before there was a table of them, once
 		if _, err := d.Exec(`INSERT OR IGNORE INTO poll SELECT json_extract(json, '$.media.poll.id'), chat_id, id

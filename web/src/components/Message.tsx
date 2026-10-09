@@ -362,8 +362,8 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
           {m.forwarded && (
             <div className="mb-1 flex items-center gap-1 text-xs opacity-70"><Forward className="size-3" />{t("chat.forwarded")}</div>
           )}
-          {(m.notice?.code === "story_reply" || m.notice?.code === "story_reaction") && (
-            <div className="mb-1 text-xs opacity-70">{noticeLines(m.notice, t)[0]}</div>
+          {["story_reply", "story_reaction", "story", "unsupported"].includes(m.notice?.code ?? "") && (
+            <div className="mb-1 text-xs opacity-70">{noticeLines(m.notice!, t)[0]}</div>
           )}
           {m.reply && (
             <button

@@ -490,3 +490,30 @@ func TestPollResults(t *testing.T) {
 		t.Fatalf("voters %d, imports %v", voters, in.keys)
 	}
 }
+
+// A reaction made after the message came (most are) goes into its stored message, imported again.
+func TestReactionsLater(t *testing.T) {
+	in := newInstance(t, nil)
+	c := in.ctx()
+	bob := user(2, "Bob", 22)
+	if _, err := storeMessages(c, bob, []sent{{text(9, &tg.PeerUser{UserID: 2}, 0, 1600000000, "hi", false), bob}}); err != nil {
+		t.Fatal(err)
+	}
+	u := &tg.UpdateMessageReactions{Peer: &tg.PeerUser{UserID: 2}, MsgID: 9, Reactions: tg.MessageReactions{
+		Results: []tg.ReactionCount{{Reaction: &tg.ReactionEmoji{Emoticon: "👍"}, Count: 1}}}}
+	if err := noteReactions(c, u); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := db.ReadOnly(DBPath())
+	defer d.Close()
+	var emoji string
+	db.Row(d, "SELECT coalesce(json_extract(json, '$.reactions.results[0].reaction.emoticon'), '') FROM message WHERE id = 9",
+		nil, &emoji)
+	if emoji != "👍" || len(in.keys) != 2 {
+		t.Fatalf("emoji %q, imports %v", emoji, in.keys)
+	}
+	// a message not stored: nothing
+	if err := noteReactions(c, &tg.UpdateMessageReactions{Peer: &tg.PeerUser{UserID: 2}, MsgID: 99}); err != nil || len(in.keys) != 2 {
+		t.Fatal(err, in.keys)
+	}
+}

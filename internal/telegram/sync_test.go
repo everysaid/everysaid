@@ -128,6 +128,18 @@ func TestSyncRun(t *testing.T) {
 	if !strings.Contains(out.String(), "1 new messages in") {
 		t.Fatalf("%q", out.String())
 	}
+	// a message the live connection stored (253) does not hide one it missed below it (252)
+	bob.messages = append(bob.messages, text(252, &tg.PeerUser{UserID: 2}, 0, 1700000001, "missed", false),
+		text(253, &tg.PeerUser{UserID: 2}, 0, 1700000002, "live", false))
+	w, _ := openStore(DBPath())
+	db.Exec(w, "INSERT INTO message (chat_id, id, date, json) VALUES (2, 253, 1700000002, '{}')")
+	w.Close()
+	if err := syncRun(newTestCtx(), f.conn(), en(&out)); err != nil {
+		t.Fatal(err)
+	}
+	if n := db.Int(d, "SELECT count(*) FROM message WHERE chat_id = 2 AND id = 252"); n != 1 {
+		t.Fatal("the message missed below a live one was not fetched")
+	}
 }
 
 func TestSurvey(t *testing.T) {
@@ -178,5 +190,37 @@ func TestSyncMainFlags(t *testing.T) {
 	stdin, input = strings.NewReader("12a\nabcdef\n"), nil
 	if err := SyncMain([]string{"--save-credentials"}, &out); err == nil {
 		t.Fatal("api_id must be a number")
+	}
+}
+
+// A supergroup that was a basic group: the basic group's history (no longer among the dialogs) is
+// read as its own chat, Telegram asked once.
+func TestMigratedGroup(t *testing.T) {
+	freshCache(t)
+	f := account()
+	old := &tg.Chat{ID: 30, Title: "Old", Photo: &tg.ChatPhotoEmpty{}}
+	old.SetMigratedTo(&tg.InputChannel{ChannelID: 40, AccessHash: 55})
+	super := &tg.Channel{ID: 40, Title: "Old", Photo: &tg.ChatPhotoEmpty{}}
+	super.SetMegagroup(true)
+	super.SetAccessHash(55)
+	oldChat := &fakeChat{entity: old, peer: &tg.PeerChat{ChatID: 30}, hidden: true}
+	for i := 1; i <= 3; i++ {
+		oldChat.messages = append(oldChat.messages, text(i, &tg.PeerChat{ChatID: 30}, 2, 1500000000+i, "before", false))
+	}
+	f.chats = append(f.chats, oldChat, &fakeChat{entity: super, peer: &tg.PeerChannel{ChannelID: 40}, from: 30,
+		messages: []tg.MessageClass{text(1, &tg.PeerChannel{ChannelID: 40}, 2, 1600000000, "after", false)}})
+	var out bytes.Buffer
+	for range 2 {
+		if err := syncRun(newTestCtx(), f.conn(), en(&out)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d, _ := db.ReadOnly(DBPath())
+	defer d.Close()
+	if n := db.Int(d, "SELECT count(*) FROM message WHERE chat_id = -30"); n != 3 {
+		t.Fatalf("the basic group's messages: %d", n)
+	}
+	if n := strings.Count(strings.Join(f.calls, ","), "getFullChannel"); n != 1 {
+		t.Fatalf("asked %d times", n)
 	}
 }

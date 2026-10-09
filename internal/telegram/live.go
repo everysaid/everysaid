@@ -9,6 +9,7 @@
 package telegram
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -139,8 +140,12 @@ func storeMessages(c *plugins.Context, chat any, msgs []sent) (n int, err error)
 			"ON CONFLICT (id) DO UPDATE SET kind = excluded.kind, title = excluded.title, json = excluded.json",
 			chatID, kind, DisplayName(chat), Dump(chat.(tdp.Object)))
 		for _, s := range msgs {
+			// an edit that replaced the file has it downloaded again (the one before stays in the archive)
 			db.Exec(tx, "INSERT INTO message (chat_id, id, date, json) VALUES (?, ?, ?, ?) "+
-				"ON CONFLICT (chat_id, id) DO UPDATE SET json = excluded.json",
+				"ON CONFLICT (chat_id, id) DO UPDATE SET json = excluded.json, file = CASE WHEN "+
+				"coalesce(json_extract(json, '$.media.photo.id'), json_extract(json, '$.media.document.id')) IS "+
+				"coalesce(json_extract(excluded.json, '$.media.photo.id'), json_extract(excluded.json, '$.media.document.id')) "+
+				"THEN file END",
 				chatID, s.Message.GetID(), messageDate(s.Message), Dump(s.Message.(tdp.Object)))
 			if o, ok := s.Sender.(tdp.Object); ok && s.Sender != nil {
 				db.Exec(tx, "INSERT OR REPLACE INTO entity VALUES (?, ?)", EntityID(s.Sender), Dump(o))
@@ -237,8 +242,11 @@ func notePoll(c *plugins.Context, u *tg.UpdateMessagePoll) (err error) {
 				keys[k] = true
 			})
 		for k := range keys {
-			db.Exec(tx, "UPDATE message SET json = json_set(json, '$.media.results', json(?)) WHERE chat_id = ? AND id = ?",
-				Dump(&u.Results), k[0], k[1])
+			// results without each answer's count (hidden until one votes) leave the counts known
+			if len(u.Results.Results) > 0 {
+				db.Exec(tx, "UPDATE message SET json = json_set(json, '$.media.results', json(?)) WHERE chat_id = ? AND id = ?",
+					Dump(&u.Results), k[0], k[1])
+			}
 			if poll, ok := u.GetPoll(); ok {
 				db.Exec(tx, "UPDATE message SET json = json_set(json, '$.media.poll', json(?)) WHERE chat_id = ? AND id = ?",
 					Dump(&poll), k[0], k[1])
@@ -255,6 +263,54 @@ func notePoll(c *plugins.Context, u *tg.UpdateMessagePoll) (err error) {
 	if err != nil || len(keys) == 0 {
 		return err
 	}
+	_, _, err = sourcekit.RunImporters(c, []sourcekit.Step{{Label: "Telegram live", Run: func(a *archive.Archive, out func(string)) error {
+		return importTelegram(a, out, keys, nil)
+	}}})
+	return err
+}
+
+// noteReactions writes a message's reactions as they are now (someone reacted, changed or took
+// theirs back) into its stored row, then imports it again: the archive's follow.
+func noteReactions(c *plugins.Context, u *tg.UpdateMessageReactions) (err error) {
+	defer db.Recover(&err)
+	chatID := PeerID(u.Peer)
+	if idSet(currentSettings(c)["skip_chats"])[chatID] {
+		return nil
+	}
+	store, err := openStore(DBPath())
+	if err != nil {
+		return err
+	}
+	res, err := func() (sql.Result, error) {
+		defer store.Close()
+		if u.Reactions.Min { // without the owner's choice: theirs as it was stored
+			chosen := map[string]int{}
+			db.Each(store, "SELECT json_extract(r.value, '$.reaction'), json_extract(r.value, '$.chosen_order') "+
+				"FROM message m, json_each(m.json, '$.reactions.results') r WHERE m.chat_id = ? AND m.id = ? "+
+				"AND json_extract(r.value, '$.chosen_order') IS NOT NULL", []any{chatID, u.MsgID}, func(scan func(...any)) {
+				var reaction string
+				var order int
+				scan(&reaction, &order)
+				chosen[reaction] = order
+			})
+			for i, r := range u.Reactions.Results {
+				if o, ok := r.Reaction.(tdp.Object); ok {
+					if order, ok := chosen[compactJSON(Dump(o))]; ok {
+						u.Reactions.Results[i].SetChosenOrder(order)
+					}
+				}
+			}
+		}
+		return store.Exec("UPDATE message SET json = json_set(json, '$.reactions', json(?)) WHERE chat_id = ? AND id = ?",
+			Dump(&u.Reactions), chatID, u.MsgID)
+	}()
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return nil // a message not stored (a channel's, a bot's)
+	}
+	keys := map[[2]int64]bool{{chatID, int64(u.MsgID)}: true}
 	_, _, err = sourcekit.RunImporters(c, []sourcekit.Step{{Label: "Telegram live", Run: func(a *archive.Archive, out func(string)) error {
 		return importTelegram(a, out, keys, nil)
 	}}})
@@ -372,6 +428,9 @@ func dialogStates(dialogs []dialog) []stateItem {
 // newest that telegram.db has (a chat new since then, all of it). It gives the groups whose members
 // changed meanwhile, as their service messages say.
 func catchUp(ctx context.Context, c *plugins.Context, cn *conn, dialogs []dialog) (changed []int64, err error) {
+	if dialogs, err = withMigrated(ctx, cn, dialogs); err != nil {
+		return nil, err
+	}
 	have := map[int64]int64{}
 	if err := func() (err error) {
 		defer db.Recover(&err)
@@ -380,7 +439,7 @@ func catchUp(ctx context.Context, c *plugins.Context, cn *conn, dialogs []dialog
 			return err
 		}
 		defer store.Close()
-		db.Each(store, "SELECT chat_id, max(id) FROM message GROUP BY chat_id", nil, func(scan func(...any)) {
+		db.Each(store, "SELECT chat_id, id FROM read_through", nil, func(scan func(...any)) {
 			var chat, id int64
 			scan(&chat, &id)
 			have[chat] = id
@@ -398,16 +457,21 @@ func catchUp(ctx context.Context, c *plugins.Context, cn *conn, dialogs []dialog
 		if d.Message == nil || int64(d.Message.GetID()) <= since {
 			continue
 		}
-		peer, err := dialogPeer(d)
-		if err != nil {
-			return nil, err
-		}
 		var batch []sent
-		if err := cn.history(ctx, peer, int(since), func(chunk []sent) error {
-			batch = append(batch, chunk...)
-			return nil
-		}); err != nil {
-			return nil, err
+		peer, err := dialogPeer(d)
+		if err == nil {
+			err = cn.history(ctx, peer, int(since), func(chunk []sent) error {
+				batch = append(batch, chunk...)
+				return nil
+			})
+		}
+		if err != nil {
+			if stopsAll(ctx, err) {
+				return nil, err
+			}
+			// this chat (no longer reachable, say): the others go on; it is tried again next time
+			c.Log("{chat}: not caught up ({e})", map[string]any{"chat": d.Name, "e": err.Error()})
+			continue
 		}
 		if len(batch) > 0 {
 			if _, err := storeMessages(c, d.Entity, batch); err != nil {
@@ -415,6 +479,9 @@ func catchUp(ctx context.Context, c *plugins.Context, cn *conn, dialogs []dialog
 			}
 			total += len(batch)
 			chats++
+		}
+		if err := noteReadThrough(d.ID, max(since, int64(d.Message.GetID()))); err != nil {
+			return nil, err
 		}
 		for _, s := range batch {
 			if changesMembers(s.Message) {
@@ -429,6 +496,53 @@ func catchUp(ctx context.Context, c *plugins.Context, cn *conn, dialogs []dialog
 		c.Log("caught up: nothing new", nil)
 	}
 	return changed, nil
+}
+
+// compactJSON is a JSON text as SQLite's json functions give it (no spaces).
+func compactJSON(s string) string {
+	var b bytes.Buffer
+	if json.Compact(&b, []byte(s)) != nil {
+		return s
+	}
+	return b.String()
+}
+
+// keptChat says whether telegram.db keeps a chat (by marked id).
+func keptChat(id int64) (kept bool) {
+	defer func() { recover() }()
+	store, err := db.ReadOnly(DBPath())
+	if err != nil {
+		return false
+	}
+	defer store.Close()
+	return db.Exists(store, "SELECT 1 FROM chat WHERE id = ?", id)
+}
+
+// stopsAll says whether an error stops everything (a flood wait, the end) rather than one chat.
+// Only Telegram's refusal of that chat is the chat's: a lost connection, a sign-in no longer
+// valid or Telegram's own failure would be every chat's.
+func stopsAll(ctx context.Context, err error) bool {
+	if _, flood := tgerr.AsFloodWait(err); flood || ctx.Err() != nil {
+		return true
+	}
+	if _, ok := errors.AsType[noPeer](err); ok {
+		return false
+	}
+	rpc, ok := tgerr.As(err)
+	return !ok || rpc.Code == 401 || rpc.Code >= 500
+}
+
+// noteReadThrough notes a chat's history read with no gap up to a message.
+func noteReadThrough(chat, id int64) (err error) {
+	defer db.Recover(&err)
+	store, err := openStore(DBPath())
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	db.Exec(store, "INSERT INTO read_through VALUES (?, ?) ON CONFLICT (chat_id) DO UPDATE SET id = max(id, excluded.id)",
+		chat, id)
+	return nil
 }
 
 // --- the live connection ---------------------------------------------------------------------------
@@ -491,8 +605,13 @@ func live(ctx context.Context, c *plugins.Context) error {
 		default:
 		}
 	}
+	// a broadcast channel's gap is not ours (channels are not kept); getChannelDifference two at a time
 	mgr := updates.New(updates.Config{Handler: d, Storage: newFileState(StatePath()),
-		OnTooLong: resync, OnChannelTooLong: func(int64) { resync() }})
+		OnTooLong: resync, OnChannelTooLong: func(id int64) {
+			if keptChat(-channelMark - id) {
+				resync()
+			}
+		}, MaxChannelDifferenceConcurrency: 2, AccessHasher: &storedHashes{}})
 	var readies atomic.Int32
 	reconnected := make(chan struct{}, 1)
 	onState := func(o *telegram.Options) {
@@ -669,6 +788,10 @@ func handlers(c *plugins.Context, cn *conn, d tg.UpdateDispatcher, members func(
 	// notice of the poll follows
 	d.OnMessagePoll(func(ctx context.Context, e tg.Entities, u *tg.UpdateMessagePoll) error {
 		return logged(notePoll(c, u))
+	})
+	// someone reacted to a message (or changed, or took theirs back): the archive's follow
+	d.OnMessageReactions(func(ctx context.Context, e tg.Entities, u *tg.UpdateMessageReactions) error {
+		return logged(noteReactions(c, u))
 	})
 
 	// deleted on any device, by the user or (for everyone) by the others: kept, said deleted

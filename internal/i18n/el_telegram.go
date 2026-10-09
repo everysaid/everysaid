@@ -21,6 +21,7 @@ func init() {
 		"{n} files, {gb} GB, in {chats} chats":                        "{n} αρχεία, {gb} GB, σε {chats} συνομιλίες",
 		"{n} downloaded into {folder}":                                "{n} κατέβηκαν στο {folder}",
 		"{file}: not downloaded ({e})":                                "{file}: δεν κατέβηκε ({e})",
+		"{chat}: not caught up ({e})":                                 "{chat}: δεν ενημερώθηκε ({e})",
 		"[telegram] media = false in config: no media are downloaded": "[telegram] media = false στις ρυθμίσεις: δεν κατεβαίνουν αρχεία",
 		"Telegram is connected by another Everysaid (the server, or telegram-sync run by hand): stop it, or wait until it finishes": "Το Telegram είναι συνδεδεμένο από άλλο Everysaid (τον server ή το telegram-sync που έτρεξε με το χέρι): σταμάτησέ το ή περίμενε να τελειώσει",
 		"waiting: Telegram is connected by another Everysaid (telegram-sync run by hand?)":                                          "αναμονή: το Telegram είναι συνδεδεμένο από άλλο Everysaid (το telegram-sync με το χέρι;)",
