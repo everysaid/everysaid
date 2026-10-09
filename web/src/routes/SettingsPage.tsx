@@ -127,7 +127,7 @@ export function SettingsPage() {
       else await disablePush();
       setPush(on);
     } catch (e: any) {
-      toast.error(e.message === "denied" ? t("settings.pushDenied") : e.message);
+      toast.error(e.message === "denied" ? t("settings.pushDenied") : e.message === "unavailable" ? t("settings.pushUnavailable") : e.message);
     }
   };
 
