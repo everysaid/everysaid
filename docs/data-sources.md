@@ -629,8 +629,12 @@ receipts of the owner's messages up to it (`read_at` 0: read, when not known).
       WhatsApp said it (joined, added, left, removed, admin, name, description, timer, who may edit
       or send, approval to join, a new link, a new photo, the group's end), people by jid; imported
       as notices (docs/design.md, "Notices").
-    - `chat_events` (`chat_jid`, `id`, `sender`, `is_from_me`, `timestamp`, `code` pin, unpin or
-      timer, `args` JSON, `target` the message pinned): pins and a chat's timer, as notices.
+    - `chat_events` (`chat_jid`, `id`, `sender`, `is_from_me`, `timestamp`, `code` pin, unpin,
+      timer, unsupported, view_once or unreadable, `args` JSON, `target` the message pinned): pins,
+      a chat's timer, a message of a kind not kept, and one this device could not read
+      (`undecryptable:<id>`, gone when the phone sends it again; imported after a day), as notices.
+    - `history_pending` (`direct_path`, `notification`, `tries`, `next_at`): history the phone sent,
+      kept until it is downloaded and stored (tried again, up to a day apart).
     - in `messages`, `poll` (JSON: `question`, `options`, `multiple`), and `poll_votes`
       (`chat_jid`, `poll_id`, `voter`, `options`: the SHA-256 of each option chosen, as WhatsApp names
       them, `timestamp`): each voter's newest vote; a poll is imported with its votes.

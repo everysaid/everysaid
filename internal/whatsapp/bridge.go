@@ -78,8 +78,9 @@ type Bridge struct {
 	// history-sync notifications received and not yet handled: whatsmeow acknowledges one to the phone
 	// at once and downloads it later, apart from the connection, so it would be lost if the store
 	// closed in between
-	history map[string]int
-	said    chan any // what Run acts on: connected, logged out, a temporary ban, a connect failure
+	history     map[string]int
+	historyWake chan struct{} // fetchHistory's: a history notification kept
+	said        chan any      // what Run acts on: connected, logged out, a temporary ban, a connect failure
 }
 
 var (
@@ -191,6 +192,13 @@ func (b *Bridge) Run(ctx context.Context) error {
 		deviceStore = container.NewDevice()
 	}
 	client := whatsmeow.NewClient(deviceStore, b.log.Sub("Client"))
+	// as mautrix-whatsapp: a message acknowledged only once stored (and kept decrypted meanwhile, so
+	// that a crash does not lose it); one that cannot be read asked of the phone too; the history
+	// downloaded by the bridge (history.go)
+	client.SynchronousAck = true
+	client.EnableDecryptedEventBuffer = true
+	client.AutomaticMessageRerequestFromPhone = true
+	client.ManualHistorySyncDownload = true
 	store, err := OpenMessages(b.Dir)
 	if err != nil {
 		return err
@@ -202,9 +210,19 @@ func (b *Bridge) Run(ctx context.Context) error {
 	b.store, b.client, b.sender = store, client, sender
 	b.mu.Unlock()
 
-	client.AddEventHandler(func(evt any) { b.handle(client, store, evt) })
+	client.AddEventHandlerWithSuccessStatus(func(evt any) bool { return b.handle(client, store, evt) })
+	hctx, stopHistory := context.WithCancel(context.Background())
+	b.historyWake = make(chan struct{}, 1)
+	go fetchHistory(hctx, client, store, b.historyWake, func(path string, h *events.HistorySync) bool {
+		if h == nil {
+			b.historyPending(path, -1)
+			return false
+		}
+		return b.handle(client, store, h)
+	}, b.log)
 	defer func() {
 		b.end(client)
+		stopHistory()
 		b.mu.Lock()
 		if b.downloads != nil {
 			b.downloads.stop()
@@ -274,19 +292,30 @@ func (b *Bridge) stay(ctx context.Context, ready func()) error {
 	}
 }
 
-// handle is the client's event handler.
-func (b *Bridge) handle(client *whatsmeow.Client, store *MessageStore, evt any) {
+// handle is the client's event handler: false for what could not be stored (WhatsApp is not told
+// it arrived, and gives it again), or when the bridge is ending.
+func (b *Bridge) handle(client *whatsmeow.Client, store *MessageStore, evt any) bool {
 	b.handling.RLock()
 	defer b.handling.RUnlock()
 	if b.closed {
-		return
+		return false
 	}
 	switch v := evt.(type) {
 	case *events.Message:
 		if n := v.Message.GetProtocolMessage().GetHistorySyncNotification(); n != nil && v.Info.IsFromMe {
+			if err := store.pendHistory(n); err != nil {
+				b.log.Errorf("Failed to keep a history notification: %v", err)
+				return false
+			}
 			b.historyPending(n.GetDirectPath(), 1)
+			select {
+			case b.historyWake <- struct{}{}:
+			default:
+			}
 		}
-		processMessage(client, store, v, "", b.log)
+		if !processMessage(client, store, v, "", b.log) {
+			return false
+		}
 		b.mu.Lock()
 		d := b.downloads
 		b.mu.Unlock()
@@ -296,6 +325,17 @@ func (b *Bridge) handle(client *whatsmeow.Client, store *MessageStore, evt any) 
 	case *events.HistorySync:
 		handleHistorySync(client, store, v, b.log)
 		b.historyPending(v.Notification.GetDirectPath(), -1)
+	case *events.UndecryptableMessage:
+		handleUndecryptable(store, v, b.log)
+	case *events.MediaRetry:
+		mediaRetried(store, v, func(id, chat string) {
+			b.mu.Lock()
+			d := b.downloads
+			b.mu.Unlock()
+			if d != nil {
+				d.queue(id, chat)
+			}
+		}, b.log)
 	case *events.CallOffer, *events.CallOfferNotice, *events.CallAccept, *events.CallReject, *events.CallTerminate:
 		handleCallEvent(client, store, v, b.log)
 	case *events.Receipt:
@@ -317,6 +357,7 @@ func (b *Bridge) handle(client *whatsmeow.Client, store *MessageStore, evt any) 
 		default:
 		}
 	}
+	return true
 }
 
 func (b *Bridge) historyPending(key string, n int) {
