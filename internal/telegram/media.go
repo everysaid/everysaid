@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path"
 	"path/filepath"
@@ -214,6 +215,44 @@ func largest(sizes []any) any {
 }
 
 // download is download_media(m, file=dest): false when there was nothing to write.
+// fileName is where a message's file goes, relative to the media folder: <chat>/<id><ext>, or
+// <chat>/<id>-<file id><ext> when that is taken (an edit replaced the file: the one before stays
+// as it was, and the archive takes the new one as a file of its own).
+func fileName(chatID int64, id int, p *tg.Photo, d *tg.Document) string {
+	rel := fmt.Sprintf("%d/%d%s", chatID, id, fileExt(p, d))
+	if _, err := os.Stat(filepath.Join(MediaPath(), filepath.FromSlash(rel))); err != nil {
+		return rel
+	}
+	var fid int64
+	if p != nil {
+		fid = p.ID
+	} else if d != nil {
+		fid = d.ID
+	}
+	return fmt.Sprintf("%d/%d-%d%s", chatID, id, fid, fileExt(p, d))
+}
+
+// fetchTo downloads a message's file to dest: written first under a name of its own (another
+// download of the same file, the queue's and the user's, never writes into it), then renamed. A
+// file reference expired (they last a while) has the message fetched again (refetch) and the file
+// tried once more. It says whether there was a file to write.
+func fetchTo(ctx context.Context, api *tg.Client, m tg.MessageClass, dest string,
+	refetch func() (tg.MessageClass, error)) (bool, error) {
+	part := fmt.Sprintf("%s.%d.part", dest, rand.Int64())
+	ok, err := download(ctx, api, m, part)
+	if err != nil && tgerr.Is(err, "FILE_REFERENCE_EXPIRED") && refetch != nil {
+		os.Remove(part)
+		if again, rerr := refetch(); rerr == nil && again != nil {
+			ok, err = download(ctx, api, again, part)
+		}
+	}
+	if err != nil || !ok {
+		os.Remove(part)
+		return ok, err
+	}
+	return true, os.Rename(part, dest)
+}
+
 func download(ctx context.Context, api *tg.Client, m tg.MessageClass, dest string) (bool, error) {
 	photo, doc := fileOf(m)
 	var loc tg.InputFileLocationClass
@@ -223,9 +262,7 @@ func download(ctx context.Context, api *tg.Client, m tg.MessageClass, dest strin
 		for _, s := range photo.Sizes {
 			sizes = append(sizes, s)
 		}
-		for _, s := range photo.VideoSizes {
-			sizes = append(sizes, s)
-		}
+		// the picture, not the short video an animated one has beside it (it would be kept as a .jpg)
 		var typ string
 		switch s := largest(sizes).(type) {
 		case nil, *tg.PhotoSizeEmpty:
@@ -346,9 +383,18 @@ func mediaRun(ctx context.Context, c *conn, dryRun bool, sel mediaSel, out *prin
 // the end of ctx stops it.
 func fetchFiles(ctx context.Context, c *conn, store *sql.DB, chatID int64, ids []int, wrote func(),
 	failed func(rel string, err error)) error {
+	stops := func(err error) bool { // a flood wait or the end: all stop; anything else is this chat's
+		_, flood := tgerr.AsFloodWait(err)
+		return flood || ctx.Err() != nil
+	}
 	peer, err := c.peer(ctx, chatID)
 	if err != nil {
-		return err
+		if stops(err) {
+			return err
+		}
+		// a chat no longer reachable (left, removed, deleted): its files fail, the others go on
+		failed(strconv.FormatInt(chatID, 10), err)
+		return nil
 	}
 	folder := filepath.Join(MediaPath(), strconv.FormatInt(chatID, 10))
 	if err := os.MkdirAll(folder, 0o700); err != nil {
@@ -357,7 +403,11 @@ func fetchFiles(ctx context.Context, c *conn, store *sql.DB, chatID int64, ids [
 	for i := 0; i < len(ids); i += 100 { // fetched again: the file references expire
 		msgs, err := c.byIDs(ctx, peer, ids[i:min(i+100, len(ids))])
 		if err != nil {
-			return err
+			if stops(err) {
+				return err
+			}
+			failed(strconv.FormatInt(chatID, 10), err)
+			return nil
 		}
 		for _, m := range msgs {
 			if m == nil {
@@ -367,22 +417,25 @@ func fetchFiles(ctx context.Context, c *conn, store *sql.DB, chatID int64, ids [
 			if p == nil && d == nil {
 				continue // no longer carries it
 			}
-			rel := fmt.Sprintf("%d/%d%s", chatID, m.GetID(), fileExt(p, d))
+			rel := fileName(chatID, m.GetID(), p, d)
 			dest := filepath.Join(MediaPath(), filepath.FromSlash(rel))
-			ok, err := download(ctx, c.api, m, dest+".part")
+			id := m.GetID()
+			ok, err := fetchTo(ctx, c.api, m, dest, func() (tg.MessageClass, error) {
+				again, err := c.byIDs(ctx, peer, []int{id})
+				if err != nil || len(again) == 0 {
+					return nil, err
+				}
+				return again[0], nil
+			})
 			if err != nil {
-				if _, flood := tgerr.AsFloodWait(err); flood || ctx.Err() != nil {
+				if stops(err) {
 					return err
 				}
-				os.Remove(dest + ".part")
 				failed(rel, err)
 				continue
 			}
 			if !ok {
 				continue // a picture without a size to download
-			}
-			if err := os.Rename(dest+".part", dest); err != nil {
-				return err
 			}
 			db.Exec(store, "UPDATE message SET file = ? WHERE chat_id = ? AND id = ?", rel, chatID, m.GetID())
 			wrote()
@@ -439,17 +492,19 @@ func (Plugin) FetchMedia(ctx context.Context, c *plugins.Context, messageID int6
 	if p == nil && d == nil {
 		return "", nil
 	}
-	rel := fmt.Sprintf("%d/%d%s", chatID, id, fileExt(p, d))
+	rel := fileName(chatID, id, p, d)
 	dest := filepath.Join(MediaPath(), filepath.FromSlash(rel))
 	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 		return "", err
 	}
-	wrote, err := download(ctx, cn.api, msgs[0], dest+".part")
+	wrote, err := fetchTo(ctx, cn.api, msgs[0], dest, func() (tg.MessageClass, error) {
+		again, err := cn.byIDs(ctx, peer, []int{id})
+		if err != nil || len(again) == 0 {
+			return nil, err
+		}
+		return again[0], nil
+	})
 	if err != nil || !wrote {
-		os.Remove(dest + ".part")
-		return "", err
-	}
-	if err := os.Rename(dest+".part", dest); err != nil {
 		return "", err
 	}
 	db.Exec(store, "UPDATE message SET file = ? WHERE chat_id = ? AND id = ?", rel, chatID, id)
@@ -505,7 +560,9 @@ func (q *fileQueue) recent(c *plugins.Context) (err error) {
 	}
 	defer store.Close()
 	skip := idSet(currentSettings(c)["skip_chats"])
-	db.Each(store, "SELECT chat_id, id, json FROM message WHERE file IS NULL AND date >= ?",
+	// not those deleted on Telegram (asked again in vain on every start)
+	db.Each(store, "SELECT chat_id, id, json FROM message m WHERE file IS NULL AND date >= ? "+
+		"AND NOT EXISTS (SELECT 1 FROM deleted d WHERE d.chat_id = m.chat_id AND d.id = m.id)",
 		[]any{time.Now().Add(-mediaBackfill).Unix()}, func(scan func(...any)) {
 			var chat int64
 			var id int

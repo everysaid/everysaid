@@ -169,7 +169,8 @@ changes in place).
     `multiple`, `voters`, `ended`, kept as the votes change; an option's `votes` null where the
     service gave only how many voted), `poll_end` (answers the poll), `group_call`,
     `payment`, `gift`, `unsupported` (made by a newer version of the service), `unreadable` (could
-    not be decrypted), `story_reply` (a message answering a story), `story_reaction` (`emoji`).
+    not be decrypted), `story_reply` (a message answering a story), `story_reaction` (`emoji`), `story` (a story shared; `mention`: one that names the owner),
+    `signed_up` (someone the owner knows joined the service), `screenshot`.
 - **The user's settings** shared by every device (theme, language, names' order, hidden services,
   labels' settings) are in the archive (`setting`), and so is a chat's state the user chose
   (`chat_state`).

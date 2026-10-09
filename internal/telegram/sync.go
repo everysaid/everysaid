@@ -272,8 +272,13 @@ func dialogPeer(d dialog) (tg.InputPeerClass, error) {
 	if p, ok := InputPeer(d.Entity); ok {
 		return p, nil
 	}
-	return nil, fmt.Errorf("cannot address chat %d", d.ID)
+	return nil, noPeer(d.ID)
 }
+
+// noPeer is a chat that cannot be addressed (known only in part): that chat's failure alone.
+type noPeer int64
+
+func (n noPeer) Error() string { return fmt.Sprintf("cannot address chat %d", int64(n)) }
 
 func isoDate(unix int) string { return time.Unix(int64(unix), 0).UTC().Format("2006-01-02") }
 
@@ -417,6 +422,9 @@ func syncRun(ctx context.Context, c *conn, out *printer) (err error) {
 	if err != nil {
 		return err
 	}
+	if dialogs, err = withMigrated(ctx, c, dialogs); err != nil {
+		return err
+	}
 	total := 0
 	for _, d := range dialogs {
 		k := EntityKind(d.Entity)
@@ -428,11 +436,7 @@ func syncRun(ctx context.Context, c *conn, out *printer) (err error) {
 			"archived = excluded.archived, json = excluded.json",
 			d.ID, k, d.Name, boolInt(d.Archived), Dump(d.Entity.(tdp.Object)))
 		noteRead(b.q(), d.ID, intp(d.Dialog.ReadInboxMaxID), intp(d.Dialog.ReadOutboxMaxID), false)
-		last := db.Int(b.q(), "SELECT max(id) FROM message WHERE chat_id = ?", d.ID)
-		peer, err := dialogPeer(d)
-		if err != nil {
-			return err
-		}
+		last := db.Int(b.q(), "SELECT coalesce(max(id), 0) FROM read_through WHERE chat_id = ?", d.ID)
 		label := d.Name
 		if label == "" {
 			label = strconv.FormatInt(d.ID, 10)
@@ -443,24 +447,37 @@ func syncRun(ctx context.Context, c *conn, out *printer) (err error) {
 		if err := b.commit(); err != nil {
 			return err
 		}
-		err = c.history(ctx, peer, int(last), func(chunk []sent) error {
-			for _, s := range chunk {
-				db.Exec(b.q(), "INSERT OR IGNORE INTO message (chat_id, id, date, json) VALUES (?, ?, ?, ?)",
-					d.ID, s.Message.GetID(), messageDate(s.Message), Dump(s.Message.(tdp.Object)))
-				if isEntity(s.Sender) {
-					db.Exec(b.q(), "INSERT OR REPLACE INTO entity VALUES (?, ?)", EntityID(s.Sender), Dump(s.Sender.(tdp.Object)))
+		peer, err := dialogPeer(d)
+		if err == nil {
+			err = c.history(ctx, peer, int(last), func(chunk []sent) error {
+				for _, s := range chunk {
+					db.Exec(b.q(), "INSERT OR IGNORE INTO message (chat_id, id, date, json) VALUES (?, ?, ?, ?)",
+						d.ID, s.Message.GetID(), messageDate(s.Message), Dump(s.Message.(tdp.Object)))
+					if isEntity(s.Sender) {
+						db.Exec(b.q(), "INSERT OR REPLACE INTO entity VALUES (?, ?)", EntityID(s.Sender), Dump(s.Sender.(tdp.Object)))
+					}
+					n++
+					if n%1000 == 0 {
+						fmt.Fprintf(out, "\r%s: %d", label, n)
+					}
 				}
-				n++
-				if n%1000 == 0 {
-					fmt.Fprintf(out, "\r%s: %d", label, n)
-				}
-			}
-			return b.commit()
-		})
+				return b.commit()
+			})
+		}
 		if err != nil {
-			return err
+			if stopsAll(ctx, err) {
+				return err
+			}
+			// this chat (no longer reachable, say): the others go on; it is tried again next time
+			fmt.Fprintf(out, "\n%s\n", out.say("{chat}: not caught up ({e})", map[string]any{"chat": label, "e": err.Error()}))
+			continue
 		}
 		db.Exec(b.q(), "UPDATE chat SET synced_at = ? WHERE id = ?", time.Now().Unix(), d.ID)
+		if d.Message != nil {
+			last = max(last, int64(d.Message.GetID()))
+		}
+		db.Exec(b.q(), "INSERT INTO read_through VALUES (?, ?) ON CONFLICT (chat_id) DO UPDATE SET id = max(id, excluded.id)",
+			d.ID, last)
 		if err := b.commit(); err != nil {
 			return err
 		}

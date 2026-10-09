@@ -27,6 +27,7 @@ func TestMain(m *testing.M) {
 		"EVERYSAID_CONFIG": "config", "EVERYSAID_STATE": "state"} {
 		os.Setenv(k, filepath.Join(dir, v))
 	}
+	historyPause = 0
 	os.Setenv("EVERYSAID_KEYRING", "everysaid-test-telegram")
 	config.Load()
 	code := m.Run()
@@ -47,6 +48,8 @@ type fakeChat struct {
 	members  []int64 // a group's members, as getFullChat and getParticipants give them
 	shown    int     // a supergroup's members given at most (hidden members), 0 for all
 	refuse   string  // their refusal (CHAT_ADMIN_REQUIRED), "" for none
+	hidden   bool    // not among the dialogs (a basic group made a supergroup)
+	from     int64   // a supergroup's basic group before (migrated_from_chat_id), 0 if none
 }
 
 type fake struct {
@@ -148,17 +151,23 @@ func (f *fake) answer(input bin.Encoder) (bin.Encoder, error) {
 	switch r := input.(type) {
 	case *tg.MessagesGetDialogsRequest:
 		f.calls = append(f.calls, "getDialogs")
+		var shown []*fakeChat
+		for _, c := range f.chats {
+			if !c.hidden {
+				shown = append(shown, c)
+			}
+		}
 		start := 0
 		if p := inputToPeer(r.OffsetPeer, f.self.ID); p != nil {
-			for i, c := range f.chats {
+			for i, c := range shown {
 				if PeerID(c.peer) == PeerID(p) {
 					start = i + 1
 				}
 			}
 		}
-		end := min(len(f.chats), start+r.Limit)
-		out := &tg.MessagesDialogsSlice{Count: len(f.chats), Users: f.users, Chats: f.chatsList()}
-		for _, c := range f.chats[start:end] {
+		end := min(len(shown), start+r.Limit)
+		out := &tg.MessagesDialogsSlice{Count: len(shown), Users: f.users, Chats: f.chatsList()}
+		for _, c := range shown[start:end] {
 			top := sortedDesc(c.messages)
 			d := &tg.Dialog{Peer: c.peer, ReadInboxMaxID: c.readIn, ReadOutboxMaxID: c.readOut, Pinned: c.pinned}
 			if c.mute != 0 {
@@ -364,6 +373,17 @@ func (f *fake) answer(input bin.Encoder) (bin.Encoder, error) {
 			page = append(page, tg.PeerBlocked{PeerID: &tg.PeerUser{UserID: id}})
 		}
 		return &tg.ContactsBlockedBox{Blocked: &tg.ContactsBlockedSlice{Count: len(f.blocked), Blocked: page, Users: f.users}}, nil
+	case *tg.ChannelsGetFullChannelRequest:
+		f.calls = append(f.calls, "getFullChannel")
+		id := r.Channel.(*tg.InputChannel).ChannelID
+		c := f.chat(&tg.PeerChannel{ChannelID: id})
+		full := &tg.ChannelFull{ID: id, ChatPhoto: &tg.PhotoEmpty{}, NotifySettings: tg.PeerNotifySettings{},
+			ExportedInvite: &tg.ChatInviteExported{}}
+		if c != nil && c.from != 0 {
+			full.SetMigratedFromChatID(c.from)
+			full.SetMigratedFromMaxID(len(f.chat(&tg.PeerChat{ChatID: c.from}).messages))
+		}
+		return &tg.MessagesChatFull{FullChat: full, Users: f.users, Chats: f.chatsList()}, nil
 	case *tg.ChannelsDeleteMessagesRequest:
 		f.calls = append(f.calls, "channels.deleteMessages")
 		f.requests = append(f.requests, r)

@@ -206,9 +206,72 @@ func TestTelegramNotices(t *testing.T) {
 	code, v = notice("35")
 	eq(t, "timer", []any{code, v["seconds"]}, []any{"timer", float64(86400)})
 	code, _ = notice("36")
-	eq(t, "no notice", code, "")
+	eq(t, "signed up", code, "signed_up")
 	code, v = notice("37")
 	opts, _ := v["options"].([]any)
 	eq(t, "poll", []any{code, len(opts), opts[1].(map[string]any)["votes"], v["ended"], v["voters"]},
 		[]any{"poll", 2, float64(2), true, float64(3)})
+}
+
+// What the official apps show that was lost: a conference call (a call), a reply to another chat's
+// message (what it quotes), a forum topic's message (no reply to the topic's start), dice and a to-do
+// list as text, a bot's own service text, a story (and a reply to one), content of a newer Telegram,
+// and an edit Telegram hides that still moves a live location.
+func TestTelegramWhatTheAppsShow(t *testing.T) {
+	t.Cleanup(config.Load)
+	t.Setenv("EVERYSAID_CACHE", t.TempDir())
+	config.Load()
+	a, _ := newArchive(t)
+	d := telegramDB(t, telegramstore.DB())
+	add := func(id int64, m M) {
+		m["id"] = id
+		if m["from_id"] == nil && m["out"] == nil {
+			m["from_id"] = M{"user_id": tgMaria}
+		}
+		db.Exec(d, "INSERT INTO message (chat_id, id, date, json) VALUES (?, ?, ?, ?)", tgMaria, id, 1_790_000_100+id, js(m))
+	}
+	add(40, M{"_": "MessageService", "action": M{"_": "MessageActionConferenceCall", "call_id": 9001, "missed": true}})
+	add(41, M{"_": "Message", "message": "this", "reply_to": M{"reply_to_msg_id": 5, "reply_to_peer_id": M{"channel_id": 1},
+		"quote_text": "the quote"}})
+	add(42, M{"_": "Message", "message": "in a topic", "reply_to": M{"reply_to_msg_id": 2, "forum_topic": true}})
+	add(43, M{"_": "Message", "media": M{"_": "MessageMediaDice", "emoticon": "🎲", "value": 4}})
+	add(44, M{"_": "Message", "media": M{"_": "MessageMediaToDo", "todo": M{"title": M{"text": "Trip"},
+		"list": []M{{"title": M{"text": "tickets"}}, {"title": M{"text": "hotel"}}}}}})
+	add(45, M{"_": "MessageService", "action": M{"_": "MessageActionCustomAction", "message": "Score: 10"}})
+	add(46, M{"_": "Message", "media": M{"_": "MessageMediaStory", "via_mention": true}})
+	add(47, M{"_": "Message", "message": "nice", "reply_to": M{"_": "MessageReplyStoryHeader", "story_id": 3}})
+	add(48, M{"_": "Message", "media": M{"_": "MessageMediaUnsupported"}})
+	add(49, M{"_": "Message", "media": M{"_": "MessageMediaGeoLive", "geo": M{"lat": 1.0, "long": 2.0}, "period": 900}})
+	must(t, Telegram(a, nil, TelegramOptions{}))
+
+	var detail, key string
+	a.Row("SELECT detail, key FROM call", nil, &detail, &key)
+	eq(t, "conference call", []any{detail, key}, []any{"missed", "9001"})
+	eq(t, "other chat's reply", msgRow(a, "41", "reply_text, reply_to"), []any{"the quote", nil})
+	eq(t, "topic", msgRow(a, "42", "reply_to")[0], nil)
+	eq(t, "dice", msgRow(a, "43", "text")[0], "🎲 4")
+	eq(t, "to-do", msgRow(a, "44", "text")[0], "Trip\n- tickets\n- hotel")
+	eq(t, "bot's text", msgRow(a, "45", "text")[0], "Score: 10")
+	code := func(key string) string {
+		return db.Str(a.Tx(), "SELECT coalesce(n.code, '') FROM message m LEFT JOIN notice n ON n.message_id = m.id WHERE m.key = ?", key)
+	}
+	eq(t, "notices", []string{code("46"), code("47"), code("48")}, []string{"story", "story_reply", "unsupported"})
+
+	// the location moves (an edit Telegram hides): the new place, not marked edited
+	db.Exec(d, "UPDATE message SET json = ? WHERE chat_id = ? AND id = 49", js(M{"_": "Message", "id": 49,
+		"from_id": M{"user_id": tgMaria}, "media": M{"_": "MessageMediaGeoLive", "geo": M{"lat": 3.0, "long": 4.0}, "period": 900},
+		"edit_date": 1_790_000_900, "edit_hide": true}), tgMaria)
+	must(t, Telegram(a, nil, TelegramOptions{Only: map[[2]int64]bool{{tgMaria, 49}: true}}))
+	eq(t, "moved", msgRow(a, "49", "lat, lon, edited"), []any{3.0, 4.0, int64(0)})
+
+	// a conference call recorded while it went on: how it went once it ended
+	add(50, M{"_": "MessageService", "action": M{"_": "MessageActionConferenceCall", "call_id": 9002}})
+	must(t, Telegram(a, nil, TelegramOptions{}))
+	db.Exec(d, "UPDATE message SET json = ? WHERE chat_id = ? AND id = 50", js(M{"_": "MessageService", "id": 50,
+		"from_id": M{"user_id": tgMaria}, "action": M{"_": "MessageActionConferenceCall", "call_id": 9002, "duration": 120},
+		"edit_date": 1_790_001_000}), tgMaria)
+	must(t, Telegram(a, nil, TelegramOptions{Only: map[[2]int64]bool{{tgMaria, 50}: true}}))
+	var answered, duration int64
+	a.Row("SELECT answered, duration FROM call WHERE key = '9002'", nil, &answered, &duration)
+	eq(t, "ended", []any{answered, duration}, []any{int64(1), int64(120)})
 }

@@ -282,9 +282,16 @@ each time, the API works for any user and brings only what is new.
   is kept as a secret (`telegram-session-go`).
 - `--survey`: every chat with its kind, size and dates, no content, in `<cache>/telegram/survey.tsv`.
 - With no option: every chat but channels and bots into `<cache>/telegram/telegram.db`, each message
-  whole (as JSON); later runs bring only what is new.
+  whole (as JSON); later runs bring only what is new, from where each chat's history was last read
+  with no gap (`read_through`: a message the live source stored does not hide one missed below it).
+  A supergroup that was a basic group brings the basic group's history too, as a chat of its own.
 - `--media [--dry-run]`: the files of the messages (pictures, videos, voice messages, stickers,
   documents), into `<cache>/telegram/media/` (`[telegram] media`, `no_media`).
+
+The live source keeps the update state of the account and of the supergroups it keeps, so that
+after a restart Telegram says what changed meanwhile (edits, deletions, reactions); reactions and
+poll votes made later are followed as they come. A chat that cannot be read (left, removed) is
+skipped, not the others.
 
 The source in the app downloads the files of new messages as they arrive, and at each connection
 and import those of the last week still missing (its setting, on by default); a chat's whole

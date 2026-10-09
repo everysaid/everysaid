@@ -23,6 +23,15 @@ func telegramNotice(a *archive.Archive, m map[string]any, person *tgPeople, own 
 	}
 	if pyStr(m["_"]) != "MessageService" {
 		media := obj(m["media"])
+		switch pyStr(media["_"]) {
+		case "MessageMediaUnsupported": // made by a newer version of Telegram
+			return notice("unsupported", nil)
+		case "MessageMediaStory": // a story shared, or one that mentions the owner
+			return notice("story", map[string]any{"mention": truthy(media["via_mention"])})
+		}
+		if pyStr(obj(m["reply_to"])["_"]) == "MessageReplyStoryHeader" {
+			return notice("story_reply", nil)
+		}
 		if pyStr(media["_"]) != "MessageMediaPoll" {
 			return nil
 		}
@@ -80,7 +89,7 @@ func telegramNotice(a *archive.Archive, m map[string]any, person *tgPeople, own 
 			return nil
 		}
 		return groupNotice(by, act("joined_link", from))
-	case "MessageActionChatJoinedByRequest":
+	case "MessageActionChatJoinedByRequest", "MessageActionChatJoinedViaCommunity":
 		if !fromOK {
 			return nil
 		}
@@ -97,10 +106,18 @@ func telegramNotice(a *archive.Archive, m map[string]any, person *tgPeople, own 
 		return notice("group_call", nil)
 	case "MessageActionSetMessagesTTL":
 		return notice("timer", map[string]any{"seconds": toInt(action["period"])})
-	case "MessageActionPaymentSent", "MessageActionPaymentSentMe":
+	case "MessageActionPaymentSent", "MessageActionPaymentSentMe", "MessageActionPaymentRefunded",
+		"MessageActionPaidMessagesRefunded":
 		return notice("payment", nil)
-	case "MessageActionGiftPremium", "MessageActionGiftCode", "MessageActionStarGift", "MessageActionGiftStars":
+	case "MessageActionGiftPremium", "MessageActionGiftCode", "MessageActionStarGift", "MessageActionGiftStars",
+		"MessageActionGiftTon", "MessageActionStarGiftUnique", "MessageActionPrizeStars":
 		return notice("gift", nil)
+	case "MessageActionContactSignUp": // someone in the owner's contacts joined Telegram
+		return notice("signed_up", nil)
+	case "MessageActionScreenshotTaken":
+		return notice("screenshot", nil)
+	case "MessageActionEmpty", "MessageActionSecureValuesSentMe", "MessageActionWebViewDataSentMe":
+		return notice("unsupported", nil)
 	}
 	return nil
 }
