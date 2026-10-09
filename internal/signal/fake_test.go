@@ -4,7 +4,8 @@ package signal
 // EVERYSAID_FAKE_SIGNAL=1. In the store folder it is given it keeps `linked` (once linked), and reads
 // `script.jsonl` (the events a receive brings; a fetch again gives their files); it writes
 // `sent.jsonl`, `acted.jsonl`, `read.jsonl` and `fetch.jsonl` (the sends, reactions, edits and
-// deletions, marks read and fetches asked of it), for the tests to look at. `unlinked` there:
+// deletions, marks read and fetches asked of it), for the tests to look at; `discover.json` is who
+// has an account ({number: {aci, pni}}). `unlinked` there:
 // Signal refuses the device (it was removed from the phone); `link-fails`: a link fails. It never
 // touches the network.
 
@@ -69,7 +70,7 @@ func fakeHelper() {
 			continue
 		}
 		needsLink := map[string]bool{"sync": true, "receive": true, "send": true, "mark_read": true, "history": true,
-			"react": true, "edit": true, "delete": true}
+			"react": true, "edit": true, "delete": true, "discover": true}
 		if needsLink[cmd] && !linked() {
 			fail("not_linked", "not linked to a Signal account")
 			continue
@@ -190,6 +191,18 @@ func fakeHelper() {
 				}
 			}
 			ok(map[string]any{"found": len(req["messages"].([]any))})
+		case "discover":
+			var accounts map[string]map[string]any
+			b, _ := os.ReadFile(filepath.Join(store, "discover.json"))
+			json.Unmarshal(b, &accounts)
+			found := []any{}
+			for _, x := range req["numbers"].([]any) {
+				if a, has := accounts[x.(string)]; has {
+					write(map[string]any{"event": "ids", "aci": a["aci"], "pni": a["pni"], "phone": x})
+					found = append(found, map[string]any{"number": x, "aci": a["aci"], "pni": a["pni"]})
+				}
+			}
+			ok(map[string]any{"found": found})
 		case "history":
 			ok(map[string]any{"events": []any{}})
 		case "contacts", "groups":

@@ -21,13 +21,15 @@ cargo build --release          # target/release/everysaid-signal
 cargo test                     # the protocol and the conversion of messages; never the network
 ```
 
-It needs a recent stable Rust, a C compiler, `protoc` (the protobuf compiler, used by libsignal's
-build) and OpenSSL's libcrypto with its headers (SQLCipher, which encrypts the store, uses it; the
-program links `libcrypto.so.3`): on Arch the packages `protobuf` and `openssl`, on Debian and Ubuntu
-`protobuf-compiler` and `libssl-dev`.
+It needs a recent stable Rust, a C and C++ compiler, `protoc` (the protobuf compiler, used by
+libsignal's build), `cmake` and libclang (libsignal-net builds BoringSSL, for Signal's contact
+discovery): on Arch the packages `protobuf`, `cmake` and `clang`, on Debian and Ubuntu
+`protobuf-compiler`, `cmake` and `libclang-dev`. SQLCipher, which encrypts the store, takes its
+crypto from Rust (rusqlite's custom crypto provider: OpenSSL's libcrypto would clash with BoringSSL),
+so the program links no system crypto library.
 
 Everysaid finds the program next to its own binary, else on the `PATH`; the source's setting
-"The Signal helper" names another. The release binary is about 18 MB.
+"The Signal helper" names another. The release binary is about 23 MB.
 
 ## What it keeps
 
@@ -74,6 +76,7 @@ most).
 | `delete` | `chat`, `target_ts` (the message's newest version) | the owner's message deleted for everyone: `{ts}`; and a `delete` event of it |
 | `mark_read` | `messages: [{author, ts}]`, `receipts` (default true) | a read sync to the phone always, read receipts to each author where `receipts`: `{marked}` |
 | `fetch` | `messages: [{author, ts}]` | the files of these messages (in the store) fetched again: each comes again as its `message` event; `{found}` |
+| `discover` | `numbers` (E.164) | `{found: [{number, aci, pni}]}`: those of the numbers that have a Signal account (Signal's contact discovery), each by its ACI where Signal gives it, else its PNI; each found is also an `ids` event (the id with the number) |
 | `history` | `since` (Unix ms), `chats` (ids besides the contacts', e.g. PNIs) | `{events: [...]}`: what the store holds, as events (files already fetched only); the store lists only its contacts' and groups' chats, so a number written to (a PNI) is read only when named in `chats` |
 | `quit` | | `{}`, then it ends |
 
@@ -97,7 +100,7 @@ Signal's name for a message) and `server_ts`.
 | `queue_empty` | what waited on the server has all come |
 | `contacts` | `contacts`, as the `contacts` request (after the phone sent them) |
 | `contact` | `aci, phone, name, profile_name`: someone whose message came, once presage fetched their profile |
-| `ids` | `aci`, `pni`, `phone` (each may be null): one person's ids as Signal told them. From the phone's copy of a message it sent (its destination and `destinationE164`): a PNI with its number, or an ACI with its number. From a message whose sender signed with their PNI (Signal's apps do so in answer to someone who wrote to their number): an ACI with its PNI |
+| `ids` | `aci`, `pni`, `phone` (each may be null): one person's ids as Signal told them. From the phone's copy of a message it sent (its destination and `destinationE164`): a PNI with its number, or an ACI with its number. From a message whose sender signed with their PNI (Signal's apps do so in answer to someone who wrote to their number): an ACI with its PNI. From `discover`: an ACI or a PNI with its number |
 | `group` | as one of `groups`, before the first message of a group at a new revision |
 | `message` | `text`, `mentions`, `quote`, `attachments` (`content_type, filename, size, width, height, caption, voice, gif, borderless, sticker, file` or `error`), `contacts` (shared), `previews`, `poll`, `group_change`, `group_revision`, `group_call`, `expire_timer_update`, `expire_timer`, `forwarded`, `view_once`, `pin`, `unpin`, `payment`, `gift`, `story_reply` |
 | `edit` | `target_ts` and the message's new fields |

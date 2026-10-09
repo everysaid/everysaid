@@ -318,6 +318,7 @@ async fn handle(state: &Shared, out: &Out, cmd: Command) -> Result<Value, Fail> 
         Command::Delete { chat, target_ts } => delete(state, out, chat, target_ts).await,
         Command::MarkRead { messages, receipts } => mark_read(state, messages, receipts).await,
         Command::Fetch { messages } => fetch_again(state, out, messages).await,
+        Command::Discover { numbers } => discover(state, out, numbers).await,
         Command::History { since, chats } => history(state, since, chats).await,
         Command::Open { .. } | Command::Quit => Err(fail_with("bad_request", "not here")),
     }
@@ -719,6 +720,30 @@ async fn fetch_again(state: &Shared, out: &Out, refs: Vec<protocol::MessageRef>)
                 found += 1;
             }
         }
+    }
+    Ok(json!({"found": found}))
+}
+
+/// Which numbers have a Signal account: `{found: [{number, aci, pni}]}` (one of the ids; the ACI
+/// where Signal gives it), each also an `ids` event, which ties the account to the number.
+async fn discover(state: &Shared, out: &Out, numbers: Vec<String>) -> Result<Value, Fail> {
+    let mut m = manager_of(state)?;
+    let numbers: Vec<String> = numbers.into_iter().filter(|n| n.starts_with('+')).collect();
+    if numbers.is_empty() {
+        return Ok(json!({"found": []}));
+    }
+    let got = m.discover_contacts_by_phone_number(numbers.iter().map(String::as_str)).await.map_err(failed)?;
+    let mut found = vec![];
+    for (number, sid) in got {
+        let Some(sid) = sid else { continue };
+        let number = e164(&number);
+        let id = sid.service_id_string();
+        let (aci, pni) = match sid {
+            ServiceId::Aci(_) => (Some(id), None),
+            ServiceId::Pni(_) => (None, Some(id)),
+        };
+        out.send(event("ids", json!({"aci": aci, "pni": pni, "phone": number})));
+        found.push(json!({"number": number, "aci": aci, "pni": pni}));
     }
     Ok(json!({"found": found}))
 }

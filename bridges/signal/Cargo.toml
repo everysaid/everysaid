@@ -11,7 +11,9 @@ publish = false
 # with our fixes (vendor/README.md); libsignal by the tag they pin (v0.99.0), held by Cargo.lock.
 [dependencies]
 presage = { path = "vendor/presage" }
-presage-store-sqlite = { path = "vendor/presage-store-sqlite" }
+# cdsi: who has an account, by phone number (presage's, with libsignal-net); SQLCipher then takes
+# its crypto from Rust, since libsignal-net's BoringSSL would stand in for OpenSSL's
+presage-store-sqlite = { path = "vendor/presage-store-sqlite", features = ["cdsi"] }
 
 base64 = "0.22"
 futures = "0.3"

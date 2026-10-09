@@ -73,6 +73,11 @@ pub enum Command {
         chat: Chat,
         target_ts: u64,
     },
+    /// Which of these numbers (E.164) have a Signal account (Signal's contact discovery): each
+    /// found comes as an `ids` event too, so that its chat meets the person with that number.
+    Discover {
+        numbers: Vec<String>,
+    },
     /// Fetches again the files of messages the store holds, where they failed before.
     Fetch {
         messages: Vec<MessageRef>,
@@ -236,6 +241,13 @@ mod tests {
         let r = parse(r#"{"id":13,"cmd":"delete","chat":{"kind":"contact","id":"a"},"target_ts":7}"#);
         assert_eq!(r.unwrap().cmd, Command::Delete { chat, target_ts: 7 });
         assert_eq!(parse(r#"{"id":14,"cmd":"delete","chat":{"kind":"contact","id":"a"}}"#).unwrap_err().0, Some(14));
+    }
+
+    #[test]
+    fn discover() {
+        let r = parse(r#"{"id":15,"cmd":"discover","numbers":["+306900000001"]}"#).unwrap();
+        assert_eq!(r.cmd, Command::Discover { numbers: vec!["+306900000001".into()] });
+        assert_eq!(parse(r#"{"id":16,"cmd":"discover"}"#).unwrap_err().0, Some(16));
     }
 
     #[test]
