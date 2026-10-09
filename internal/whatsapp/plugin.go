@@ -61,6 +61,11 @@ func (Plugin) Info() *plugins.Info {
 			{Key: "read_receipts", Label: "Send read receipts", Type: "bool", Default: false,
 				Help: "When a chat is opened here, the others see it read, and it is read on the phone too"},
 			{Key: "interval", Label: "Check every (seconds)", Type: "number", Default: 10},
+			{Key: "send_per_minute", Label: "Messages sent at most a minute", Type: "number", Default: 15,
+				Help: "Bulk sending is what WhatsApp blocks accounts for; 0 in any of these, no limit"},
+			{Key: "send_per_hour", Label: "Messages sent at most an hour", Type: "number", Default: 300},
+			{Key: "send_per_day", Label: "Messages sent at most a day", Type: "number", Default: 1000},
+			{Key: "send_same_text", Label: "The same longer text into at most so many chats an hour", Type: "number", Default: 3},
 		},
 		CanSend: true, CanReply: true, CanMention: true, CanMarkRead: true, CanSendFiles: true,
 		// any emoji, the app's six quick ones first
@@ -72,6 +77,12 @@ func (Plugin) Info() *plugins.Info {
 }
 
 func storeDir(c *plugins.Context) string { return c.Str("store") }
+
+// limits are the limits of sending, as the source's settings say.
+func limits(c *plugins.Context) SendLimits {
+	return SendLimits{PerMinute: int(c.Num("send_per_minute")), PerHour: int(c.Num("send_per_hour")),
+		PerDay: int(c.Num("send_per_day")), SameText: int(c.Num("send_same_text"))}
+}
 
 func paths(c *plugins.Context) (string, string) {
 	d := storeDir(c)
@@ -143,6 +154,7 @@ var connections = map[string]string{"connected": "connected to WhatsApp", "disco
 func cardStatus(c *plugins.Context) map[string]any {
 	if b := Running(storeDir(c)); b != nil {
 		if s := b.Status(); s != nil {
+			s["limits"] = limits(c) // as set now: the bridge takes them at the next message
 			return s
 		}
 	}
@@ -159,7 +171,7 @@ func cardStatus(c *plugins.Context) map[string]any {
 		d.Close()
 	}
 	return map[string]any{"connected": false, "connection": st["connection"], "send_blocked": st["send_blocked"],
-		"send_enabled": opts.Send, "limits": opts.Limits, "sent": sent, "linked": HasDevice(storeDir(c))}
+		"send_enabled": opts.Send, "limits": limits(c), "sent": sent, "linked": HasDevice(storeDir(c))}
 }
 
 func (p Plugin) InfoFacts(c *plugins.Context) []plugins.Fact {
@@ -197,9 +209,8 @@ func (p Plugin) InfoFacts(c *plugins.Context) []plugins.Fact {
 	if s["linked"] == false {
 		said = "not linked yet (Link a device)"
 	}
-	// sending's own key and its limits are config.toml's ([whatsapp]), what the bridge's flags were
 	limits, _ := s["limits"].(SendLimits)
-	set := i18n.T("{minute} a minute, {hour} an hour, {day} a day; the same text into {same} chats an hour (config.toml, [whatsapp])",
+	set := i18n.T("{minute} a minute, {hour} an hour, {day} a day; the same text into {same} chats an hour",
 		c.Lang(), map[string]any{"minute": limits.PerMinute, "hour": limits.PerHour, "day": limits.PerDay, "same": limits.SameText})
 	return []plugins.Fact{{Label: "Connection", Value: said}, {Label: "Sending", Value: sending},
 		{Label: "Sending limits", Value: set}}
@@ -258,7 +269,9 @@ func (p Plugin) Live(ctx context.Context, c *plugins.Context) error {
 	if standaloneAnswers(c) {
 		return errs.Plugin("The standalone WhatsApp bridge is running: stop it first (both on one device would end its session)", 409)
 	}
-	b := New(storeDir(c), ConfigOptions(), Hooks{
+	opts := ConfigOptions()
+	opts.Limits = limits(c)
+	b := New(storeDir(c), opts, Hooks{
 		QR: func(code, drawn string) {
 			c.Log("Scan this QR code in WhatsApp on the phone (Linked devices):", nil)
 			c.Logf("%s", drawn)
@@ -510,6 +523,7 @@ func (p Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conve
 	if b == nil {
 		return nil, errs.Plugin("not connected to WhatsApp", 503)
 	}
+	b.SetLimits(limits(c)) // as the settings are now
 	code, answer := b.Send(req)
 	if code != http.StatusOK { // its refusals: off, blocked, a limit, not a chat they wrote in
 		watchState(c)

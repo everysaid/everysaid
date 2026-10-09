@@ -32,19 +32,13 @@ type Options struct {
 	Download bool
 }
 
-// ConfigOptions are the options as config.toml sets them ([whatsapp] send, send_per_minute,
-// send_per_hour, send_per_day, send_same_text, download), with the bridge's defaults. Sending stays
+// ConfigOptions are the options as config.toml sets them ([whatsapp] send, download), with the
+// bridge's defaults; the limits are the source's settings (limits). Sending stays
 // off unless the owner turns it on there, as the bridge needed -send: the plugin's own setting is a
 // second key, not the only one.
 func ConfigOptions() Options {
 	return Options{
-		Send: config.Bool("whatsapp", "send", false),
-		Limits: SendLimits{
-			PerMinute: config.Int("whatsapp", "send_per_minute", 15),
-			PerHour:   config.Int("whatsapp", "send_per_hour", 300),
-			PerDay:    config.Int("whatsapp", "send_per_day", 1000),
-			SameText:  config.Int("whatsapp", "send_same_text", 3),
-		},
+		Send:     config.Bool("whatsapp", "send", false),
 		Download: config.Bool("whatsapp", "download", true),
 	}
 }
@@ -528,6 +522,15 @@ func (b *Bridge) parts() (*whatsmeow.Client, *MessageStore, *Sender) {
 // ErrNotConnected: the bridge is not running (or not yet).
 var ErrNotConnected = errors.New("not connected to WhatsApp")
 
+// SetLimits changes the limits of sending, from the next message on.
+func (b *Bridge) SetLimits(l SendLimits) {
+	if _, _, sender := b.parts(); sender != nil {
+		sender.mu.Lock()
+		sender.limits = l
+		sender.mu.Unlock()
+	}
+}
+
 // Send sends (POST /api/send): an HTTP status and the answer, as the bridge gave them.
 func (b *Bridge) Send(req SendRequest) (int, SendResponse) {
 	_, _, sender := b.parts()
@@ -579,7 +582,9 @@ func (b *Bridge) Status() map[string]any {
 	out["logged_in"] = client.IsLoggedIn()
 	out["linked"] = client.Store.ID != nil
 	out["send_enabled"] = sender.enabled
+	sender.mu.Lock()
 	out["limits"] = sender.limits
+	sender.mu.Unlock()
 	out["sent"] = sender.counts()
 	return out
 }

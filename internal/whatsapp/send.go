@@ -87,14 +87,14 @@ func (s *Sender) counts() map[string]int {
 	return map[string]int{"minute": s.count(time.Minute), "hour": s.count(time.Hour), "day": s.count(24 * time.Hour)}
 }
 
-// overLimit says which limit of pace one more message would pass ("" for none).
+// overLimit says which limit of pace one more message would pass ("" for none); 0 is no limit.
 func (s *Sender) overLimit() string {
 	for _, l := range []struct {
 		n    int
 		over time.Duration
 		word string
 	}{{s.limits.PerMinute, time.Minute, "minute"}, {s.limits.PerHour, time.Hour, "hour"}, {s.limits.PerDay, 24 * time.Hour, "day"}} {
-		if s.count(l.over) >= l.n {
+		if l.n > 0 && s.count(l.over) >= l.n {
 			return fmt.Sprintf("limit reached: %d messages a %s", l.n, l.word)
 		}
 	}
@@ -202,7 +202,7 @@ func (s *Sender) send(req SendRequest) (int, SendResponse) {
 		var others int
 		s.store.db.QueryRow("SELECT count(DISTINCT chat_jid) FROM sent WHERE text_hash = ? AND chat_jid != ? AND at > ?",
 			hash, chat.String(), time.Now().Add(-time.Hour).Unix()).Scan(&others)
-		if others >= s.limits.SameText {
+		if s.limits.SameText > 0 && others >= s.limits.SameText {
 			return fail(http.StatusTooManyRequests, "the same text or file went to %d other chats this hour", others)
 		}
 	}

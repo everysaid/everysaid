@@ -19,8 +19,13 @@ func init() {
 		"No QR code was scanned in time":                           "Κανένας κωδικός QR δεν σαρώθηκε εγκαίρως",
 		"Sending allowed again at the bridge (blocked for: {why})": "Η αποστολή επιτρέπεται ξανά στη γέφυρα (ήταν μπλοκαρισμένη για: {why})",
 		"Sending limits":                                           "Όρια αποστολής",
-		"{minute} a minute, {hour} an hour, {day} a day; the same text into {same} chats an hour (config.toml, [whatsapp])": "{minute} το λεπτό, {hour} την ώρα, {day} τη μέρα· το ίδιο κείμενο σε {same} συνομιλίες την ώρα (config.toml, [whatsapp])",
-		"unknown action": "άγνωστη ενέργεια",
+		"{minute} a minute, {hour} an hour, {day} a day; the same text into {same} chats an hour": "{minute} το λεπτό, {hour} την ώρα, {day} τη μέρα· το ίδιο κείμενο σε {same} συνομιλίες την ώρα",
+		"Messages sent at most a minute": "Μέγιστα μηνύματα το λεπτό",
+		"Bulk sending is what WhatsApp blocks accounts for; 0 in any of these, no limit": "Το WhatsApp μπλοκάρει λογαριασμούς για μαζικές αποστολές· 0 σε οποιοδήποτε από αυτά σημαίνει χωρίς όριο",
+		"Messages sent at most an hour":                           "Μέγιστα μηνύματα την ώρα",
+		"Messages sent at most a day":                             "Μέγιστα μηνύματα τη μέρα",
+		"The same longer text into at most so many chats an hour": "Το ίδιο μεγάλο κείμενο σε τόσες συνομιλίες το πολύ την ώρα",
+		"unknown action":                                          "άγνωστη ενέργεια",
 	} {
 		EL[k] = v
 	}

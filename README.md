@@ -133,7 +133,6 @@ TOML, optional: every key has a general default.
 | `[viber] desktop_export` | none | a decrypted copy of Viber Desktop's database, imported where there is one |
 | `[whatsapp] bridge` | none (the source uses `<data>/whatsapp-bridge`) | the WhatsApp store folder (`messages.db`, `whatsapp.db`, `media/`); `everysaid import whatsapp` reads it only when set |
 | `[whatsapp] send`, `download` | false, true | whether the WhatsApp source may send at all (its own setting is a second key), and whether it downloads the files of messages as they arrive |
-| `[whatsapp] send_per_minute`, `send_per_hour`, `send_per_day`, `send_same_text` | 15, 300, 1000, 3 | the limits on sending |
 | `[imlogs] adium`, `pidgin` | none | the folders of Adium (`Adium 2.0`, `Users/Default` or `Logs`) and of Pidgin (`.purple` or its `logs`), for the "Adium and Pidgin logs" source |
 | `[telegram] media`, `no_media` | true, none | `telegram-sync --media`: false downloads nothing; `no_media` lists chat ids whose media are passed over |
 | `[immich] url` | none | the address an immich library is offered with |
