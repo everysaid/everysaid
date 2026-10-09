@@ -378,6 +378,62 @@ func TestFindAndFirstMessage(t *testing.T) {
 	must(t, r.status == 409 && r.code() == "chat.no_phone", "email only: %d %s", r.status, r.body)
 }
 
+// A message that cannot go now is kept and sent by itself once it can, in the order written; one sent
+// again with its id is not sent twice; a refusal is said at once and not kept; a kept one can be
+// taken out.
+func TestOutbox(t *testing.T) {
+	c := newServer(t)
+	c.login()
+	drain()
+	var group string
+	for _, x := range items(c.getJSON("/api/chats?kind=group")) {
+		group = x["id"].(string)
+	}
+	send := func(id, text string) resp {
+		return c.post("/api/chats/"+group+"/send", M{"text": text, "service": "whatsapp", "client_id": id})
+	}
+	kept := func() []M { return items(c.getJSON("/api/chats/" + group + "/outbox")) }
+
+	r := send("a", "write: once")
+	must(t, r.status == 200, "send: %d %s", r.status, r.body)
+	next(t)
+	r = send("a", "write: once")
+	must(t, r.status == 200 && num(r.json()["conversation_id"]) != 0, "again: %d %s", r.status, r.body)
+	select {
+	case a := <-askedCh:
+		t.Fatalf("sent twice: %+v", a)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	busy.Store(true)
+	r = send("b", "write: later")
+	must(t, r.status == 202 && r.json()["queued"] == true && r.json()["error"] != nil, "kept: %d %s", r.status, r.body)
+	r = send("c", "write: after")
+	must(t, r.status == 202, "behind it: %d %s", r.status, r.body)
+	k := kept()
+	must(t, len(k) == 2 && k[0]["id"] == "b" && k[1]["id"] == "c" && k[0]["error"] != nil, "outbox: %v", k)
+	r = send("b", "write: later")
+	must(t, r.status == 202, "asked again while kept: %d %s", r.status, r.body)
+
+	busy.Store(false)
+	r = c.post("/api/outbox/b/retry", M{})
+	must(t, r.status == 200, "retry: %d %s", r.status, r.body)
+	must(t, next(t).text == "write: later" && next(t).text == "write: after", "in order")
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end) && len(kept()) > 0; time.Sleep(50 * time.Millisecond) {
+	}
+	must(t, len(kept()) == 0, "sent: %v", kept())
+
+	r = send("d", "refuse: no")
+	must(t, r.status == 409 && len(kept()) == 0, "refused: %d %s %v", r.status, r.body, kept())
+
+	busy.Store(true)
+	send("e", "write: never")
+	must(t, len(kept()) == 1, "kept: %v", kept())
+	r = c.do("DELETE", "/api/outbox/e", nil, H)
+	must(t, r.status == 200 && len(kept()) == 0, "discarded: %d %v", r.status, kept())
+	busy.Store(false)
+}
+
 // A group's members to name with @, a file sent with its caption, who got and read the user's
 // messages, and the services told the chat was read: through a plugin that records what it is asked.
 func TestMentionsFilesReceiptsAndReadReceipts(t *testing.T) {

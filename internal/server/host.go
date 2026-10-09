@@ -54,14 +54,18 @@ type Host struct {
 	bars      map[int64]string
 	marking   map[[2]int64]bool            // (instance, conversation) being told it was read now
 	reach     map[string]map[string]*reach // chat -> service -> where a person was looked for (find.go)
-	wg        sync.WaitGroup
+
+	outbox     *sql.DB // what waits to be sent (outbox.go)
+	outboxOnce sync.Once
+	outboxWake chan struct{}
+	wg         sync.WaitGroup
 }
 
 // NewHost makes the host of an archive; nothing runs until Start.
 func NewHost(store *core.Store, push *Push, log *slog.Logger) *Host {
 	return &Host{store: store, push: push, log: log, listeners: map[chan M]struct{}{}, wake: make(chan struct{}, 1),
 		running: map[int64]string{}, live: map[int64]context.CancelFunc{}, lines: map[int64][]string{},
-		bars: map[int64]string{}, marking: map[[2]int64]bool{}}
+		bars: map[int64]string{}, marking: map[[2]int64]bool{}, outboxWake: make(chan struct{}, 1)}
 }
 
 // Store is the archive (plugins.Host).
@@ -529,6 +533,7 @@ func (h *Host) connect(ctx context.Context, iid int64, p plugins.Plugin, liver p
 		return next, !sleep(time.Minute)
 	}
 	h.Emit(M{"type": "plugin", "instance": iid, "live": true})
+	h.wakeOutbox() // what waits may go now
 	err = func() (err error) {
 		defer func() {
 			if r := recover(); r != nil {
@@ -598,8 +603,9 @@ func (h *Host) Start(ctx context.Context) {
 	}
 	h.ctx = ctx
 	h.mu.Unlock()
-	h.wg.Add(1)
+	h.wg.Add(2)
 	go h.dispatch(ctx)
+	go h.runOutbox(ctx)
 	for _, row := range h.sourcesAndAnalysis() {
 		h.AutoLive(row.ID)
 	}

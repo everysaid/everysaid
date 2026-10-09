@@ -243,12 +243,21 @@ func after(c *plugins.Context, d time.Duration, fn func() error) {
 	})
 }
 
+// busyOnce: the "busy:" texts refused once already.
+var busyOnce sync.Map
+
 func (Sender) Send(ctx context.Context, c *plugins.Context, conv plugins.Conversation, text string, reply *plugins.Reply,
 	mentions []plugins.Mention, file *plugins.File) (any, error) {
 	select { // as a real service takes a moment
 	case <-time.After(800 * time.Millisecond):
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	}
+	// "busy:" cannot go the first time (a limit of pace): the server keeps it and sends it again
+	if strings.Contains(text, "busy:") {
+		if _, again := busyOnce.LoadOrStore(text, true); !again {
+			return nil, errs.Plugin("limit reached: 15 messages a minute", 429)
+		}
 	}
 	replyKey := ""
 	if reply != nil {

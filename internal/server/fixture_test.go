@@ -20,11 +20,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"everysaid/internal/archive"
 	"everysaid/internal/config"
+	"everysaid/internal/errs"
 	"everysaid/internal/plugins"
 )
 
@@ -207,8 +209,17 @@ func (testSource) Info() *plugins.Info {
 
 func (testSource) Check(c *plugins.Context) (bool, string) { return true, "ready" }
 
+// busy: the test source cannot send now (a limit of pace), as a service may say for a while.
+var busy atomic.Bool
+
 func (testSource) Send(ctx context.Context, c *plugins.Context, conv plugins.Conversation, text string, reply *plugins.Reply,
 	mentions []plugins.Mention, file *plugins.File) (any, error) {
+	if busy.Load() {
+		return nil, errs.Plugin("limit reached", 429)
+	}
+	if strings.HasPrefix(text, "refuse:") {
+		return nil, errs.Plugin("not allowed", 0)
+	}
 	askedCh <- asked{what: "send", service: conv.Service, text: text, mentions: mentions, file: file}
 	if strings.HasPrefix(text, "write:") { // as a source that has what it sent in the archive
 		return writeSent(c, conv, text)

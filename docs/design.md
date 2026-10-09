@@ -272,6 +272,13 @@ UI (planned); on an iPhone that is not possible at all, and the backup stays.
     Text shown to the user never names a plugin or a service as the way out.
   - A plugin with a live connection may want it on by default (`live_default`): the host starts it
     once the plugin is set up, unless the user turned it off.
+- **Nothing written is lost**: each message carries the app's own id. The app keeps it on the device
+  (IndexedDB) until the server has it, and sends it again with that id once the server answers; the
+  server sends one id only once. A message the server has but that cannot go now (a plugin's 429,
+  502, 503, 504, or a failure it did not word) waits in its outbox (`<archive>-outbox.db`) and is
+  sent by itself, each chat's in order, with growing pauses, for a day; before each try the chat is
+  looked at, in case it went after all. A refusal is said at once. What waits shows after the chat's
+  messages, to be sent again now or discarded.
 - **Names**: the plugins weigh them, the user orders them (Settings → Names, which can go back to
   the weights) or pins one source or handle for a person; every name seen is kept, with when ("also
   known as"). Self-chosen names are marked (~) in groups.

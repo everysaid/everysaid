@@ -289,6 +289,10 @@ func (s *Server) chatRoutes() {
 			return nil, err
 		}
 		r := SendRequest{Text: text, Service: q.text("service"), Mentions: mentions, File: file}
+		id := q.text("client_id")
+		if len(id) > 64 {
+			return nil, failed(400, "client_id")
+		}
 		if truthy(q.get("conversation_id")) {
 			if r.ConversationID, err = pyInt(q.get("conversation_id")); err != nil {
 				return nil, failed(409, err.Error())
@@ -299,11 +303,34 @@ func (s *Server) chatRoutes() {
 				return nil, failed(409, err.Error())
 			}
 		}
-		out, err := s.Host.Send(q.r.Context(), q.r.PathValue("chat_id"), r)
+		out, err := s.Host.SendKept(q.r.Context(), q.r.PathValue("chat_id"), id, r)
+		var kept *queued
+		if errors.As(err, &kept) { // it could not go now: kept, sent by itself when it can (202)
+			why := any(nil)
+			var ue *errs.UserError
+			if errors.As(kept.Cause, &ue) {
+				why = userErrorDetail(ue, q.xlang())
+			} else if kept.Cause != nil {
+				why = userErrorDetail(errs.Plugin(kept.Cause.Error(), 500), q.xlang())
+			}
+			writeJSON(q.w, 202, M{"queued": true, "id": kept.ID, "error": why})
+			return done, nil
+		}
 		if err != nil {
 			return nil, is404(err, func(e error) error { return failed(409, e.Error()) })
 		}
 		return out, nil
+	})
+
+	// what of a chat waits to be sent, or could not be (the outbox)
+	h("GET /api/chats/{chat_id}/outbox", bodyNone, func(q *req) (any, error) {
+		return M{"items": s.Host.Kept(q.r.PathValue("chat_id"), q.xlang())}, nil
+	})
+	h("POST /api/outbox/{id}/retry", bodyNone, func(q *req) (any, error) {
+		return M{"ok": true}, is404(s.Host.Retry(q.r.PathValue("id")), nil)
+	})
+	h("DELETE /api/outbox/{id}", bodyNone, func(q *req) (any, error) {
+		return M{"ok": true}, is404(s.Host.Discard(q.r.PathValue("id")), nil)
 	})
 
 	act := func(q *req, a MessageAction) (any, error) {

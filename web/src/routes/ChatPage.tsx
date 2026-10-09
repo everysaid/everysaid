@@ -22,6 +22,8 @@ import { ChatInfo } from "@/components/ChatInfo";
 import { MessageInfo } from "@/components/MessageInfo";
 import { DateField } from "@/components/DateField";
 import { EmojiPicker } from "@/components/EmojiPicker";
+import { Pending } from "@/components/Pending";
+import { dropUnsent, flying, keepUnsent, sendUnsent, unreached, type Unsent, type Went } from "@/lib/outbox";
 import { avatarUrl } from "@/components/ChatList";
 
 const START = 1_000_000_000;
@@ -48,6 +50,11 @@ export function ChatPage() {
   const { chatId } = chatRoute.useParams();
   const { m, ts, hide } = chatRoute.useSearch();
   return <ChatView key={`${chatId}:${m ?? ""}:${ts ?? ""}:${hide ?? ""}`} chatId={chatId} jumpTo={m} around={ts} hide={hide} />;
+}
+
+// what waits to be sent, after the latest messages (not while newer ones are still to load)
+function PendingFooter({ context }: { context?: { chatId: string; hasNewer: boolean } }) {
+  return context && !context.hasNewer ? <Pending chatId={context.chatId} /> : null;
 }
 
 function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: number; around?: number; hide?: string }) {
@@ -273,25 +280,40 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       loose: mentions.length > 0 || !!file,
       reply: answered ? { id: answered.id, text: answered.text ?? "", outgoing: answered.outgoing, sender: answered.sender, kind: answered.kind } : undefined,
     }]);
+    // kept on this device until the server has it: if it cannot be reached, it waits there (Pending)
+    const unsent: Unsent = { id: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`, chatId, text: body,
+      service: answered ? answered.service : service, replyTo: answered?.id ?? null,
+      mentions: mentions.map((m) => ({ start: m.start, length: m.length, address_id: m.address_id })),
+      file, fileName: file?.name ?? null, createdAt: Date.now(), state: "waiting", error: null };
+    const gone = () => setItems((prev) => prev.filter((i) => !(i.type === "message" && i.id === id)));
+    flying(unsent.id, true);
     try {
-      const via = answered ? answered.service : service;
-      let went: { conversation_id: number; messages: MessageItem[] };
-      if (file) {
-        const form = new FormData();
-        form.append("text", body);
-        if (via) form.append("service", via);
-        if (answered) form.append("reply_to", String(answered.id));
-        if (mentions.length) form.append("mentions", JSON.stringify(mentions));
-        form.append("file", file);
-        went = await api.form(`/api/chats/${chatId}/send`, form);
-      } else {
-        went = await api.post(`/api/chats/${chatId}/send`, { text: body, service: via, reply_to: answered?.id, mentions: mentions.length ? mentions : undefined });
+      await keepUnsent(unsent).catch(() => {});      // no IndexedDB (a private window): sent all the same
+      let went: Went;
+      try {
+        went = await sendUnsent(unsent);
+      } catch (e) {
+        gone();
+        if (unreached(e)) {
+          toast(t("chat.waitingServerHint"));
+        } else {
+          await keepUnsent({ ...unsent, state: "failed", error: (e as Error).message }).catch(() => {});
+          toast.error(`${t("chat.sendFailed")}: ${(e as Error).message}`);
+        }
+        return;
+      }
+      await dropUnsent(unsent.id).catch(() => {});
+      if (went.queued) {                                 // the server keeps it, and sends it when it can
+        gone();
+        qc.invalidateQueries({ queryKey: ["outbox", chatId] });
+        return;
       }
       mark("sent", went.conversation_id);
+      const messages = (went.messages ?? []) as MessageItem[];
       setItems((prev) => {
         const seen = new Set(prev.map((i) => i.cursor));
-        const real = went.messages.filter((m) => !seen.has(m.cursor));
-        if (went.messages.length) return prev.flatMap((i) => (i.type === "message" && i.id === id ? real : [i]));
+        const real = messages.filter((m) => !seen.has(m.cursor));
+        if (messages.length) return prev.flatMap((i) => (i.type === "message" && i.id === id ? real : [i]));
         // where the service cannot say what went: the message itself, if it came before the answer
         return withoutSent(prev, prev, 10_000);
       });
@@ -300,8 +322,10 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
     } catch (e) {
       mark("failed");
       toast.error(`${t("chat.sendFailed")}: ${(e as Error).message}`);
+    } finally {
+      flying(unsent.id, false);
     }
-  }, [hasNewer, chatId, loadNewer, navigate, t]);
+  }, [hasNewer, chatId, loadNewer, navigate, t, qc]);
   useEffect(() => {
     if (!toEnd.current) return;
     toEnd.current = false;
@@ -512,7 +536,9 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
               isScrolling={(on) => { if (!on && ready) remember(); }}
               atBottomThreshold={120}
               increaseViewportBy={{ top: 800, bottom: 400 }}
+              context={{ chatId, hasNewer }}
               components={{
+                Footer: PendingFooter,
                 Header: () => (
                   <div className="flex justify-center py-4">
                     {hasOlder ? <Spinner /> : <span className="rounded-full bg-panel/80 px-3 py-1 text-xs text-muted">{t("chat.start")}</span>}

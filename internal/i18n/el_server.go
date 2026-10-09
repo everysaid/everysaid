@@ -10,11 +10,13 @@ func init() {
 		"no user yet: `everysaid serve` prints the link of the first setup": "κανένας χρήστης ακόμα: `everysaid serve` τυπώνει τον σύνδεσμο πρώτης ρύθμισης",
 		"(one use, valid {minutes} minutes)":                                "(μίας χρήσης, ισχύει {minutes} λεπτά)",
 		"(one use, valid {minutes} minutes · a new user)":                   "(μίας χρήσης, ισχύει {minutes} λεπτά · νέος χρήστης)",
-		"no user":             "κανένας χρήστης",
-		"no such token: {id}": "δεν υπάρχει token {id}",
-		"token {id} revoked":  "το token {id} ανακλήθηκε",
-		"never":               "ποτέ",
-		"— {what} —":          "— {what} —",
+		"no user":                "κανένας χρήστης",
+		"no such token: {id}":    "δεν υπάρχει token {id}",
+		"token {id} revoked":     "το token {id} ανακλήθηκε",
+		"never":                  "ποτέ",
+		"— {what} —":             "— {what} —",
+		"A message was not sent": "Ένα μήνυμα δεν στάλθηκε",
+		"It could not go for a day: it waits in its chat to be sent again or discarded": "Δεν μπόρεσε να φύγει για μια μέρα: περιμένει στη συνομιλία του να ξανασταλεί ή να απορριφθεί",
 	} {
 		EL[k] = v
 	}
