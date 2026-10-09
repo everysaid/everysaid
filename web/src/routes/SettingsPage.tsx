@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowDown, ArrowUp, Bell, Download, Fingerprint, KeyRound, LogOut, Monitor, Moon, Palette, EyeOff, Shield, Sun, Tags, Trash2, UserRound } from "lucide-react";
+import { ArrowDown, ArrowUp, Bell, Bot, Download, EyeOff, Fingerprint, KeyRound, LogOut, Monitor, Moon, Palette, Shield, Sun, Tags, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import { api, type Account, type NameSources } from "@/lib/api";
 import { fullDate, number, relative } from "@/lib/format";
@@ -228,6 +228,17 @@ export function SettingsPage() {
           </Section>
           )}
 
+          {tab === "general" && (
+          <Section title={<span className="flex items-center gap-2"><Bot className="size-4" />{t("settings.assistants")}</span>}>
+            <Card className="divide-y divide-line">
+              <Line label={t("settings.mcpOpen")} hint={t("settings.mcpOpenHint")}>
+                <Switch checked={(settings.data?.mcp as boolean | undefined) ?? true} label={t("settings.mcpOpen")}
+                  onChange={(v) => put.mutate({ mcp: v })} />
+              </Line>
+            </Card>
+          </Section>
+          )}
+
           {tab === "security" && (
           <Section title={<span className="flex items-center gap-2"><Shield className="size-4" />{t("settings.security")}</span>}>
             <Card className="divide-y divide-line">
@@ -276,10 +287,6 @@ export function SettingsPage() {
                 <Button size="sm" onClick={() => confirm(t("settings.newCodes") + "?") && api.post<{ codes: string[] }>("/api/auth/recovery-codes").then((r) => { setCodes(r.codes); refreshAccount(); })}>
                   {t("settings.newCodes")}
                 </Button>
-              </Line>
-              <Line label={t("settings.mcpOpen")} hint={t("settings.mcpOpenHint")}>
-                <Switch checked={(settings.data?.mcp as boolean | undefined) ?? true} label={t("settings.mcpOpen")}
-                  onChange={(v) => put.mutate({ mcp: v })} />
               </Line>
               <Line label={t("settings.mcp")} hint={t("settings.mcpHint")}>
                 <Button size="sm" onClick={() => api.post<{ token: string }>("/api/auth/mcp-token", { label: "MCP" }).then((r) => { setToken(r.token); refreshAccount(); }, (e) => toast.error(e.message))}>{t("settings.newToken")}</Button>
