@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"everysaid/internal/archive"
 	"everysaid/internal/db"
@@ -200,8 +201,9 @@ func TestBridgeCalls(t *testing.T) {
 		{"L2", "log", waPeer, nil, 0, 0, 0, waTS(10), "MISSED", 0, nil, nil, nil},
 		{"E1", "event", waPeer, waPeer, 0, 0, 0, waTS(20), nil, nil, waTS(20), "2026-10-06 10:21:30+03:00", "terminate"},
 		{"E2", "event", waPeer, waPeer, 0, 0, 0, waTS(40), nil, nil, nil, waTS(40), "reject"},
-		{"E3", "event", waPeer, waPeer, 0, 0, 0, waTS(50), nil, nil, nil, nil, nil},            // still ringing
-		{"E4", "event", waPeer, waPeer, 0, 0, 0, waTS(10), nil, nil, nil, waTS(10), "timeout"}, // the same call as L2
+		{"E3", "event", waPeer, waPeer, 0, 0, 0, time.Now().Format("2006-01-02 15:04:05-07:00"), nil, nil, nil, nil, nil}, // still ringing
+		{"E5", "event", waPeer, waPeer, 0, 0, 0, waTS(50), nil, nil, nil, nil, nil},                                       // its end never seen, long ago: missed
+		{"E4", "event", waPeer, waPeer, 0, 0, 0, waTS(10), nil, nil, nil, waTS(10), "timeout"},                            // the same call as L2
 	}
 	for _, c := range calls {
 		db.Exec(d, "INSERT INTO calls VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", c...)
@@ -213,11 +215,12 @@ func TestBridgeCalls(t *testing.T) {
 	for _, r := range db.Maps(a.Tx(), "SELECT outgoing, answered, duration, detail, video FROM call ORDER BY ts") {
 		got = append(got, []any{r["outgoing"], r["answered"], r["duration"], r["detail"], r["video"]})
 	}
-	eq(t, "count", a.Int("SELECT count(*) FROM call"), before+4)
+	eq(t, "count", a.Int("SELECT count(*) FROM call"), before+5)
 	eq(t, "calls", got, [][]any{{int64(1), int64(1), int64(125), nil, int64(1)}, {int64(0), int64(0), int64(0), "missed", int64(0)},
-		{int64(0), int64(1), int64(90), nil, int64(0)}, {int64(0), int64(0), int64(0), "rejected", int64(0)}})
+		{int64(0), int64(1), int64(90), nil, int64(0)}, {int64(0), int64(0), int64(0), "rejected", int64(0)},
+		{int64(0), int64(0), int64(0), "missed", int64(0)}})
 	must(t, BridgeCalls(a, NewCallSet(a), path, "")) // again: nothing new
-	eq(t, "count again", a.Int("SELECT count(*) FROM call"), before+4)
+	eq(t, "count again", a.Int("SELECT count(*) FROM call"), before+5)
 }
 
 func TestTheFilesTheBridgeDownloadedGoToTheirMessages(t *testing.T) {
@@ -345,6 +348,11 @@ func TestBridgePinsTimersAndPolls(t *testing.T) {
 	db.Exec(d, "INSERT INTO poll_votes VALUES (?, 'P1', ?, ?, ?)", waPeer, waPeer, `["`+hex.EncodeToString(tue[:])+`"]`, waTS(3))
 	db.Exec(d, "INSERT INTO chat_events VALUES (?, 'E1', '', 1, ?, 'pin', '{\"seconds\":86400}', 'M1')", waPeer, waTS(4))
 	db.Exec(d, "INSERT INTO chat_events VALUES (?, 'E2', ?, 0, ?, 'timer', '{\"seconds\":604800}', '')", waPeer, waPeer, waTS(5))
+	// a view-once message, one that could not be read (long ago, and just now: it may still come)
+	db.Exec(d, "INSERT INTO chat_events VALUES (?, 'undecryptable:V', ?, 0, ?, 'view_once', '{}', '')", waPeer, waPeer, waTS(6))
+	db.Exec(d, "INSERT INTO chat_events VALUES (?, 'undecryptable:U', ?, 0, ?, 'unreadable', '{}', '')", waPeer, waPeer, waTS(7))
+	db.Exec(d, "INSERT INTO chat_events VALUES (?, 'undecryptable:N', ?, 0, ?, 'unreadable', '{}', '')", waPeer, waPeer,
+		time.Now().Format("2006-01-02 15:04:05-07:00"))
 	runBridge(t, a, path)
 	notice := func(key string) (string, map[string]any) {
 		var code, args string
@@ -358,6 +366,12 @@ func TestBridgePinsTimersAndPolls(t *testing.T) {
 	eq(t, "pinned", a.Int("SELECT count(*) FROM message p JOIN message m ON m.id = p.reply_to WHERE p.key = 'E1' AND m.key = 'M1'"), int64(1))
 	code, v = notice("E2")
 	eq(t, "timer", []any{code, v["seconds"]}, []any{"timer", float64(604800)})
+	code, _ = notice("undecryptable:V")
+	eq(t, "view once", code, "view_once")
+	code, _ = notice("undecryptable:U")
+	eq(t, "unreadable", code, "unreadable")
+	code, _ = notice("undecryptable:N")
+	eq(t, "not yet", code, "")
 	code, v = notice("P1")
 	opts, _ := v["options"].([]any)
 	eq(t, "poll", []any{code, opts[0].(map[string]any)["votes"], opts[1].(map[string]any)["votes"], v["voters"]},

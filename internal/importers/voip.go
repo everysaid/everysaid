@@ -441,13 +441,19 @@ func bridgeCalls(a *archive.Archive, calls *CallSet, bridgeDB, storeDB string) {
 				}
 			}
 		} else {
-			if r["ended_at"] == nil { // still ringing, or under way: the next import has it
+			// still ringing, or under way: the next import has it; its end never seen (the bridge was
+			// down then) and an hour gone: taken as it stood, with no end
+			unended := r["ended_at"] == nil
+			if unended && time.Since(time.UnixMilli(ts)) < time.Hour {
 				continue
 			}
 			accepted, wasAccepted := ms(r["accepted_at"])
 			wasAccepted = wasAccepted && accepted != 0
 			ended, _ := ms(r["ended_at"])
 			reason := str(r["end_reason"])
+			if unended {
+				ended, reason = accepted, "unended"
+			}
 			detail := ""
 			if !wasAccepted {
 				switch {

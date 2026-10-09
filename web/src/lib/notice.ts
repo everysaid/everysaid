@@ -74,7 +74,7 @@ export function noticeLines(n: Notice, t: TFunction): string[] {
     case "pin":
       return [typeof a.seconds === "number" && a.seconds > 0 ? say("pinFor", undefined, { duration: durationWords(a.seconds, t) }) : say("pin")];
     case "unpin": case "poll_end": case "group_call": case "payment": case "gift": case "unsupported": case "unreadable":
-    case "signed_up": case "screenshot":
+    case "signed_up": case "screenshot": case "view_once":
       return [say(n.code)];
     case "story": // a story shared, or one that mentions the owner
       return [a.mention ? say("story_mention") : t("notice.story")];

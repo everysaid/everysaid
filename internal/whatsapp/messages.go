@@ -7,6 +7,7 @@ package whatsapp
 // the edits and deletions of earlier messages.
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/hex"
@@ -143,6 +144,17 @@ func (store *MessageStore) storeChatEvent(evt *events.Message, code string, args
 	_, err := store.db.Exec(`INSERT OR IGNORE INTO chat_events VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, evt.Info.Chat.String(),
 		evt.Info.ID, evt.Info.Sender.ToNonAD().String(), evt.Info.IsFromMe, evt.Info.Timestamp, code, string(js), target)
 	return err
+}
+
+// joinLines joins the parts that say something, a line each.
+func joinLines(parts ...string) string {
+	var out []string
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // pollJSON is a poll as the store keeps it.
@@ -328,11 +340,52 @@ func describe(m *StoredMessage, msg *waE2E.Message, evt *events.Message) bool {
 		p := msg.GetPollCreationMessageV2()
 		m.Kind, m.Content = "poll", pollText(p.GetName(), p.GetOptions())
 		m.Poll = pollJSON(p.GetName(), p.GetOptions(), p.GetSelectableOptionsCount())
-	case msg.GetPollCreationMessageV3() != nil:
-		p := msg.GetPollCreationMessageV3()
+	case msg.GetPollCreationMessageV3() != nil, msg.GetPollCreationMessageV5() != nil, msg.GetPollCreationMessageV6() != nil:
+		p := cmp.Or(msg.GetPollCreationMessageV3(), msg.GetPollCreationMessageV5(), msg.GetPollCreationMessageV6())
 		m.Kind, m.Content = "poll", pollText(p.GetName(), p.GetOptions())
 		m.Poll = pollJSON(p.GetName(), p.GetOptions(), p.GetSelectableOptionsCount())
+	// what other kinds say, as text (mautrix-whatsapp's way): an event, an invitation to a group,
+	// a business's message with its buttons, and the answers to those
+	case msg.GetEventMessage() != nil:
+		e := msg.GetEventMessage()
+		m.Kind, m.Content = "text", joinLines(e.GetName(), e.GetDescription(), e.GetLocation().GetName())
+	case msg.GetGroupInviteMessage() != nil:
+		g := msg.GetGroupInviteMessage()
+		m.Kind, m.Content = "text", joinLines(g.GetGroupName(), g.GetCaption())
+	case msg.GetScheduledCallCreationMessage() != nil:
+		m.Kind, m.Content = "text", msg.GetScheduledCallCreationMessage().GetTitle()
+	case msg.GetButtonsMessage() != nil:
+		b := msg.GetButtonsMessage()
+		lines := []string{b.GetContentText(), b.GetFooterText()}
+		for _, x := range b.GetButtons() {
+			lines = append(lines, "["+x.GetButtonText().GetDisplayText()+"]")
+		}
+		m.Kind, m.Content = "text", joinLines(lines...)
+	case msg.GetListMessage() != nil:
+		l := msg.GetListMessage()
+		m.Kind, m.Content = "text", joinLines(l.GetTitle(), l.GetDescription(), l.GetFooterText())
+	case msg.GetTemplateMessage() != nil:
+		h := msg.GetTemplateMessage().GetHydratedTemplate()
+		m.Kind, m.Content = "text", joinLines(h.GetHydratedTitleText(), h.GetHydratedContentText(), h.GetHydratedFooterText())
+	case msg.GetInteractiveMessage() != nil:
+		i := msg.GetInteractiveMessage()
+		m.Kind, m.Content = "text", joinLines(i.GetHeader().GetTitle(), i.GetBody().GetText(), i.GetFooter().GetText())
+	case msg.GetButtonsResponseMessage() != nil:
+		m.Kind, m.Content = "text", msg.GetButtonsResponseMessage().GetSelectedDisplayText()
+	case msg.GetListResponseMessage() != nil:
+		m.Kind, m.Content = "text", msg.GetListResponseMessage().GetTitle()
+	case msg.GetTemplateButtonReplyMessage() != nil:
+		m.Kind, m.Content = "text", msg.GetTemplateButtonReplyMessage().GetSelectedDisplayText()
+	case msg.GetInteractiveResponseMessage() != nil:
+		m.Kind, m.Content = "text", msg.GetInteractiveResponseMessage().GetBody().GetText()
 	default:
+		// a newer kind wrapped for the clients that know it: what it wraps
+		for _, w := range []*waE2E.FutureProofMessage{msg.GetGroupMentionedMessage(), msg.GetLottieStickerMessage(),
+			msg.GetPollCreationMessageV4(), msg.GetQuestionMessage(), msg.GetSpoilerMessage(), msg.GetAudioStickerMessage()} {
+			if inner := w.GetMessage(); inner != nil {
+				return describe(m, inner, evt)
+			}
+		}
 		return false
 	}
 	if m.Kind == "sticker" {
@@ -477,10 +530,35 @@ func changeable(client *whatsmeow.Client, store *MessageStore, evt *events.Messa
 
 // processMessage stores a message, or applies what it does to an earlier one (an edit, a
 // deletion, a reaction), or records the call it logs. name: the chat's name where already known.
-func processMessage(client *whatsmeow.Client, store *MessageStore, evt *events.Message, name string, logger waLog.Logger) {
+// false: it could not be stored (not acknowledged, WhatsApp gives it again).
+func processMessage(client *whatsmeow.Client, store *MessageStore, evt *events.Message, name string, logger waLog.Logger) bool {
 	msg := evt.Message
 	if msg == nil || isChannel(evt.Info.Chat) {
-		return
+		return true
+	}
+	// a reaction or an edit sent encrypted with the message's secret (newer clients): what it says
+	if er := msg.GetEncReactionMessage(); er != nil {
+		r, err := client.DecryptReaction(context.Background(), evt)
+		if err != nil {
+			logger.Warnf("Failed to read an encrypted reaction: %v", err)
+			return true
+		}
+		r.Key = er.GetTargetMessageKey()
+		msg = &waE2E.Message{ReactionMessage: r}
+	}
+	if msg.GetSecretEncryptedMessage() != nil {
+		inner, err := client.DecryptSecretEncryptedMessage(context.Background(), evt)
+		if err != nil {
+			logger.Warnf("Failed to read a secret-encrypted message: %v", err)
+			return true
+		}
+		e := *evt
+		e.RawMessage, e.Message = inner, nil
+		evt = e.UnwrapRaw()
+		msg = evt.Message
+		if msg == nil {
+			return true
+		}
 	}
 	chatJID := evt.Info.Chat.String()
 	sender := evt.Info.Sender.ToNonAD().String()
@@ -513,7 +591,7 @@ func processMessage(client *whatsmeow.Client, store *MessageStore, evt *events.M
 				}
 			}
 		}
-		return
+		return true
 	}
 	if rm := msg.GetReactionMessage(); rm != nil {
 		t := evt.Info.Timestamp
@@ -523,11 +601,11 @@ func processMessage(client *whatsmeow.Client, store *MessageStore, evt *events.M
 		if err := store.storeReaction(chatJID, rm.GetKey().GetID(), sender, evt.Info.IsFromMe, rm.GetText(), t); err != nil {
 			logger.Warnf("Failed to store reaction: %v", err)
 		}
-		return
+		return true
 	}
 	if cl := msg.GetCallLogMesssage(); cl != nil {
 		storeCallLog(store, evt, cl, logger)
-		return
+		return true
 	}
 	if pin := msg.GetPinInChatMessage(); pin != nil {
 		code, args := "pin", map[string]any{"seconds": nil}
@@ -539,13 +617,13 @@ func processMessage(client *whatsmeow.Client, store *MessageStore, evt *events.M
 		if err := store.storeChatEvent(evt, code, args, pin.GetKey().GetID()); err != nil {
 			logger.Warnf("Failed to store a pin: %v", err)
 		}
-		return
+		return true
 	}
 	if pu := msg.GetPollUpdateMessage(); pu != nil {
 		vote, err := client.DecryptPollVote(context.Background(), evt)
 		if err != nil {
 			logger.Warnf("Failed to read a poll vote: %v", err)
-			return
+			return true
 		}
 		// one voter by one jid: their number's where the vote came from a LID and names it
 		voter := sender
@@ -562,12 +640,22 @@ func processMessage(client *whatsmeow.Client, store *MessageStore, evt *events.M
 			chatJID, pu.GetPollCreationMessageKey().GetID(), voter, string(js), evt.Info.Timestamp); err != nil {
 			logger.Warnf("Failed to store a poll vote: %v", err)
 		}
-		return
+		return true
 	}
 
 	m := StoredMessage{ID: evt.Info.ID, ChatJID: chatJID, Sender: sender, Timestamp: evt.Info.Timestamp, IsFromMe: evt.Info.IsFromMe}
 	if !describe(&m, msg, evt) {
-		return
+		// a message there is, of a kind not kept (a payment, a product, a sticker pack, one the phone
+		// keeps from linked devices): said as such, not lost without a trace
+		if msg.GetPlaceholderMessage() != nil || msg.GetSendPaymentMessage() != nil || msg.GetRequestPaymentMessage() != nil ||
+			msg.GetProductMessage() != nil || msg.GetOrderMessage() != nil || msg.GetStickerPackMessage() != nil ||
+			msg.GetMusicMessage() != nil || msg.GetHighlyStructuredMessage() != nil || msg.GetConditionalRevealMessage() != nil {
+			if err := store.storeChatEvent(evt, "unsupported", map[string]any{}, ""); err != nil {
+				logger.Warnf("Failed to store a message of a kind not kept: %v", err)
+				return false
+			}
+		}
+		return true
 	}
 	if name == "" {
 		name = chatName(client, store, evt.Info.Chat, chatJID, nil, evt.Info.Sender.User, logger)
@@ -577,12 +665,14 @@ func processMessage(client *whatsmeow.Client, store *MessageStore, evt *events.M
 	}
 	if err := store.storeMessage(m); err != nil {
 		logger.Warnf("Failed to store message: %v", err)
-		return
+		return false
 	}
+	store.readAfterAll(m.ChatJID, m.ID)
 	if m.Poll != "" {
 		store.db.Exec("UPDATE messages SET poll = ? WHERE id = ? AND chat_jid = ?", m.Poll, m.ID, m.ChatJID)
 	}
 	logger.Debugf("stored a message: %s", m.Kind) // its kind, never its text or who wrote it
+	return true
 }
 
 // historyReactions stores the reactions a history-sync message carries.

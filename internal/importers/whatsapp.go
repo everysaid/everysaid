@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -918,6 +919,9 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 					}
 				}
 				code := str(r["code"])
+				if code == "unreadable" && time.Since(t) < 24*time.Hour {
+					return // the phone may still send it (a day, as for Signal's)
+				}
 				x := &archive.Extras{Notice: &archive.Notice{Code: code, Args: args}}
 				if code == "pin" || code == "unpin" {
 					x.Subtype, x.SubtypeCode = "pin", "whatsmeow:"+code

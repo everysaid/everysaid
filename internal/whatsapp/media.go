@@ -18,6 +18,9 @@ import (
 	"time"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waMmsRetry"
+	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
@@ -66,7 +69,67 @@ func (store *MessageStore) writeMedia(rel string, data []byte) error {
 var (
 	errSaving     = errors.New("failed to save media file")
 	errIncomplete = errors.New("incomplete media information for download")
+	errAskedAgain = errors.New("WhatsApp no longer has the file: the phone was asked to send it again")
 )
+
+// askedAgain marks (media_error) a file the phone was asked to send again, once.
+const askedAgain = "asked again"
+
+// expired: WhatsApp's server no longer keeps the file (they last some weeks); the phone may.
+func expired(err error) bool {
+	return errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith403) || errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith404) ||
+		errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith410)
+}
+
+// askAgain asks the phone to send a file WhatsApp's server no longer has, as WhatsApp's apps do
+// (its answer is a MediaRetry event, mediaRetried): once for each file.
+func (store *MessageStore) askAgain(client *whatsmeow.Client, id, chatJID string, mediaKey []byte) bool {
+	var sender, failed sql.NullString
+	var fromMe bool
+	if store.db.QueryRow("SELECT sender, is_from_me, media_error FROM messages WHERE id = ? AND chat_jid = ?", id, chatJID).
+		Scan(&sender, &fromMe, &failed) != nil || failed.String == askedAgain {
+		return false
+	}
+	chat, err := types.ParseJID(chatJID)
+	if err != nil {
+		return false
+	}
+	info := &types.MessageInfo{ID: id, MessageSource: types.MessageSource{Chat: chat, IsFromMe: fromMe,
+		IsGroup: chat.Server == types.GroupServer}}
+	if s, err := types.ParseJID(sender.String); err == nil {
+		info.Sender = s
+	}
+	if err := client.SendMediaRetryReceipt(context.Background(), info, mediaKey); err != nil {
+		return false
+	}
+	store.db.Exec("UPDATE messages SET media_error = ? WHERE id = ? AND chat_jid = ?", askedAgain, id, chatJID)
+	return true
+}
+
+// mediaRetried takes the phone's answer to askAgain: where the file is now, then downloads it; the
+// phone no longer having it is recorded as the file gone.
+func mediaRetried(store *MessageStore, evt *events.MediaRetry, downloads func(id, chat string), logger waLog.Logger) {
+	var key []byte
+	chat := evt.ChatID.String()
+	if store.db.QueryRow("SELECT media_key FROM messages WHERE id = ? AND chat_jid = ?", evt.MessageID, chat).Scan(&key) != nil {
+		return
+	}
+	n, err := whatsmeow.DecryptMediaRetryNotification(evt, key)
+	if err != nil || n.GetResult() != waMmsRetry.MediaRetryNotification_SUCCESS || n.GetDirectPath() == "" {
+		reason := "the phone no longer has the file"
+		if err != nil {
+			reason = err.Error()
+		}
+		store.db.Exec("UPDATE messages SET media_error = ? WHERE id = ? AND chat_jid = ?", reason, evt.MessageID, chat)
+		return
+	}
+	if _, err := store.db.Exec("UPDATE messages SET direct_path = ?, url = '', media_error = NULL WHERE id = ? AND chat_jid = ?",
+		n.GetDirectPath(), evt.MessageID, chat); err != nil {
+		logger.Warnf("Failed to store a file's new place: %v", err)
+		return
+	}
+	downloads(evt.MessageID, chat)
+}
 
 // gone: WhatsApp no longer has the file, or what came is not it. It is recorded (media_error) and
 // not tried again; anything else (not connected, the network, the disk) is tried again at the next
@@ -144,6 +207,9 @@ func (store *MessageStore) download(client *whatsmeow.Client, id, chatJID string
 	}
 	rel := mediaFile(mediaType.String, filename.String, chatJID, id)
 	if err := store.downloadTo(client, d, rel); err != nil {
+		if expired(err) && store.askAgain(client, id, chatJID, mediaKey) {
+			return "", fmt.Errorf("%w: %v", errAskedAgain, err)
+		}
 		if gone(err) {
 			store.db.Exec("UPDATE messages SET media_error = ? WHERE id = ? AND chat_jid = ?", err.Error(), id, chatJID)
 		}
