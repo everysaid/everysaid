@@ -157,7 +157,8 @@ changes in place).
   tokenizer for the index, `term` and the search alike (`archive.Tokens`, `archive.Words`).
   The archive writes them as it adds a message, not a trigger, so that every connection that
   writes needs no custom function; `term` is checked against the index (fts5vocab) when the
-  server starts and after an import. The snippet is made from the original text.
+  server starts and after an import from the command line (a live connection's import adds its words
+  as it indexes and leaves the rest to the next start). The snippet is made from the original text.
 - **Notices** (`notice`: a message's code and values, JSON) say what a notice or a message's context
   is in a form the interface puts in the user's language, whatever the source: the importers write
   the codes below, and the UI and the MCP read them without knowing the service. A person in the

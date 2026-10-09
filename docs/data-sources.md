@@ -987,7 +987,7 @@ person; a new address starts as a person of its own, until the user merges it.
 | `blocked` | `address_id`, `phone` (the device, or `telegram`, `whatsapp`), `original`: handles blocked on a phone (its export) or a service (its blocklist, kept as it changes) |
 | `spam` | `address_id` PK, `decision` (`removed`: removed as spam, and removed again from what each import brings; `kept`: not spam, not suggested again), `name` (the name it had), `at` |
 | `message_fts` | contentless FTS5 table (`contentless_delete=1`, `detail=none`: words without their places), by words (`unicode61`), over the text folded by `text.Fold` (Unicode case folding, which also makes a final sigma σ; combining marks removed in every script; compatibility forms brought to one), rowid = `message.id`; written by `Archive.AddMessage` (a trigger cannot fold); a query is folded the same way (`core.WordFilters`) |
-| `term` | every word `message_fts` holds (`term`), for parts of words: written with the index (`Archive.IndexText`), checked against it (`archive.SyncTerms`, fts5vocab) when the server starts and after an import |
+| `term` | every word `message_fts` holds (`term`), for parts of words: written with the index (`Archive.IndexText`), checked against it (`archive.SyncTerms`, fts5vocab) when the server starts and after an import from the command line |
 
 **Media:**
 
