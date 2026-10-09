@@ -187,7 +187,7 @@ export function MenuContent({ children, align = "end", className }: { children: 
 }
 
 export function MenuItem({ children, onSelect, danger, icon }: {
-  children: React.ReactNode; onSelect?: () => void; danger?: boolean; icon?: React.ReactNode;
+  children: React.ReactNode; onSelect?: (e: Event) => void; danger?: boolean; icon?: React.ReactNode;   // e.preventDefault(): the menu stays open
 }) {
   return (
     <DropdownPrimitive.Item

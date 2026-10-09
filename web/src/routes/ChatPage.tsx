@@ -937,7 +937,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
                 </div>
               ))}
               {findable && (
-                <MenuItem onSelect={find}>
+                <MenuItem onSelect={(e) => { e.preventDefault(); find(); }}>       {/* open: each answer shows in it as it comes */}
                   <Search className="size-5" />
                   <span className="flex-1">{t("chat.findElsewhere")}</span>
                 </MenuItem>
