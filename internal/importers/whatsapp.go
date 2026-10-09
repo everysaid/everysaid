@@ -10,7 +10,11 @@
 package importers
 
 import (
+	"crypto/sha1"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -767,8 +771,29 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 			if text == "" {
 				text = metadataTextOf(metadata[toInt(r["Z_PK"])])
 			}
-			add("iphone", pyStr(r["Z_PK"]), whatsappExtras(r, asBytes(r["meta_blob"]), asBytes(r["receipt_blob"]), r),
-				s.conv, appleMS(toFloat(r["ZMESSAGEDATE"])), outgoing, sender, kind, text, r["ZSTANZAID"])
+			x := whatsappExtras(r, asBytes(r["meta_blob"]), asBytes(r["receipt_blob"]), r)
+			if mt == 6 && !a.HasOrigin(src["iphone"], pyStr(r["Z_PK"]), "") && a.Exists("SELECT 1 FROM message "+
+				"WHERE conversation_id = ? AND subtype_code = 'whatsmeow:group_event' AND abs(ts - ?) <= 5000",
+				s.conv, appleMS(toFloat(r["ZMESSAGEDATE"]))) {
+				return // the bridge's copy of the same change is there already
+			}
+			if mt == 6 { // a group's change: those whose meaning is known, as notices
+				var by map[string]any
+				if outgoing {
+					by = map[string]any{"self": true}
+				} else if sender != nil {
+					by = NoticePerson(a, *sender, own)
+				}
+				x.Notice = iphoneGroupNotice(a, person, own, toInt(r["ZGROUPEVENTTYPE"]), str(r["ZTEXT"]), by)
+				if x.Notice != nil {
+					if mid, ok := a.IntOK("SELECT message_id FROM message_origin WHERE source_id = ? AND row_key = ?",
+						src["iphone"], pyStr(r["Z_PK"])); ok {
+						setNoticeIfChanged(a, mid, x.Notice) // imported before there were notices
+					}
+				}
+			}
+			add("iphone", pyStr(r["Z_PK"]), x, s.conv, appleMS(toFloat(r["ZMESSAGEDATE"])), outgoing, sender, kind, text,
+				r["ZSTANZAID"])
 		})
 	}
 
@@ -826,6 +851,132 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 			add("bridge", jid+"/"+pyStr(r["id"]), whatsappBridgeExtras(r, reactions[reactionKey{jid, str(r["id"])}]), convs[jid],
 				tsMS(t), outgoing, sender, kind, str(r["content"]), r["id"])
 		})
+		if hasTable(bridge, "group_event") { // a group's changes, as notices
+			eachMap(bridge, "SELECT "+selectAll(bridge, "group_event", "")+" FROM group_event ORDER BY timestamp", nil, func(r row) {
+				jid := str(r["group_jid"])
+				if _, ok := convs[jid]; !ok {
+					convs[jid] = waConversation(a, person, jid, names[jid], nil)
+				}
+				t, ok := fromISO(str(r["timestamp"]))
+				if !ok {
+					return
+				}
+				var acts []map[string]any
+				if json.Unmarshal([]byte(str(r["actions"])), &acts) != nil || len(acts) == 0 {
+					return
+				}
+				who := func(jid string) map[string]any {
+					if h, ok := person.of(jid); ok {
+						return NoticePerson(a, h, own)
+					}
+					return nil
+				}
+				for _, x := range acts {
+					if j, ok := x["who"].(string); ok {
+						x["who"] = who(j)
+					}
+				}
+				var sender *archive.Handle
+				by := who(str(r["sender"]))
+				outgoing := by != nil && by["self"] == true
+				if h, ok := person.of(str(r["sender"])); ok && !outgoing {
+					sender = &h
+				}
+				n := groupNotice(by, acts...)
+				// the iPhone's copy of the same change (its own row, a few seconds apart) is kept
+				if a.Exists("SELECT 1 FROM message WHERE conversation_id = ? AND subtype = 'group event' "+
+					"AND subtype_code = 'whatsapp:6' AND abs(ts - ?) <= 5000", convs[jid], tsMS(t)) {
+					return
+				}
+				sum := sha1.Sum([]byte(str(r["actions"])))
+				key := fmt.Sprintf("group_event:%s:%d:%x", jid, tsMS(t), sum[:6])
+				add("bridge", key, &archive.Extras{Subtype: "group event", SubtypeCode: "whatsmeow:group_event", Notice: n},
+					convs[jid], tsMS(t), outgoing, sender, "system", "", key)
+			})
+		}
+		if hasTable(bridge, "chat_events") { // pins and timers, as notices
+			eachMap(bridge, "SELECT "+selectAll(bridge, "chat_events", "")+" FROM chat_events ORDER BY timestamp", nil, func(r row) {
+				jid := str(r["chat_jid"])
+				if _, ok := convs[jid]; !ok {
+					convs[jid] = waConversation(a, person, jid, names[jid], nil)
+				}
+				t, ok := fromISO(str(r["timestamp"]))
+				var args map[string]any
+				if !ok || json.Unmarshal([]byte(str(r["args"])), &args) != nil {
+					return
+				}
+				outgoing := truthy(r["is_from_me"])
+				var sender *archive.Handle
+				if h, ok := person.of(str(r["sender"])); ok && !outgoing {
+					sender = &h
+				}
+				args["by"] = map[string]any{"self": true}
+				if !outgoing {
+					args["by"] = nil
+					if sender != nil {
+						args["by"] = NoticePerson(a, *sender, own)
+					}
+				}
+				code := str(r["code"])
+				x := &archive.Extras{Notice: &archive.Notice{Code: code, Args: args}}
+				if code == "pin" || code == "unpin" {
+					x.Subtype, x.SubtypeCode = "pin", "whatsmeow:"+code
+				} else {
+					x.Subtype, x.SubtypeCode = "notice", "whatsmeow:"+code
+				}
+				if truthy(r["target"]) {
+					x.ReplyKey = str(r["target"])
+				}
+				add("bridge", jid+"/"+str(r["id"]), x, convs[jid], tsMS(t), outgoing, sender, "system", "", str(r["id"]))
+			})
+		}
+		if cols["poll"] { // polls with their votes as they are now
+			votes := map[string][][]string{}
+			if hasTable(bridge, "poll_votes") {
+				for _, r := range maps(bridge, "SELECT chat_jid, poll_id, options FROM poll_votes ORDER BY voter") {
+					var chosen []string
+					if json.Unmarshal([]byte(str(r["options"])), &chosen) == nil {
+						k := str(r["chat_jid"]) + "/" + str(r["poll_id"])
+						votes[k] = append(votes[k], chosen)
+					}
+				}
+			}
+			for _, r := range maps(bridge, "SELECT id, chat_jid, poll FROM messages WHERE coalesce(poll, '') != ''") {
+				var p struct {
+					Question string   `json:"question"`
+					Options  []string `json:"options"`
+					Multiple bool     `json:"multiple"`
+				}
+				if json.Unmarshal([]byte(str(r["poll"])), &p) != nil {
+					continue
+				}
+				counts := map[string]int64{}
+				voters := 0
+				pollVotes := votes[str(r["chat_jid"])+"/"+str(r["id"])]
+				for _, v := range pollVotes {
+					if len(v) > 0 {
+						voters++
+					}
+					for _, h := range v {
+						counts[h]++
+					}
+				}
+				options := []any{}
+				for _, o := range p.Options { // WhatsApp names an option by the SHA-256 of its text
+					sum := sha256.Sum256([]byte(o))
+					opt := pollOption(o, counts[hex.EncodeToString(sum[:])])
+					if len(pollVotes) == 0 { // no vote seen (made before linking, or unreadable): not known
+						opt["votes"] = nil
+					}
+					options = append(options, opt)
+				}
+				n := &archive.Notice{Code: "poll", Args: map[string]any{"question": p.Question, "options": options,
+					"multiple": p.Multiple, "voters": voters}}
+				if mid, ok := a.MessageByKey("whatsapp", str(r["id"]), 0); ok && mid != 0 {
+					setNoticeIfChanged(a, mid, n)
+				}
+			}
+		}
 		updated = bridgeChanges(a, bridge, person, own, reactionOrder, reactions)
 		bridgeMembers(a, bridge, person, own)
 		bridgeMentions(a, bridge, person)
@@ -942,4 +1093,44 @@ func containsHandle(hs []archive.Handle, h archive.Handle) bool {
 		}
 	}
 	return false
+}
+
+// iphoneGroupNotice is a group's change on the iPhone (ZWAMESSAGE type 6) as a notice, for the kinds
+// of change (ZGROUPEVENTTYPE) whose meaning the data shows: 12, the group made (ZTEXT its name; a
+// list of jids is no name); 50, people added (ZTEXT "adder;added,added,..."). nil for the rest,
+// which stay as they are.
+func iphoneGroupNotice(a *archive.Archive, person *waPeople, own map[archive.Handle]bool, event int64, text string,
+	by map[string]any) *archive.Notice {
+	who := func(jid string) map[string]any {
+		if h, ok := person.of(strings.TrimSpace(jid)); ok {
+			return NoticePerson(a, h, own)
+		}
+		return nil
+	}
+	switch event {
+	case 12:
+		if text == "" || strings.Contains(text, "@") {
+			return nil
+		}
+		return groupNotice(by, map[string]any{"type": "created", "title": text})
+	case 50:
+		adder, added, ok := strings.Cut(text, ";")
+		if !ok || added == "" {
+			return nil
+		}
+		if p := who(adder); p != nil {
+			by = p
+		}
+		var actions []map[string]any
+		for _, j := range strings.Split(added, ",") {
+			if p := who(j); p != nil {
+				actions = append(actions, map[string]any{"type": "added", "who": p})
+			}
+		}
+		if len(actions) == 0 {
+			return nil
+		}
+		return groupNotice(by, actions...)
+	}
+	return nil
 }

@@ -214,6 +214,53 @@ func noteDeleted(c *plugins.Context, chat int64, ids []int) (err error) {
 	return err
 }
 
+// notePoll writes a poll's new results (and the poll, where the update has it) into its stored
+// messages, then imports them again.
+func notePoll(c *plugins.Context, u *tg.UpdateMessagePoll) (err error) {
+	defer db.Recover(&err)
+	store, err := openStore(DBPath())
+	if err != nil {
+		return err
+	}
+	keys := map[[2]int64]bool{}
+	err = func() error {
+		defer store.Close()
+		tx, err := store.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		db.Each(tx, "SELECT chat_id, id FROM poll WHERE poll_id = ?", []any{u.PollID},
+			func(scan func(...any)) {
+				var k [2]int64
+				scan(&k[0], &k[1])
+				keys[k] = true
+			})
+		for k := range keys {
+			db.Exec(tx, "UPDATE message SET json = json_set(json, '$.media.results', json(?)) WHERE chat_id = ? AND id = ?",
+				Dump(&u.Results), k[0], k[1])
+			if poll, ok := u.GetPoll(); ok {
+				db.Exec(tx, "UPDATE message SET json = json_set(json, '$.media.poll', json(?)) WHERE chat_id = ? AND id = ?",
+					Dump(&poll), k[0], k[1])
+			}
+		}
+		return tx.Commit()
+	}()
+	skip := idSet(currentSettings(c)["skip_chats"])
+	for k := range keys {
+		if skip[k[0]] {
+			delete(keys, k)
+		}
+	}
+	if err != nil || len(keys) == 0 {
+		return err
+	}
+	_, _, err = sourcekit.RunImporters(c, []sourcekit.Step{{Label: "Telegram live", Run: func(a *archive.Archive, out func(string)) error {
+		return importTelegram(a, out, keys, nil)
+	}}})
+	return err
+}
+
 // untilMS is Telegram's mute_until as Unix ms: 0 not muted, -1 for ever (past the year 3000).
 func untilMS(s tg.PeerNotifySettings) int64 {
 	until, ok := s.GetMuteUntil()
@@ -616,6 +663,12 @@ func handlers(c *plugins.Context, cn *conn, d tg.UpdateDispatcher, members func(
 	})
 	d.OnEditChannelMessage(func(ctx context.Context, e tg.Entities, u *tg.UpdateEditChannelMessage) error {
 		return onMessage(ctx, e, u.Message)
+	})
+
+	// a poll's results changed (someone voted): its stored message takes them, and the archive's
+	// notice of the poll follows
+	d.OnMessagePoll(func(ctx context.Context, e tg.Entities, u *tg.UpdateMessagePoll) error {
+		return logged(notePoll(c, u))
 	})
 
 	// deleted on any device, by the user or (for everyone) by the others: kept, said deleted

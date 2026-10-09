@@ -395,6 +395,9 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 		for _, r := range maps(iphone, "SELECT * FROM ZVIBERMESSAGE ORDER BY Z_PK") {
 			outgoing := !(isStr(r["ZSTATE"]) && str(r["ZSTATE"]) == "received")
 			system := str(r["ZSYSTEMTYPE"])
+			if system == "pollMessageInvisible" { // a vote: counted on its poll
+				continue
+			}
 			var kind string
 			switch {
 			case truthy(r["ZATTACHMENT"]):
@@ -425,6 +428,18 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 				panic(&db.Error{Query: "ZVIBERMESSAGE", Err: fmt.Errorf("KeyError: %v", r["ZCONVERSATION"])})
 			}
 			extra := viberIphoneExtras(r, locations)
+			var by map[string]any
+			if outgoing {
+				by = map[string]any{"self": true}
+			} else if sender != nil {
+				by = NoticePerson(a, *sender, own)
+			}
+			if n, about := viberIphoneNotice(r, by); n != nil {
+				extra.Notice = n
+				if about != "" && extra.ReplyKey == "" {
+					extra.ReplyKey = about
+				}
+			}
 			if extra.EditsKey != "" { // an edit: the message edited takes its text, it is no line of its own
 				edits = append(edits, viberEdit{extra.EditsKey, str(r["ZTEXT"])})
 				continue
@@ -439,6 +454,7 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 	}
 
 	takenFromIphone := map[int64]bool{}
+	var noticed []viberMsg // the desktop export's rows with a notice (iphoneRecs has the iPhone's)
 	var takenOrder []int64
 	events := "—"
 	if desktop != nil {
@@ -558,11 +574,26 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 			if truthy(obj(info["desktop_info"])["edit_token"]) {
 				extra.Edited = true
 			}
+			var by map[string]any
+			if outgoing {
+				by = map[string]any{"self": true}
+			} else if sender != nil {
+				by = NoticePerson(a, *sender, own)
+			}
+			if n, about := viberPin(info, by); n != nil {
+				extra.Notice = n
+				if about != "" && extra.ReplyKey == "" {
+					extra.ReplyKey = about
+				}
+			}
 			rs, reactionsKnown := desktopReactions(r, likes[key], contact)
 			if reactionsKnown {
 				extra.Reactions = rs
 			}
 			add("desktop", pyStr(r["EventID"]), viberMsg{extra, conv, ts, outgoing, sender, kind, str(r["Body"]), key})
+			if extra.Notice != nil && key != "" {
+				noticed = append(noticed, viberMsg{extra: extra, key: key})
+			}
 			if key != "" && conv != 0 {
 				follows = append(follows, desktopFollow{key: key, text: str(r["Body"]), edited: extra.Edited,
 					deleted: deleted, reactions: rs, reactionsKnown: reactionsKnown, mentions: info["textMetaInfo"]})
@@ -575,6 +606,19 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 	for _, pk := range iphoneOrder {
 		if !takenFromIphone[pk] {
 			add("iphone", fmt.Sprint(pk), iphoneRecs[pk])
+		}
+	}
+	// notices on rows imported before there were notices (a poll's counts also change)
+	for _, pk := range iphoneOrder {
+		if r := iphoneRecs[pk]; r.extra.Notice != nil && r.key != "" {
+			noticed = append(noticed, r)
+		}
+	}
+	for _, r := range noticed {
+		if mid, ok := a.MessageByKey("viber", r.key, 0); ok && mid != 0 {
+			if setNoticeIfChanged(a, mid, r.extra.Notice) && r.extra.ReplyKey != "" { // what it pinned
+				a.Exec("UPDATE message SET reply_key = ? WHERE id = ? AND reply_key IS NULL", r.extra.ReplyKey, mid)
+			}
 		}
 	}
 	// the iPhone's copies of messages kept from the Android phone, as second origins: later imports

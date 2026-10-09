@@ -624,6 +624,15 @@ receipts of the owner's messages up to it (`read_at` 0: read, when not known).
       sees itself (`source` 'event': offered, `accepted_at`, `ended_at`, `end_reason`).
     - `blocklist` (`jid`): the people the account blocked, as WhatsApp gives them on connecting and
       as they change.
+    - `group_event` (`group_jid`, `timestamp`, `sender`, `actions` JSON): what changed in a group as
+      WhatsApp said it (joined, added, left, removed, admin, name, description, timer, who may edit
+      or send, approval to join, a new link, a new photo, the group's end), people by jid; imported
+      as notices (docs/design.md, "Notices").
+    - `chat_events` (`chat_jid`, `id`, `sender`, `is_from_me`, `timestamp`, `code` pin, unpin or
+      timer, `args` JSON, `target` the message pinned): pins and a chat's timer, as notices.
+    - in `messages`, `poll` (JSON: `question`, `options`, `multiple`), and `poll_votes`
+      (`chat_jid`, `poll_id`, `voter`, `options`: the SHA-256 of each option chosen, as WhatsApp names
+      them, `timestamp`): each voter's newest vote; a poll is imported with its votes.
     - `bridge_state` (key/value: `connection`, `send_enabled`, `send_blocked`, `ban_until`),
       `bridge_events` (what WhatsApp said about the connection), `sent` (what it sent, for its
       limits).

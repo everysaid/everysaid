@@ -1,6 +1,7 @@
 // The server's API. Every change carries X-Everysaid: 1 (the server refuses changes without it); every
 // request says the interface's language (X-Lang), in which the server words a source's errors.
 import i18n from "./i18n";
+import type { Notice } from "./notice";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -79,6 +80,7 @@ export interface LastItem {
   answered?: boolean;
   video?: boolean;
   detail?: string | null;
+  notice?: Notice | null;
 }
 
 export interface ChatSummary {
@@ -269,6 +271,7 @@ export interface MessageItem {
   chat_title?: string;
   highlight?: [string, boolean][];
   loose?: boolean;          // a message being sent whose text the service may write otherwise (mentions, a file)
+  notice?: Notice | null;   // what a notice (or the message's context) says, for noticeLines
 }
 
 export interface CallItem {

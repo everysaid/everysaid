@@ -8,6 +8,7 @@ import { Archive, ArchiveRestore, BellOff, Check, Image, MessagesSquare, Mic, Mo
 import { api, type ChatSummary } from "@/lib/api";
 import { useChats, useDebounced } from "@/lib/hooks";
 import { shortWhen } from "@/lib/format";
+import { noticeLines } from "@/lib/notice";
 import { cn } from "@/lib/utils";
 import { service } from "@/lib/services";
 import { Avatar, Button, Empty, Menu, MenuContent, MenuItem, MenuTrigger, Segmented, ServiceDot, Spinner } from "./ui";
@@ -36,11 +37,12 @@ function Preview({ c }: { c: ChatSummary }) {
     );
   }
   const icon = l.kind === "image" ? <Image className="size-3.5 shrink-0" /> : l.kind === "voice" ? <Mic className="size-3.5 shrink-0" /> : l.kind === "video" ? <Video className="size-3.5 shrink-0" /> : null;
-  const body = l.deleted ? t("chat.deleted") : l.text || (l.kind && l.kind !== "text" ? t(`kind.${l.kind}`, { defaultValue: l.kind }) : "");
+  const said = l.notice && l.kind === "system" ? noticeLines(l.notice, t)[0] : null;
+  const body = l.deleted ? t("chat.deleted") : said || l.text || (l.kind && l.kind !== "text" ? t(`kind.${l.kind}`, { defaultValue: l.kind }) : "");
   return (
     <span className="flex min-w-0 items-center gap-1">
       {l.outgoing && <Check className="size-3.5 shrink-0 text-muted" />}
-      {l.sender && <span className="shrink-0 font-medium text-fg/80">{/\p{L}/u.test(l.sender) ? l.sender.split(" ")[0] : l.sender}:</span>}
+      {l.sender && !said && <span className="shrink-0 font-medium text-fg/80">{/\p{L}/u.test(l.sender) ? l.sender.split(" ")[0] : l.sender}:</span>}
       {icon}
       <span className="truncate">{body}</span>
     </span>

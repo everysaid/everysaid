@@ -1,6 +1,7 @@
 package importers
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -150,4 +151,64 @@ func TestTelegramMembers(t *testing.T) {
 	var name string
 	a.Row("SELECT hn.name FROM handle_name hn JOIN address ad ON ad.id = hn.address_id WHERE ad.value = '666'", nil, &name)
 	eq(t, "Dan's name", name, "Dan")
+}
+
+// Telegram's service messages and polls say what they are as notices: who added whom, who left, a
+// new title, a pin (of the message it answers), a group call, a timer, and a poll with its results.
+func TestTelegramNotices(t *testing.T) {
+	t.Cleanup(config.Load)
+	t.Setenv("EVERYSAID_CACHE", t.TempDir())
+	config.Load()
+	a, _ := newArchive(t)
+	d := telegramDB(t, telegramstore.DB())
+	add := func(id int64, m M) {
+		db.Exec(d, "INSERT INTO message (chat_id, id, date, json) VALUES (?, ?, ?, ?)", tgGroup, id, 1_790_000_100+id, js(m))
+	}
+	svc := func(id, from int64, action M) {
+		add(id, M{"_": "MessageService", "id": id, "from_id": M{"user_id": from}, "action": action})
+	}
+	svc(30, tgBob, M{"_": "MessageActionChatAddUser", "users": []int64{tgMaria}})
+	svc(31, tgMaria, M{"_": "MessageActionChatDeleteUser", "user_id": tgMaria})
+	svc(32, tgBob, M{"_": "MessageActionChatEditTitle", "title": "Friends!"})
+	add(33, M{"_": "MessageService", "id": 33, "out": true, "action": M{"_": "MessageActionPinMessage"},
+		"reply_to": M{"reply_to_msg_id": 2}})
+	svc(34, tgBob, M{"_": "MessageActionGroupCall", "call": M{"id": 5}})
+	svc(35, tgBob, M{"_": "MessageActionSetMessagesTTL", "period": 86400})
+	svc(36, tgBob, M{"_": "MessageActionContactSignUp"})
+	add(37, M{"_": "Message", "id": 37, "from_id": M{"user_id": tgBob}, "media": M{"_": "MessageMediaPoll",
+		"poll":    M{"question": M{"text": "When?"}, "answers": []M{{"text": "Mon"}, {"text": "Tue"}}, "closed": true},
+		"results": M{"total_voters": 3, "results": []M{{"voters": 1}, {"voters": 2}}}}})
+	must(t, Telegram(a, nil, TelegramOptions{}))
+
+	notice := func(key string) (string, map[string]any) {
+		var code, args string
+		a.Row("SELECT n.code, n.args FROM notice n JOIN message m ON m.id = n.message_id WHERE m.key = ?", []any{key}, &code, &args)
+		var v map[string]any
+		json.Unmarshal([]byte(args), &v)
+		return code, v
+	}
+	action := func(key string) map[string]any {
+		_, v := notice(key)
+		acts, _ := v["actions"].([]any)
+		if len(acts) != 1 {
+			t.Fatalf("%s: %v", key, v)
+		}
+		return acts[0].(map[string]any)
+	}
+	eq(t, "added", action("30")["type"], "added")
+	eq(t, "left", action("31")["type"], "left")
+	eq(t, "title", action("32")["title"], "Friends!")
+	code, v := notice("33")
+	eq(t, "pin", []any{code, v["by"]}, []any{"pin", map[string]any{"self": true}})
+	eq(t, "pinned", a.Int("SELECT count(*) FROM message p JOIN message m ON m.id = p.reply_to WHERE p.key = '33' AND m.key = '2'"), int64(1))
+	code, _ = notice("34")
+	eq(t, "group call", code, "group_call")
+	code, v = notice("35")
+	eq(t, "timer", []any{code, v["seconds"]}, []any{"timer", float64(86400)})
+	code, _ = notice("36")
+	eq(t, "no notice", code, "")
+	code, v = notice("37")
+	opts, _ := v["options"].([]any)
+	eq(t, "poll", []any{code, len(opts), opts[1].(map[string]any)["votes"], v["ended"], v["voters"]},
+		[]any{"poll", 2, float64(2), true, float64(3)})
 }

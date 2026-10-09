@@ -702,9 +702,15 @@ func lastItem(s *Store, chat *Chat, calls bool) M {
 	if chat.Type == "group" && row.sender.Valid && row.sender.Int64 != 0 {
 		sender = PeopleOf(s).NameOfAddress(row.sender.Int64)
 	}
+	var notice any
+	var code string
+	var args sql.NullString
+	if tables(s)["notice"] && db.Row(q, "SELECT code, args FROM notice WHERE message_id = ?", []any{row.id}, &code, &args) {
+		notice = noticeOf(PeopleOf(s), code, args)
+	}
 	return M{"type": "message", "id": row.id, "ts": row.ts, "outgoing": row.outgoing, "kind": lk.Kind[row.kind],
 		"text": Cut(txt, 160), "service": lk.Service[row.sid], "subtype": nullString(row.subtype),
-		"deleted": row.deleted, "sender": sender}
+		"deleted": row.deleted, "sender": sender, "notice": notice}
 }
 
 func nullString(v sql.NullString) any {

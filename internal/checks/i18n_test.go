@@ -121,7 +121,7 @@ func webSources(t *testing.T) map[string]string {
 }
 
 // keys the code builds from data: each whole namespace is used
-var dynamic = []string{"errors.", "audit.", "kind.", "call.", "nav.", "settings.via.", "sources.", "people.why", "chat.state",
+var dynamic = []string{"errors.", "audit.", "kind.", "call.", "nav.", "settings.via.", "sources.", "people.why", "chat.state", "notice.",
 	"labels.builtin.", "settings.tab."}
 
 func TestBothLanguagesHaveTheSameKeys(t *testing.T) {
@@ -248,6 +248,102 @@ func TestTheArchivesVocabulariesHaveWords(t *testing.T) {
 	for _, d := range archive.VocabularyOf("call.detail") {
 		if !keys["call."+d] {
 			t.Errorf("no words for call.%s", d)
+		}
+	}
+}
+
+// The words the interface builds from a notice's values (notice.ts) exist.
+func TestTheNoticesWordsBuiltFromValuesExist(t *testing.T) {
+	keys := uiKeys(t, "el")
+	for _, k := range []string{"group.adminOn", "group.adminOff", "group.linkOn", "group.linkOff", "group.linkApproval",
+		"group.announcementsOn", "group.announcementsOff", "group.approval", "group.approvalOn", "group.approvalOff",
+		"group.invitedSomeone", "group.avatarRemoved", "group.joined_link", "group.created", "group.changed", "timerOff",
+		"pinFor", "you", "votes_one", "voters_one", "multiple", "ended"} {
+		if !keys["notice."+k] {
+			t.Errorf("no words for notice.%s", k)
+		}
+	}
+}
+
+// Every notice an importer writes (archive.Notice{Code: "..."}) has words in the interface
+// (notice.<code>, a group's change notice.group.changed), and so does every action of a group's
+// change the Signal helper writes (convert.rs: "type": "...").
+func TestEveryNoticeHasWords(t *testing.T) {
+	keys := uiKeys(t, "el")
+	codes := map[string]bool{}
+	for _, f := range goFiles(t) {
+		ast.Inspect(f, func(n ast.Node) bool {
+			c, ok := n.(*ast.CallExpr)
+			if ok { // notice("code", ...) in the Signal importer
+				if id, ok := c.Fun.(*ast.Ident); ok && id.Name == "notice" && len(c.Args) > 0 {
+					if lit, ok := c.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+						v, _ := strconv.Unquote(lit.Value)
+						codes[v] = true
+					}
+				}
+			}
+			cl, ok := n.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			if sel, ok := cl.Type.(*ast.SelectorExpr); !ok || sel.Sel.Name != "Notice" {
+				return true
+			}
+			for _, e := range cl.Elts {
+				kv, ok := e.(*ast.KeyValueExpr)
+				if !ok {
+					continue
+				}
+				if k, ok := kv.Key.(*ast.Ident); ok && k.Name == "Code" {
+					if lit, ok := kv.Value.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+						v, _ := strconv.Unquote(lit.Value)
+						codes[v] = true
+					}
+				}
+			}
+			return true
+		})
+	}
+	for c := range codes {
+		switch c {
+		case "poll": // shown as the poll itself (PollView), with notice.votes
+			c = "votes_one"
+		case "group":
+			c = "group.changed"
+		}
+		if !keys["notice."+c] {
+			t.Errorf("notice without words: notice.%s", c)
+		}
+	}
+	src, err := os.ReadFile(filepath.Join(root(t), "bridges", "signal", "src", "convert.rs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	said := map[string]bool{ // said by other words (on or off, how far)
+		"admin": true, "access_link": true, "announcements": true, "timer": true, "invited": true, "approval": true}
+	sources := []string{string(src)}
+	// the Go importers' notices and the WhatsApp bridge's group changes, pins and timers
+	files, _ := filepath.Glob(filepath.Join(root(t), "internal", "importers", "*notice*.go"))
+	files = append(files, filepath.Join(root(t), "internal", "whatsapp", "groups.go"),
+		filepath.Join(root(t), "internal", "whatsapp", "messages.go"),
+		filepath.Join(root(t), "internal", "importers", "whatsapp.go"))
+	{
+		for _, f := range files {
+			b, _ := os.ReadFile(f)
+			sources = append(sources, string(b))
+			for _, m := range regexp.MustCompile(`(?:code(?:, args)? :?= |storeChatEvent\(evt, )"(\w+)"`).FindAllStringSubmatch(string(b), -1) {
+				if !keys["notice."+m[1]] {
+					t.Errorf("notice without words: notice.%s (%s)", m[1], filepath.Base(f))
+				}
+			}
+		}
+	}
+	for _, src := range sources {
+		// a type written as a map's or JSON's value, or passed to a helper that writes it
+		for _, m := range regexp.MustCompile(`(?:"type":\s*|\bact\(|\bpeople\()"(\w+)"`).FindAllStringSubmatch(src, -1) {
+			if !said[m[1]] && !keys["notice.group."+m[1]] {
+				t.Errorf("a group's change without words: notice.group.%s", m[1])
+			}
 		}
 	}
 }

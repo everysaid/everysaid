@@ -58,6 +58,18 @@ CREATE TABLE IF NOT EXISTS chat_member_list ( -- when each group's members were 
     count INTEGER,                      -- how many Telegram says the group has
     fetched_at INTEGER NOT NULL         -- Unix s
 );
+CREATE TABLE IF NOT EXISTS poll (           -- which message has each poll (a vote's update names only the poll)
+    poll_id INTEGER NOT NULL,
+    chat_id INTEGER NOT NULL,
+    id INTEGER NOT NULL,
+    PRIMARY KEY (poll_id, chat_id, id)
+) WITHOUT ROWID;
+CREATE TRIGGER IF NOT EXISTS message_poll_insert AFTER INSERT ON message
+    WHEN json_extract(new.json, '$.media.poll.id') IS NOT NULL BEGIN
+    INSERT OR IGNORE INTO poll VALUES (json_extract(new.json, '$.media.poll.id'), new.chat_id, new.id); END;
+CREATE TRIGGER IF NOT EXISTS message_poll_update AFTER UPDATE OF json ON message
+    WHEN json_extract(new.json, '$.media.poll.id') IS NOT NULL BEGIN
+    INSERT OR IGNORE INTO poll VALUES (json_extract(new.json, '$.media.poll.id'), new.chat_id, new.id); END;
 `
 
 // DB is the store's path; Media the folder of its downloaded files.
@@ -76,9 +88,17 @@ func Open(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	hadPolls := db.Exists(d, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'poll'")
 	if _, err := d.Exec(Schema); err != nil {
 		d.Close()
 		return nil, err
+	}
+	if !hadPolls { // the polls of a store made before there was a table of them, once
+		if _, err := d.Exec(`INSERT OR IGNORE INTO poll SELECT json_extract(json, '$.media.poll.id'), chat_id, id
+			FROM message WHERE json LIKE '%"MessageMediaPoll"%' AND json_extract(json, '$.media.poll.id') IS NOT NULL`); err != nil {
+			d.Close()
+			return nil, err
+		}
 	}
 	return d, nil
 }

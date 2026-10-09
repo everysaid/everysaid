@@ -552,6 +552,11 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 				calls += telegramCall(a, src, rowKey, m, person.of(c.id, true), ts)
 			}
 			from, fromOK := peerID(m["from_id"])
+			// who did what a notice says: in a private chat Telegram leaves it out, the other person
+			noticeFrom, noticeOK := from, fromOK && from != 0
+			if !noticeOK && kind == "user" {
+				noticeFrom, noticeOK = c.id, true
+			}
 			if !outgoing && kind != "user" && kind != "saved" && fromOK && from > 0 {
 				h := person.of(from, true) // a group's members: whoever wrote there
 				if !senders[h] {
@@ -566,6 +571,20 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 			}
 			if a.HasOrigin(src, rowKey, "") {
 				telegramChanges(a, src, rowKey, m, person, own, updated, deleted[mid])
+				// notices of rows imported before there were notices, and a poll's results as they are
+				// now (a later fetch of the message, or a vote's update, has them)
+				n := telegramNotice(a, m, person, own, noticeFrom, noticeOK)
+				if n != nil {
+					if mid, ok := a.IntOK("SELECT message_id FROM message_origin WHERE source_id = ? AND row_key = ?",
+						src, rowKey); ok && setNoticeIfChanged(a, mid, n) {
+						updated["notice"]++
+						reply := obj(m["reply_to"])
+						if n.Code == "pin" && truthy(reply["reply_to_msg_id"]) { // what it pinned
+							a.Exec("UPDATE message SET reply_key = ? WHERE id = ? AND reply_key IS NULL",
+								pyStr(reply["reply_to_msg_id"]), mid)
+						}
+					}
+				}
 				return
 			}
 			k := telegramKindOf(m)
@@ -593,6 +612,7 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 			if truthy(m["reactions"]) {
 				x.Reactions = tgReactions(m, person, own)
 			}
+			x.Notice = telegramNotice(a, m, person, own, noticeFrom, noticeOK)
 			var senderID int64
 			if !outgoing {
 				who, whoOK := from, fromOK && from != 0

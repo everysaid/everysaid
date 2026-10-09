@@ -251,7 +251,7 @@ func slim(item core.M) core.M {
 	if truthy(item["text"]) {
 		out["text"] = item["text"]
 	}
-	for _, k := range []string{"subtype", "edited", "deleted", "forwarded"} {
+	for _, k := range []string{"subtype", "notice", "edited", "deleted", "forwarded"} {
 		if truthy(item[k]) {
 			out[k] = item[k]
 		}

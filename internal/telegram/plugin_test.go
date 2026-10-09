@@ -463,3 +463,30 @@ func TestLiveFiles(t *testing.T) {
 		t.Fatal("the setting")
 	}
 }
+
+// A poll's new results (someone voted) go into its stored message, which is imported again.
+func TestPollResults(t *testing.T) {
+	in := newInstance(t, nil)
+	c := in.ctx()
+	bob := user(2, "Bob", 22)
+	poll := &tg.Message{ID: 7, PeerID: &tg.PeerUser{UserID: 2}, Date: 1600000000}
+	poll.SetMedia(&tg.MessageMediaPoll{Poll: tg.Poll{ID: 4242, Question: tg.TextWithEntities{Text: "When?"},
+		Answers: []tg.PollAnswerClass{&tg.PollAnswer{Text: tg.TextWithEntities{Text: "Mon"}, Option: []byte{0}},
+			&tg.PollAnswer{Text: tg.TextWithEntities{Text: "Tue"}, Option: []byte{1}}}}})
+	if _, err := storeMessages(c, bob, []sent{{poll, bob}}); err != nil {
+		t.Fatal(err)
+	}
+	u := &tg.UpdateMessagePoll{PollID: 4242, Results: tg.PollResults{Results: []tg.PollAnswerVoters{
+		{Option: []byte{0}, Voters: 1}, {Option: []byte{1}, Voters: 3}}}}
+	u.Results.SetTotalVoters(4)
+	if err := notePoll(c, u); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := db.ReadOnly(DBPath())
+	defer d.Close()
+	var voters int64
+	db.Row(d, "SELECT coalesce(json_extract(json, '$.media.results.total_voters'), 0) FROM message WHERE id = 7", nil, &voters)
+	if voters != 4 || len(in.keys) != 2 {
+		t.Fatalf("voters %d, imports %v", voters, in.keys)
+	}
+}

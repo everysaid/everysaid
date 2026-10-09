@@ -5,6 +5,7 @@ import { Check, CheckCheck, CornerUpLeft, FileText, Forward, ImageOff, MapPin, P
 import { thumbUrl, type Attachment, type CallItem, type Mention, type MessageItem, type Receipts } from "@/lib/api";
 import { bytes, duration, time } from "@/lib/format";
 import { service } from "@/lib/services";
+import { noticeLines, pollOf } from "@/lib/notice";
 import { cn } from "@/lib/utils";
 import { Avatar, Menu, MenuContent, MenuItem, MenuTrigger } from "./ui";
 
@@ -131,14 +132,39 @@ function AttachmentView({ a, onOpen }: { a: Attachment; onOpen: (a: Attachment) 
 }
 
 export const SystemLine = memo(function SystemLine({ m }: { m: MessageItem }) {
+  const { t } = useTranslation();
+  const lines = m.notice ? noticeLines(m.notice, t) : [];
   return (
     <div className="flex justify-center px-4 py-1">
-      <span className="max-w-[80%] rounded-full bg-panel/80 px-3 py-1 text-center text-xs text-muted shadow-sm backdrop-blur">
-        {m.text || m.subtype || "—"} · {time(m.ts)}
+      <span className="max-w-[80%] rounded-2xl bg-panel/80 px-3 py-1 text-center text-xs text-muted shadow-sm backdrop-blur">
+        {lines.length ? lines.map((l, i) => <span key={i} className="block">{l}{i === lines.length - 1 && <> · {time(m.ts)}</>}</span>)
+          : <>{m.text || m.subtype || "—"} · {time(m.ts)}</>}
       </span>
     </div>
   );
 });
+
+/** A poll with how many chose each option. */
+function PollView({ poll }: { poll: NonNullable<ReturnType<typeof pollOf>> }) {
+  const { t } = useTranslation();
+  const most = Math.max(1, ...poll.options.map((o) => o.votes ?? 0));
+  return (
+    <div className="min-w-48">
+      <div className="font-medium">{poll.question}</div>
+      {poll.multiple && <div className="text-xs opacity-70">{t("notice.multiple")}</div>}
+      {poll.ended && <div className="text-xs opacity-70">{t("notice.ended")}</div>}
+      {poll.voters != null && poll.voters > 0 && <div className="text-xs opacity-70">{t("notice.voters", { count: poll.voters })}</div>}
+      <ul className="mt-1 space-y-1">
+        {poll.options.map((o, i) => (
+          <li key={i} className="text-sm">
+            <div className="flex justify-between gap-3"><span>{o.text}</span>{o.votes != null && <span className="shrink-0 text-xs opacity-70">{t("notice.votes", { count: o.votes })}</span>}</div>
+            {o.votes != null && <div className="mt-0.5 h-1 rounded-full bg-current/15"><div className="h-1 rounded-full bg-current/60" style={{ width: `${(o.votes / most) * 100}%` }} /></div>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 export const CallLine = memo(function CallLine({ c }: { c: CallItem }) {
   const { t } = useTranslation();
@@ -303,6 +329,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
   // pictures alone: the time over them (not when none of them is there any more: a line of text then)
   const onlyMedia = !(m.deleted && !reveal) && media.some((a) => a.available !== "gone") && !m.text && !others.length && !m.reply;
   const label = m.kind !== "text" && !m.attachments.length && !m.text && !m.location ? t(`kind.${m.kind}`, { defaultValue: m.kind }) : null;
+  const poll = pollOf(m.notice);
   return (
     <div id={`m${m.id}`} className={cn("group/msg flex gap-2 px-3 md:px-6", out ? "justify-end" : "justify-start", first ? "mt-2" : "mt-0.5")}>
       {out && actions}
@@ -335,6 +362,9 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
           {m.forwarded && (
             <div className="mb-1 flex items-center gap-1 text-xs opacity-70"><Forward className="size-3" />{t("chat.forwarded")}</div>
           )}
+          {(m.notice?.code === "story_reply" || m.notice?.code === "story_reaction") && (
+            <div className="mb-1 text-xs opacity-70">{noticeLines(m.notice, t)[0]}</div>
+          )}
           {m.reply && (
             <button
               onClick={() => onJump(m.reply!.id)}
@@ -366,7 +396,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
               <span>{m.location.place || t("kind.location")}{m.location.lat != null && <span className="block text-xs opacity-70">{m.location.lat.toFixed(4)}, {m.location.lon?.toFixed(4)}</span>}</span>
             </a>
           )}
-          {(m.text || label || m.deleted) && (
+          {poll && !m.deleted ? <PollView poll={poll} /> : (m.text || label || m.deleted) && (
             <div className={cn("whitespace-pre-wrap break-words [overflow-wrap:anywhere]", onlyMedia && "px-2 pb-1")}>
               {m.deleted && !m.text ? t("chat.deleted") : m.text ? <RichText text={m.text} marks={m.highlight} mentions={m.mentions} /> : <span className="opacity-70">{label}</span>}
             </div>

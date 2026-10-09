@@ -3,7 +3,10 @@
 package importers
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -303,4 +306,72 @@ func TestStatusAndChannelsAreNotChats(t *testing.T) {
 			t.Fatalf("%s is a chat", jid)
 		}
 	}
+}
+
+// A group's changes the bridge kept (group_event) are notices in the group: who was added and by
+// whom, a new name; once only, however many times it is imported.
+func TestBridgeGroupEvents(t *testing.T) {
+	a, _ := newArchive(t)
+	path, d := bridgeDB(t, t.TempDir(), newBridgeSchema+`CREATE TABLE group_event (group_jid TEXT, timestamp TIMESTAMP,
+		sender TEXT, actions TEXT, PRIMARY KEY (group_jid, timestamp, actions));`)
+	db.Exec(d, "INSERT INTO chats VALUES (?, 'Friends', ?)", waGroup, waTS(30))
+	db.Exec(d, "INSERT INTO group_event VALUES (?, ?, ?, ?)", waGroup, waTS(5), waPeer,
+		`[{"type":"added","who":"15559990000@s.whatsapp.net"},{"type":"title","title":"Friends!"}]`)
+	runBridge(t, a, path)
+	runBridge(t, a, path)
+	var code, args string
+	a.Row("SELECT n.code, n.args FROM notice n JOIN message m ON m.id = n.message_id", nil, &code, &args)
+	var v map[string]any
+	must(t, json.Unmarshal([]byte(args), &v))
+	acts, _ := v["actions"].([]any)
+	eq(t, "notice", []any{code, len(acts), v["by"] != nil}, []any{"group", 2, true})
+	eq(t, "who", acts[0].(map[string]any)["who"] != nil, true)
+	eq(t, "once", a.Int("SELECT count(*) FROM notice"), int64(1))
+}
+
+// A pin (of the message it is about), a timer set, and a poll with each option's votes (WhatsApp
+// names a chosen option by the SHA-256 of its text), from what the bridge kept.
+func TestBridgePinsTimersAndPolls(t *testing.T) {
+	a, _ := newArchive(t)
+	path, d := bridgeDB(t, t.TempDir(), newBridgeSchema+`ALTER TABLE messages ADD COLUMN poll TEXT;
+		CREATE TABLE poll_votes (chat_jid TEXT, poll_id TEXT, voter TEXT, options TEXT, timestamp TIMESTAMP,
+			PRIMARY KEY (chat_jid, poll_id, voter));
+		CREATE TABLE chat_events (chat_jid TEXT, id TEXT, sender TEXT, is_from_me BOOLEAN, timestamp TIMESTAMP, code TEXT,
+			args TEXT, target TEXT, PRIMARY KEY (chat_jid, id));`)
+	waMessage(d, "M1", 1, "pin me", 0, M{"kind": "text"})
+	waMessage(d, "P1", 2, "When?\n• Mon\n• Tue", 0, M{"kind": "poll",
+		"poll": `{"question":"When?","options":["Mon","Tue"],"multiple":false}`})
+	tue := sha256.Sum256([]byte("Tue"))
+	db.Exec(d, "INSERT INTO poll_votes VALUES (?, 'P1', ?, ?, ?)", waPeer, waPeer, `["`+hex.EncodeToString(tue[:])+`"]`, waTS(3))
+	db.Exec(d, "INSERT INTO chat_events VALUES (?, 'E1', '', 1, ?, 'pin', '{\"seconds\":86400}', 'M1')", waPeer, waTS(4))
+	db.Exec(d, "INSERT INTO chat_events VALUES (?, 'E2', ?, 0, ?, 'timer', '{\"seconds\":604800}', '')", waPeer, waPeer, waTS(5))
+	runBridge(t, a, path)
+	notice := func(key string) (string, map[string]any) {
+		var code, args string
+		a.Row("SELECT n.code, n.args FROM notice n JOIN message m ON m.id = n.message_id WHERE m.key = ?", []any{key}, &code, &args)
+		var v map[string]any
+		json.Unmarshal([]byte(args), &v)
+		return code, v
+	}
+	code, v := notice("E1")
+	eq(t, "pin", []any{code, v["seconds"], v["by"]}, []any{"pin", float64(86400), map[string]any{"self": true}})
+	eq(t, "pinned", a.Int("SELECT count(*) FROM message p JOIN message m ON m.id = p.reply_to WHERE p.key = 'E1' AND m.key = 'M1'"), int64(1))
+	code, v = notice("E2")
+	eq(t, "timer", []any{code, v["seconds"]}, []any{"timer", float64(604800)})
+	code, v = notice("P1")
+	opts, _ := v["options"].([]any)
+	eq(t, "poll", []any{code, opts[0].(map[string]any)["votes"], opts[1].(map[string]any)["votes"], v["voters"]},
+		[]any{"poll", float64(0), float64(1), float64(1)})
+}
+
+// The iPhone's group changes whose meaning is known: a new name (12), people added (50).
+func TestIphoneGroupNotices(t *testing.T) {
+	a, _ := newArchive(t)
+	person := newWAPeople(nil, nil, nil, nil)
+	own := a.Own()
+	n := iphoneGroupNotice(a, person, own, 12, "Friends!", nil)
+	eq(t, "title", n.Args["actions"].([]any)[0].(map[string]any)["title"], "Friends!")
+	n = iphoneGroupNotice(a, person, own, 50, "15551234567@s.whatsapp.net;15559990001@s.whatsapp.net,15559990002@s.whatsapp.net", nil)
+	eq(t, "added", []any{len(n.Args["actions"].([]any)), n.Args["by"] != nil}, []any{2, true})
+	eq(t, "unknown kinds stay", iphoneGroupNotice(a, person, own, 2, "15559990001@s.whatsapp.net", nil) == nil, true)
 }

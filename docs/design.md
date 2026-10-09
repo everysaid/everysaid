@@ -149,6 +149,26 @@ changes in place).
   finds `Καλημέρα`: `message_fts` by words and `message_tri` by trigrams (parts of words). The
   archive writes them as it adds a message, not a trigger, so that every connection that writes
   needs no custom function; the snippet is made from the original text.
+- **Notices** (`notice`: a message's code and values, JSON) say what a notice or a message's context
+  is in a form the interface puts in the user's language, whatever the source: the importers write
+  the codes below, and the UI and the MCP read them without knowing the service. A person in the
+  values is `{"address": id}` (the core adds `name`, `person_id`, `me`), the owner `{"self": true}`;
+  `by` is who did it. A source adds them as it learns its service's events; a message without one
+  is shown by its text and subtype as before.
+  - `group`: `actions`, each `{"type", ...}`: `created` (`title`), `added`, `removed`, `joined`, `joined_link` (by the group's link), `left`,
+    `invited`, `invite_accepted`, `invite_declined`, `invite_revoked`, `requested`,
+    `request_approved`, `request_denied`, `request_withdrawn` (each with `who`); `admin` (`who`,
+    `on`); `title` (`title`); `description` (`text`); `avatar`; `timer` (`seconds`, 0: off);
+    `access_info`, `access_members`, `access_link` (`level`: anyone, members, admins, off);
+    `link_reset`; `announcements` (`on`); `approval` (joining needs an admin's approval: `on`,
+    absent where the service does not say which); `banned`, `unbanned` (`who`); `ended`. No actions: the
+    group changed, how is not known.
+  - `timer` (`seconds`, 0: off), `pin` (`seconds`, null: for good) and `unpin` (the message is the
+    one it answers), `poll` (on the poll itself: `question`, `options` `[{text, votes}]`,
+    `multiple`, `voters`, `ended`, kept as the votes change; an option's `votes` null where the
+    service gave only how many voted), `poll_end` (answers the poll), `group_call`,
+    `payment`, `gift`, `unsupported` (made by a newer version of the service), `unreadable` (could
+    not be decrypted), `story_reply` (a message answering a story), `story_reaction` (`emoji`).
 - **The user's settings** shared by every device (theme, language, names' order, hidden services,
   labels' settings) are in the archive (`setting`), and so is a chat's state the user chose
   (`chat_state`).

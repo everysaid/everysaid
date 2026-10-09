@@ -256,3 +256,44 @@ func TestViberEditEvents(t *testing.T) {
 		eq(t, "found by the new", searchKeys(a, "fixed"), []string{"1002"})
 	}
 }
+
+// Viber's pins and polls say what they are as notices: a pin of the message it is about, an unpin,
+// and a poll with its counts and how many voted (each vote a row of its own, not a message).
+func TestViberNotices(t *testing.T) {
+	a, _ := newArchive(t)
+	path := filepath.Join(t.TempDir(), "viber.sqlite")
+	viberDB(t, path)
+	d, err := db.Open(path)
+	must(t, err)
+	date := 1_790_000_200 - archive.AppleEpoch
+	ins := func(pk, token int64, state, system string, sender any, text string, md, cm any) {
+		db.Exec(d, "INSERT INTO ZVIBERMESSAGE (Z_PK, ZSTATE, ZSYSTEMTYPE, ZCONVERSATION, ZDATE, ZTOKEN, ZPHONENUMINDEX, "+
+			"ZTEXT, ZMETADATA, ZCLIENTMETADATA, ZLIKESCOUNT) VALUES (?, ?, ?, 20, ?, ?, ?, ?, ?, ?, 0)",
+			pk, state, system, date+int(pk), token, sender, text, md, cm)
+	}
+	ins(10, 3001, "received", "systemPinnedMessageCreated", 1, "(paperclip) hey", js(M{"pin": M{"action": "create", "token": 2001}}), nil)
+	ins(11, 3002, "delivered", "systemPinnedMessageDeleted", nil, "", js(M{"pin": M{"action": "delete", "token": 2001}}), nil)
+	ins(12, 3003, "received", "poll", 1, "When?", js(M{"poll": M{"multiple": false}}),
+		js(M{"Poll": []M{{"title": "Mon", "count": 1}, {"title": "Tue", "count": 1}}}))
+	ins(13, 3004, "received", "pollMessageInvisible", 1, "Mon", js(M{"poll": M{"parentToken": 3003}}), nil)
+	ins(14, 3005, "delivered", "pollMessageInvisible", nil, "Tue", js(M{"poll": M{"parentToken": 3003}}), nil)
+	d.Close()
+	must(t, Viber(a, nil, ViberOptions{IphoneDB: path, NoDesktop: true}))
+
+	notice := func(key string) (string, map[string]any) {
+		var code, args string
+		a.Row("SELECT n.code, n.args FROM notice n JOIN message m ON m.id = n.message_id WHERE m.key = ?", []any{key}, &code, &args)
+		var v map[string]any
+		json.Unmarshal([]byte(args), &v)
+		return code, v
+	}
+	code, v := notice("3001")
+	eq(t, "pin", []any{code, v["by"] != nil}, []any{"pin", true})
+	eq(t, "pinned", a.Int("SELECT count(*) FROM message p JOIN message m ON m.id = p.reply_to WHERE p.key = '3001' AND m.key = '2001'"), int64(1))
+	code, v = notice("3002")
+	eq(t, "unpin", []any{code, v["by"]}, []any{"unpin", map[string]any{"self": true}})
+	code, v = notice("3003")
+	opts, _ := v["options"].([]any)
+	eq(t, "poll", []any{code, len(opts), v["voters"]}, []any{"poll", 2, float64(2)}) // single choice: one each
+	eq(t, "no votes as messages", a.Int("SELECT count(*) FROM message WHERE key IN ('3004', '3005')"), int64(0))
+}

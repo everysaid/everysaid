@@ -9,6 +9,8 @@ package whatsapp
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -35,6 +37,7 @@ type StoredMessage struct {
 	Forwarded                            bool
 	Lat, Lon                             *float64
 	Place                                string
+	Poll                                 string // a poll's question, options, multiple (JSON)
 }
 
 // migrate adds what this version keeps to a store made by an older one. Nothing is removed.
@@ -55,6 +58,7 @@ func (store *MessageStore) migrate() error {
 		"media_error": "TEXT",      // why it could not be downloaded
 		"mentions":    "TEXT",      // the jids the text names with @<user>, comma-separated
 		"read_at":     "TIMESTAMP", // when the account read it (a message from others), on any device
+		"poll":        "TEXT",      // a poll's question, options and whether several may be chosen (JSON)
 	}
 	have := map[string]bool{}
 	rows, err := store.db.Query("PRAGMA table_info(messages)")
@@ -110,8 +114,45 @@ func (store *MessageStore) migrate() error {
 			outcome TEXT,
 			PRIMARY KEY (call_id, jid)
 		);
+		CREATE TABLE IF NOT EXISTS poll_votes (   -- each voter's newest vote in a poll
+			chat_jid TEXT,
+			poll_id TEXT,
+			voter TEXT,
+			options TEXT,             -- JSON: the SHA-256 (hex) of each option chosen, as WhatsApp names them
+			timestamp TIMESTAMP,
+			PRIMARY KEY (chat_jid, poll_id, voter)
+		);
+		CREATE TABLE IF NOT EXISTS chat_events (  -- a pin, a timer set: what a notice says (docs/design.md, "Notices")
+			chat_jid TEXT,
+			id TEXT,                  -- the message that said it
+			sender TEXT,
+			is_from_me BOOLEAN,
+			timestamp TIMESTAMP,
+			code TEXT,                -- pin, unpin, timer
+			args TEXT,                -- JSON
+			target TEXT,              -- the message it is about, if any
+			PRIMARY KEY (chat_jid, id)
+		);
 	`)
 	return err
+}
+
+// storeChatEvent keeps a pin or a timer set, as a notice says it.
+func (store *MessageStore) storeChatEvent(evt *events.Message, code string, args map[string]any, target string) error {
+	js, _ := json.Marshal(args)
+	_, err := store.db.Exec(`INSERT OR IGNORE INTO chat_events VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, evt.Info.Chat.String(),
+		evt.Info.ID, evt.Info.Sender.ToNonAD().String(), evt.Info.IsFromMe, evt.Info.Timestamp, code, string(js), target)
+	return err
+}
+
+// pollJSON is a poll as the store keeps it.
+func pollJSON(name string, options []*waE2E.PollCreationMessage_Option, selectable uint32) string {
+	names := []string{}
+	for _, o := range options {
+		names = append(names, o.GetOptionName())
+	}
+	js, _ := json.Marshal(map[string]any{"question": name, "options": names, "multiple": selectable != 1})
+	return string(js)
 }
 
 // storeChatTime records a chat, keeping its newest message time (history arrives newest first).
@@ -282,12 +323,15 @@ func describe(m *StoredMessage, msg *waE2E.Message, evt *events.Message) bool {
 	case msg.GetPollCreationMessage() != nil:
 		p := msg.GetPollCreationMessage()
 		m.Kind, m.Content = "poll", pollText(p.GetName(), p.GetOptions())
+		m.Poll = pollJSON(p.GetName(), p.GetOptions(), p.GetSelectableOptionsCount())
 	case msg.GetPollCreationMessageV2() != nil:
 		p := msg.GetPollCreationMessageV2()
 		m.Kind, m.Content = "poll", pollText(p.GetName(), p.GetOptions())
+		m.Poll = pollJSON(p.GetName(), p.GetOptions(), p.GetSelectableOptionsCount())
 	case msg.GetPollCreationMessageV3() != nil:
 		p := msg.GetPollCreationMessageV3()
 		m.Kind, m.Content = "poll", pollText(p.GetName(), p.GetOptions())
+		m.Poll = pollJSON(p.GetName(), p.GetOptions(), p.GetSelectableOptionsCount())
 	default:
 		return false
 	}
@@ -455,6 +499,12 @@ func processMessage(client *whatsmeow.Client, store *MessageStore, evt *events.M
 					logger.Warnf("Failed to store edit: %v", err)
 				}
 			}
+		case waE2E.ProtocolMessage_EPHEMERAL_SETTING: // the timer of a chat (a group's comes as its change)
+			if evt.Info.Chat.Server != types.GroupServer {
+				if err := store.storeChatEvent(evt, "timer", map[string]any{"seconds": pm.GetEphemeralExpiration()}, ""); err != nil {
+					logger.Warnf("Failed to store a timer: %v", err)
+				}
+			}
 		case waE2E.ProtocolMessage_REVOKE:
 			if chat, ok := changeable(client, store, evt, pm.GetKey().GetID(), true); ok {
 				if _, err := store.db.Exec("UPDATE messages SET deleted = 1 WHERE id = ? AND chat_jid = ?",
@@ -479,6 +529,41 @@ func processMessage(client *whatsmeow.Client, store *MessageStore, evt *events.M
 		storeCallLog(store, evt, cl, logger)
 		return
 	}
+	if pin := msg.GetPinInChatMessage(); pin != nil {
+		code, args := "pin", map[string]any{"seconds": nil}
+		if pin.GetType() == waE2E.PinInChatMessage_UNPIN_FOR_ALL {
+			code, args = "unpin", map[string]any{}
+		} else if d := msg.GetMessageContextInfo().GetMessageAddOnDurationInSecs(); d > 0 {
+			args["seconds"] = d
+		}
+		if err := store.storeChatEvent(evt, code, args, pin.GetKey().GetID()); err != nil {
+			logger.Warnf("Failed to store a pin: %v", err)
+		}
+		return
+	}
+	if pu := msg.GetPollUpdateMessage(); pu != nil {
+		vote, err := client.DecryptPollVote(context.Background(), evt)
+		if err != nil {
+			logger.Warnf("Failed to read a poll vote: %v", err)
+			return
+		}
+		// one voter by one jid: their number's where the vote came from a LID and names it
+		voter := sender
+		if evt.Info.Sender.Server == types.HiddenUserServer && !evt.Info.SenderAlt.IsEmpty() {
+			voter = evt.Info.SenderAlt.ToNonAD().String()
+		}
+		chosen := []string{}
+		for _, h := range vote.GetSelectedOptions() {
+			chosen = append(chosen, hex.EncodeToString(h))
+		}
+		js, _ := json.Marshal(chosen)
+		if _, err := store.db.Exec(`INSERT INTO poll_votes VALUES (?, ?, ?, ?, ?) ON CONFLICT (chat_jid, poll_id, voter)
+			DO UPDATE SET options = excluded.options, timestamp = excluded.timestamp WHERE excluded.timestamp >= poll_votes.timestamp`,
+			chatJID, pu.GetPollCreationMessageKey().GetID(), voter, string(js), evt.Info.Timestamp); err != nil {
+			logger.Warnf("Failed to store a poll vote: %v", err)
+		}
+		return
+	}
 
 	m := StoredMessage{ID: evt.Info.ID, ChatJID: chatJID, Sender: sender, Timestamp: evt.Info.Timestamp, IsFromMe: evt.Info.IsFromMe}
 	if !describe(&m, msg, evt) {
@@ -493,6 +578,9 @@ func processMessage(client *whatsmeow.Client, store *MessageStore, evt *events.M
 	if err := store.storeMessage(m); err != nil {
 		logger.Warnf("Failed to store message: %v", err)
 		return
+	}
+	if m.Poll != "" {
+		store.db.Exec("UPDATE messages SET poll = ? WHERE id = ? AND chat_jid = ?", m.Poll, m.ID, m.ChatJID)
 	}
 	logger.Debugf("stored a message: %s", m.Kind) // its kind, never its text or who wrote it
 }
