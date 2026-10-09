@@ -277,6 +277,10 @@ export function SettingsPage() {
                   {t("settings.newCodes")}
                 </Button>
               </Line>
+              <Line label={t("settings.mcpOpen")} hint={t("settings.mcpOpenHint")}>
+                <Switch checked={(settings.data?.mcp as boolean | undefined) ?? true} label={t("settings.mcpOpen")}
+                  onChange={(v) => put.mutate({ mcp: v })} />
+              </Line>
               <Line label={t("settings.mcp")} hint={t("settings.mcpHint")}>
                 <Button size="sm" onClick={() => api.post<{ token: string }>("/api/auth/mcp-token", { label: "MCP" }).then((r) => { setToken(r.token); refreshAccount(); }, (e) => toast.error(e.message))}>{t("settings.newToken")}</Button>
               </Line>
