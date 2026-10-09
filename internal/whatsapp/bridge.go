@@ -41,8 +41,8 @@ func ConfigOptions() Options {
 		Send: config.Bool("whatsapp", "send", false),
 		Limits: SendLimits{
 			PerMinute: config.Int("whatsapp", "send_per_minute", 15),
-			PerHour:   config.Int("whatsapp", "send_per_hour", 60),
-			PerDay:    config.Int("whatsapp", "send_per_day", 300),
+			PerHour:   config.Int("whatsapp", "send_per_hour", 300),
+			PerDay:    config.Int("whatsapp", "send_per_day", 1000),
 			SameText:  config.Int("whatsapp", "send_same_text", 3),
 		},
 		Download: config.Bool("whatsapp", "download", true),

@@ -159,8 +159,8 @@ func TestItsCardSaysWhatTheStoreSays(t *testing.T) {
 	f := bridgeInstance(t)
 	p := Plugin{}
 	facts := p.InfoFacts(f.ctx())
-	if facts[0].Value != "not linked yet (Link a device)" || !strings.HasPrefix(facts[1].Value, "on, 0 of 300 today") ||
-		facts[2].Value != "15 a minute, 60 an hour, 300 a day; the same text into 3 chats an hour (config.toml, [whatsapp])" {
+	if facts[0].Value != "not linked yet (Link a device)" || !strings.HasPrefix(facts[1].Value, "on, 0 of 1000 today") ||
+		facts[2].Value != "15 a minute, 300 an hour, 1000 a day; the same text into 3 chats an hour (config.toml, [whatsapp])" {
 		t.Fatalf("no device: %v", facts)
 	}
 	// a device linked, the connection last said connected: not so now (it does not run)
@@ -170,7 +170,7 @@ func TestItsCardSaysWhatTheStoreSays(t *testing.T) {
 	f.ms.setState("connection", "connected")
 	f.ms.db.Exec("INSERT INTO sent (at, chat_jid, id, text_hash) VALUES (?, 'c', 'x', 'h')", time.Now().Unix()-60)
 	facts = p.InfoFacts(f.ctx())
-	if want := []plugins.Fact{{Label: "Connection", Value: "not connected to WhatsApp"}, {Label: "Sending", Value: "on, 1 of 300 today"}}; !reflect.DeepEqual(facts[:2], want) {
+	if want := []plugins.Fact{{Label: "Connection", Value: "not connected to WhatsApp"}, {Label: "Sending", Value: "on, 1 of 1000 today"}}; !reflect.DeepEqual(facts[:2], want) {
 		t.Fatalf("got %v", facts)
 	}
 	f.ms.setState("connection", "logged_out")
