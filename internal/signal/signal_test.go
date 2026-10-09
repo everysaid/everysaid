@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1151,6 +1152,62 @@ func TestNumberWrittenTo(t *testing.T) {
 	req := lines(t, filepath.Join(StoreDir(c), "sent.jsonl"))[0]
 	if ch := req["chat"].(map[string]any); ch["kind"] != "contact" || ch["id"] != pni {
 		t.Fatalf("sent to %v", ch)
+	}
+}
+
+// Finding a person by number: the ACI (else the PNI) as the key; a first message to it, with no
+// conversation yet, goes to them alone and lands in the chat of the person with that number.
+func TestFind(t *testing.T) {
+	const (
+		dora  = "88888888-8888-8888-8888-888888888888"
+		pni   = "PNI:99999999-9999-9999-9999-999999999999"
+		phone = "+306900000005"
+	)
+	c, _, path := newPlugin(t, nil)
+	p := Plugin{}
+	if _, err := p.Find(context.Background(), c, []string{phone}); err == nil || !strings.Contains(err.Error(), "Not linked") {
+		t.Fatalf("find before linking: %v", err)
+	}
+	if err := p.Action(c, "link"); err != nil {
+		t.Fatal(err)
+	}
+	accounts := `{"` + phone + `": {"aci": "` + dora + `"}, "+306900000006": {"pni": "` + pni + `"}}`
+	os.WriteFile(filepath.Join(StoreDir(c), "discover.json"), []byte(accounts), 0o600)
+	found, err := p.Find(context.Background(), c, []string{phone, "+306900000006", "+306900000007"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []plugins.Found{{Phone: phone, Service: Service, Key: dora}, {Phone: "+306900000006", Service: Service, Key: pni}}
+	if !slices.Equal(found, want) {
+		t.Fatalf("found %v", found)
+	}
+
+	// the person's SMS, already in the archive
+	a, err := archive.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := a.Source("phone/sms", "", "sms", "")
+	sms := a.Conversation("sms", []archive.Handle{archive.H("phone", phone)}, "", "")
+	a.AddMessage(src, "1", archive.Message{Service: "sms", ConversationID: sms, TS: 500, Kind: "text", Text: "sms"})
+	a.Commit()
+	a.Close()
+
+	sent, err := p.Send(context.Background(), c, plugins.Conversation{Key: dora, Service: Service}, "hello", nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := lines(t, filepath.Join(StoreDir(c), "sent.jsonl"))[0]
+	if ch := req["chat"].(map[string]any); ch["kind"] != "contact" || ch["id"] != dora {
+		t.Fatalf("sent to %v", ch)
+	}
+	if keys := sent.(plugins.Sent).Keys; len(keys) != 1 {
+		t.Fatalf("sent %v", sent)
+	}
+	ix := core.Index(c.Store())
+	cid := db.Int(c.Store().Read(), "SELECT id FROM conversation WHERE key = ?", dora)
+	if cid == 0 || ix.ConvChat[cid] != ix.ConvChat[sms] {
+		t.Fatalf("the first message's chat %q, the SMS %q", ix.ConvChat[cid], ix.ConvChat[sms])
 	}
 }
 

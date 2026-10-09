@@ -21,7 +21,7 @@ Without `go generate` the binary still builds; its pages then say how to build t
 Any of Linux, macOS and Windows, on amd64 or arm64, builds from any of them:
 `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./cmd/everysaid`.
 
-Signal's helper, only where Signal is wanted (Rust; it needs `protoc` and the OpenSSL headers):
+Signal's helper, only where Signal is wanted (Rust; it needs `protoc`, `cmake` and libclang):
 
 ```
 cd bridges/signal && cargo build --release      # target/release/everysaid-signal

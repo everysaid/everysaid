@@ -15,6 +15,7 @@
 package signal
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -904,7 +905,8 @@ func mentionsOut(c *plugins.Context, text string, ms []plugins.Mention, conversa
 }
 
 // Send sends into a conversation (a reply quoting a message, mentions, a file with the text as its
-// caption); what was sent comes into the archive as Signal's other messages do.
+// caption); what was sent comes into the archive as Signal's other messages do. A conversation
+// with no ID yet (someone Find found) is the person's by its key, their ACI or PNI.
 func (p Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conversation, text string,
 	reply *plugins.Reply, mentions []plugins.Mention, file *plugins.File) (any, error) {
 	if removed(c) {
@@ -978,6 +980,43 @@ func (p Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conve
 	}
 	json.Unmarshal(raw, &answer)
 	return plugins.Sent{Keys: []string{Key(n.own, answer.TS)}}, nil
+}
+
+// Find says which of the numbers have a Signal account (Signal's contact discovery): the key is
+// their ACI, else the PNI Signal gave (a person's chat is keyed so). The helper also says each as
+// an `ids` event, which signal.db keeps, so that the chat a first message starts (Send, with no
+// conversation yet) is the person with that number.
+func (p Plugin) Find(ctx context.Context, c *plugins.Context, phones []string) ([]plugins.Found, error) {
+	if removed(c) {
+		return nil, errs.Plugin(removedText, 0)
+	}
+	n, done, err := helperFor(ctx, c)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	raw, err := n.h.Call(ctx, "discover", map[string]any{"numbers": phones})
+	if err != nil {
+		return nil, notLinked(err)
+	}
+	n.h.Settle() // its ids are in signal.db
+	var answer struct {
+		Found []struct {
+			Number string  `json:"number"`
+			ACI    *string `json:"aci"`
+			PNI    *string `json:"pni"`
+		} `json:"found"`
+	}
+	if err := json.Unmarshal(raw, &answer); err != nil {
+		return nil, err
+	}
+	var out []plugins.Found
+	for _, f := range answer.Found {
+		if key := cmp.Or(deref(f.ACI), deref(f.PNI)); key != "" && !isGroupKey(key) {
+			out = append(out, plugins.Found{Phone: f.Number, Service: Service, Key: key})
+		}
+	}
+	return out, nil
 }
 
 // MarkRead marks the others' messages of the conversation up to `until` (Unix ms) read, as Signal
