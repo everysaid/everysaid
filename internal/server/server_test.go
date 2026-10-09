@@ -359,6 +359,7 @@ func TestFindAndFirstMessage(t *testing.T) {
 		}
 	}
 	must(t, reach["telegram"] == "found" && reach["viber"] == "found", "reach: %v", reach)
+	must(t, c.getJSON("/api/chats/"+maria)["findable"] == false, "every service it lacks answered: nothing more to look for")
 
 	r = c.post("/api/chats/"+maria+"/send", M{"text": "write: first", "service": "telegram"})
 	must(t, r.status == 200, "send: %d %s", r.status, r.body)

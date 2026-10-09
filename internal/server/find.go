@@ -55,8 +55,8 @@ func (h *Host) Find(chatID string) ([]string, error) {
 		h.reach = map[string]map[string]*reach{}
 	}
 	got := map[string]*reach{}
-	for svc, r := range h.reach[chatID] { // one found stays found while it is asked again
-		if r.State == "found" && now.Sub(r.at) < foundFor {
+	for svc, r := range h.reach[chatID] { // what was said stays while asked again (not what gave no answer)
+		if (r.State == "found" || r.State == "none") && now.Sub(r.at) < foundFor {
 			got[svc] = r
 		}
 	}
@@ -71,7 +71,7 @@ func (h *Host) Find(chatID string) ([]string, error) {
 		}
 		var services []string
 		for _, svc := range s.p.Info().Services {
-			if c.Services[svc] || (got[svc] != nil && got[svc].State == "found") {
+			if c.Services[svc] || got[svc] != nil && (got[svc].State == "found" || got[svc].State == "none") {
 				continue
 			}
 			if got[svc] == nil {
@@ -164,7 +164,7 @@ func (h *Host) Reach(chatID string) map[string]string {
 	defer h.mu.Unlock()
 	out := map[string]string{}
 	for svc, r := range h.reach[chatID] {
-		if r.State != "found" || time.Since(r.at) < foundFor {
+		if (r.State != "found" && r.State != "none") || time.Since(r.at) < foundFor {
 			out[svc] = r.State
 		}
 	}
@@ -203,16 +203,18 @@ func (h *Host) phones(personID int64) []string {
 }
 
 // Findable says whether a chat is a person's with a number, who could be looked for on a service the
-// chat has none of: a source that can send and find reaches one.
+// chat has none of: a source that can send and find reaches one not asked lately (found there, or
+// said not to be: nothing more to look for; one that gave no answer may be asked again).
 func (h *Host) Findable(chatID string) bool {
 	c := core.ChatOf(h.store, chatID)
 	if c == nil || c.Type != "person" || len(h.phones(c.PersonID)) == 0 {
 		return false
 	}
+	said := h.Reach(chatID)
 	for _, s := range h.Senders() {
 		if _, ok := s.p.(plugins.Finder); ok {
 			for _, svc := range s.p.Info().Services {
-				if !c.Services[svc] {
+				if !c.Services[svc] && said[svc] != "found" && said[svc] != "none" {
 					return true
 				}
 			}
