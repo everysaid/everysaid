@@ -8,7 +8,8 @@ package archive
 //
 // `term` is kept with the index (IndexText); SyncTerms makes it the index's word list again
 // (fts5vocab), adding a word that is missing and taking out one no message has any more, when the
-// server starts and after an import. A word too many finds nothing; a word missing would hide
+// server starts and after an import from the command line (not after a live connection's: it reads
+// the whole index, seconds each time). A word too many finds nothing; a word missing would hide
 // messages.
 
 import (
