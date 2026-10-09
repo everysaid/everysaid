@@ -116,7 +116,17 @@ func NewStore(a *archive.Archive) *Store {
 // Link links the file at path (rel: its path within the source's folder) to a message (0: none
 // found).
 func (s *Store) Link(source string, sourceID int64, path, rel string, messageID int64) {
+	s.LinkNamed(source, sourceID, path, rel, messageID, "")
+}
+
+// LinkNamed is Link with the file's name as it was sent ("": not known); a file linked before the
+// name was kept takes it.
+func (s *Store) LinkNamed(source string, sourceID int64, path, rel string, messageID int64, name string) {
 	a := s.a
+	if name != "" && messageID != 0 {
+		a.Exec("UPDATE attachment SET name = ? WHERE source_id = ? AND source_path = ? AND message_id = ? AND name IS NOT ?",
+			name, sourceID, rel, messageID, name)
+	}
 	if messageID == 0 {
 		s.Missing[missingKey{source, "no message"}]++
 		return
@@ -159,8 +169,8 @@ func (s *Store) Link(source string, sourceID int64, path, rel string, messageID 
 		}
 		a.Exec("INSERT INTO media VALUES (?, ?, ?, ?)", digest, fileSize(path), archive.NullStr(guessType(path)), stored)
 	}
-	a.Exec("INSERT INTO attachment (message_id, sha256, source_id, source_path) VALUES (?, ?, ?, ?)",
-		messageID, digest, sourceID, rel)
+	a.Exec("INSERT INTO attachment (message_id, sha256, source_id, source_path, name) VALUES (?, ?, ?, ?, ?)",
+		messageID, digest, sourceID, rel, archive.NullStr(name))
 	s.Added[source]++
 }
 
@@ -199,15 +209,20 @@ func MediaViberDesktop(database, source string) MediaStep {
 		defer d.Close()
 		src := a.Source(source, database, "", "")
 		messages := byKey(a, "viber")
-		for _, r := range maps(d, "SELECT e.Token, m.PayloadPath FROM Messages m JOIN Events e USING (EventID) "+
+		for _, r := range maps(d, "SELECT e.Token, m.PayloadPath, m.Info FROM Messages m JOIN Events e USING (EventID) "+
 			"WHERE coalesce(m.PayloadPath, '') != '' ORDER BY e.EventID") {
 			path := str(r["PayloadPath"])
 			if !filepath.IsAbs(path) {
 				continue
 			}
-			s.Link(source, src, path, path, messages[pyStr(r["Token"])])
+			s.LinkNamed(source, src, path, path, messages[pyStr(r["Token"])], viberFileName(r["Info"]))
 		}
 	}
+}
+
+// viberFileName is the name a file was sent with (a message's fileInfo), "" for none.
+func viberFileName(info any) string {
+	return strOrEmpty(obj(jsonObj(info)["fileInfo"])["FileName"])
 }
 
 // MediaStep is one source's files, linked through the store.
@@ -224,14 +239,15 @@ func MediaWhatsApp(a *archive.Archive, s *Store) {
 	messages := byKey(a, "whatsapp")
 	d := ro(path)
 	defer d.Close()
-	for _, r := range maps(d, "SELECT m.ZSTANZAID, i.ZMEDIALOCALPATH FROM ZWAMEDIAITEM i JOIN ZWAMESSAGE m ON m.Z_PK = i.ZMESSAGE "+
-		"WHERE i.ZMEDIALOCALPATH IS NOT NULL ORDER BY i.Z_PK") {
+	// a document's name is its title
+	for _, r := range maps(d, "SELECT m.ZSTANZAID, i.ZMEDIALOCALPATH, CASE WHEN m.ZMESSAGETYPE = 8 THEN i.ZTITLE END AS name "+
+		"FROM ZWAMEDIAITEM i JOIN ZWAMESSAGE m ON m.Z_PK = i.ZMESSAGE WHERE i.ZMEDIALOCALPATH IS NOT NULL ORDER BY i.Z_PK") {
 		rel := strings.TrimPrefix(str(r["ZMEDIALOCALPATH"]), "Media/")
 		var mid int64
 		if k, ok := r["ZSTANZAID"].(string); ok {
 			mid = messages[k]
 		}
-		s.Link(archive.Iphone()+"/whatsapp", src, data+"/whatsapp-media/"+rel, rel, mid)
+		s.LinkNamed(archive.Iphone()+"/whatsapp", src, data+"/whatsapp-media/"+rel, rel, mid, strOrEmpty(r["name"]))
 	}
 }
 
@@ -253,7 +269,10 @@ func MediaWhatsAppBridge(database string) MediaStep {
 		src := a.Source("whatsapp-bridge", database, "whatsapp-bridge", folder)
 		origins, messages := byOrigin(a, "whatsapp-bridge"), byKey(a, "whatsapp")
 		absFolder, _ := filepath.Abs(folder)
-		for _, r := range maps(d, "SELECT chat_jid, id, media_path FROM messages "+
+		// a document's name as it was sent (the bridge names the others itself, and a document
+		// without one document_<time>)
+		for _, r := range maps(d, "SELECT chat_jid, id, media_path, CASE WHEN media_type = 'document' "+
+			"AND filename NOT GLOB 'document_[0-9]*_[0-9]*' THEN filename END AS name FROM messages "+
 			"WHERE coalesce(media_path, '') != '' ORDER BY timestamp") {
 			rel := str(r["media_path"])
 			path := rel
@@ -270,7 +289,7 @@ func MediaWhatsAppBridge(database string) MediaStep {
 					mid = messages[k]
 				}
 			}
-			s.Link("whatsapp-bridge", src, path, rel, mid)
+			s.LinkNamed("whatsapp-bridge", src, path, rel, mid, strOrEmpty(r["name"]))
 		}
 	}
 }
@@ -293,7 +312,7 @@ func MediaViberIphone(a *archive.Archive, s *Store) {
 	}
 	d := ro(database)
 	defer d.Close()
-	for _, r := range maps(d, "SELECT m.Z_PK, m.ZTOKEN, a.ZNAME FROM ZVIBERMESSAGE m JOIN ZATTACHMENT a ON a.Z_PK = m.ZATTACHMENT "+
+	for _, r := range maps(d, "SELECT m.Z_PK, m.ZTOKEN, m.ZMETADATA, a.ZNAME FROM ZVIBERMESSAGE m JOIN ZATTACHMENT a ON a.Z_PK = m.ZATTACHMENT "+
 		"WHERE a.ZNAME IS NOT NULL ORDER BY m.Z_PK") {
 		f, ok := files[str(r["ZNAME"])]
 		if !ok {
@@ -305,7 +324,7 @@ func MediaViberIphone(a *archive.Archive, s *Store) {
 		} else {
 			mid = origins[pyStr(r["Z_PK"])]
 		}
-		s.Link(archive.Iphone()+"/viber", src, data+"/viber-media/"+f, f, mid)
+		s.LinkNamed(archive.Iphone()+"/viber", src, data+"/viber-media/"+f, f, mid, viberFileName(r["ZMETADATA"]))
 	}
 }
 

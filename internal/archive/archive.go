@@ -696,6 +696,9 @@ type Extras struct {
 	EditsKey             string
 	ReactsTo             *ReactsTo
 	Notice               *Notice
+	ForwardFrom          string // who a forwarded message first came from, as the service names them
+	Album                string // the service's key of the files sent together
+	Pinned               int64  // pinned until (Unix milliseconds), -1 for ever; 0: not pinned
 }
 
 // Notice is what a notice says, its code and values (the `notice` table), for the interface to put
@@ -772,12 +775,12 @@ func (a *Archive) AddMessage(sourceID int64, rowKey string, m Message) int64 {
 	mid, _ := a.Exec(
 		"INSERT INTO message (service_id, conversation_id, ts, outgoing, sender_id, kind_id, text, key, "+
 			"key_scope, subtype, subtype_code, reply_key, reply_text, edited, deleted, forwarded, "+
-			"starred, lat, lon, place, sender_lat, sender_lon) "+
-			"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			"starred, lat, lon, place, sender_lat, sender_lon, forward_from, album, pinned) "+
+			"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		sid, m.ConversationID, m.TS, b2i(m.Outgoing), nullID(m.SenderID), a.MessageKind.ID(m.Kind), nullStr(txt), key,
 		scope, nullStr(x.Subtype), nullStr(x.SubtypeCode), nullStr(x.ReplyKey), nullStr(x.ReplyText),
 		b2i(x.Edited), b2i(x.Deleted), b2i(x.Forwarded), b2i(x.Starred),
-		lat, lon, nullStr(x.Place), slat, slon).LastInsertId()
+		lat, lon, nullStr(x.Place), slat, slon, nullStr(x.ForwardFrom), nullStr(x.Album), nullID(x.Pinned)).LastInsertId()
 	if txt != "" {
 		a.IndexText(mid, text.Fold(txt))
 	}

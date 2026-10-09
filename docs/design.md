@@ -171,7 +171,8 @@ changes in place).
     forum's: `created`, `title`, `closed`). No actions: the
     group changed, how is not known.
   - `timer` (`seconds`, 0: off), `pin` (`seconds`, null: for good) and `unpin` (the message is the
-    one it answers), `poll` (on the poll itself: `question`, `options` `[{text, votes}]`,
+    one it answers; a message's `pinned` follows its last pin or unpin, Telegram's from the message
+    itself), `poll` (on the poll itself: `question`, `options` `[{text, votes}]`,
     `multiple`, `voters`, `ended`, kept as the votes change; an option's `votes` null where the
     service gave only how many voted), `poll_end` (answers the poll), `group_call` (`seconds` once it ended, `scheduled` a
     time), `group_call_invite` (`who`: a list),

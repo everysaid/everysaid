@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "@tanstack/react-router";
-import { Check, CheckCheck, CornerUpLeft, FileText, Forward, ImageOff, MapPin, Pencil, Phone, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Plus, SmilePlus, Trash2, Video } from "lucide-react";
+import { Check, CheckCheck, CornerUpLeft, FileText, Forward, ImageOff, MapPin, Pencil, Phone, Pin, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Plus, SmilePlus, Trash2, Video } from "lucide-react";
 import { thumbUrl, type Attachment, type CallItem, type Mention, type MessageItem, type Receipts } from "@/lib/api";
 import { bytes, duration, time } from "@/lib/format";
 import { service } from "@/lib/services";
@@ -119,12 +119,12 @@ function AttachmentView({ a, onOpen }: { a: Attachment; onOpen: (a: Attachment) 
   return (
     <a
       href={a.available === "gone" ? undefined : `/api/media/${a.sha256}/original`}
-      download
+      download={a.name ?? ""}
       className="flex items-center gap-3 rounded-xl bg-black/10 px-3 py-2 text-sm"
     >
       <FileText className="size-8 shrink-0 opacity-80" />
       <span className="min-w-0">
-        <span className="block truncate font-medium">{mime || t("kind.file")}</span>
+        <span className="block truncate font-medium">{a.name || mime || t("kind.file")}</span>
         <span className="text-xs opacity-70">{a.available === "gone" ? t("chat.gone") : bytes(a.size)}</span>
       </span>
     </a>
@@ -360,7 +360,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
             </button>
           ) : <>
           {m.forwarded && (
-            <div className="mb-1 flex items-center gap-1 text-xs opacity-70"><Forward className="size-3" />{t("chat.forwarded")}</div>
+            <div className="mb-1 flex items-center gap-1 text-xs opacity-70"><Forward className="size-3" />{m.forward_from ? t("chat.forwardedFrom", { name: m.forward_from }) : t("chat.forwarded")}</div>
           )}
           {["story_reply", "story_reaction", "story", "unsupported"].includes(m.notice?.code ?? "") && (
             <div className="mb-1 text-xs opacity-70">{noticeLines(m.notice!, t)[0]}</div>
@@ -405,6 +405,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
           </>}
           <div className={cn("mt-0.5 flex items-center justify-end gap-1 text-[11px] leading-none", out ? "text-bubble-out-fg/70" : "text-muted", onlyMedia && "absolute bottom-2 right-2.5 rounded-full bg-black/45 px-1.5 py-1 text-white")}>
             {showService && <span className="flex items-center gap-1"><span className="size-1.5 rounded-full" style={{ background: svc.color }} />{svc.name} ·</span>}
+            {m.pinned && <Pin className="size-3" aria-label={t("chat.pinned")} />}
             {m.edited && <span>{t("chat.edited")} ·</span>}
             {m.status === "sending" && <span>{t("chat.sending")} ·</span>}
             {m.status === "failed" && <span className="text-danger">{t("chat.sendFailed")} ·</span>}

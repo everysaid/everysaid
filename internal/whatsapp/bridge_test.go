@@ -149,6 +149,15 @@ func TestDescribe(t *testing.T) {
 	if m.ReplyTo != "Q1" || m.ReplyText != "coming?" || !m.Forwarded {
 		t.Errorf("reply: %+v", m)
 	}
+	// a picture of an album, forwarded from a channel
+	m = StoredMessage{}
+	describe(&m, &waE2E.Message{ImageMessage: &waE2E.ImageMessage{ContextInfo: &waE2E.ContextInfo{IsForwarded: proto.Bool(true),
+		ForwardedNewsletterMessageInfo: &waE2E.ContextInfo_ForwardedNewsletterMessageInfo{NewsletterName: proto.String("News")}}},
+		MessageContextInfo: &waE2E.MessageContextInfo{MessageAssociation: &waE2E.MessageAssociation{
+			AssociationType: waE2E.MessageAssociation_MEDIA_ALBUM.Enum(), ParentMessageKey: &waCommon.MessageKey{ID: proto.String("ALB")}}}}, nil)
+	if m.Kind != "image" || m.ForwardFrom != "News" || m.Album != "ALB" {
+		t.Errorf("album: %+v", m)
+	}
 }
 
 func TestBlockKeepsTheFirstReason(t *testing.T) {

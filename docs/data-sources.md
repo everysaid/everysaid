@@ -609,7 +609,8 @@ receipts of the owner's messages up to it (`read_at` 0: read, when not known).
       sender edits or deletes it later; `content` is the last version), `lat`, `lon`, `place`. A
       shared contact's `content` is "name, number"; a poll's is the question and its options.
     - `mentions`: the jids the text names with `@<user part>`, comma-separated; `read_at`: when the
-      owner read a message from others, on any device.
+      owner read a message from others, on any device; `forward_from`: the channel a forwarded
+      message came from; `album`: the album's message id, for files sent together.
     - `receipts` (`chat_jid`, `message_id`, `jid`, `type` delivered/read/played, `timestamp`): who
       got and read the owner's messages, and when, the first time each.
     - `group_info` (`jid`, `name`, `addressing` 'pn' or 'lid', `member`) and `group_members`

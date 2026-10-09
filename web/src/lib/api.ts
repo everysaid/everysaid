@@ -228,6 +228,7 @@ export interface Attachment {
   sha256: string;
   mime: string | null;
   size: number;
+  name?: string | null;     // the file's name as it was sent
   available: "local" | "library" | "gone";
 }
 
@@ -259,6 +260,9 @@ export interface MessageItem {
   edited: boolean;
   deleted: boolean;
   forwarded: boolean;
+  forward_from?: string | null; // who it first came from, as the service names them
+  album?: string | null;        // the service's key of the files sent together
+  pinned?: boolean;             // pinned in its chat now
   starred: boolean;
   status: string | null;
   keyed?: boolean;          // the service's own id is known: an answer to it can be sent

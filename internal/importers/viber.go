@@ -683,6 +683,7 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 		iphoneMarks(a, iphone, src["iphone"], convs, convMembers, person, int64(mtime(iphoneDB)*1000))
 	}
 	a.Resolve()
+	ApplyPins(a, "viber")
 	for _, s := range srcOrder {
 		a.Imported(src[s])
 	}

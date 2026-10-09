@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"everysaid/internal/archive"
 	"everysaid/internal/db"
@@ -284,18 +285,19 @@ func Hydrate(s *Store, rows []Item, chat *Chat) []M {
 		mentionsL []M
 	}
 	ex := map[int64]*extra{}
+	now := time.Now().UnixMilli()
 	if len(mids) > 0 {
 		marks := db.Marks(len(mids))
 		db.Each(q, "SELECT id, ts, service_id, conversation_id, outgoing, sender_id, kind_id, text, subtype, reply_to, "+
-			"reply_text, edited, deleted, forwarded, starred, lat, lon, place, status, key IS NOT NULL "+
+			"reply_text, edited, deleted, forwarded, starred, lat, lon, place, status, key IS NOT NULL, forward_from, album, pinned "+
 			"FROM message WHERE id IN ("+marks+")", db.Args(mids), func(scan func(...any)) {
 			var mid, ts, sid, conv, kind int64
 			var outgoing, edited, deleted, forwarded, starred, keyed bool
-			var sender, replyTo sql.NullInt64
-			var txt, subtype, replyText, place, status sql.NullString
+			var sender, replyTo, pinned sql.NullInt64
+			var txt, subtype, replyText, place, status, forwardFrom, album sql.NullString
 			var lat, lon sql.NullFloat64
 			scan(&mid, &ts, &sid, &conv, &outgoing, &sender, &kind, &txt, &subtype, &replyTo, &replyText, &edited,
-				&deleted, &forwarded, &starred, &lat, &lon, &place, &status, &keyed)
+				&deleted, &forwarded, &starred, &lat, &lon, &place, &status, &keyed, &forwardFrom, &album, &pinned)
 			var senderID, senderName any
 			selfNamed := false
 			if sender.Valid && sender.Int64 != 0 {
@@ -315,7 +317,9 @@ func Hydrate(s *Store, rows []Item, chat *Chat) []M {
 				"sender_id": senderID, "sender": senderName, "sender_self_named": selfNamed,
 				"reply_to": nullInt(replyTo), "reply_text": nullString(replyText), "edited": edited, "deleted": deleted,
 				"forwarded": forwarded, "starred": starred, "status": nullString(status),
-				"keyed":     keyed, // the service's own id is known: an answer to it can be sent
+				"forward_from": nullString(forwardFrom), "album": nullString(album),
+				"pinned":    pinned.Valid && (pinned.Int64 < 0 || pinned.Int64 > now), // pinned now
+				"keyed":     keyed,                                                    // the service's own id is known: an answer to it can be sent
 				"location":  location,
 				"reactions": []M{}, "attachments": []M{}, "mentions": []M{}, "receipts": nil, "notice": nil,
 			}
@@ -452,14 +456,14 @@ func Hydrate(s *Store, rows []Item, chat *Chat) []M {
 				msgs[mid]["receipts"] = M{"to": len(to), "delivered": delivered, "read": read, "played": played}
 			}
 		}
-		db.Each(q, "SELECT a.message_id, m.sha256, m.mime, m.size, m.path, "+
+		db.Each(q, "SELECT a.message_id, m.sha256, m.mime, m.size, m.path, a.name, "+
 			"(SELECT count(*) FROM library_link l WHERE l.sha256 = m.sha256) "+
 			"FROM attachment a JOIN media m ON m.sha256 = a.sha256 WHERE a.message_id IN ("+marks+")", db.Args(mids),
 			func(scan func(...any)) {
 				var mid, size, linked int64
 				var sha, path string
-				var mime sql.NullString
-				scan(&mid, &sha, &mime, &size, &path, &linked)
+				var mime, name sql.NullString
+				scan(&mid, &sha, &mime, &size, &path, &name, &linked)
 				att := msgs[mid]["attachments"].([]M)
 				for _, x := range att {
 					if x["sha256"] == sha {
@@ -467,7 +471,7 @@ func Hydrate(s *Store, rows []Item, chat *Chat) []M {
 					}
 				}
 				msgs[mid]["attachments"] = append(att, M{"sha256": sha, "mime": nullString(mime), "size": size,
-					"available": availability(path, linked)})
+					"name": nullString(name), "available": availability(path, linked)})
 			})
 	}
 	if len(cids) > 0 {

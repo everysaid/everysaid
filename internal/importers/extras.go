@@ -554,6 +554,7 @@ func whatsappBridgeExtras(r row, reactions []bridgeReaction) *archive.Extras {
 		}
 	}
 	out.Forwarded, out.Edited, out.Deleted = truthy(r["forwarded"]), truthy(r["edited"]), truthy(r["deleted"])
+	out.ForwardFrom, out.Album = strOrEmpty(r["forward_from"]), strOrEmpty(r["album"])
 	if r["lat"] != nil && r["lon"] != nil {
 		out.Lat, out.Lon = floatPtr(r["lat"]), floatPtr(r["lon"])
 		if truthy(r["place"]) {
