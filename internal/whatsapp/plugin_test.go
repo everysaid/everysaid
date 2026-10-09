@@ -473,7 +473,8 @@ func TestTheImportBringsTheStoresMessages(t *testing.T) {
 	}
 }
 
-// A first message (a conversation not in the archive yet) goes only to someone in the owner's contacts.
+// A first message (a conversation not in the archive yet) goes only to someone the owner knows: in
+// their contacts, or in a group with them.
 func TestFirstMessageOnlyToContacts(t *testing.T) {
 	f := bridgeInstance(t)
 	fakeRunning(t, f, true)
@@ -492,5 +493,22 @@ func TestFirstMessageOnlyToContacts(t *testing.T) {
 	a.Close()
 	if _, err := (Plugin{}).Send(context.Background(), f.ctx(), conv, "hi", nil, nil, nil); !errors.As(err, &ue) || ue.Text != "not connected to WhatsApp" {
 		t.Fatalf("a contact: on to the bridge: %v", err)
+	}
+
+	// someone in a group with the owner (any service), not in the contacts: known too
+	met := plugins.Conversation{Key: "+15559990001", Service: "whatsapp"}
+	if _, err := (Plugin{}).Send(context.Background(), f.ctx(), met, "hi", nil, nil, nil); !errors.As(err, &ue) || ue.Text != notAContact {
+		t.Fatalf("a stranger: %v", err)
+	}
+	a, err = archive.Open(f.ctx().Store().Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := a.Conversation("telegram", []archive.Handle{archive.H("phone", "+15559990001"), archive.H("phone", "+15559990002")}, "-100", "Club")
+	a.Exec("UPDATE conversation SET is_group = 1 WHERE id = ?", g)
+	a.Commit()
+	a.Close()
+	if _, err := (Plugin{}).Send(context.Background(), f.ctx(), met, "hi", nil, nil, nil); !errors.As(err, &ue) || ue.Text != "not connected to WhatsApp" {
+		t.Fatalf("in a group with the owner: on to the bridge: %v", err)
 	}
 }

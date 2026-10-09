@@ -144,7 +144,7 @@ iPhone, where the other lets it be seen); a tap on them says who got and read th
 
 **WhatsApp's safeguards:** it sends only into chats where the other side has written (or that
 were started from here: a first message to someone found on WhatsApp, only to people in the
-owner's contacts, at most so many new chats a day, 5 at first), within limits
+owner's contacts or in a group with them, at most so many new chats a day, 5 at first), within limits
 a minute, an hour and a day (the source's settings: 15, 300, 1000 at first; 0 for none), and never
 the same longer text into more than so many chats an hour (3). When
 WhatsApp warns the account (a temporary ban, a logout) sending is blocked until the user clears it

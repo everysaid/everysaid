@@ -67,7 +67,7 @@ func (Plugin) Info() *plugins.Info {
 			{Key: "send_per_day", Label: "Messages sent at most a day", Type: "number", Default: 1000},
 			{Key: "send_same_text", Label: "The same longer text into at most so many chats an hour", Type: "number", Default: 3},
 			{Key: "send_new_chats", Label: "New chats started from here at most a day", Type: "number", Default: 5,
-				Help: "A first message to someone found on WhatsApp, only to people in your contacts"},
+				Help: "A first message to someone found on WhatsApp, only to people in your contacts or in a group with you"},
 		},
 		CanSend: true, CanReply: true, CanMention: true, CanMarkRead: true, CanSendFiles: true,
 		// any emoji, the app's six quick ones first
@@ -522,10 +522,8 @@ func (p Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conve
 	if err != nil {
 		return nil, err
 	}
-	if conv.ID == 0 { // a first message, to someone found: only to people in the owner's contacts
-		if !db.Exists(c.Store().Read(), "SELECT 1 FROM address a JOIN address_kind k ON k.id = a.kind_id "+
-			"JOIN person_address pa ON pa.address_id = a.id JOIN person p ON p.id = pa.person_id "+
-			"WHERE k.name = 'phone' AND a.value = ? AND p.contact_uid IS NOT NULL", conv.Key) {
+	if conv.ID == 0 { // a first message, to someone found: only to someone the owner knows
+		if !known(c, conv.Key) {
 			return nil, errs.Plugin(notAContact, 0)
 		}
 		req.First = true
@@ -557,8 +555,18 @@ func (p Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conve
 	return plugins.Sent{Keys: []string{answer.ID}}, nil
 }
 
-// notAContact: a chat is started from here only with someone in the owner's contacts.
-const notAContact = "A new WhatsApp chat starts from here only with someone in your contacts"
+// notAContact: a chat is started from here only with someone the owner knows.
+const notAContact = "A new WhatsApp chat starts from here only with someone in your contacts or in a group with you"
+
+// known says whether the person of a number is in the owner's contacts, or in a group with them (on
+// any service): one to start a chat with, not a stranger.
+func known(c *plugins.Context, phone string) bool {
+	return db.Exists(c.Store().Read(), "SELECT 1 FROM address a JOIN address_kind k ON k.id = a.kind_id "+
+		"JOIN person_address pa ON pa.address_id = a.id JOIN person p ON p.id = pa.person_id "+
+		"WHERE k.name = 'phone' AND a.value = ? AND (p.contact_uid IS NOT NULL OR EXISTS ("+
+		"SELECT 1 FROM person_address mine JOIN conversation_member cm ON cm.address_id = mine.address_id "+
+		"JOIN conversation g ON g.id = cm.conversation_id WHERE mine.person_id = p.id AND g.is_group))", phone)
+}
 
 // Find asks WhatsApp which of the numbers it has (nothing is sent to anyone).
 func (Plugin) Find(ctx context.Context, c *plugins.Context, phones []string) ([]plugins.Found, error) {
