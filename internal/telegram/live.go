@@ -669,6 +669,17 @@ func live(ctx context.Context, c *plugins.Context) error {
 		queue, files := newMemberQueue(), newFileQueue()
 		go queue.run(ctx, c, cn)
 		go files.run(ctx, c, cn)
+		cn.readers = func(chat int64) { askReaders(ctx, c, cn, chat) }
+		go func() { // one chat after another: not all asked at once
+			for _, chat := range recentGroups() {
+				if ctx.Err() != nil {
+					return
+				}
+				if err := readers(ctx, c, cn, chat); err != nil {
+					c.Log("error: {e}", map[string]any{"e": err})
+				}
+			}
+		}()
 		handlers(c, cn, d, queue.add, files)
 		liveConn.Store(cn)
 		defer liveConn.Store(nil)
@@ -895,13 +906,21 @@ func handlers(c *plugins.Context, cn *conn, d tg.UpdateDispatcher, members func(
 		return logged(noteReads(c, []readItem{{PeerID(u.Peer), intp(u.MaxID), nil}}, false))
 	})
 	d.OnReadHistoryOutbox(func(ctx context.Context, e tg.Entities, u *tg.UpdateReadHistoryOutbox) error {
-		return logged(noteReads(c, []readItem{{PeerID(u.Peer), nil, intp(u.MaxID)}}, true))
+		err := logged(noteReads(c, []readItem{{PeerID(u.Peer), nil, intp(u.MaxID)}}, true))
+		if _, group := u.Peer.(*tg.PeerChat); group && cn.readers != nil {
+			cn.readers(PeerID(u.Peer))
+		}
+		return err
 	})
 	d.OnReadChannelInbox(func(ctx context.Context, e tg.Entities, u *tg.UpdateReadChannelInbox) error {
 		return logged(noteReads(c, []readItem{{PeerID(&tg.PeerChannel{ChannelID: u.ChannelID}), intp(u.MaxID), nil}}, false))
 	})
 	d.OnReadChannelOutbox(func(ctx context.Context, e tg.Entities, u *tg.UpdateReadChannelOutbox) error {
-		return logged(noteReads(c, []readItem{{PeerID(&tg.PeerChannel{ChannelID: u.ChannelID}), nil, intp(u.MaxID)}}, true))
+		err := logged(noteReads(c, []readItem{{PeerID(&tg.PeerChannel{ChannelID: u.ChannelID}), nil, intp(u.MaxID)}}, true))
+		if cn.readers != nil {
+			cn.readers(PeerID(&tg.PeerChannel{ChannelID: u.ChannelID}))
+		}
+		return err
 	})
 }
 

@@ -61,10 +61,11 @@ type fake struct {
 	requests []bin.Encoder
 	files    map[int64][]byte // document id -> its bytes
 	nextID   int
-	noPhotos bool                    // sendMedia refuses photos (PHOTO_INVALID_DIMENSIONS)
-	refused  string                  // a reaction sendReaction refuses (REACTION_INVALID)
-	blocked  []int64                 // the users blocked, in the order blocked
-	asked    func(input bin.Encoder) // called at each request, before its answer
+	noPhotos bool                             // sendMedia refuses photos (PHOTO_INVALID_DIMENSIONS)
+	refused  string                           // a reaction sendReaction refuses (REACTION_INVALID)
+	blocked  []int64                          // the users blocked, in the order blocked
+	asked    func(input bin.Encoder)          // called at each request, before its answer
+	readBy   map[int][]tg.ReadParticipantDate // who read each message (by id) of a group
 }
 
 func (f *fake) chat(peer tg.PeerClass) *fakeChat {
@@ -384,6 +385,9 @@ func (f *fake) answer(input bin.Encoder) (bin.Encoder, error) {
 			full.SetMigratedFromMaxID(len(f.chat(&tg.PeerChat{ChatID: c.from}).messages))
 		}
 		return &tg.MessagesChatFull{FullChat: full, Users: f.users, Chats: f.chatsList()}, nil
+	case *tg.MessagesGetMessageReadParticipantsRequest:
+		f.calls = append(f.calls, "getMessageReadParticipants")
+		return &tg.ReadParticipantDateVector{Elems: f.readBy[r.MsgID]}, nil
 	case *tg.ChannelsDeleteMessagesRequest:
 		f.calls = append(f.calls, "channels.deleteMessages")
 		f.requests = append(f.requests, r)
