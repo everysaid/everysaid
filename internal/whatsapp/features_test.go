@@ -73,6 +73,7 @@ func TestMoreKinds(t *testing.T) {
 		Options: []*waE2E.PollCreationMessage_Option{{OptionName: proto.String("Mon")}}}})
 	msg("S", &waE2E.Message{SpoilerMessage: &waE2E.FutureProofMessage{Message: &waE2E.Message{Conversation: proto.String("hidden")}}})
 	msg("X", &waE2E.Message{PlaceholderMessage: &waE2E.PlaceholderMessage{}})
+	msg("D", &waE2E.Message{DocumentMessage: &waE2E.DocumentMessage{FileName: proto.String("plan.pdf")}})
 	got := map[string]string{}
 	rows, _ := store.db.Query("SELECT id, kind || ':' || content FROM messages")
 	for rows.Next() {
@@ -81,7 +82,7 @@ func TestMoreKinds(t *testing.T) {
 		got[id] = v
 	}
 	rows.Close()
-	want := map[string]string{"E": "text:Dinner\nat 8", "G": "text:Club\njoin", "P5": "poll:When?\n• Mon", "S": "text:hidden"}
+	want := map[string]string{"E": "text:Dinner\nat 8", "G": "text:Club\njoin", "P5": "poll:When?\n• Mon", "S": "text:hidden", "D": "document:📎 plan.pdf"}
 	for k, v := range want {
 		if got[k] != v {
 			t.Errorf("%s: %q, want %q", k, got[k], v)

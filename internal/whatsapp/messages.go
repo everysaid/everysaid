@@ -315,6 +315,11 @@ func describe(m *StoredMessage, msg *waE2E.Message, evt *events.Message) bool {
 		}
 	case msg.GetDocumentMessage() != nil:
 		m.Kind = "document"
+		if d := msg.GetDocumentMessage(); m.Content == "" { // a file without words: its name, as WhatsApp shows it
+			if n := cmp.Or(d.GetFileName(), d.GetTitle()); n != "" {
+				m.Content = "📎 " + n
+			}
+		}
 	case msg.GetStickerMessage() != nil:
 		m.Kind = "sticker"
 	case msg.GetLocationMessage() != nil:
