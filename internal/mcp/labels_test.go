@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"testing"
 
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"everysaid/internal/core"
 	"everysaid/internal/db"
 )
@@ -36,4 +38,23 @@ func TestTheAssistantSeesLabelsOnlyWhenAllowed(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("labels %v", got)
 	}
+}
+
+// The user may close the assistants' access (the setting mcp): each tool then says so, at once, in
+// a session already open; opened again, it answers again.
+func TestAccessClosedAndOpened(t *testing.T) {
+	f := build(t)
+	cs := connect(t, Env{Store: f.store})
+	call(t, cs, "statistics", map[string]any{})
+	if err := core.SetSetting(f.store, "mcp", false); err != nil {
+		t.Fatal(err)
+	}
+	res := callRaw(t, cs, "statistics", map[string]any{})
+	if !res.IsError || res.Content[0].(*sdk.TextContent).Text != Closed {
+		t.Fatalf("closed: %+v", res)
+	}
+	if err := core.SetSetting(f.store, "mcp", true); err != nil {
+		t.Fatal(err)
+	}
+	call(t, cs, "statistics", map[string]any{})
 }

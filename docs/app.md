@@ -173,6 +173,9 @@ From another machine, over HTTP: the server's `/mcp` (e.g. `https://everysaid.ex
 with `Authorization: Bearer <token>`, a token made in Settings or by `everysaid user mcp-token`
 (`everysaid user mcp-tokens` lists them, `everysaid user mcp-token --revoke ID` ends one).
 
+Settings → Security closes the assistants' access and opens it again (the setting `mcp`, open
+unless closed): closed, every tool of either way says so, at once, in sessions already open too.
+
 Tools: search messages, list and read chats, a message in context, people, a person's direct chat
 and last interaction, calls, a day's timeline, statistics, a chat's files and a file itself; and,
 only with the user's approval, a person's name or note, or a file sent to the photo library. It

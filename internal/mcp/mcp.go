@@ -74,9 +74,24 @@ func New(env Env) *sdk.Server {
 			return next(ctx, method, req)
 		}
 	})
+	// the user may close the assistants' access (Settings, "mcp"): each tool then says so
+	srv.AddReceivingMiddleware(func(next sdk.MethodHandler) sdk.MethodHandler {
+		return func(ctx context.Context, method string, req sdk.Request) (sdk.Result, error) {
+			if _, ok := req.(*sdk.CallToolRequest); ok && !Open(env.Store) {
+				return &sdk.CallToolResult{IsError: true, Content: []sdk.Content{&sdk.TextContent{Text: Closed}}}, nil
+			}
+			return next(ctx, method, req)
+		}
+	})
 	addTools(srv, env)
 	return srv
 }
+
+// Closed is what each tool says while the user keeps the assistants' access closed.
+const Closed = "The owner has closed assistants' access to the archive (Everysaid's settings): nothing can be read or done now"
+
+// Open says whether the user lets assistants in (the setting "mcp", open unless closed).
+func Open(s *core.Store) bool { return s.SettingAny("mcp", true) != false }
 
 var schemas = sdk.NewSchemaCache()
 
