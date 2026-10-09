@@ -1132,6 +1132,62 @@ func sentMessage(r tg.UpdatesClass, randomID int64, peer tg.PeerClass, text stri
 	return nil, users, chats
 }
 
+// find is Find: each number asked of Telegram, those found kept in telegram.db (with that number, as
+// Telegram gives it only to their contacts).
+func find(ctx context.Context, phones []string) ([]plugins.Found, error) {
+	var out []plugins.Found
+	err := withConn(ctx, func(ctx context.Context, cn *conn) error {
+		var found []*tg.User
+		for _, p := range phones {
+			r, err := cn.api.ContactsResolvePhone(ctx, strings.TrimPrefix(p, "+"))
+			if tgerr.Is(err, "PHONE_NOT_OCCUPIED", "PHONE_NOT_FOUND") {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			cn.seen(r.Users, r.Chats)
+			peer, ok := r.Peer.(*tg.PeerUser)
+			if !ok {
+				continue
+			}
+			for _, x := range r.Users {
+				if u, ok := x.(*tg.User); ok && u.ID == peer.UserID {
+					if u.Phone == "" {
+						u.SetPhone(strings.TrimPrefix(p, "+"))
+					}
+					found = append(found, u)
+					out = append(out, plugins.Found{Phone: p, Service: "telegram", Key: strconv.FormatInt(u.ID, 10)})
+				}
+			}
+		}
+		if len(found) == 0 {
+			return nil
+		}
+		store, err := openStore(DBPath())
+		if err != nil {
+			return err
+		}
+		defer store.Close()
+		tx, err := store.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		if err := func() (err error) {
+			defer db.Recover(&err)
+			for _, u := range found {
+				db.Exec(tx, "INSERT OR REPLACE INTO entity VALUES (?, ?)", u.ID, Dump(u))
+			}
+			return nil
+		}(); err != nil {
+			return err
+		}
+		return tx.Commit()
+	})
+	return out, err
+}
+
 // fetchEntity is get_entity of an input peer: the user or chat as Telegram has it now.
 func fetchEntity(ctx context.Context, cn *conn, peer tg.InputPeerClass) (any, error) {
 	switch p := peer.(type) {

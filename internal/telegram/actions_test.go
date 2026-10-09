@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/gotd/td/tg"
@@ -183,5 +184,47 @@ func TestActionsManifest(t *testing.T) {
 	}
 	if r := m["reactions"].([]string); !reflect.DeepEqual(r[:6], []string{"👍", "❤", "🔥", "🥰", "👏", "😁"}) {
 		t.Fatalf("%v", r)
+	}
+}
+
+// Someone found by their number (who has no chat with the owner yet): kept in the store with that
+// number, and a first message reaches them through another connection too.
+func TestFindAndFirstMessage(t *testing.T) {
+	in := newInstance(t, M{})
+	c := in.ctx()
+	f := account()
+	carol := user(9, "Carol", 99)
+	f.users = append(f.users, carol)
+	f.phones = map[string]int64{"306900000009": 9}
+	func() {
+		_, release, _ := one.take(newTestCtx(), false, nil)
+		defer release()
+		defer one.share(f.conn())()
+		got, err := Plugin{}.Find(newTestCtx(), c, []string{"+306900000009", "+306911111111"})
+		if err != nil || len(got) != 1 || got[0] != (plugins.Found{Phone: "+306900000009", Service: "telegram", Key: "9"}) {
+			t.Fatalf("found: %v %v", got, err)
+		}
+	}()
+	if p, ok := storedPeer(9); !ok || p.(*tg.InputPeerUser).AccessHash != 99 {
+		t.Fatalf("kept: %v %v", p, ok)
+	}
+	store, err := openStore(DBPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw := db.Str(store, "SELECT json FROM entity WHERE id = 9"); !strings.Contains(raw, "306900000009") {
+		t.Fatalf("kept without the number: %s", raw)
+	}
+	store.Close()
+
+	_, release, _ := one.take(newTestCtx(), false, nil)
+	defer release()
+	defer one.share(f.conn())() // a new connection: it has not seen Carol
+	if _, err := (Plugin{}).Send(newTestCtx(), c, plugins.Conversation{Key: "9", Service: "telegram"}, "hello", nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	req := f.requests[len(f.requests)-1].(*tg.MessagesSendMessageRequest)
+	if p, ok := req.Peer.(*tg.InputPeerUser); !ok || p.UserID != 9 || p.AccessHash != 99 || req.Message != "hello" {
+		t.Fatalf("sent: %+v", req)
 	}
 }

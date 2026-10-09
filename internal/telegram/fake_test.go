@@ -66,6 +66,7 @@ type fake struct {
 	blocked  []int64                          // the users blocked, in the order blocked
 	asked    func(input bin.Encoder)          // called at each request, before its answer
 	readBy   map[int][]tg.ReadParticipantDate // who read each message (by id) of a group
+	phones   map[string]int64                 // the user each number finds (resolvePhone), as digits
 }
 
 func (f *fake) chat(peer tg.PeerClass) *fakeChat {
@@ -348,6 +349,16 @@ func (f *fake) answer(input bin.Encoder) (bin.Encoder, error) {
 			out.Participants = append(out.Participants, &tg.ChannelParticipant{UserID: id})
 		}
 		return out, nil
+	case *tg.ContactsResolvePhoneRequest:
+		f.calls = append(f.calls, "resolvePhone")
+		for _, u := range f.users {
+			if id, ok := f.phones[r.Phone]; ok && u.(*tg.User).ID == id {
+				x := *u.(*tg.User) // Telegram gives the number only to contacts
+				x.Phone = ""
+				return &tg.ContactsResolvedPeer{Peer: &tg.PeerUser{UserID: id}, Users: []tg.UserClass{&x}}, nil
+			}
+		}
+		return nil, &tgerr.Error{Code: 400, Type: "PHONE_NOT_OCCUPIED"}
 	case *tg.MessagesReportSpamRequest:
 		f.calls = append(f.calls, "reportSpam")
 		return &tg.BoolBox{Bool: &tg.BoolTrue{}}, nil

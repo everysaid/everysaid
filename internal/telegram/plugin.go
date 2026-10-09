@@ -190,6 +190,14 @@ func (Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Convers
 	return send(ctx, c, conv, text, reply, mentions, file)
 }
 
+// Find asks Telegram who has each number (contacts.resolvePhone: nothing changes in the account; one
+// who does not let others find them by their number is not found). Who is found is kept in
+// telegram.db with the number asked, so that a first message reaches them from any connection and
+// their chat goes to the person of that number.
+func (Plugin) Find(ctx context.Context, c *plugins.Context, phones []string) ([]plugins.Found, error) {
+	return find(ctx, phones)
+}
+
 // MarkRead sends read receipts for the chat, where the user turned them on; nothing otherwise.
 func (Plugin) MarkRead(ctx context.Context, c *plugins.Context, conv plugins.Conversation, until int64) (int, error) {
 	if !c.Bool("read_receipts") {

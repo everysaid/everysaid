@@ -541,6 +541,19 @@ func (b *Bridge) Send(req SendRequest) (int, SendResponse) {
 	return sender.send(req)
 }
 
+// Find is which of the numbers (+digits) WhatsApp has.
+func (b *Bridge) Find(ctx context.Context, phones []string) (map[string]bool, error) {
+	client, _, sender := b.parts()
+	if sender == nil || !b.open() {
+		return nil, ErrNotConnected
+	}
+	defer b.handling.RUnlock()
+	if !client.IsConnected() {
+		return nil, ErrNotConnected
+	}
+	return sender.find(ctx, phones)
+}
+
 // MarkRead sends read receipts (POST /api/read).
 func (b *Bridge) MarkRead(req ReadRequest) (int, map[string]any) {
 	_, _, sender := b.parts()

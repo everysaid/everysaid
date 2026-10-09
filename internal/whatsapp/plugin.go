@@ -66,6 +66,8 @@ func (Plugin) Info() *plugins.Info {
 			{Key: "send_per_hour", Label: "Messages sent at most an hour", Type: "number", Default: 300},
 			{Key: "send_per_day", Label: "Messages sent at most a day", Type: "number", Default: 1000},
 			{Key: "send_same_text", Label: "The same longer text into at most so many chats an hour", Type: "number", Default: 3},
+			{Key: "send_new_chats", Label: "New chats started from here at most a day", Type: "number", Default: 5,
+				Help: "A first message to someone found on WhatsApp, only to people in your contacts"},
 		},
 		CanSend: true, CanReply: true, CanMention: true, CanMarkRead: true, CanSendFiles: true,
 		// any emoji, the app's six quick ones first
@@ -81,7 +83,7 @@ func storeDir(c *plugins.Context) string { return c.Str("store") }
 // limits are the limits of sending, as the source's settings say.
 func limits(c *plugins.Context) SendLimits {
 	return SendLimits{PerMinute: int(c.Num("send_per_minute")), PerHour: int(c.Num("send_per_hour")),
-		PerDay: int(c.Num("send_per_day")), SameText: int(c.Num("send_same_text"))}
+		PerDay: int(c.Num("send_per_day")), SameText: int(c.Num("send_same_text")), NewChats: int(c.Num("send_new_chats"))}
 }
 
 func paths(c *plugins.Context) (string, string) {
@@ -210,8 +212,9 @@ func (p Plugin) InfoFacts(c *plugins.Context) []plugins.Fact {
 		said = "not linked yet (Link a device)"
 	}
 	limits, _ := s["limits"].(SendLimits)
-	set := i18n.T("{minute} a minute, {hour} an hour, {day} a day; the same text into {same} chats an hour",
-		c.Lang(), map[string]any{"minute": limits.PerMinute, "hour": limits.PerHour, "day": limits.PerDay, "same": limits.SameText})
+	set := i18n.T("{minute} a minute, {hour} an hour, {day} a day; the same text into {same} chats an hour; {new} new chats a day",
+		c.Lang(), map[string]any{"minute": limits.PerMinute, "hour": limits.PerHour, "day": limits.PerDay, "same": limits.SameText,
+			"new": limits.NewChats})
 	return []plugins.Fact{{Label: "Connection", Value: said}, {Label: "Sending", Value: sending},
 		{Label: "Sending limits", Value: set}}
 }
@@ -519,6 +522,14 @@ func (p Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conve
 	if err != nil {
 		return nil, err
 	}
+	if conv.ID == 0 { // a first message, to someone found: only to people in the owner's contacts
+		if !db.Exists(c.Store().Read(), "SELECT 1 FROM address a JOIN address_kind k ON k.id = a.kind_id "+
+			"JOIN person_address pa ON pa.address_id = a.id JOIN person p ON p.id = pa.person_id "+
+			"WHERE k.name = 'phone' AND a.value = ? AND p.contact_uid IS NOT NULL", conv.Key) {
+			return nil, errs.Plugin(notAContact, 0)
+		}
+		req.First = true
+	}
 	b := Running(storeDir(c))
 	if b == nil {
 		return nil, errs.Plugin("not connected to WhatsApp", 503)
@@ -544,6 +555,28 @@ func (p Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conve
 		c.Log("error: {e}", map[string]any{"e": err})
 	}
 	return plugins.Sent{Keys: []string{answer.ID}}, nil
+}
+
+// notAContact: a chat is started from here only with someone in the owner's contacts.
+const notAContact = "A new WhatsApp chat starts from here only with someone in your contacts"
+
+// Find asks WhatsApp which of the numbers it has (nothing is sent to anyone).
+func (Plugin) Find(ctx context.Context, c *plugins.Context, phones []string) ([]plugins.Found, error) {
+	b := Running(storeDir(c))
+	if b == nil {
+		return nil, errs.Plugin("not connected to WhatsApp", 503)
+	}
+	on, err := b.Find(ctx, phones)
+	if err != nil {
+		return nil, err
+	}
+	var out []plugins.Found
+	for _, p := range phones {
+		if on[p] {
+			out = append(out, plugins.Found{Phone: p, Service: "whatsapp", Key: p})
+		}
+	}
+	return out, nil
 }
 
 func (p Plugin) React(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref, emoji string) error {
