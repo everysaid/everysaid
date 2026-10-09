@@ -23,7 +23,10 @@ export async function enablePush() {
   if (perm !== "granted") throw new Error("denied");
   const reg = await navigator.serviceWorker.ready;
   const { key } = await api.get<{ key: string }>("/api/push/key");
-  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8Array(key) });
+  // A browser without a push service (Chromium without Google's, Brave with it turned off) aborts here.
+  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToUint8Array(key) }).catch((e) => {
+    throw e?.name === "AbortError" ? new Error("unavailable") : e;
+  });
   await api.post("/api/push/subscribe", sub.toJSON());
   return sub;
 }
