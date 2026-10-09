@@ -191,6 +191,8 @@ type conn struct {
 	mu       sync.Mutex
 	entities map[int64]any  // marked id -> *tg.User, *tg.Chat, *tg.Channel, ...
 	unknown  map[int64]bool // ids the dialogs were read again for, in vain: not again
+
+	readers func(chat int64) // asks who read the owner's messages in a group (the live connection's)
 }
 
 func newConn(api *tg.Client) *conn {

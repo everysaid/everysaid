@@ -67,6 +67,13 @@ CREATE TABLE IF NOT EXISTS migrated (       -- the basic group each supergroup w
     chat_id INTEGER NOT NULL,               -- the basic group's id (unmarked), 0 if none
     max_id INTEGER NOT NULL                 -- its last message
 );
+CREATE TABLE IF NOT EXISTS read_by (        -- who read each of the owner's messages in a group, as Telegram says
+    chat_id INTEGER NOT NULL,               -- (it says so for a week, in groups of up to a hundred)
+    id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    at INTEGER NOT NULL,                    -- Unix s
+    PRIMARY KEY (chat_id, id, user_id)
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS poll (           -- which message has each poll (a vote's update names only the poll)
     poll_id INTEGER NOT NULL,
     chat_id INTEGER NOT NULL,

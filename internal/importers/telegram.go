@@ -447,6 +447,19 @@ func telegramReads(a *archive.Archive, dbPath string, chats map[int64]bool) {
 				a.ReportState(src, conv, "read_until", ts.Int64, toInt(r["observed_at"])*1000, 0)
 			}
 		}
+		// in a group: who read each of the owner's messages, as Telegram said when asked
+		if k := str(r["kind"]); (k == "group" || k == "supergroup") && db.Exists(d, "SELECT 1 FROM sqlite_master WHERE name = 'read_by'") {
+			for _, b := range maps(d, "SELECT id, user_id, at FROM read_by WHERE chat_id = ? ORDER BY id, user_id", chatID) {
+				mid, ok := a.MessageByKey("telegram", pyStr(b["id"]), conv)
+				if !ok || mid == 0 {
+					continue
+				}
+				who := a.Address(person.of(toInt(b["user_id"]), true))
+				a.Exec("INSERT OR IGNORE INTO receipt (message_id, address_id) SELECT id, ? FROM message WHERE id = ? AND outgoing", who, mid)
+				a.Exec("UPDATE receipt SET read_at = ? WHERE message_id = ? AND address_id = ? AND read_at IS NULL",
+					toInt(b["at"])*1000, mid, who)
+			}
+		}
 		if outbox := r["outbox"]; truthy(outbox) && str(r["kind"]) == "user" {
 			peer := a.Address(person.of(chatID, true))
 			mine := "SELECT id FROM message WHERE conversation_id = ? AND outgoing AND key IS NOT NULL " +

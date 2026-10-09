@@ -517,3 +517,46 @@ func TestReactionsLater(t *testing.T) {
 		t.Fatal(err, in.keys)
 	}
 }
+
+// Who read the owner's message in a group, asked of Telegram, comes into the archive as receipts;
+// asked again, nothing changes.
+func TestGroupReaders(t *testing.T) {
+	in := newInstance(t, M{})
+	importTelegram, importReads = func(a *archive.Archive, out func(string), only map[[2]int64]bool, skip map[int64]bool) error {
+		return importers.Telegram(a, out, importers.TelegramOptions{Only: only, Skip: skip})
+	}, func(a *archive.Archive, chats map[int64]bool) error {
+		return importers.TelegramReads(a, nil, "", chats)
+	}
+	c := in.ctx()
+	f := account()
+	now := int(time.Now().Unix())
+	f.readBy = map[int][]tg.ReadParticipantDate{6: {{UserID: 2, Date: now - 60}}}
+	cn := f.conn()
+	if _, err := cn.dialogs(newTestCtx()); err != nil {
+		t.Fatal(err)
+	}
+	self := f.self
+	group := f.chats[1].entity
+	if _, err := storeMessages(c, group, []sent{{text(6, &tg.PeerChat{ChatID: 10}, 1, now-120, "mine", true), self}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := noteReads(c, []readItem{{-10, nil, intp(6)}}, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := readers(newTestCtx(), c, cn, -10); err != nil {
+		t.Fatal(err)
+	}
+	read := func() int64 {
+		return db.Int(in.h.store.Read(), "SELECT count(*) FROM receipt r JOIN message m ON m.id = r.message_id "+
+			"WHERE m.key = '6' AND r.read_at = ?", int64(now-60)*1000)
+	}
+	if n := read(); n != 1 {
+		t.Fatalf("%d receipts", n)
+	}
+	if err := readers(newTestCtx(), c, cn, -10); err != nil {
+		t.Fatal(err)
+	}
+	if n := read(); n != 1 {
+		t.Fatalf("again: %d receipts", n)
+	}
+}
