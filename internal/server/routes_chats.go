@@ -137,6 +137,7 @@ func (s *Server) chatRoutes() {
 			}
 		}
 		c["sendable"], c["replyable"], c["mentionable"], c["fileable"], c["unsendable"] = sendable, replyable, mentionable, fileable, unsendable
+		c["findable"], c["reach"] = s.Host.Findable(q.r.PathValue("chat_id")), s.Host.Reach(q.r.PathValue("chat_id"))
 		// what can be done to a message, by service: the emoji (null: any), whether any other emoji
 		// may be put too, and how long after sending an edit or a deletion for everyone is allowed
 		react, free, edit, del := s.Host.Reactable()
@@ -242,6 +243,16 @@ func (s *Server) chatRoutes() {
 		// the services' read receipts, where the user allows them: on their own, not waited for
 		s.Host.MarkReadSoon(chat, time.Now().UnixMilli())
 		return M{"ok": true}, nil
+	})
+
+	// a person looked for on the services the chat has none of yet: those asked, each answer
+	// following as a "reach" event
+	h("POST /api/chats/{chat_id}/find", bodyNone, func(q *req) (any, error) {
+		services, err := s.Host.Find(q.r.PathValue("chat_id"))
+		if err != nil {
+			return nil, is404(err, nil)
+		}
+		return M{"services": services}, nil
 	})
 
 	// A JSON body {text, conversation_id, service, reply_to, mentions}, or a form with the same

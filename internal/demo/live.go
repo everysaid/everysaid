@@ -255,6 +255,13 @@ func (Sender) Send(ctx context.Context, c *plugins.Context, conv plugins.Convers
 		replyKey = reply.Key
 	}
 	h := c.Host()
+	if conv.ID == 0 { // a first message, to someone found (Find): the conversation with their number
+		if err := change(c, func(a *archive.Archive) {
+			conv.ID = a.Conversation(conv.Service, []archive.Handle{archive.H("phone", conv.Key)}, conv.Key, "")
+		}); err != nil {
+			return nil, err
+		}
+	}
 	mid, err := Message(h, conv.ID, text, true, replyKey, mentions, file)
 	if err != nil {
 		return nil, err
@@ -282,6 +289,24 @@ func (Sender) Send(ctx context.Context, c *plugins.Context, conv plugins.Convers
 		return nil, errs.Plugin("Sending failed", 0)
 	}
 	return plugins.Sent{IDs: []int64{mid}}, nil
+}
+
+// Find: every number is on WhatsApp and Viber, one ending in an even digit on Telegram too (never
+// SMS: it is not looked for).
+func (Sender) Find(ctx context.Context, c *plugins.Context, phones []string) ([]plugins.Found, error) {
+	select { // as a real service takes a moment, each its own
+	case <-time.After(600 * time.Millisecond):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	var out []plugins.Found
+	for _, p := range phones {
+		out = append(out, plugins.Found{Phone: p, Service: "whatsapp", Key: p}, plugins.Found{Phone: p, Service: "viber", Key: p})
+		if strings.IndexByte("02468", p[len(p)-1]) >= 0 {
+			out = append(out, plugins.Found{Phone: p, Service: "telegram", Key: p})
+		}
+	}
+	return out, nil
 }
 
 func (Sender) MarkRead(ctx context.Context, c *plugins.Context, conv plugins.Conversation, until int64) (int, error) {

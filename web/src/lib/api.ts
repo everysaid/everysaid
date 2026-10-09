@@ -174,6 +174,8 @@ export interface ChatDetail {
   mentionable: string[];    // those where people of a group can be named with @
   fileable: string[];       // those where a file can be sent
   unsendable: Record<string, string>;   // those a source reaches but may not send to now: what it says is missing
+  findable?: boolean;       // a person's chat that a source could look for on a service it has none of
+  reach?: Record<string, "asking" | "found" | "none" | "failed">;   // what was asked lately, by service: found, a first message can go there
   reactions?: Record<string, string[] | null>;   // where a reaction can be put now: the emoji (null: any)
   free_reactions?: Record<string, boolean>;      // where any other emoji can be put too
   editable?: Record<string, number>;             // where the user's message can be edited: for how many seconds (0: always)

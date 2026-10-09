@@ -72,7 +72,9 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   const busy = useRef({ older: false, newer: false, again: false });
   const itemsRef = useRef(items);
   itemsRef.current = items;
-  const sendable = detail.data?.sendable ?? [];
+  // where the person was found on a service the chat has none of: a first message may go there
+  const found = Object.entries(detail.data?.reach ?? {}).filter(([s, v]) => v === "found" && !detail.data?.services.includes(s)).map(([s]) => s);
+  const sendable = [...(detail.data?.sendable ?? []), ...found];
   const replyable = detail.data?.replyable ?? [];
   const [replyTo, setReplyTo] = useState<MessageItem | null>(null);
   const [infoOf, setInfoOf] = useState<MessageItem | null>(null);      // the message whose receipts are shown
@@ -542,7 +544,8 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
           )}
         </div>
         {detail.data && (
-          <Composer services={detail.data.services.filter((s) => service(s).messages)} sendable={sendable} replyable={detail.data.replyable} missing={detail.data.unsendable}
+          <Composer services={[...detail.data.services.filter((s) => service(s).messages), ...found]} sendable={sendable}
+            findable={!!detail.data.findable} reach={detail.data.reach ?? {}} replyable={detail.data.replyable} missing={detail.data.unsendable}
             mentionable={isGroup ? detail.data.mentionable ?? [] : []} fileable={detail.data.fileable ?? []} members={detail.data.members ?? []}
             chatId={chatId} onSend={send} replyTo={replyTo} onCancelReply={() => setReplyTo(null)}
             editing={editing} onEdit={edit} onCancelEdit={() => setEditing(null)}
@@ -691,13 +694,15 @@ export function placeMentions(text: string, members: { label: string; address_id
   return out.sort((a, b) => a.start - b.start);
 }
 
-/** services: those of the chat with messages; sendable / replyable: those something can send to now
+/** services: those of the chat with messages, and those the person was found on; findable: the person
+ * can be looked for on other services (reach: what they said, each as it answers); sendable / replyable: those something can send to now
  * (or answer a given message in); mentionable / fileable: those where people of the group can be named
  * with @ / a file sent; missing: why a source cannot send to one now. preferred: where the chat was last
  * active, the way to answer until the user picks another. One it cannot send through still shows,
  * closed, with a lock for Send. */
-function Composer({ chatId, services, sendable, replyable, mentionable, fileable, members, missing, preferred, onSend, replyTo, onCancelReply, editing, onEdit, onCancelEdit }: {
+function Composer({ chatId, services, sendable, replyable, mentionable, fileable, members, missing, preferred, findable, reach, onSend, replyTo, onCancelReply, editing, onEdit, onCancelEdit }: {
   chatId: string; services: string[]; sendable: string[]; replyable: string[]; mentionable: string[]; fileable: string[];
+  findable: boolean; reach: Record<string, string>;
   members: Member[]; missing: Record<string, string>;
   preferred?: string | null;
   onSend: (text: string, service: string | null, replyTo: MessageItem | null, mentions: Mentioned[], file: File | null) => void;
@@ -708,6 +713,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   const settings = useSettings();
   const wide = useWide();
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const [text, setText] = useState(() => draft(chatId));       // what was left unsent here, kept
   useEffect(() => { if (!editing) keepDraft(chatId, text); }, [chatId, text, editing]);
   const [svc, setSvc] = useState<string | null>(null);
@@ -762,6 +768,12 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
       .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "")).slice(0, 8);
   }, [asked, members, via]);
   useEffect(() => setPick(0), [asked?.query]);
+  // the person looked for on the services the chat has none of: each answer comes as an event
+  const find = () => {
+    api.post(`/api/chats/${chatId}/find`, {})
+      .then(() => qc.invalidateQueries({ queryKey: ["chat", chatId] }))
+      .catch((e) => toast.error((e as Error).message));
+  };
   if (!services.length || !svc) return null;          // calls only: nothing to write
   const can = !!editing || (replyTo ? replyable : sendable).includes(via);
   const canFile = can && fileable.includes(via);
@@ -847,7 +859,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
               <button data-via={via} aria-label={t("chat.sendVia")} title={`${t("chat.sendVia")} ${service(via).name}`}
                 className="mb-1 ml-1 flex h-9 shrink-0 items-center gap-0.5 rounded-full pl-2 pr-1 hover:bg-panel disabled:hover:bg-transparent data-[state=open]:bg-panel">
                 <ServiceIcon id={via} className="size-5" />
-                {!replyTo && !editing && services.length > 1 && <ChevronDown className="size-3.5 text-muted" />}
+                {!replyTo && !editing && (services.length > 1 || findable) && <ChevronDown className="size-3.5 text-muted" />}
               </button>
             </MenuTrigger>
             <MenuContent align="start" className="w-60">
@@ -861,6 +873,19 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
                   <span className="grid size-4 place-items-center">{s === svc && <Check className="size-4 text-accent" />}</span>
                 </MenuItem>
               ))}
+              {Object.entries(reach).filter(([s, v]) => v !== "found" && !services.includes(s)).map(([s, v]) => (
+                <div key={s} data-reach={s} className="flex items-center gap-2 px-3 py-1.5 text-sm text-muted">
+                  <ServiceIcon id={s} className="size-5 opacity-60" />
+                  <span className="flex-1">{service(s).name}</span>
+                  {v === "asking" ? <Spinner className="size-4" /> : <span className="text-xs">{t(v === "none" ? "chat.notFound" : "chat.notAnswered")}</span>}
+                </div>
+              ))}
+              {findable && (
+                <MenuItem onSelect={find}>
+                  <Search className="size-5" />
+                  <span className="flex-1">{t("chat.findElsewhere")}</span>
+                </MenuItem>
+              )}
             </MenuContent>
           </Menu>
           <Textarea

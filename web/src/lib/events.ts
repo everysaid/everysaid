@@ -8,7 +8,8 @@ export type LiveEvent =
   | { type: "plugin_log"; instance: number; line: string }
   | { type: "plugin_progress"; instance: number; line: string }     // a line drawn again (a progress bar)
   | { type: "plugin_qr"; instance: number; code: string }           // a code to link a device (WhatsApp, Signal): shown as a QR
-  | { type: "alert"; title: string; body: string };                  // a plugin's warning, in the user's words
+  | { type: "alert"; title: string; body: string }                   // a plugin's warning, in the user's words
+  | { type: "reach"; chat: string; service: string; state: string };  // a source's answer: whether a person is on its service
 
 type Listener = (e: LiveEvent) => void;
 const listeners = new Set<Listener>();
@@ -39,6 +40,8 @@ export function connectEvents(qc: QueryClient) {
         qc.invalidateQueries();
       } else if (e.type === "plugin") {
         qc.invalidateQueries({ queryKey: ["plugins"] });
+      } else if (e.type === "reach") {
+        qc.invalidateQueries({ queryKey: ["chat", e.chat] });
       }
       listeners.forEach((f) => f(e));
     };

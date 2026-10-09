@@ -316,6 +316,17 @@ type MediaFetcher interface {
 	FetchMedia(ctx context.Context, c *Context, messageID int64) (string, error)
 }
 
+// Finder says which of a person's numbers (+E.164) have an account on its services, to write to
+// them where the archive has no conversation with them yet. A Sender: what it finds it is then given
+// to Send, as a conversation with no ID and the key found.
+type Finder interface {
+	Find(ctx context.Context, c *Context, phones []string) ([]Found, error)
+}
+
+// Found is a number with an account on a service: the key of the one-to-one conversation with it
+// there.
+type Found struct{ Phone, Service, Key string }
+
 // ChatLister gives the chats it can see, for the user's choice of what to import.
 type ChatLister interface {
 	Chats(c *Context) ([]M, error)

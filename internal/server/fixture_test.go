@@ -223,11 +223,23 @@ func writeSent(c *plugins.Context, conv plugins.Conversation, text string) (_ an
 	}
 	defer a.Close()
 	defer archive.Recover(&err)
+	if conv.ID == 0 { // a first message, to someone found: the conversation with their number
+		conv.ID = a.Conversation(conv.Service, []archive.Handle{archive.H("phone", conv.Key)}, conv.Key, "")
+	}
 	key := fmt.Sprint("sent-", time.Now().UnixNano())
 	a.AddMessage(a.Source("test/sent", "", "", ""), key, archive.Message{Service: conv.Service, ConversationID: conv.ID,
 		TS: time.Now().UnixMilli(), Outgoing: true, Kind: "text", Text: text, Key: key})
 	a.Commit()
 	return plugins.Sent{Keys: []string{key}}, nil
+}
+
+// Find: every number is on Telegram and Viber.
+func (testSource) Find(ctx context.Context, c *plugins.Context, phones []string) ([]plugins.Found, error) {
+	var out []plugins.Found
+	for _, p := range phones {
+		out = append(out, plugins.Found{Phone: p, Service: "telegram", Key: p}, plugins.Found{Phone: p, Service: "viber", Key: p})
+	}
+	return out, nil
 }
 
 func (testSource) MarkRead(ctx context.Context, c *plugins.Context, conv plugins.Conversation, until int64) (int, error) {

@@ -326,6 +326,58 @@ func TestSendSaysWhatWent(t *testing.T) {
 	must(t, len(went) == 0, "messages where the plugin cannot say: %v", went)
 }
 
+// A person looked for on the services their chat has none of: each answer as it comes, then a first
+// message there, which brings the service into the chat; only a person's chat, with a number.
+func TestFindAndFirstMessage(t *testing.T) {
+	c := newServer(t)
+	c.login()
+	drain()
+	var maria, group, katerina string
+	for _, x := range items(c.getJSON("/api/chats")) {
+		switch {
+		case x["title"] == "Μαρία Ελένη":
+			maria = x["id"].(string)
+		case x["type"] == "group":
+			group = x["id"].(string)
+		case strings.HasPrefix(fmt.Sprint(x["title"]), "Katerina") || strings.Contains(fmt.Sprint(x["title"]), "katerina"):
+			katerina = x["id"].(string)
+		}
+	}
+	must(t, maria != "" && group != "" && katerina != "", "chats: %q %q %q", maria, group, katerina)
+	detail := c.getJSON("/api/chats/" + maria)
+	must(t, detail["findable"] == true, "findable: %v", detail["findable"])
+
+	r := c.post("/api/chats/"+maria+"/find", M{})
+	must(t, r.status == 200, "find: %d %s", r.status, r.body)
+	asked := r.json()["services"].([]any)
+	must(t, fmt.Sprint(asked) == "[telegram viber]", "asked (not what the chat has): %v", asked)
+	var reach map[string]any
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+		reach = c.getJSON("/api/chats/" + maria)["reach"].(map[string]any)
+		if reach["telegram"] == "found" && reach["viber"] == "found" {
+			break
+		}
+	}
+	must(t, reach["telegram"] == "found" && reach["viber"] == "found", "reach: %v", reach)
+
+	r = c.post("/api/chats/"+maria+"/send", M{"text": "write: first", "service": "telegram"})
+	must(t, r.status == 200, "send: %d %s", r.status, r.body)
+	a := next(t)
+	must(t, a.service == "telegram" && a.text == "write: first", "asked: %+v", a)
+	must(t, num(r.json()["conversation_id"]) != 0 && len(r.json()["messages"].([]any)) == 1, "went: %s", r.body)
+	detail = c.getJSON("/api/chats/" + maria)
+	must(t, slices.Contains(detail["services"].([]any), any("telegram")), "services: %v", detail["services"])
+	must(t, detail["reach"].(map[string]any)["telegram"] == nil, "reach after: %v", detail["reach"])
+
+	// nowhere found: sent as before, through the conversations the chat has
+	r = c.post("/api/chats/"+maria+"/send", M{"text": "x", "service": "messenger"})
+	must(t, r.status == 409 && r.code() == "chat.no_sender", "not found: %d %s", r.status, r.body)
+	r = c.post("/api/chats/"+group+"/find", M{})
+	must(t, r.status == 409 && r.code() == "chat.not_a_person", "group: %d %s", r.status, r.body)
+	r = c.post("/api/chats/"+katerina+"/find", M{})
+	must(t, r.status == 409 && r.code() == "chat.no_phone", "email only: %d %s", r.status, r.body)
+}
+
 // A group's members to name with @, a file sent with its caption, who got and read the user's
 // messages, and the services told the chat was read: through a plugin that records what it is asked.
 func TestMentionsFilesReceiptsAndReadReceipts(t *testing.T) {

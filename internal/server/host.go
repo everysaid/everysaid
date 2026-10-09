@@ -52,7 +52,8 @@ type Host struct {
 	live      map[int64]context.CancelFunc
 	lines     map[int64][]string // the instance's last log lines, for its panel
 	bars      map[int64]string
-	marking   map[[2]int64]bool // (instance, conversation) being told it was read now
+	marking   map[[2]int64]bool            // (instance, conversation) being told it was read now
+	reach     map[string]map[string]*reach // chat -> service -> where a person was looked for (find.go)
 	wg        sync.WaitGroup
 }
 
@@ -757,6 +758,14 @@ func (h *Host) Send(ctx context.Context, chatID string, r SendRequest) (out M, e
 			}
 		}
 		options = keep
+		// a first message where the person was found (Find): into a conversation the archive has not yet
+		if iid, key, ok := h.reached(chatID, r.Service); ok && len(keep) == 0 && answered == nil && conversationID == 0 {
+			for _, s := range senders {
+				if s.iid == iid && (r.File == nil || s.p.Info().CanSendFiles) {
+					options = append(options, option{key: key, service: r.Service, s: s})
+				}
+			}
+		}
 	}
 	if len(options) == 0 {
 		code := "chat.no_sender"
@@ -795,6 +804,11 @@ func (h *Host) Send(ctx context.Context, chatID string, r SendRequest) (out M, e
 	result, err := snd.Send(ctx, pc, plugins.Conversation{ID: o.conv, Key: o.key, Service: o.service}, r.Text, answered, mentions, r.File)
 	if err != nil {
 		return nil, err
+	}
+	if o.conv == 0 { // a first message: its conversation, if the source has brought it already
+		if o.conv = h.conversationOf(o.service, o.key); o.conv != 0 {
+			h.forget(chatID, o.service)
+		}
 	}
 	h.Emit(M{"type": "changed"})
 	return M{"service": o.service, "conversation_id": o.conv, "messages": h.sent(o.conv, result), "result": result}, nil

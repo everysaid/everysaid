@@ -89,7 +89,9 @@ weights of the names and the chat state it brings (7).
 Beyond the manifest a plugin implements only the interfaces it needs: `RunImport` (an import),
 `Live` (a connection), `Send`, `React`, `Edit`, `Delete`, `MarkRead`, `FetchMedia`, `ReportSpam`
 (report, block and delete the chat on the service), `Forget` (drop its own copy of a chat removed
-as spam), `Chats` (the
+as spam), `Find` (which of a person's numbers have an account on its services: asked of every such
+source at once when the user looks for a person elsewhere, each answer reaching the app as a
+`reach` event as it comes, and a first message then sent to the key found), `Chats` (the
 chats it can see, with kind and size, for the user's choice of what to import and whose media to
 fetch; Telegram and Signal have it), `Asks` (what the user types for one run only, such as a backup
 password not kept), `Action`, `Check`; a library `Find`, `Store`, `Fetch`; a contacts plugin

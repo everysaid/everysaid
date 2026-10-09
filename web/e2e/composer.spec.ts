@@ -30,7 +30,8 @@ test("answers where the chat was last active, with a lock where it cannot send",
   await via.click();
   const items = page.getByRole("menuitem");
   await expect(items.first()).toBeVisible();
-  await expect(items.filter({ has: page.locator("[data-icon]") })).toHaveCount(await items.count());
+  const choices = items.filter({ hasNotText: /Αναζήτηση σε άλλες υπηρεσίες|Look for them on other services/ });   // a person's chat: one more, to look for them
+  await expect(items.filter({ has: page.locator("[data-icon]") })).toHaveCount(await choices.count());
   await items.filter({ hasText: (await page.evaluate(async (s) => {
     const h = { "X-Everysaid": "1" };
     return (await (await fetch("/api/services", { headers: h })).json())[s].name;
@@ -68,4 +69,40 @@ test("a person's services, all on at first: one turned off leaves its messages o
   await expect(page.locator(`[data-service-toggle="${chat.services.at(-1)}"]`)).toBeDisabled();
   for (const s of chat.services.slice(0, -1)) await page.locator(`[data-service-toggle="${s}"]`).click();   // all back on
   await expect(page).not.toHaveURL(/hide=/);
+});
+
+// A person looked for on the services their chat has none of (the demo's source finds every number on
+// WhatsApp and Viber): each answer shows as it comes, and a first message there brings the service in.
+test("a person found on another service, and a first message there", async ({ page }, info) => {
+  await signedIn(page, info.project.name);
+  const chat = await page.evaluate(async () => {
+    const h = { "X-Everysaid": "1" };
+    const chats = (await (await fetch("/api/chats", { headers: h })).json()).items;
+    for (const c of chats) {
+      if (c.type !== "person" || c.services.includes("viber")) continue;
+      const d = await (await fetch(`/api/chats/${c.id}`, { headers: h })).json();
+      if (d.findable) return { id: c.id };
+    }
+    return null;
+  });
+  test.skip(!chat, "no person to look for");
+  await page.goto(`/chat/${chat!.id}`);
+  const via = page.locator("[data-via]");
+  await via.click();
+  await page.getByRole("menuitem", { name: /Αναζήτηση σε άλλες υπηρεσίες|Look for them on other services/ }).click();
+  const viber = await page.evaluate(async () => (await (await fetch("/api/services", { headers: { "X-Everysaid": "1" } })).json()).viber.name);
+  await expect.poll(async () => {
+    await via.click();
+    const n = await page.getByRole("menuitem", { name: viber }).count();
+    await page.keyboard.press("Escape");
+    return n;
+  }, { timeout: 10_000 }).toBe(1);
+  await via.click();
+  await page.getByRole("menuitem", { name: viber }).click();
+  await expect(via).toHaveAttribute("data-via", "viber");
+  await page.locator("[data-composer-body] textarea").fill("quiet: a first message");
+  await page.locator("[data-send]").click();
+  await expect(page.locator('[id^="m-"]').getByText("quiet: a first message")).toBeVisible();
+  await expect.poll(async () => page.evaluate(async (id) =>
+    (await (await fetch(`/api/chats/${id}`, { headers: { "X-Everysaid": "1" } })).json()).services.includes("viber"), chat!.id)).toBe(true);
 });
