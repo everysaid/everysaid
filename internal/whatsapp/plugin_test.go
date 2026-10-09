@@ -160,7 +160,7 @@ func TestItsCardSaysWhatTheStoreSays(t *testing.T) {
 	p := Plugin{}
 	facts := p.InfoFacts(f.ctx())
 	if facts[0].Value != "not linked yet (Link a device)" || !strings.HasPrefix(facts[1].Value, "on, 0 of 1000 today") ||
-		facts[2].Value != "15 a minute, 300 an hour, 1000 a day; the same text into 3 chats an hour (config.toml, [whatsapp])" {
+		facts[2].Value != "15 a minute, 300 an hour, 1000 a day; the same text into 3 chats an hour" {
 		t.Fatalf("no device: %v", facts)
 	}
 	// a device linked, the connection last said connected: not so now (it does not run)
