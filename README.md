@@ -331,10 +331,10 @@ The folders are read as they are: unpacking an archive of them is the user's job
   with every service and the address book; the others are ids within their service.
 - The owner's account a chat was on (the log folder's) is a member of its conversation, so that one
   of several accounts can be hidden; a chat with someone may have been on several.
-- Messages have no ids: the fingerprint (second, direction, kind, text) within the conversation
-  tells one seen before, from either program, so they get no `message_origin` row (a log file's
-  path would be most of the table). Status lines are left out; the pictures Adium kept
-  beside its logs come in as the messages' files.
+- Messages have no ids: the time, direction, kind and text within the conversation tell one seen
+  before, from either program, so they get no `message_origin` row (a log file's path would be most
+  of the table). Status lines are left out; the pictures Adium kept beside its logs come in as the
+  messages' files.
 - Pidgin logs names, not handles: the owner's messages are told by the account's names (the
   account, its alias in `accounts.xml`, any name speaking in three or more of its conversations).
   Adium's `alias` and Pidgin's `blist.xml` give people their names (`handle_name`, `chat` and

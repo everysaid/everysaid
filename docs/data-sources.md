@@ -87,7 +87,7 @@ pair"); the importers run without it.
   extracts, the media files, the password file and the MMS parts.
 - **Idempotent imports.** Every importer can be run again. A row is identified by `(source,
   row_key)`, its id in that source, and is skipped if already present (the Adium and Pidgin logs,
-  without ids, by their fingerprint). A message's service-wide id
+  without ids, by their time, direction, kind and text). A message's service-wide id
   (`message.key`) stops the same message arriving twice from two sources.
 - **One origin per record.** A record found on two devices is stored once, from the device that was
   in use at the time (`device.used_from`/`used_until` in the archive, `Archive.Keeper`): an
@@ -966,7 +966,7 @@ person; a new address starts as a person of its own, until the user merges it.
 |---|---|
 | `conversation` | `service_id`, `key`, `title`, `is_group`; (service, key) unique |
 | `conversation_member` | conversation × address |
-| `message` | `status` (a message sent from the app: sending, sent, failed), `id`, `service_id`, `conversation_id`, `ts` (Unix ms UTC), `outgoing`, `sender_id` (NULL when outgoing), `kind_id`, `text`, `key`, `key_scope` (the conversation, for services whose keys are per chat), `fingerprint` (messages without a key: time, direction, kind and text); unique on (service, key, key_scope); and the extras: `subtype`, `subtype_code`, `reply_to`, `reply_key`, `reply_text`, `edited`, `deleted`, `forwarded`, `starred`, `lat`, `lon`, `place` (a location shared), `sender_lat`, `sender_lon` (where the sender was, older Viber) |
+| `message` | `status` (a message sent from the app: sending, sent, failed), `id`, `service_id`, `conversation_id`, `ts` (Unix ms UTC), `outgoing`, `sender_id` (NULL when outgoing), `kind_id`, `text`, `key`, `key_scope` (the conversation, for services whose keys are per chat); unique on (service, key, key_scope) where there is a key; and the extras: `subtype`, `subtype_code`, `reply_to`, `reply_key`, `reply_text`, `edited`, `deleted`, `forwarded`, `starred`, `lat`, `lon`, `place` (a location shared), `sender_lat`, `sender_lon` (where the sender was, older Viber) |
 | `reaction` | `message_id`, `emoji` (NULL where only a code is known), `code`, `count`, `address_id`, `outgoing` |
 | `receipt` | message × address: `delivered_at`, `read_at`, `played_at` (Unix ms; 0 so but when not known; NULL not yet), for the owner's messages |
 | `mention` | message × address: whom its text names with @, and `token`, how the text names them (WhatsApp `@<number or LID's user part>`, Telegram `@username` or the name itself, Viber `@Name`) |
@@ -1072,7 +1072,7 @@ everysaid import [--db PATH] [sms calls viber whatsapp telegram voip media]
 | WhatsApp | `Z_PK` / `<jid>/<id>` | stanza id (`message.key`); iPhone first within one run |
 | Media | `(source, source_path, message)` | content sha256 (`media`) |
 | Services with ids per chat (Telegram) | `(source, row_key)` | (`message.key`, `key_scope`) |
-| Adium and Pidgin logs (no ids) | `message.fingerprint` within the conversation, no `message_origin` | the same fingerprint (README, "Adium and Pidgin") |
+| Adium and Pidgin logs (no ids) | time, direction, kind and text within the conversation (no key), no `message_origin` | the same (README, "Adium and Pidgin") |
 
 ---
 

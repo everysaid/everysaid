@@ -121,7 +121,6 @@ CREATE TABLE IF NOT EXISTS message (
     text TEXT,
     key TEXT,                           -- the service's own id; NULL for SMS and MMS
     key_scope INTEGER REFERENCES conversation,  -- the conversation, where the key is unique only there
-    fingerprint TEXT,                   -- messages without a key: see fingerprint()
     subtype TEXT,                       -- the service's finer kind (vocabulary): link, gif, video note, poll...
     subtype_code TEXT,                  -- the service's own code for it, e.g. 'whatsapp:54'
     reply_to INTEGER REFERENCES message,    -- the message this one answers
@@ -135,11 +134,10 @@ CREATE TABLE IF NOT EXISTS message (
     sender_lat REAL, sender_lon REAL,   -- where the sender was when sending (older Viber)
     status TEXT                         -- a message sent from the app: sending, sent, failed (NULL: as imported)
 );
-CREATE UNIQUE INDEX IF NOT EXISTS message_key ON message (service_id, key, ifnull(key_scope, 0));
+CREATE UNIQUE INDEX IF NOT EXISTS message_key ON message (service_id, key, ifnull(key_scope, 0))
+    WHERE key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS message_conversation_ts ON message (conversation_id, ts);
 CREATE INDEX IF NOT EXISTS message_ts ON message (ts);
-CREATE INDEX IF NOT EXISTS message_fingerprint ON message (conversation_id, fingerprint)
-    WHERE fingerprint IS NOT NULL;
 CREATE TABLE IF NOT EXISTS notice (     -- what a notice says (a group's change, a timer set...), for the
     message_id INTEGER PRIMARY KEY REFERENCES message,  -- interface to put in words
     code TEXT NOT NULL,                 -- what it is: group, timer, pin, unpin, unreadable, story_reply...
