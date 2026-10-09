@@ -336,6 +336,12 @@ type Informer interface {
 	InfoFacts(c *Context) []Fact
 }
 
+// LiveStopper is told when the user ends an instance's live connection (turned off, the instance
+// disabled or removed), not when the server stops: what the connection keeps running may stop too.
+type LiveStopper interface {
+	LiveStopped(c *Context)
+}
+
 // Actioner runs one of its actions; IdleActions are those with nothing to do now.
 type Actioner interface {
 	Action(c *Context, name string) error

@@ -111,8 +111,11 @@ The live sources:
 - **Signal** (`internal/signal`): a separate helper program, `everysaid-signal` (`bridges/signal`,
   Rust, on presage, AGPL-3.0), started by the plugin and spoken to in JSON lines on its stdin and
   stdout; none of its code is linked into `everysaid`.
-- **Viber** (`internal/viber`): through the running Viber Desktop on Linux, driven from inside by
-  Everysaid's bridge (`bridges/viber`, an `LD_PRELOAD` library; `docs/viber-bridge.md`).
+- **Viber** (`internal/viber`): through Viber Desktop on Linux, driven from inside by Everysaid's
+  bridge (`bridges/viber`, an `LD_PRELOAD` library; `docs/viber-bridge.md`). The plugin starts
+  Viber Desktop headless, in a session of its own so that the server's restarts leave it running,
+  starts it again if it goes, and stops it when the user says (kept stopped until started again)
+  or ends the live connection (`plugins.LiveStopper`).
 
 **Instances.** A plugin can be added many times: two iPhones, several Android phones, two Telegram
 accounts. Each instance (`plugin_instance`) has its own label, settings, secrets, state (its

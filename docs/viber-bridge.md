@@ -75,14 +75,91 @@ Open in the running client, no decryption needed: `~/.ViberPC/<number>/viber.db`
   writes `UploadFile`. The README's socket protocol has what the database keeps for reactions,
   edits, deletions, quotes and mentions.
 
+## How Viber Desktop runs
+
+The source starts Viber Desktop itself and keeps it running; nothing else needs to be set up
+(its setting "Start Viber Desktop here", on by default).
+
+**What is started.** What `bridges/viber/run.sh` does by hand, done by the source:
+
+```
+Xvfb :99 -screen 0 1280x900x24 -nolisten tcp          (only if no X server is on the display)
+dbus-run-session -- env --default-signal=INT LD_PRELOAD=<the bridge> /opt/viber/Viber
+    DISPLAY=:99  QT_QPA_PLATFORM=xcb  VIBER_BRIDGE_SOCK=<the socket>  VIBER_ALLOW_SEND=1
+```
+
+- A **virtual display** (Xvfb): composing (replies, edits, mentions) drives Viber's real input, which
+  needs a window; nothing shows on the desktop. Xvfb is left running when Viber stops, for the next
+  start (in a scope of its own too, `everysaid-xvfb-<display>`, for the same reason as Viber's).
+- A **D-Bus session of its own**: on the desktop's, Viber would put its icon in the tray and its
+  notifications on the screen.
+- **SIGINT** left to stop it: Viber ignores SIGTERM and quits cleanly on SIGINT.
+- A **session of its own** (`setsid`) and, where the user's systemd runs, a **scope of its own**
+  (`systemd-run --user --scope --unit=everysaid-viber-<id>`, in front of the line above): stopping a
+  service ends every process in its cgroup, so without its own scope a restart of
+  `everysaid.service` would end Viber too. The scope is made for the run and goes with it; nothing
+  is installed. The server's restarts and deployments do not reach Viber: a server that starts
+  finds it already there, on its socket, and only connects.
+- Viber's own output (the bridge's check at its start among it) goes to
+  `~/.local/state/everysaid/logs/plugin-<id>/viber.log`, of its last start.
+
+The source's settings: "The bridge" (default `~/.local/share/everysaid/viber/viber-bridge.so`, where
+`make -C bridges/viber/inject install` puts it), "Viber Desktop" (default `/opt/viber/Viber`), "Its
+virtual display" (default `:99`), "The bridge's socket" (default
+`$XDG_RUNTIME_DIR/viber-bridge.sock`). Needed on the system: Viber Desktop, Xvfb and
+`dbus-run-session` (the D-Bus package).
+
+**When it starts.** With the live connection: a live connection that finds Viber not running starts
+it, waits for its socket, and follows it. If Viber goes away (it crashed, it was killed), the live
+connection starts it again. "Import now" also starts it when it is not running. A source whose
+Viber is not running but can be started counts as ready ("the live connection starts it").
+
+**Stopping it, and starting it again.** On the source's card in Sources:
+
+| Action | What it does |
+|---|---|
+| Start Viber Desktop | starts it (and forgets an earlier stop) |
+| Restart Viber Desktop | stops it and starts it again (after a new bridge, for example) |
+| Stop Viber Desktop | stops it, and keeps it stopped: nothing starts it again until "Start" |
+
+The same from the command line, also with the server not running:
+
+```
+everysaid viber status       # running or not, started by the source, stopped by the user, version, what is missing
+everysaid viber start
+everysaid viber stop
+everysaid viber restart
+                             # --instance N where there are several Viber Desktop sources
+```
+
+Stopping asks the bridge to `quit` (Viber closes its database and ends); if it has not ended within
+20 seconds, SIGINT goes to its session. A stop by the user is kept in
+`~/.local/state/everysaid/viber/<id>/stopped`, so neither the live connection nor a restart of the
+server starts Viber again; "Start" removes it. The process the source started is in `viber.pid`
+beside it.
+
+Turning the live connection off, disabling the source or removing it stops Viber too (it is there
+for the live connection), without keeping it stopped: turning the live connection on starts it
+again. The server stopping or restarting does not stop it.
+
+**Started by hand instead.** With "Start Viber Desktop here" off, the source starts and stops
+nothing: Viber Desktop is started with `bridges/viber/run.sh`, or kept running by the systemd user
+unit `bridges/viber/viber-bridge.service` (its README), and the source waits for it. Then sending
+also needs the bridge started with `VIBER_ALLOW_SEND=1`. Only one of the two ways at a time: a
+second Viber hands over to the first.
+
+**A new bridge.** `make -C bridges/viber/inject install` puts it in place (beside, then moved: the
+running Viber keeps the old one mapped); it takes effect when Viber starts again ("Restart Viber
+Desktop").
+
 ## When Viber updates
 
 Viber is updated as any other package, not held back: the bridge says itself what an update broke.
 Its `check` command looks up, on the classes Viber has (nothing is called), everything each command
 uses (the table above), and answers with Viber's version and, per capability (`read`, `live`,
 `send`, `file`, `compose`, `react`, `delete`, `read-receipts`), `ok` or what is missing. It runs
-once at Viber's start (its summary in the journal of `viber-bridge.service`) and whenever the
-source connects. The source then:
+once at Viber's start (its summary in Viber's output: `viber.log`, above, or the journal of
+`viber-bridge.service` where it is started by hand) and whenever the source connects. The source then:
 
 - shows the version, and what this version cannot do, on its card; it is not ready without `read`
   or `live`;
@@ -94,10 +171,13 @@ source connects. The source then:
 
 When something is missing: run `bridges/viber/tools/probe.so` (it dumps every class's methods,
 signals and properties), find what the call became, fix `inject/viber-bridge.cpp` (and its check),
-rebuild, and try a send, a reply and a reaction in My Notes. The most fragile part is composing
+rebuild and install it (`make -C bridges/viber/inject install`), restart Viber ("Restart Viber
+Desktop"), and try a send, a reply and a reaction in My Notes. The most fragile part is composing
 (replies, edits, mentions), which drives the QML input. Until it is fixed, the version before can
 be put back from the package cache (Arch: `/var/cache/pacman/pkg/`, or the AUR helper's cache).
 
 Viber allows one linked Desktop client per account, so the bridge's Viber Desktop is that client.
-Sending is real, and is gated twice: the bridge's `VIBER_ALLOW_SEND=1` and the source's "Sending
-messages".
+Sending is real. It is allowed by the source's "Sending messages" (and, for read receipts, "Send
+read receipts"); the bridge it starts may act, its socket private to the user (mode 600, in the
+user's runtime folder). Viber Desktop started by hand is gated twice: its bridge also needs
+`VIBER_ALLOW_SEND=1`.

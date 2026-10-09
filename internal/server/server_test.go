@@ -622,6 +622,39 @@ func TestSPA(t *testing.T) {
 	must(t, r.status == 503 && strings.Contains(string(r.body), "go generate"), "not built: %d", r.status)
 }
 
+// A plugin is told when the user ends its live connection, not when the server stops.
+func TestLiveStoppedByTheUserIsTold(t *testing.T) {
+	c := newServer(t)
+	c.login()
+	iid := num(c.post("/api/plugins", M{"plugin": "test-live", "label": "Live"}).json()["id"])
+	connected := func() {
+		t.Helper()
+		select {
+		case got := <-liveRuns:
+			must(t, got == iid, "connected")
+		case <-time.After(5 * time.Second):
+			t.Fatal("not connected")
+		}
+	}
+	must(t, c.post(fmt.Sprintf("/api/plugins/%d/live", iid), M{"on": true}).status == 200, "on")
+	connected()
+	must(t, c.post(fmt.Sprintf("/api/plugins/%d/live", iid), M{"on": false}).status == 200, "off")
+	select {
+	case got := <-liveStopped:
+		must(t, got == iid, "told")
+	case <-time.After(5 * time.Second):
+		t.Fatal("not told")
+	}
+	must(t, c.post(fmt.Sprintf("/api/plugins/%d/live", iid), M{"on": true}).status == 200, "on again")
+	connected()
+	c.s.Host.Wait(5 * time.Second) // the server stopping
+	select {
+	case <-liveStopped:
+		t.Fatal("told when the server stopped")
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
 func TestLiveConnectionsAndRuns(t *testing.T) {
 	c := newServer(t)
 	c.login()

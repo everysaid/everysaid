@@ -29,6 +29,7 @@ import (
 	"everysaid/internal/iphone"
 	"everysaid/internal/mcp"
 	"everysaid/internal/telegram"
+	"everysaid/internal/viber"
 )
 
 var _ = all.Loaded
@@ -45,6 +46,7 @@ var commands = map[string]func(args []string) error{
 	},
 	"android-export": func(a []string) error { return android.ExportMain(a, os.Stdout) },
 	"telegram-sync":  func(a []string) error { return telegram.SyncMain(a, os.Stdout) },
+	"viber":          func(a []string) error { return viber.Main(a, os.Stdout) },
 }
 
 const usage = `everysaid: a personal archive of messages and calls.
@@ -54,6 +56,7 @@ const usage = `everysaid: a personal archive of messages and calls.
   everysaid mcp [--db PATH]                    the MCP server for an assistant (stdio)
   everysaid demo [--dir DIR] [--serve]         a demo archive of invented people, for trying the app
   everysaid user ...                           users, passkeys, recovery (everysaid user -h)
+  everysaid viber start|stop|restart|status    Viber Desktop, as the Viber Desktop source keeps it
   everysaid iphone-sync | iphone-ls | iphone-verify | android-export | telegram-sync
                                                the extraction the sources run, by hand
 `

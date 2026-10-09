@@ -299,7 +299,10 @@ var (
 	liveRuns    = make(chan int64, 10)
 	importGoOn  = make(chan struct{})
 	liveFailing = make(chan error, 10)
+	liveStopped = make(chan int64, 10)
 )
+
+func (testLive) LiveStopped(c *plugins.Context) { liveStopped <- c.ID }
 
 func (testLive) Info() *plugins.Info {
 	return &plugins.Info{ID: "test-live", Name: "Test live", Kind: "source", Modes: []string{"import", "live"}}

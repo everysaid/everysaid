@@ -54,17 +54,25 @@ func (Plugin) Info() *plugins.Info {
 		Platforms:   []string{"linux"},
 		Modes:       []string{"import", "live"},
 		LiveDefault: true,
-		Needs:       []string{"Viber Desktop", "Everysaid's Viber bridge (bridges/viber)"},
+		Needs:       []string{"Viber Desktop", "Everysaid's Viber bridge (bridges/viber)", "Xvfb (a virtual display)"},
 		Settings: []plugins.Setting{
+			{Key: "launch", Label: "Start Viber Desktop here", Type: "bool", Default: true,
+				Help: "Started headless with the bridge, kept running, and left running when the server restarts; off: Viber Desktop is started by hand (bridges/viber/run.sh)"},
+			{Key: "library", Label: "The bridge", Type: "path", Default: DefaultLibrary()},
+			{Key: "viber", Label: "Viber Desktop", Type: "path", Default: defaultViber},
+			{Key: "display", Label: "Its virtual display", Default: defaultDisplay},
 			{Key: "socket", Label: "The bridge's socket", Type: "path", Default: DefaultSocket()},
 			{Key: "send", Label: "Sending messages", Type: "bool", Default: false,
-				Help: "Also needs the bridge started with VIBER_ALLOW_SEND=1"},
+				Help: "Viber Desktop started by hand also needs the bridge started with VIBER_ALLOW_SEND=1"},
 			{Key: "read_receipts", Label: "Send read receipts", Type: "bool", Default: false,
 				Help: "When a chat is opened here, the others see it read, and it is read on the phone too"},
 			{Key: "interval", Label: "Check every (seconds)", Type: "number", Default: 60},
 		},
 		CanSend: true, CanReply: true, CanMention: true, CanMarkRead: true, CanSendFiles: true,
 		CanReact: true, Reactions: quick, FreeReactions: true, CanEdit: true, CanDelete: true,
+		Actions: []plugins.Action{{ID: "start", Label: "Start Viber Desktop"},
+			{ID: "restart", Label: "Restart Viber Desktop"},
+			{ID: "stop", Label: "Stop Viber Desktop", Confirm: "Viber Desktop stops, and stays stopped until started again: nothing arrives or is sent through it until then."}},
 	}
 }
 
@@ -83,13 +91,28 @@ func running(c *plugins.Context) bool {
 }
 
 const (
-	notRunning = "Viber Desktop is not running with Everysaid's bridge"
-	waiting    = "Viber Desktop is not running with Everysaid's bridge: waiting for it"
+	notRunning     = "Viber Desktop is not running with Everysaid's bridge"
+	waiting        = "Viber Desktop is not running with Everysaid's bridge: waiting for it"
+	stoppedHere    = "Viber Desktop was stopped here: Start Viber Desktop, on this source, starts it again"
+	startsWithLive = "Viber Desktop is not running: the live connection starts it"
 )
 
 func (Plugin) Check(c *plugins.Context) (bool, string) {
 	if !running(c) {
-		return false, notRunning
+		switch {
+		case !managed(c):
+			return false, notRunning
+		case stoppedByUser(c):
+			return false, stoppedHere
+		}
+		if _, err := viberCommand(c); err != nil {
+			var ue *errs.UserError
+			if errors.As(err, &ue) {
+				return false, i18n.Format(i18n.Tr(ue.Text, c.Lang()), ue.Params)
+			}
+			return false, err.Error()
+		}
+		return true, startsWithLive
 	}
 	ck := checkOf(c)
 	if m := ck.lacks(nil, "read", "live"); m != "" {
@@ -116,7 +139,11 @@ func (Plugin) NotSending(c *plugins.Context) string {
 
 func (Plugin) InfoFacts(c *plugins.Context) []plugins.Fact {
 	if !running(c) {
-		return []plugins.Fact{{Label: "Viber Desktop", Value: "not running"}}
+		state := "not running"
+		if managed(c) && stoppedByUser(c) {
+			state = "stopped here"
+		}
+		return []plugins.Fact{{Label: "Viber Desktop", Value: state}}
 	}
 	facts := []plugins.Fact{{Label: "Viber Desktop", Value: "running"}}
 	ck := checkOf(c)
@@ -306,7 +333,18 @@ func importUnless(ctx context.Context, c *plugins.Context, done func() bool) err
 	return err
 }
 
-func (Plugin) RunImport(c *plugins.Context) error { return runImport(context.Background(), c) }
+// RunImport brings Viber Desktop's history (started first, where the source keeps it running).
+func (Plugin) RunImport(c *plugins.Context) error {
+	if !running(c) && managed(c) && !stoppedByUser(c) {
+		if err := ensure(c); err != nil {
+			return err
+		}
+		if err := waitRunning(context.Background(), c); err != nil {
+			return err
+		}
+	}
+	return runImport(context.Background(), c)
+}
 
 // Live imports at once, then again whenever Viber adds events (a message, a reaction, an edit),
 // gathered for a moment, and every `interval` seconds for what changes without one (a deletion).
@@ -321,7 +359,19 @@ func (Plugin) Live(ctx context.Context, c *plugins.Context) error {
 	for ctx.Err() == nil {
 		if !running(c) {
 			c.Log(waiting, nil)
+			last := ""
+			var tried time.Time
 			for !running(c) {
+				// started where the source keeps it running (again, if it went), unless the user
+				// stopped it; a failure said once, until it changes; tried again only once it had
+				// time to start (one that goes at once is not started over and over)
+				if time.Since(tried) >= launchWait {
+					tried = time.Now()
+					if err := ensure(c); err != nil && err.Error() != last {
+						last = err.Error()
+						c.Log("error: {e}", map[string]any{"e": err})
+					}
+				}
 				select {
 				case <-ctx.Done():
 					return nil

@@ -5,6 +5,7 @@
 # ships a different Qt major, rebuild against matching headers.
 #
 #   make            # build viber-bridge.so
+#   make install    # and put it where the viber-desktop source loads it from (its "The bridge")
 #   make clean
 
 QT      ?= /usr/include/qt6
@@ -21,10 +22,19 @@ viber-bridge.so: viber-bridge.cpp moc_watch.cpp watch.h
 	g++ $(CXXFLAGS) -o $@.new viber-bridge.cpp moc_watch.cpp $(LDFLAGS)
 	mv -f $@.new $@
 
+# Everysaid's data folder (EVERYSAID_DATA, else the XDG one), as the source's default for the bridge.
+DATA ?= $(or $(EVERYSAID_DATA),$(or $(XDG_DATA_HOME),$(HOME)/.local/share)/everysaid)
+
+# Copied beside and moved into place, for the same reason; takes effect when Viber starts again.
+install: viber-bridge.so
+	install -d -m 700 $(DATA)/viber
+	cp viber-bridge.so $(DATA)/viber/viber-bridge.so.new
+	mv -f $(DATA)/viber/viber-bridge.so.new $(DATA)/viber/viber-bridge.so
+
 moc_watch.cpp: watch.h
 	$(MOC) watch.h -o moc_watch.cpp
 
 clean:
 	rm -f viber-bridge.so moc_watch.cpp
 
-.PHONY: clean
+.PHONY: clean install

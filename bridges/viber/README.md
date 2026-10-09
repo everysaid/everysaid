@@ -24,6 +24,7 @@ Needs the system Qt 6 headers (QtCore/QtSql/QtGui) and `moc`; it links against V
 
 ```
 make -C inject          # -> inject/viber-bridge.so
+make -C inject install  # -> ~/.local/share/everysaid/viber/viber-bridge.so, where the source loads it
 make -C tools           # -> tools/probe.so   (meta-object dumper, optional)
 ```
 
@@ -31,6 +32,11 @@ The library is written beside and moved into place: a running Viber has the old 
 writing into it brings that Viber down. A new build takes effect when Viber is started again.
 
 ## Run
+
+The `viber-desktop` source starts Viber Desktop with the bridge itself, keeps it running apart from
+the server, and stops it when asked: the source's actions, `everysaid viber start|stop|restart|status`
+(`docs/viber-bridge.md`, "How Viber Desktop runs"). What follows is the way by hand, for a source
+with "Start Viber Desktop here" off (or for trying the bridge alone).
 
 ```
 ./run.sh                       # read-only
@@ -44,7 +50,7 @@ already be running: a second start hands over to the first.
 
 Viber ignores SIGTERM but quits cleanly on SIGINT, or on the bridge's `quit`. A program started in
 the background of a shell without job control has SIGINT ignored from the start, so `run.sh` starts
-Viber with `env --default-signal=INT`. For a permanent service, copy `viber-bridge.service` to
+Viber with `env --default-signal=INT`. Kept running by systemd instead of the source, copy `viber-bridge.service` to
 `~/.config/systemd/user/`, adjust its paths, and `systemctl --user enable --now viber-bridge` (it
 stops Viber with SIGINT).
 
@@ -127,7 +133,8 @@ deletion); a stopped Viber is waited for. Sending maps the archive's conversatio
 group's or the notes' token, a person's number) and a message to its `EventID` (by token), on the
 last copy, or a fresh one where it is not there. It uses `send`, `file`, `compose`, `react`/`unreact`,
 `delete` and `read`, gated by the source's "Sending messages" (and, for `read`, "Send read
-receipts") and by `VIBER_ALLOW_SEND=1` here.
+receipts"); a Viber started by hand also by `VIBER_ALLOW_SEND=1` here (the source starts it with
+it). Viber Desktop itself is started, kept running and stopped by the source (`launch.go`).
 
 ## Layout
 
@@ -135,8 +142,8 @@ receipts") and by `VIBER_ALLOW_SEND=1` here.
 inject/viber-bridge.cpp   the resident LD_PRELOAD bridge
 inject/watch.h            QObject slot for EventsStorage::eventsAdded (moc)
 inject/Makefile
-run.sh                    headless launcher (Xvfb, D-Bus session, preload)
-viber-bridge.service      systemd user unit template
+run.sh                    headless launcher by hand (Xvfb, D-Bus session, preload)
+viber-bridge.service      systemd user unit template, for Viber started by hand
 tools/probe.cpp           meta-object dumper, for re-checking signatures after a Viber update
 tools/Makefile
 ```

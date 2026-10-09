@@ -118,11 +118,12 @@ live connection. Each instance shows whether it is ready, what it needs, and its
 The live services: Telegram and WhatsApp run inside `everysaid serve` (WhatsApp as a device linked
 from the phone with a QR code: the source's "Link a device"); Signal through its helper
 (`bridges/signal/`, `docs/go.md`); Viber Desktop through Everysaid's bridge (`bridges/viber/`,
-Linux), a library loaded into the running Viber Desktop.
+Linux), a library loaded into Viber Desktop, which the source starts headless and keeps running
+(`docs/viber-bridge.md`, "How Viber Desktop runs"; `everysaid viber start|stop|restart|status`).
 
 **Sending** is off until turned on in the source's settings ("Sending messages"); WhatsApp also
-needs `[whatsapp] send = true` in `config.toml` (an unofficial client risks the account), Viber its
-bridge started with `VIBER_ALLOW_SEND=1`. Then the app sends text, answers to a message, mentions
+needs `[whatsapp] send = true` in `config.toml` (an unofficial client risks the account); Viber
+Desktop started by hand (not by the source) its bridge started with `VIBER_ALLOW_SEND=1`. Then the app sends text, answers to a message, mentions
 (in a group "@" lists its members) and files (the clip sends a file with the text as its caption;
 Viber sends the file, then the text). A message's actions (its smiley button, or a long press on a
 touch screen) put the user's reaction (the service's quick ones, and any other emoji where it takes

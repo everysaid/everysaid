@@ -1,5 +1,8 @@
-# systemd user unit template for the Viber bridge. Copy to ~/.config/systemd/user/, adjust the path
-# and WorkingDirectory, then: systemctl --user daemon-reload && systemctl --user enable --now viber-bridge
+# systemd user unit template for the Viber bridge, for Viber Desktop started by hand: the viber-desktop
+# source starts and keeps it running itself, unless its "Start Viber Desktop here" is off. Not both:
+# a second Viber hands over to the first.
+# Copy to ~/.config/systemd/user/, adjust the path and WorkingDirectory, then:
+# systemctl --user daemon-reload && systemctl --user enable --now viber-bridge
 #
 # Start read-only first (no VIBER_ALLOW_SEND). Turn sending on deliberately, the way the WhatsApp
 # bridge's "-send" is the owner's to enable, by adding  Environment=VIBER_ALLOW_SEND=1  and restarting.

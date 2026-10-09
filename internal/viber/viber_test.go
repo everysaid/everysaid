@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -39,6 +40,7 @@ func TestMain(m *testing.M) {
 	os.Setenv("EVERYSAID_KEYRING", "everysaid-test-viber")
 	config.Load()
 	settleAfter, fileWait, liveWait, checkFor = 0, 0, 20*time.Millisecond, 0
+	start = func(*plugins.Context) error { return nil } // never the real Viber Desktop
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
@@ -184,6 +186,13 @@ func (b *bridge) serve(c net.Conn) {
 		}
 		b.mu.Unlock()
 		return
+	case "quit": // Viber quits: the bridge goes with it
+		b.mu.Lock()
+		b.said = append(b.said, line)
+		b.mu.Unlock()
+		io.WriteString(c, "ok\n")
+		c.Close()
+		go func() { b.stop(); os.Remove(b.sock) }()
 	case "check":
 		b.mu.Lock()
 		out := "version " + b.version + "\n"
@@ -445,7 +454,7 @@ func TestViberDesktopGates(t *testing.T) {
 		t.Fatal("reacted with sending off")
 	}
 	eq(t, "nothing went", b.take(), []string(nil))
-	c = instance(t, M{"socket": filepath.Join(t.TempDir(), "none"), "send": true})
+	c = instance(t, M{"socket": filepath.Join(t.TempDir(), "none"), "send": true, "launch": false}) // started by hand
 	if ok, why := (Plugin{}).Check(c); ok || why != notRunning {
 		t.Fatal(why)
 	}
@@ -578,4 +587,112 @@ func TestLiveReceivingThatStoppedIsSaid(t *testing.T) {
 	cancel()
 	must(t, <-done)
 	eq(t, "said once", h.said(), []string{"Viber Desktop: Receiving live from Viber Desktop does not work: new messages come only with the check every 1 seconds"})
+}
+
+// Viber Desktop as the source keeps it: started when it is not running, stopped by the user and then
+// left stopped (the live connection does not start it) until started again, stopped when the user
+// ends the live connection; not started where the source is told not to.
+func TestViberDesktopStartedAndStopped(t *testing.T) {
+	b := newBridge(t)
+	b.stop()
+	os.Remove(b.sock)
+	starts := 0
+	start = func(*plugins.Context) error { starts++; b.start(t); return nil }
+	t.Cleanup(func() { start = func(*plugins.Context) error { return nil } })
+	c := instance(t, M{"socket": b.sock})
+	must(t, os.MkdirAll(filepath.Dir(library(c)), 0o700))
+	must(t, os.WriteFile(library(c), []byte("so"), 0o600))
+	t.Cleanup(func() { os.Remove(library(c)) })
+	ok, why := (Plugin{}).Check(c)
+	if _, err := os.Stat(defaultViber); err == nil {
+		eq(t, "ready: the live connection starts it", []any{ok, why}, []any{true, startsWithLive})
+	}
+
+	must(t, (Plugin{}).Action(c, "start"))
+	eq(t, "started", []any{starts, running(c)}, []any{1, true})
+	eq(t, "nothing to start", (Plugin{}).IdleActions(c), []string{"start"})
+	must(t, (Plugin{}).Action(c, "start"))
+	eq(t, "running already", starts, 1)
+
+	must(t, (Plugin{}).Action(c, "stop"))
+	eq(t, "quit", b.take(), []string{"quit"})
+	eq(t, "stopped", running(c), false)
+	ok, why = (Plugin{}).Check(c)
+	eq(t, "stopped here", []any{ok, why}, []any{false, stoppedHere})
+	eq(t, "the fact", (Plugin{}).InfoFacts(c), []plugins.Fact{{Label: "Viber Desktop", Value: "stopped here"}})
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	must(t, (Plugin{}).Live(ctx, c))
+	cancel()
+	eq(t, "the live connection leaves it stopped", starts, 1)
+
+	must(t, (Plugin{}).Action(c, "restart"))
+	eq(t, "started again", []any{starts, running(c), stoppedByUser(c)}, []any{2, true, false})
+	(Plugin{}).LiveStopped(c)
+	eq(t, "stopped with the live connection", running(c), false)
+	eq(t, "not as by the user", stoppedByUser(c), false)
+	must(t, (Plugin{}).RunImport(c))
+	eq(t, "started to import", starts, 3)
+
+	c.Settings["launch"] = false
+	(Plugin{}).LiveStopped(c)
+	eq(t, "not stopped where it does not start it", running(c), true)
+	b.stop()
+	os.Remove(b.sock)
+	must(t, ensure(c))
+	eq(t, "not started where it is told not to", starts, 3)
+	ok, why = (Plugin{}).Check(c)
+	eq(t, "not running", []any{ok, why}, []any{false, notRunning})
+}
+
+// A Viber Desktop that goes at once is not started over and over by the live connection: again
+// only once it had time to start.
+func TestViberDesktopNotStartedOverAndOver(t *testing.T) {
+	b := newBridge(t)
+	b.stop()
+	os.Remove(b.sock)
+	starts := 0
+	start = func(*plugins.Context) error { starts++; return nil } // started, and gone at once
+	t.Cleanup(func() { start = func(*plugins.Context) error { return nil } })
+	c := instance(t, M{"socket": b.sock})
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	must(t, (Plugin{}).Live(ctx, c))
+	cancel()
+	eq(t, "started once", starts, 1)
+}
+
+// How Viber Desktop is started: the bridge preloaded, on its display and D-Bus, its socket the
+// source's, in a session of its own; what is missing said.
+func TestViberCommand(t *testing.T) {
+	if _, err := exec.LookPath("dbus-run-session"); err != nil {
+		t.Skip("no dbus-run-session")
+	}
+	dir := t.TempDir()
+	so, bin := filepath.Join(dir, "viber-bridge.so"), filepath.Join(dir, "Viber")
+	c := instance(t, M{"library": so, "viber": bin, "display": ":42", "socket": "/run/x.sock"})
+	var ue *errs.UserError
+	if _, err := viberCommand(c); !errors.As(err, &ue) || !strings.HasPrefix(ue.Text, "The bridge is not installed") || ue.Params["path"] != so {
+		t.Fatal(err)
+	}
+	must(t, os.WriteFile(so, nil, 0o600))
+	if _, err := viberCommand(c); !errors.As(err, &ue) || ue.Params["path"] != bin {
+		t.Fatal(err)
+	}
+	must(t, os.WriteFile(bin, nil, 0o700))
+	scope := userScope
+	t.Cleanup(func() { userScope = scope })
+	userScope = func() bool { return false }
+	cmd, err := viberCommand(c)
+	must(t, err)
+	eq(t, "args", cmd.Args, []string{"dbus-run-session", "--", "env", "--default-signal=INT", "LD_PRELOAD=" + so, bin})
+	userScope = func() bool { return true } // under systemd: a scope of its own, out of the server's cgroup
+	inScope, err := viberCommand(c)
+	must(t, err)
+	eq(t, "args in a scope", inScope.Args, append([]string{"systemd-run", "--user", "--scope", "--quiet", "--collect",
+		fmt.Sprintf("--unit=everysaid-viber-%d", c.ID), "--"}, cmd.Args...))
+	for _, e := range []string{"DISPLAY=:42", "QT_QPA_PLATFORM=xcb", "VIBER_BRIDGE_SOCK=/run/x.sock", "VIBER_ALLOW_SEND=1"} {
+		if !slices.Contains(cmd.Env, e) {
+			t.Fatalf("%s not in %v", e, cmd.Env)
+		}
+	}
+	eq(t, "a session of its own", cmd.SysProcAttr.Setsid, true)
 }
