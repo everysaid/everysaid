@@ -971,6 +971,18 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 				add("bridge", jid+"/"+str(r["id"]), x, convs[jid], tsMS(t), outgoing, sender, "system", "", str(r["id"]))
 			})
 		}
+		// what was not kept when they came: the channel a message was forwarded from, its album
+		meta := map[string]int{}
+		if cols["album"] {
+			eachMap(bridge, "SELECT chat_jid, id, forward_from, album FROM messages "+
+				"WHERE forward_from IS NOT NULL OR album IS NOT NULL", nil, func(r row) {
+				if mid, ok := a.MessageByKey("whatsapp", str(r["id"]), convs[str(r["chat_jid"])]); ok {
+					for _, c := range ApplyMeta(a, mid, Meta{ForwardFrom: strOrEmpty(r["forward_from"]), Album: strOrEmpty(r["album"])}) {
+						meta[c]++
+					}
+				}
+			})
+		}
 		if cols["poll"] { // polls with their votes as they are now
 			votes := map[string][][]string{}
 			if hasTable(bridge, "poll_votes") {
@@ -1019,6 +1031,12 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 			}
 		}
 		updated = bridgeChanges(a, bridge, person, own, reactionOrder, reactions)
+		for c, n := range meta {
+			updated[c] += n
+		}
+		for c, n := range ApplyPins(a, "whatsapp") {
+			updated[c] += n
+		}
 		bridgeMembers(a, bridge, person, own)
 		bridgeMentions(a, bridge, person)
 		bridgeReceipts(a, bridge, person, own)

@@ -561,7 +561,7 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 			if f == "" || f != filepath.Base(f) || f == "." || f == ".." {
 				continue // only files within the helper's folder
 			}
-			files.Link(SourceName(own), src, filepath.Join(mediaDir, f), f, mid)
+			files.LinkNamed(SourceName(own), src, filepath.Join(mediaDir, f), f, mid, deref(at.Filename))
 		}
 	}
 	for _, r := range rows {
@@ -576,6 +576,13 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 		}
 		key := Key(r.author, r.ts)
 		if a.HasOrigin(src, key, "") {
+			// the names of its files, linked before names were kept
+			if strings.Contains(r.js, `"filename":"`) {
+				var e event
+				if mid, ok := a.MessageByKey(Service, key, cid); ok && json.Unmarshal([]byte(r.js), &e) == nil {
+					linkFiles(mid, e.Attachments)
+				}
+			}
 			continue
 		}
 		if mid, ok := a.MessageByKey(Service, key, cid); ok { // another instance of the same account brought it
@@ -707,6 +714,7 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 		}
 	}
 	a.Resolve()
+	importers.ApplyPins(a, Service)
 	a.Imported(src)
 	a.Commit()
 	return n, nil

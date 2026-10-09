@@ -291,6 +291,14 @@ func (p *tgPeople) others(pid int64) []archive.Handle {
 	return out
 }
 
+// title is a user's profile name or a group's or channel's title, "" for none.
+func (p *tgPeople) title(pid int64) string {
+	if n := p.name(pid); n != "" {
+		return n
+	}
+	return strOrEmpty(p.entity[pid]["title"])
+}
+
 // name is the user's profile name, "" for none.
 func (p *tgPeople) name(pid int64) string {
 	e := p.entity[pid]
@@ -671,6 +679,8 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 			if truthy(m["fwd_from"]) {
 				x.Forwarded = true
 			}
+			meta := telegramMeta(m, person)
+			x.ForwardFrom, x.Album, x.Pinned = meta.ForwardFrom, meta.Album, *meta.Pinned
 			if truthy(m["reactions"]) {
 				x.Reactions = tgReactions(m, person, own)
 			}
@@ -852,6 +862,33 @@ func telegramChanges(a *archive.Archive, src int64, rowKey string, m map[string]
 	if ReplaceReactions(a, mid, want) {
 		updated["reactions"]++
 	}
+	for _, c := range ApplyMeta(a, mid, telegramMeta(m, person)) {
+		updated[c]++
+	}
+}
+
+// telegramMeta: whom a forwarded message came from (the profile's name or the chat's title, or the
+// name a hidden sender left), the album of files sent together, and whether it is pinned (Telegram's
+// pins do not end).
+func telegramMeta(m map[string]any, person *tgPeople) Meta {
+	var out Meta
+	if fwd := obj(m["fwd_from"]); len(fwd) > 0 {
+		if id, ok := peerID(fwd["from_id"]); ok {
+			out.ForwardFrom = person.title(id)
+		}
+		if out.ForwardFrom == "" {
+			out.ForwardFrom = strOrEmpty(fwd["from_name"])
+		}
+	}
+	if truthy(m["grouped_id"]) {
+		out.Album = pyStr(m["grouped_id"])
+	}
+	var pinned int64
+	if truthy(m["pinned"]) {
+		pinned = -1
+	}
+	out.Pinned = &pinned
+	return out
 }
 
 // TelegramMedia: the downloaded files (telegram-sync --media), each to its message (a media step).
@@ -871,9 +908,14 @@ func TelegramMedia(a *archive.Archive, s *Store) {
 	})
 	d := ro(dbPath)
 	defer d.Close()
-	for _, r := range maps(d, "SELECT chat_id, id, file FROM message WHERE file IS NOT NULL ORDER BY chat_id, id") {
+	// the name it was sent with (a document's)
+	for _, r := range maps(d, "SELECT chat_id, id, file, (SELECT json_extract(a.value, '$.file_name') "+
+		"FROM json_each(json, '$.media.document.attributes') a "+
+		"WHERE json_extract(a.value, '$._') = 'DocumentAttributeFilename') AS name "+
+		"FROM message WHERE file IS NOT NULL ORDER BY chat_id, id") {
 		rel := str(r["file"])
-		s.Link(telegramSource, src, filepath.Join(media, rel), rel, origins[fmt.Sprintf("%v/%v", r["chat_id"], r["id"])])
+		s.LinkNamed(telegramSource, src, filepath.Join(media, rel), rel, origins[fmt.Sprintf("%v/%v", r["chat_id"], r["id"])],
+			strOrEmpty(r["name"]))
 	}
 }
 

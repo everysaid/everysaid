@@ -7,6 +7,7 @@ package importers
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -40,6 +41,89 @@ func ApplyChange(a *archive.Archive, messageID int64, c Change) []string {
 		}
 	}
 	return changed
+}
+
+// Meta is what a source says of a message's origin when forwarded, its album and its pin; ""
+// says nothing (kept), Pinned nil says nothing of the pin, else 0 not pinned, -1 for ever, or until
+// when (Unix milliseconds).
+type Meta struct {
+	ForwardFrom, Album string
+	Pinned             *int64
+}
+
+// ApplyMeta brings a message's origin, album and pin to what its source says now (a message
+// imported before they were kept; a pin taken back); it says what changed ("forward_from",
+// "album", "pinned").
+func ApplyMeta(a *archive.Archive, messageID int64, m Meta) []string {
+	var changed []string
+	set := func(col string, v any) {
+		if n, _ := a.Exec("UPDATE message SET "+col+" = ? WHERE id = ? AND "+col+" IS NOT ?", v, messageID, v).RowsAffected(); n > 0 {
+			changed = append(changed, col)
+		}
+	}
+	if m.ForwardFrom != "" {
+		set("forward_from", m.ForwardFrom)
+	}
+	if m.Album != "" {
+		set("album", m.Album)
+	}
+	if m.Pinned != nil {
+		set("pinned", archive.NullID(*m.Pinned))
+	}
+	return changed
+}
+
+// ApplyPins: what a service's pin and unpin notices say of the messages they are about, as each
+// one's pin now (its last notice's; a pin for a time lasts until then, from the notice's time).
+func ApplyPins(a *archive.Archive, service string) map[string]int {
+	type pin struct {
+		conv      int64
+		replyTo   sql.NullInt64
+		replyKey  sql.NullString
+		code, arg string
+		ts        int64
+	}
+	var pins []pin
+	a.Each("SELECT m.conversation_id, m.reply_to, m.reply_key, n.code, n.args, m.ts FROM notice n "+
+		"JOIN message m ON m.id = n.message_id WHERE m.service_id = ? AND n.code IN ('pin', 'unpin') "+
+		"AND (m.reply_to IS NOT NULL OR m.reply_key IS NOT NULL) ORDER BY m.ts, m.id",
+		[]any{a.Service.ID(service)}, func(scan func(...any)) {
+			var p pin
+			scan(&p.conv, &p.replyTo, &p.replyKey, &p.code, &p.arg, &p.ts)
+			pins = append(pins, p)
+		})
+	until := map[int64]int64{}
+	var order []int64
+	for _, p := range pins {
+		target, ok := p.replyTo.Int64, p.replyTo.Valid
+		if !ok {
+			target, ok = a.MessageByKey(service, p.replyKey.String, p.conv)
+		}
+		if !ok || target == 0 {
+			continue
+		}
+		if _, seen := until[target]; !seen {
+			order = append(order, target)
+		}
+		var args struct{ Seconds float64 }
+		json.Unmarshal([]byte(p.arg), &args)
+		switch {
+		case p.code == "unpin":
+			until[target] = 0
+		case args.Seconds > 0:
+			until[target] = p.ts + int64(args.Seconds*1000)
+		default:
+			until[target] = -1
+		}
+	}
+	out := map[string]int{}
+	for _, id := range order {
+		v := until[id]
+		for _, c := range ApplyMeta(a, id, Meta{Pinned: &v}) {
+			out[c]++
+		}
+	}
+	return out
 }
 
 // setText replaces a message's text and its row in the search index (taken out by its rowid and put

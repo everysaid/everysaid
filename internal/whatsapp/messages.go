@@ -36,6 +36,8 @@ type StoredMessage struct {
 	Kind, Subtype, ReplyTo, ReplyText    string
 	Mentions                             []string // the jids the text names with @<user>
 	Forwarded                            bool
+	ForwardFrom                          string // the channel a forwarded message came from
+	Album                                string // the album's message id, for files sent together
 	Lat, Lon                             *float64
 	Place                                string
 	Poll                                 string // a poll's question, options, multiple (JSON)
@@ -44,22 +46,24 @@ type StoredMessage struct {
 // migrate adds what this version keeps to a store made by an older one. Nothing is removed.
 func (store *MessageStore) migrate() error {
 	columns := map[string]string{
-		"kind":        "TEXT",    // text, image, video, audio, voice, document, sticker, location, contact, poll
-		"subtype":     "TEXT",    // gif, video_note, link, live_location, view_once
-		"reply_to":    "TEXT",    // the id of the message this one answers
-		"reply_text":  "TEXT",    // the text it quotes
-		"forwarded":   "BOOLEAN", // forwarded by the sender
-		"edited":      "BOOLEAN", // edited later by its sender: content is the last version
-		"deleted":     "BOOLEAN", // deleted later by its sender (or a group admin): content stays
-		"lat":         "REAL",
-		"lon":         "REAL",
-		"place":       "TEXT",
-		"direct_path": "TEXT",      // where the encrypted file is on WhatsApp's servers
-		"media_path":  "TEXT",      // the downloaded file, relative to the store (media.go)
-		"media_error": "TEXT",      // why it could not be downloaded
-		"mentions":    "TEXT",      // the jids the text names with @<user>, comma-separated
-		"read_at":     "TIMESTAMP", // when the account read it (a message from others), on any device
-		"poll":        "TEXT",      // a poll's question, options and whether several may be chosen (JSON)
+		"kind":         "TEXT",    // text, image, video, audio, voice, document, sticker, location, contact, poll
+		"subtype":      "TEXT",    // gif, video_note, link, live_location, view_once
+		"reply_to":     "TEXT",    // the id of the message this one answers
+		"reply_text":   "TEXT",    // the text it quotes
+		"forwarded":    "BOOLEAN", // forwarded by the sender
+		"edited":       "BOOLEAN", // edited later by its sender: content is the last version
+		"deleted":      "BOOLEAN", // deleted later by its sender (or a group admin): content stays
+		"lat":          "REAL",
+		"lon":          "REAL",
+		"place":        "TEXT",
+		"direct_path":  "TEXT",      // where the encrypted file is on WhatsApp's servers
+		"media_path":   "TEXT",      // the downloaded file, relative to the store (media.go)
+		"media_error":  "TEXT",      // why it could not be downloaded
+		"mentions":     "TEXT",      // the jids the text names with @<user>, comma-separated
+		"read_at":      "TIMESTAMP", // when the account read it (a message from others), on any device
+		"poll":         "TEXT",      // a poll's question, options and whether several may be chosen (JSON)
+		"forward_from": "TEXT",      // the channel a forwarded message came from
+		"album":        "TEXT",      // the album's message id, for files sent together
 	}
 	have := map[string]bool{}
 	rows, err := store.db.Query("PRAGMA table_info(messages)")
@@ -183,8 +187,8 @@ func (store *MessageStore) storeMessage(m StoredMessage) error {
 	_, err := store.db.Exec(`
 		INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me, media_type, filename, url,
 			media_key, file_sha256, file_enc_sha256, file_length, kind, subtype, reply_to, reply_text, forwarded,
-			lat, lon, place, direct_path, mentions)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			lat, lon, place, direct_path, mentions, forward_from, album)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id, chat_jid) DO UPDATE SET
 			sender = excluded.sender,
 			content = CASE WHEN messages.edited THEN messages.content ELSE excluded.content END,
@@ -199,10 +203,13 @@ func (store *MessageStore) storeMessage(m StoredMessage) error {
 			-- a new place for the file: worth trying again
 			media_error = CASE WHEN excluded.direct_path IS NOT messages.direct_path AND excluded.direct_path IS NOT NULL
 				THEN NULL ELSE messages.media_error END,
-			mentions = CASE WHEN messages.edited THEN messages.mentions ELSE excluded.mentions END`,
+			mentions = CASE WHEN messages.edited THEN messages.mentions ELSE excluded.mentions END,
+			forward_from = coalesce(excluded.forward_from, messages.forward_from),
+			album = coalesce(excluded.album, messages.album)`,
 		m.ID, m.ChatJID, m.Sender, m.Content, m.Timestamp, m.IsFromMe, m.MediaType, m.Filename, m.URL,
 		m.MediaKey, m.FileSHA256, m.FileEncSHA256, m.FileLength, m.Kind, m.Subtype, m.ReplyTo, m.ReplyText,
-		m.Forwarded, m.Lat, m.Lon, m.Place, nullable(m.DirectPath), nullable(strings.Join(m.Mentions, ",")))
+		m.Forwarded, m.Lat, m.Lon, m.Place, nullable(m.DirectPath), nullable(strings.Join(m.Mentions, ",")),
+		nullable(m.ForwardFrom), nullable(m.Album))
 	return err
 }
 
@@ -388,7 +395,7 @@ func describe(m *StoredMessage, msg *waE2E.Message, evt *events.Message) bool {
 		m.Kind, m.Content = "text", msg.GetInteractiveResponseMessage().GetBody().GetText()
 	default:
 		// a newer kind wrapped for the clients that know it: what it wraps
-		for _, w := range []*waE2E.FutureProofMessage{msg.GetGroupMentionedMessage(), msg.GetLottieStickerMessage(),
+		for _, w := range []*waE2E.FutureProofMessage{msg.GetAssociatedChildMessage(), msg.GetGroupMentionedMessage(), msg.GetLottieStickerMessage(),
 			msg.GetPollCreationMessageV4(), msg.GetQuestionMessage(), msg.GetSpoilerMessage(), msg.GetAudioStickerMessage()} {
 			if inner := w.GetMessage(); inner != nil {
 				return describe(m, inner, evt)
@@ -408,7 +415,11 @@ func describe(m *StoredMessage, msg *waE2E.Message, evt *events.Message) bool {
 			m.ReplyText = messageText(ci.GetQuotedMessage())
 		}
 		m.Forwarded = ci.GetIsForwarded()
+		m.ForwardFrom = ci.GetForwardedNewsletterMessageInfo().GetNewsletterName()
 		m.Mentions = ci.GetMentionedJID()
+	}
+	if as := msg.GetMessageContextInfo().GetMessageAssociation(); as.GetAssociationType() == waE2E.MessageAssociation_MEDIA_ALBUM {
+		m.Album = as.GetParentMessageKey().GetID()
 	}
 	return true
 }

@@ -320,6 +320,37 @@ func noteReactions(c *plugins.Context, u *tg.UpdateMessageReactions) (err error)
 	return err
 }
 
+// notePinned: messages pinned or unpinned in a chat; the stored messages take it, and the archive's
+// follow.
+func notePinned(c *plugins.Context, chatID int64, pinned bool, ids []int) (err error) {
+	defer db.Recover(&err)
+	if idSet(currentSettings(c)["skip_chats"])[chatID] || len(ids) == 0 {
+		return nil
+	}
+	store, err := openStore(DBPath())
+	if err != nil {
+		return err
+	}
+	keys := map[[2]int64]bool{}
+	func() {
+		defer store.Close()
+		for _, id := range ids {
+			res := db.Exec(store, "UPDATE message SET json = json_set(json, '$.pinned', json(?)) WHERE chat_id = ? AND id = ?",
+				fmt.Sprint(pinned), chatID, id)
+			if n, _ := res.RowsAffected(); n > 0 {
+				keys[[2]int64{chatID, int64(id)}] = true
+			}
+		}
+	}()
+	if len(keys) == 0 {
+		return nil // messages not stored
+	}
+	_, _, err = sourcekit.RunImporters(c, []sourcekit.Step{{Label: "Telegram live", Run: func(a *archive.Archive, out func(string)) error {
+		return importTelegram(a, out, keys, nil)
+	}}})
+	return err
+}
+
 // untilMS is Telegram's mute_until as Unix ms: 0 not muted, -1 for ever (past the year 3000).
 func untilMS(s tg.PeerNotifySettings) int64 {
 	until, ok := s.GetMuteUntil()
@@ -795,6 +826,14 @@ func handlers(c *plugins.Context, cn *conn, d tg.UpdateDispatcher, members func(
 	// someone reacted to a message (or changed, or took theirs back): the archive's follow
 	d.OnMessageReactions(func(ctx context.Context, e tg.Entities, u *tg.UpdateMessageReactions) error {
 		return logged(noteReactions(c, u))
+	})
+
+	// pinned or unpinned on any device, by anyone
+	d.OnPinnedMessages(func(ctx context.Context, e tg.Entities, u *tg.UpdatePinnedMessages) error {
+		return logged(notePinned(c, PeerID(u.Peer), u.Pinned, u.Messages))
+	})
+	d.OnPinnedChannelMessages(func(ctx context.Context, e tg.Entities, u *tg.UpdatePinnedChannelMessages) error {
+		return logged(notePinned(c, PeerID(&tg.PeerChannel{ChannelID: u.ChannelID}), u.Pinned, u.Messages))
 	})
 
 	// deleted on any device, by the user or (for everyone) by the others: kept, said deleted
