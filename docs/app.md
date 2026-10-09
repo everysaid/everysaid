@@ -143,7 +143,7 @@ the service tells (WhatsApp, Signal; Telegram in a person's chat, read but not w
 iPhone, where the other lets it be seen); a tap on them says who got and read the message, and when.
 
 **WhatsApp's safeguards:** it sends only into chats where the other side has written, within limits
-a minute, an hour and a day (`[whatsapp] send_per_minute`, `send_per_hour`, `send_per_day`: 6, 60,
+a minute, an hour and a day (`[whatsapp] send_per_minute`, `send_per_hour`, `send_per_day`: 15, 60,
 300), and never the same longer text into more than `send_same_text` (3) chats an hour. When
 WhatsApp warns the account (a temporary ban, a logout) sending is blocked until the user clears it
 (the source's "Allow sending again"), and the app turns the source's sending off and tells the
