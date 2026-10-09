@@ -75,26 +75,33 @@ function Ticks({ r, onInfo }: { r: Receipts; onInfo?: () => void }) {
   );
 }
 
-// LoopVideo is a GIF (sent as a short video without sound): played in place, silent and over and
-// over, while it is in view; fetched only once it first comes into view.
+// LoopVideo is a GIF (sent as a short video without sound): played in place, silent, twice each time
+// it comes into view, then left still; fetched only once it first comes into view.
 function LoopVideo({ a, className }: { a: Attachment; className: string }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [seen, setSeen] = useState(false);
+  const plays = useRef(0);
   useEffect(() => {
     const v = ref.current;
     if (!v) return;
     const io = new IntersectionObserver(([e]) => {
       if (e.isIntersecting) {
         setSeen(true);
+        plays.current = 0;
+        v.currentTime = 0;
         v.play().catch(() => {});
       } else v.pause();
     });
     io.observe(v);
     return () => io.disconnect();
   }, []);
+  const ended = () => {
+    plays.current++;
+    if (plays.current < 2) ref.current?.play().catch(() => {});
+  };
   return (
     <video ref={ref} src={seen ? `/api/media/${a.sha256}/original` : undefined} poster={thumbUrl(a.sha256)}
-      muted loop playsInline autoPlay preload="none" className={className} />
+      muted playsInline autoPlay preload="none" onEnded={ended} className={className} />
   );
 }
 
