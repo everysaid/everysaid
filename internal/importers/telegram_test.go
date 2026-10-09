@@ -242,6 +242,14 @@ func TestTelegramWhatTheAppsShow(t *testing.T) {
 	add(47, M{"_": "Message", "message": "nice", "reply_to": M{"_": "MessageReplyStoryHeader", "story_id": 3}})
 	add(48, M{"_": "Message", "media": M{"_": "MessageMediaUnsupported"}})
 	add(49, M{"_": "Message", "media": M{"_": "MessageMediaGeoLive", "geo": M{"lat": 1.0, "long": 2.0}, "period": 900}})
+	add(51, M{"_": "Message", "media": M{"_": "MessageMediaDocument", "document": M{"mime_type": "application/pdf",
+		"attributes": []M{{"_": "DocumentAttributeFilename", "file_name": "plan.pdf"}}}}})
+	add(52, M{"_": "Message", "media": M{"_": "MessageMediaDocument", "document": M{"mime_type": "audio/mpeg",
+		"attributes": []M{{"_": "DocumentAttributeAudio", "performer": "Band", "title": "Song"}}}}})
+	add(53, M{"_": "Message", "message": "my words", "media": M{"_": "MessageMediaDocument", "document": M{"mime_type": "application/pdf",
+		"attributes": []M{{"_": "DocumentAttributeFilename", "file_name": "plan.pdf"}}}}})
+	add(54, M{"_": "Message", "media": M{"_": "MessageMediaDocument", "document": M{"mime_type": "image/webp",
+		"attributes": []M{{"_": "DocumentAttributeSticker", "alt": "😀"}}}}})
 	must(t, Telegram(a, nil, TelegramOptions{}))
 
 	var detail, key string
@@ -252,6 +260,8 @@ func TestTelegramWhatTheAppsShow(t *testing.T) {
 	eq(t, "dice", msgRow(a, "43", "text")[0], "🎲 4")
 	eq(t, "to-do", msgRow(a, "44", "text")[0], "Trip\n- tickets\n- hotel")
 	eq(t, "bot's text", msgRow(a, "45", "text")[0], "Score: 10")
+	eq(t, "files' words", []any{msgRow(a, "51", "text")[0], msgRow(a, "52", "text")[0], msgRow(a, "53", "text")[0],
+		msgRow(a, "54", "text")[0]}, []any{"📎 plan.pdf", "🎵 Band – Song", "my words", "😀"})
 	code := func(key string) string {
 		return db.Str(a.Tx(), "SELECT coalesce(n.code, '') FROM message m LEFT JOIN notice n ON n.message_id = m.id WHERE m.key = ?", key)
 	}

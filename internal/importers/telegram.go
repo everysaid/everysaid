@@ -94,7 +94,7 @@ type tgKind struct {
 	place               string
 }
 
-func telegramKindOf(m map[string]any) tgKind {
+func telegramKindOf(m map[string]any) (k tgKind) {
 	if pyStr(m["_"]) == "MessageService" {
 		action := obj(m["action"])
 		name := pyStr(action["_"])
@@ -173,6 +173,23 @@ func telegramKindOf(m map[string]any) tgKind {
 	if truthy(doc["mime_type"]) {
 		mime = pyStr(doc["mime_type"])
 	}
+	// a file without words: what Telegram shows of it (a sticker's emoji, a song's performer and
+	// title, the file's name)
+	var words any
+	if !truthy(m["message"]) {
+		if a, ok := attrs["DocumentAttributeSticker"]; ok && truthy(a["alt"]) {
+			words = a["alt"]
+		} else if a, ok := attrs["DocumentAttributeAudio"]; ok && !truthy(a["voice"]) && (truthy(a["title"]) || truthy(a["performer"])) {
+			words = "🎵 " + joinTruthy(" – ", a["performer"], a["title"])
+		} else if a, ok := attrs["DocumentAttributeFilename"]; ok && truthy(a["file_name"]) {
+			words = "📎 " + pyStr(a["file_name"])
+		}
+	}
+	defer func() {
+		if words != nil && k.text == nil && k.kind != "video" && k.kind != "image" && k.kind != "voice" {
+			k.text = words
+		}
+	}()
 	if _, ok := attrs["DocumentAttributeSticker"]; ok {
 		return tgKind{kind: "sticker"}
 	}
