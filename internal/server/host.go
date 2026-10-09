@@ -573,6 +573,17 @@ func (h *Host) StopLive(iid int64, remember bool) {
 	if remember {
 		plugins.Update(h.store, iid, nil, M{"_live": false}, nil, false)
 	}
+	if row := plugins.GetInstance(h.store, iid); row != nil {
+		if s, ok := plugins.Get(row.Plugin).(plugins.LiveStopper); ok {
+			c := plugins.NewContext(h, *row)
+			h.wg.Add(1)
+			go func() {
+				defer h.wg.Done()
+				defer h.recovered("live stopped", iid)
+				s.LiveStopped(c)
+			}()
+		}
+	}
 	h.Emit(M{"type": "plugin", "instance": iid, "live": false})
 }
 
