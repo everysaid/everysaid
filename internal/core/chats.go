@@ -1039,10 +1039,23 @@ func conversationIDOf(c *Chat) any {
 	return c.ConversationID
 }
 
+// ChatOf is a chat by its id: one of the index, or the chat of a person with none yet (p<id>: someone
+// met only in groups, or by a call), empty, to write to them first.
+func ChatOf(s *Store, chatID string) *Chat {
+	if c := Index(s).Chats[chatID]; c != nil {
+		return c
+	}
+	var pid int64
+	if _, err := fmt.Sscanf(chatID, "p%d", &pid); err != nil || fmt.Sprintf("p%d", pid) != chatID || PeopleOf(s).Me[pid] ||
+		!db.Exists(s.Read(), "SELECT 1 FROM person WHERE id = ?", pid) {
+		return nil
+	}
+	return &Chat{ID: chatID, Type: "person", PersonID: pid, Services: map[string]bool{}}
+}
+
 // GetChat is one chat in full, or nil.
 func GetChat(s *Store, chatID string) M {
-	ix := Index(s)
-	c := ix.Chats[chatID]
+	c := ChatOf(s, chatID)
 	if c == nil {
 		return nil
 	}

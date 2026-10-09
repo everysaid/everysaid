@@ -374,6 +374,21 @@ func TestFindAndFirstMessage(t *testing.T) {
 	must(t, r.status == 409 && r.code() == "chat.no_sender", "not found: %d %s", r.status, r.body)
 	r = c.post("/api/chats/"+group+"/find", M{})
 	must(t, r.status == 409 && r.code() == "chat.not_a_person", "group: %d %s", r.status, r.body)
+
+	// someone met only in the group: their chat, empty, to look for them and write first
+	nick := fmt.Sprintf("p%d", db.Int(c.s.Store.Read(), "SELECT person_id FROM person_address WHERE address_id = ?", fx.nick))
+	detail = c.getJSON("/api/chats/" + nick)
+	must(t, len(detail["services"].([]any)) == 0 && detail["findable"] == true, "empty chat: %v", detail)
+	must(t, len(items(c.getJSON("/api/chats/"+nick+"/stream"))) == 0, "nothing in it")
+	r = c.post("/api/chats/"+nick+"/find", M{})
+	must(t, r.status == 200, "find: %d %s", r.status, r.body)
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end) && c.getJSON("/api/chats/" + nick)["reach"].(map[string]any)["telegram"] != "found"; time.Sleep(20 * time.Millisecond) {
+	}
+	r = c.post("/api/chats/"+nick+"/send", M{"text": "write: hello Nick", "service": "telegram"})
+	must(t, r.status == 200, "first: %d %s", r.status, r.body)
+	next(t)
+	must(t, slices.Contains(c.getJSON("/api/chats/" + nick)["services"].([]any), any("telegram")), "now a chat")
+	must(t, c.do("GET", "/api/chats/p999999", nil, H).status == 404, "no such person")
 	r = c.post("/api/chats/"+katerina+"/find", M{})
 	must(t, r.status == 409 && r.code() == "chat.no_phone", "email only: %d %s", r.status, r.body)
 }

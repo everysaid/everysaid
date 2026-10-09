@@ -77,7 +77,7 @@ func keyOf(r Item) cursorKey {
 }
 
 func streamSources(s *Store, chatID string) (*Chat, []int64, []int64, error) {
-	c := Index(s).Chats[chatID]
+	c := ChatOf(s, chatID)
 	if c == nil {
 		return nil, nil, nil, ErrNotFound
 	}

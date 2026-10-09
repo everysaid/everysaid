@@ -38,7 +38,7 @@ type reach struct {
 // account on its services the chat has none of yet; it returns those services, each answer
 // following as a "reach" event {chat, service, state}.
 func (h *Host) Find(chatID string) ([]string, error) {
-	c := core.Index(h.store).Chats[chatID]
+	c := core.ChatOf(h.store, chatID)
 	if c == nil {
 		return nil, core.ErrNotFound
 	}
@@ -205,7 +205,7 @@ func (h *Host) phones(personID int64) []string {
 // Findable says whether a chat is a person's with a number, who could be looked for on a service the
 // chat has none of: a source that can send and find reaches one.
 func (h *Host) Findable(chatID string) bool {
-	c := core.Index(h.store).Chats[chatID]
+	c := core.ChatOf(h.store, chatID)
 	if c == nil || c.Type != "person" || len(h.phones(c.PersonID)) == 0 {
 		return false
 	}

@@ -343,7 +343,7 @@ func (h *Host) sendKept(ctx context.Context) {
 // arrived says whether a kept message is in its chat already, sent by the user since it was written
 // (its text, through its service if it had one).
 func (h *Host) arrived(chatID string, k outboxRequest, created int64) bool {
-	c := core.Index(h.store).Chats[chatID]
+	c := core.ChatOf(h.store, chatID)
 	if c == nil || len(c.Conversations) == 0 || strings.TrimSpace(k.Text) == "" {
 		return false
 	}
