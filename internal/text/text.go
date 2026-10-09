@@ -10,6 +10,7 @@ package text
 import (
 	"sort"
 	"strings"
+	"sync"
 	"unicode"
 
 	"golang.org/x/text/cases"
@@ -57,12 +58,39 @@ func Query(q string) string {
 	return strings.Join(words, " ")
 }
 
-// foldedWithMap is Fold(s) as runes, and for each of them the index (in runes) in s it came from.
+// runeFolds holds Fold of one rune as runes, once worked out (ASCII aside: its fold is its lower case).
+var runeFolds sync.Map
+
+func foldRune(c rune) []rune {
+	if c < 0x80 {
+		if 'A' <= c && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		return asciiRunes[c : c+1]
+	}
+	if f, ok := runeFolds.Load(c); ok {
+		return f.([]rune)
+	}
+	f := []rune(Fold(string(c)))
+	runeFolds.Store(c, f)
+	return f
+}
+
+var asciiRunes = func() []rune {
+	r := make([]rune, 0x80)
+	for i := range r {
+		r[i] = rune(i)
+	}
+	return r
+}()
+
+// foldedWithMap is the text with each rune folded on its own (Fold), and for each rune of it the
+// index (in runes) in s it came from.
 func foldedWithMap(s []rune) ([]rune, []int) {
-	var out []rune
-	var where []int
+	out := make([]rune, 0, len(s))
+	where := make([]int, 0, len(s))
 	for i, c := range s {
-		for _, f := range Fold(string(c)) {
+		for _, f := range foldRune(c) {
 			out = append(out, f)
 			where = append(where, i)
 		}
@@ -106,26 +134,14 @@ func (m *Matcher) Spans(text string) []Span {
 	}
 	var out []Span
 	for _, n := range m.needles {
-		if len(n) == 0 {
-			continue
-		}
-		for a := 0; a+len(n) <= len(hay); {
-			if !equalRunes(hay[a:a+len(n)], n) {
-				a++
-				continue
-			}
-			b := a + len(n)
-			if m.Whole && ((a > 0 && isAlnum(hay[a-1])) || (b < len(hay) && isAlnum(hay[b]))) {
-				a = b
-				continue
-			}
+		find(hay, n, m.Whole, func(a, b int) bool {
 			if where == nil {
 				out = append(out, Span{a, b})
 			} else {
 				out = append(out, Span{where[a], where[b-1] + 1})
 			}
-			a = b
-		}
+			return true
+		})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Start != out[j].Start {
@@ -134,6 +150,29 @@ func (m *Matcher) Spans(text string) []Span {
 		return out[i].End < out[j].End
 	})
 	return out
+}
+
+// find gives each match [a, b) of the needle n in hay, left to right without overlaps (whole: not
+// inside a word), as long as found says to go on.
+func find(hay, n []rune, whole bool, found func(a, b int) bool) {
+	if len(n) == 0 {
+		return
+	}
+	for a := 0; a+len(n) <= len(hay); {
+		if !equalRunes(hay[a:a+len(n)], n) {
+			a++
+			continue
+		}
+		b := a + len(n)
+		if whole && ((a > 0 && isAlnum(hay[a-1])) || (b < len(hay) && isAlnum(hay[b]))) {
+			a = b
+			continue
+		}
+		if !found(a, b) {
+			return
+		}
+		a = b
+	}
 }
 
 func equalRunes(a, b []rune) bool {
@@ -147,8 +186,20 @@ func equalRunes(a, b []rune) bool {
 
 // Matches says whether every word is in the text.
 func (m *Matcher) Matches(text string) bool {
-	for _, w := range m.Words {
-		if len(NewMatcher(w, m.Case, m.Whole).Spans(text)) == 0 {
+	if len(m.needles) == 0 {
+		return true
+	}
+	if text == "" {
+		return false
+	}
+	hay := []rune(text)
+	if !m.Case {
+		hay, _ = foldedWithMap(hay)
+	}
+	for _, n := range m.needles {
+		in := false
+		find(hay, n, m.Whole, func(int, int) bool { in = true; return false })
+		if !in {
 			return false
 		}
 	}
