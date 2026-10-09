@@ -175,7 +175,6 @@ CREATE TABLE IF NOT EXISTS message_origin (
     message_id INTEGER NOT NULL REFERENCES message,
     PRIMARY KEY (source_id, row_key)
 ) WITHOUT ROWID;
-CREATE INDEX IF NOT EXISTS message_origin_message ON message_origin (message_id);
 CREATE TABLE IF NOT EXISTS call (
     id INTEGER PRIMARY KEY,
     service_id INTEGER NOT NULL REFERENCES service,

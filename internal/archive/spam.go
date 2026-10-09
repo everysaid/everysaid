@@ -41,6 +41,9 @@ func PurgeSpam(q db.Querier, only []int64) (out Purged) {
 	var msgs []int64
 	chunked(convs, func(marks string, ids []any) {
 		msgs = append(msgs, db.Ints(q, "SELECT id FROM message WHERE conversation_id IN "+marks, ids...)...)
+		// message_origin has no index by message: one pass over it for these chats' messages
+		db.Exec(q, "DELETE FROM message_origin WHERE message_id IN "+
+			"(SELECT id FROM message WHERE conversation_id IN "+marks+")", ids...)
 	})
 	shas := map[string]bool{}
 	chunked(msgs, func(marks string, ids []any) {
@@ -48,7 +51,7 @@ func PurgeSpam(q db.Querier, only []int64) (out Purged) {
 			shas[s] = true
 		}
 		db.Exec(q, "UPDATE message SET reply_to = NULL WHERE reply_to IN "+marks, ids...)
-		for _, t := range []string{"reaction", "mention", "receipt", "message_origin", "attachment", "notice"} {
+		for _, t := range []string{"reaction", "mention", "receipt", "attachment", "notice"} {
 			db.Exec(q, "DELETE FROM "+t+" WHERE message_id IN "+marks, ids...)
 		}
 		db.Exec(q, "DELETE FROM message_fts WHERE rowid IN "+marks, ids...)

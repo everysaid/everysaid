@@ -157,6 +157,9 @@ func TestImlogsAdiumAndPidginLogs(t *testing.T) {
 	if len(stats.Problems) != 0 {
 		t.Errorf("problems %v", stats.Problems)
 	}
+	if n := a.Int("SELECT count(*) FROM message_origin"); n != 0 { // known by their fingerprint
+		t.Errorf("%d origins", n)
+	}
 	tx := a.Tx()
 	// one MSN conversation with the friend, from both programs
 	type msg struct {
@@ -268,7 +271,7 @@ func TestImlogsAdiumAndPidginLogs(t *testing.T) {
 	if got := on(); len(got) != 1 || got[0] != "me@hotmail.com" {
 		t.Errorf("account member again %v", got)
 	}
-	if sumInts(again.Added) != 0 || sumInts(again.Seen) != 11 {
+	if sumInts(again.Added) != 0 || sumInts(again.Seen) != 12 { // the 11 and the repeat of the picture
 		t.Errorf("again: added %d seen %d", sumInts(again.Added), sumInts(again.Seen))
 	}
 }
@@ -440,8 +443,8 @@ func TestImlogsDryRunSeesTheWholeArchive(t *testing.T) {
 			total = l
 		}
 	}
-	if f := strings.Fields(total); len(f) < 4 || f[1] != "0" || f[3] != "11" {
-		t.Errorf("dry run after a full import: %q, want 0 new, 11 already there", total)
+	if f := strings.Fields(total); len(f) < 4 || f[1] != "0" || f[3] != "12" { // the repeat of the picture too
+		t.Errorf("dry run after a full import: %q, want 0 new, 12 already there", total)
 	}
 }
 

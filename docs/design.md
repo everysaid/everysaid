@@ -135,7 +135,8 @@ changes in place).
   devices is kept: the one in use at the time, else the newest device.
 - **Deduplication** by the importers, per record kind: the service's own key where there is one
   (Viber token, WhatsApp stanza id, iMessage guid, Telegram chat and id); else a fingerprint (time,
-  direction, kind, text); every origin kept (`message_origin`, `call_origin`).
+  direction, kind, text); every origin kept (`message_origin`, `call_origin`) but the Adium and
+  Pidgin logs', which have no ids.
 - **People**: `address` (one handle), `person`, `person_address` (`auto`, or `manual` when the
   user merged), `account` (the user's own handles), `handle_name` (every name a service showed for a
   handle). Suggested merges are shown to the user, never applied by themselves; the same phone

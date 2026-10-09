@@ -352,7 +352,6 @@ func imAt(y int, mo time.Month, d, h, mi, s int, loc *time.Location) wall {
 
 // imRecord is one message as a parser gives it; alias "" is none.
 type imRecord struct {
-	rowKey   string
 	ts       int64
 	outgoing bool
 	sender   string
@@ -533,7 +532,6 @@ func adiumTime(value string) (int64, bool) {
 
 // adiumFile is the messages of one chatlog (XML) or HTML log, in order.
 func adiumFile(path, logs, uid string, problems map[string]int) []imRecord {
-	rel := pyRelpath(path, logs)
 	folder := pyDirname(path)
 	data := readText(path)
 	me := text.Lower(uid)
@@ -556,7 +554,7 @@ func adiumFile(path, logs, uid string, problems map[string]int) []imRecord {
 		imAt(y, time.Month(mo), d, 0, 0, 0, tz)
 		var prev wall
 		hasPrev := false
-		for n, mm := range imHTMLLine.FindAllStringSubmatch(data, -1) {
+		for _, mm := range imHTMLLine.FindAllStringSubmatch(data, -1) {
 			direction, stamp, sender, body := mm[1], mm[2], mm[3], mm[4]
 			t := imHTMLStamp.FindStringSubmatch(pyStrip(stamp))
 			if t == nil {
@@ -569,12 +567,12 @@ func adiumFile(path, logs, uid string, problems map[string]int) []imRecord {
 				dt = dt.add(24 * time.Hour)
 			}
 			prev, hasPrev = dt, true
-			out = append(out, imRecord{rowKey: fmt.Sprintf("%s#%d", rel, n), ts: tsMS(dt.instant()), outgoing: direction == "send",
+			out = append(out, imRecord{ts: tsMS(dt.instant()), outgoing: direction == "send",
 				sender: pyStrip(sender), text: imClean(body)})
 		}
 		return out
 	}
-	for n, mm := range imMessage.FindAllStringSubmatch(data, -1) {
+	for _, mm := range imMessage.FindAllStringSubmatch(data, -1) {
 		attrs := map[string]string{}
 		for _, kv := range imAttr.FindAllStringSubmatch(mm[1], -1) {
 			attrs[kv[1]] = kv[2]
@@ -593,7 +591,7 @@ func adiumFile(path, logs, uid string, problems map[string]int) []imRecord {
 			}
 		}
 		low := text.Lower(sender)
-		out = append(out, imRecord{rowKey: fmt.Sprintf("%s#%d", rel, n), ts: ts, outgoing: low == me || strings.HasPrefix(low, me+"/"),
+		out = append(out, imRecord{ts: ts, outgoing: low == me || strings.HasPrefix(low, me+"/"),
 			sender: sender, text: imClean(body), alias: pyStrip(pyUnescape(attrs["alias"])), images: images})
 	}
 	return out
@@ -826,7 +824,6 @@ func pyRstrip(s string) string { return strings.TrimRightFunc(s, archive.IsSpace
 // pidginFile is each message of a log; a line without a time continues the one before (a message
 // of several lines).
 func pidginFile(path, logs string, problems map[string]int) []imRecord {
-	rel := pyRelpath(path, logs)
 	m := pidginFileRE.FindStringSubmatch(pyBasename(path))
 	if m == nil {
 		problems["files without a date"]++
@@ -857,7 +854,7 @@ func pidginFile(path, logs string, problems map[string]int) []imRecord {
 			dt = dt.add(24 * time.Hour)
 		}
 		prev, hasPrev = dt, true
-		out = append(out, imRecord{rowKey: fmt.Sprintf("%s#%d", rel, len(out)), ts: tsMS(dt.instant()),
+		out = append(out, imRecord{ts: tsMS(dt.instant()),
 			sender: pyStrip(said[1]), text: pyRstrip(strings.ReplaceAll(said[2], "\ufeff", ""))})
 	}
 	return out
@@ -925,8 +922,8 @@ type ImlogsKey struct{ Device, Service string }
 // ImlogsStats is what an import found and did.
 type ImlogsStats struct {
 	Added    map[ImlogsKey]int // messages
-	Dupes    map[ImlogsKey]int // skipped as already there (fingerprint)
-	Seen     map[ImlogsKey]int // origins already in the archive
+	Dupes    map[ImlogsKey]int // skipped as a repeat of a message this run added (fingerprint)
+	Seen     map[ImlogsKey]int // already in the archive before this run (fingerprint)
 	Chats    map[ImlogsKey]map[int64]bool
 	Span     map[ImlogsKey][2]int64 // first and last ts
 	Outgoing map[ImlogsKey]int
@@ -1063,6 +1060,7 @@ type imImporter struct {
 	out       func(string)
 	moved     map[int64]bool // addresses this run's groupings moved to another person
 	groupings []imGrouping   // the owner's groupings of each program, applied at the end
+	before    int64          // the last message id before this run: a fingerprint above it is a dupe, else seen
 }
 
 type imGrouping struct {
@@ -1128,10 +1126,6 @@ func (imp *imImporter) accountIn(service string, c *imChat, own archive.Handle) 
 // its id, 0 for none.
 func (imp *imImporter) add(device, service string, src int64, c *imChat, rec imRecord, sender archive.Handle) int64 {
 	a, key := imp.a, ImlogsKey{device, service}
-	if a.HasOrigin(src, rec.rowKey, "") {
-		imp.stats.Seen[key]++
-		return 0
-	}
 	kind := "text"
 	if len(rec.images) > 0 && rec.text == "" {
 		kind = "image"
@@ -1141,15 +1135,19 @@ func (imp *imImporter) add(device, service string, src int64, c *imChat, rec imR
 	}
 	conv := imp.conv(c)
 	fp := archive.Fingerprint(rec.ts, rec.outgoing, kind, rec.text)
-	if a.Exists("SELECT 1 FROM message WHERE conversation_id = ? AND fingerprint = ?", conv, fp) {
-		imp.stats.Dupes[key]++
+	if id, ok := a.IntOK("SELECT id FROM message WHERE conversation_id = ? AND fingerprint = ?", conv, fp); ok {
+		if id > imp.before {
+			imp.stats.Dupes[key]++
+		} else {
+			imp.stats.Seen[key]++
+		}
 		return 0
 	}
 	var senderID int64
 	if !rec.outgoing {
 		senderID = a.Address(sender)
 	}
-	mid := a.AddMessage(src, rec.rowKey, archive.Message{Service: service, ConversationID: conv, TS: rec.ts,
+	mid := a.AddMessage(src, "", archive.Message{Service: service, ConversationID: conv, TS: rec.ts,
 		Outgoing: rec.outgoing, SenderID: senderID, Kind: kind, Text: rec.text})
 	imp.stats.note(key, rec.ts, rec.outgoing)
 	if imp.stats.Chats[key] == nil {
@@ -1371,7 +1369,8 @@ func Imlogs(a *archive.Archive, out func(string), opt ImlogsOptions) (stats *Iml
 	}
 	stats = newImlogsStats()
 	imp := &imImporter{a: a, stats: stats, media: !opt.NoMedia, sources: map[ImlogsKey]int64{},
-		aliases: map[imAliasKey]imAlias{}, out: out, moved: map[int64]bool{}}
+		aliases: map[imAliasKey]imAlias{}, out: out, moved: map[int64]bool{},
+		before: a.Int("SELECT ifnull(max(id), 0) FROM message")}
 	if adium != "" {
 		imp.adium(config.ExpandUser(adium))
 	}

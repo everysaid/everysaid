@@ -332,7 +332,8 @@ The folders are read as they are: unpacking an archive of them is the user's job
 - The owner's account a chat was on (the log folder's) is a member of its conversation, so that one
   of several accounts can be hidden; a chat with someone may have been on several.
 - Messages have no ids: the fingerprint (second, direction, kind, text) within the conversation
-  tells one seen before, from either program. Status lines are left out; the pictures Adium kept
+  tells one seen before, from either program, so they get no `message_origin` row (a log file's
+  path would be most of the table). Status lines are left out; the pictures Adium kept
   beside its logs come in as the messages' files.
 - Pidgin logs names, not handles: the owner's messages are told by the account's names (the
   account, its alias in `accounts.xml`, any name speaking in three or more of its conversations).
@@ -366,8 +367,9 @@ Schema (`internal/archive`):
   and 5 by code), `video`, `attempts`, `conversation_id` (group calls) and, in `call_member`, who
   took part and how.
 - `message_origin` / `call_origin`: where each row came from: `source_id` and `row_key` (the row's
-  id in that source, unique per source). The source row itself is not kept: what matters is in
-  columns. The extracted source databases are the way back to a source row.
+  id in that source, unique per source); none for the Adium and Pidgin logs, which have no ids.
+  The source row itself is not kept: what matters is in columns. The extracted source databases are
+  the way back to a source row.
 - `service`, `address_kind`, `message_kind`, `source`: lookup tables; `address` (normalised: E.164
   numbers, lower-case email, a service's id, username or profile name); `person` joins addresses
   (`Archive.alias` adds a handle to an existing person); `conversation` and `conversation_member`.

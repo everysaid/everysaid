@@ -86,7 +86,8 @@ pair"); the importers run without it.
   one, so an interrupted run never leaves a half-written database in place. This covers the
   extracts, the media files, the password file and the MMS parts.
 - **Idempotent imports.** Every importer can be run again. A row is identified by `(source,
-  row_key)`, its id in that source, and is skipped if already present. A message's service-wide id
+  row_key)`, its id in that source, and is skipped if already present (the Adium and Pidgin logs,
+  without ids, by their fingerprint). A message's service-wide id
   (`message.key`) stops the same message arriving twice from two sources.
 - **One origin per record.** A record found on two devices is stored once, from the device that was
   in use at the time (`device.used_from`/`used_until` in the archive, `Archive.Keeper`): an
@@ -1071,7 +1072,7 @@ everysaid import [--db PATH] [sms calls viber whatsapp telegram voip media]
 | WhatsApp | `Z_PK` / `<jid>/<id>` | stanza id (`message.key`); iPhone first within one run |
 | Media | `(source, source_path, message)` | content sha256 (`media`) |
 | Services with ids per chat (Telegram) | `(source, row_key)` | (`message.key`, `key_scope`) |
-| Adium and Pidgin logs (no ids) | `<file>#<index>` as `row_key` | `message.fingerprint` within the conversation (README, "Adium and Pidgin") |
+| Adium and Pidgin logs (no ids) | `message.fingerprint` within the conversation, no `message_origin` | the same fingerprint (README, "Adium and Pidgin") |
 
 ---
 
