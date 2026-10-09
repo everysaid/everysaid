@@ -240,6 +240,11 @@ func handleHistorySync(client *whatsmeow.Client, store *MessageStore, historySyn
 			if msg == nil || msg.Message == nil {
 				continue
 			}
+			if msg.Message.GetMessage() == nil { // what WhatsApp shows of an entry with no message
+				historyStub(client, store, jid, msg.Message, logger)
+				continue
+			}
+			historyVotes(client, store, jid, msg.Message, logger)
 			evt, err := client.ParseWebMessage(jid, msg.Message)
 			if err != nil {
 				logger.Warnf("Failed to parse history message: %v", err)
