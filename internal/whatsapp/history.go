@@ -78,6 +78,11 @@ func fetchHistory(ctx context.Context, client *whatsmeow.Client, store *MessageS
 			if ctx.Err() != nil {
 				return
 			}
+			if err != nil && !client.IsConnected() { // not a try: when connected again (Connected wakes it)
+				store.db.Exec("UPDATE history_pending SET next_at = ? WHERE direct_path = ?", time.Now().Add(time.Minute).Unix(), path)
+				handle(path, nil)
+				break
+			}
 			if err != nil {
 				gone := errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith404) || errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith410)
 				if gone || tries+1 >= historyTries {
@@ -92,7 +97,12 @@ func fetchHistory(ctx context.Context, client *whatsmeow.Client, store *MessageS
 				continue
 			}
 			if !handle(path, &events.HistorySync{Data: data, Notification: n}) {
-				return // the bridge is ending: kept for the next start
+				// the bridge ending, or not all of it stored: kept, tried again later
+				store.db.Exec("UPDATE history_pending SET next_at = ? WHERE direct_path = ?", time.Now().Add(time.Minute).Unix(), path)
+				if ctx.Err() != nil {
+					return
+				}
+				continue
 			}
 			store.db.Exec("DELETE FROM history_pending WHERE direct_path = ?", path)
 			if err := client.DeleteMedia(ctx, whatsmeow.MediaHistory, n.GetDirectPath(), n.GetFileEncSHA256(), n.GetEncHandle()); err != nil {
@@ -143,7 +153,14 @@ func historyVotes(client *whatsmeow.Client, store *MessageStore, chat types.JID,
 			voter = chat.String()
 		}
 		if j, err := types.ParseJID(voter); err == nil {
-			voter = j.ToNonAD().String()
+			j = j.ToNonAD()
+			if j.Server == types.HiddenUserServer && client.Store != nil && client.Store.LIDs != nil {
+				// one voter by one jid: their number's, as the live votes are kept
+				if pn, err := client.Store.LIDs.GetPNForLID(context.Background(), j); err == nil && !pn.IsEmpty() {
+					j = pn.ToNonAD()
+				}
+			}
+			voter = j.String()
 		}
 		chosen := []string{}
 		for _, h := range u.GetVote().GetSelectedOptions() {

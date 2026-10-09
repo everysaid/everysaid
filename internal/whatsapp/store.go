@@ -223,8 +223,8 @@ func nameLIDChats(client *whatsmeow.Client, store *MessageStore, logger waLog.Lo
 
 // handleHistorySync stores each message of a history sync as a live one would be, with the
 // reactions and receipts it carries.
-func handleHistorySync(client *whatsmeow.Client, store *MessageStore, historySync *events.HistorySync, logger waLog.Logger) {
-	synced := 0
+func handleHistorySync(client *whatsmeow.Client, store *MessageStore, historySync *events.HistorySync, logger waLog.Logger) bool {
+	synced, stored := 0, true
 	for _, conversation := range historySync.Data.Conversations {
 		if conversation.ID == nil {
 			continue
@@ -253,11 +253,14 @@ func handleHistorySync(client *whatsmeow.Client, store *MessageStore, historySyn
 				logger.Warnf("Failed to parse history message: %v", err)
 				continue
 			}
-			processMessage(client, store, evt, name, logger)
+			if !processMessage(client, store, evt, name, logger) {
+				stored = false // the history kept, to be tried again (what was stored is stored again, the same)
+			}
 			historyReactions(client, store, jid, msg.Message, logger)
 			historyReceipts(store, jid, msg.Message)
 			synced++
 		}
 	}
 	logger.Infof("History sync: %d messages in %d conversations", synced, len(historySync.Data.Conversations))
+	return stored
 }
