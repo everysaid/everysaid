@@ -184,9 +184,10 @@ type mentionEv struct {
 }
 
 type quoteEv struct {
-	TS     int64   `json:"ts"`
-	Author *string `json:"author"`
-	Text   *string `json:"text"`
+	TS          int64          `json:"ts"`
+	Author      *string        `json:"author"`
+	Text        *string        `json:"text"`
+	Attachments []attachmentEv `json:"attachments"`
 }
 
 type attachmentEv struct {
@@ -197,6 +198,7 @@ type attachmentEv struct {
 	Gif         bool    `json:"gif"`
 	Sticker     bool    `json:"sticker"`
 	Caption     *string `json:"caption"`
+	Emoji       *string `json:"emoji"` // a sticker's
 	File        *string `json:"file"`
 	Error       string  `json:"error"`
 }

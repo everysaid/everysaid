@@ -274,7 +274,11 @@ fn message_fields(m: &mut Map<String, Value>, dm: &DataMessage) -> Vec<Attachmen
     if let Some(q) = &dm.quote {
         m.insert(
             "quote".into(),
-            json!({"ts": q.id, "author": aci(q.author_aci.as_ref(), q.author_aci_binary.as_ref()), "text": q.text}),
+            json!({"ts": q.id, "author": aci(q.author_aci.as_ref(), q.author_aci_binary.as_ref()), "text": q.text,
+                // what the quoted message carried (a reply to a picture quotes no text)
+                "attachments": q.attachments.iter()
+                    .map(|a| json!({"content_type": a.content_type, "filename": a.file_name}))
+                    .collect::<Vec<_>>()}),
         );
     }
     let mut pointers: Vec<AttachmentPointer> = dm.attachments.clone();
@@ -737,7 +741,7 @@ mod tests {
         assert_eq!(e["chat"]["id"], group_id(&key));
         assert_ne!(e["chat"]["id"], BASE64_STANDARD.encode(key), "the id, not the master key");
         assert_eq!(e["mentions"], json!([{"start": 3, "length": 1, "aci": BOB}]));
-        assert_eq!(e["quote"], json!({"ts": 1500, "author": ME, "text": "q"}));
+        assert_eq!(e["quote"], json!({"ts": 1500, "author": ME, "text": "q", "attachments": []}));
         assert_eq!(e["attachments"][0]["voice"], true);
         assert_eq!(e["attachments"][0]["file"], Value::Null);
         assert_eq!(e["group_revision"], 3);

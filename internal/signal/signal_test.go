@@ -1413,3 +1413,26 @@ func TestNotices(t *testing.T) {
 		t.Fatalf("unsupported: %s", code)
 	}
 }
+
+// What a message says where it has no words: a sticker's emoji, a file's caption, a card with only
+// its company, a reply to a picture; a view-once message said as such.
+func TestDescribeWithoutWords(t *testing.T) {
+	str := func(s string) *string { return &s }
+	_, _, text := describe(event{Attachments: []attachmentEv{{Sticker: true, Emoji: str("🐱")}}})
+	if text != "🐱" {
+		t.Fatalf("sticker %q", text)
+	}
+	_, _, text = describe(event{Attachments: []attachmentEv{{ContentType: str("image/jpeg"), Caption: str("at sea")}}})
+	if text != "at sea" {
+		t.Fatalf("caption %q", text)
+	}
+	_, x, _ := describe(event{Contacts: []sharedContact{{Organization: str("ACME"), Phones: []string{"+1555"}}}})
+	if x.Text != "ACME +1555" {
+		t.Fatalf("card %q", x.Text)
+	}
+	_, x, _ = describe(event{Text: str("nice"), ViewOnce: true, Quote: &quoteEv{TS: 1, Author: str(anna),
+		Attachments: []attachmentEv{{ContentType: str("image/jpeg"), Filename: str("sea.jpg")}}}})
+	if x.ReplyText != "📎 sea.jpg" || x.SubtypeCode != "signal:view_once" {
+		t.Fatalf("%q %q", x.ReplyText, x.SubtypeCode)
+	}
+}
