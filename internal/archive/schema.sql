@@ -132,7 +132,10 @@ CREATE TABLE IF NOT EXISTS message (
     starred INTEGER NOT NULL DEFAULT 0,
     lat REAL, lon REAL, place TEXT,     -- a location shared
     sender_lat REAL, sender_lon REAL,   -- where the sender was when sending (older Viber)
-    status TEXT                         -- a message sent from the app: sending, sent, failed (NULL: as imported)
+    status TEXT,                        -- a message sent from the app: sending, sent, failed (NULL: as imported)
+    forward_from TEXT,                  -- who a forwarded message first came from, as the service names them
+    album TEXT,                         -- the service's key of the group of files sent together
+    pinned INTEGER                      -- pinned until (Unix milliseconds), -1 for ever; NULL: not pinned
 );
 CREATE UNIQUE INDEX IF NOT EXISTS message_key ON message (service_id, key, ifnull(key_scope, 0))
     WHERE key IS NOT NULL;
@@ -233,6 +236,7 @@ CREATE TABLE IF NOT EXISTS attachment (
     sha256 TEXT NOT NULL REFERENCES media,
     source_id INTEGER NOT NULL REFERENCES source,
     source_path TEXT NOT NULL,          -- the file within that source (relative to its media_root)
+    name TEXT,                          -- the file's name as it was sent
     UNIQUE (source_id, source_path, message_id)
 );
 CREATE INDEX IF NOT EXISTS attachment_message ON attachment (message_id);

@@ -974,7 +974,7 @@ person; a new address starts as a person of its own, until the user merges it.
 |---|---|
 | `conversation` | `service_id`, `key`, `title`, `is_group`; (service, key) unique |
 | `conversation_member` | conversation × address |
-| `message` | `status` (a message sent from the app: sending, sent, failed), `id`, `service_id`, `conversation_id`, `ts` (Unix ms UTC), `outgoing`, `sender_id` (NULL when outgoing), `kind_id`, `text`, `key`, `key_scope` (the conversation, for services whose keys are per chat); unique on (service, key, key_scope) where there is a key; and the extras: `subtype`, `subtype_code`, `reply_to`, `reply_key`, `reply_text`, `edited`, `deleted`, `forwarded`, `starred`, `lat`, `lon`, `place` (a location shared), `sender_lat`, `sender_lon` (where the sender was, older Viber) |
+| `message` | `status` (a message sent from the app: sending, sent, failed), `id`, `service_id`, `conversation_id`, `ts` (Unix ms UTC), `outgoing`, `sender_id` (NULL when outgoing), `kind_id`, `text`, `key`, `key_scope` (the conversation, for services whose keys are per chat); unique on (service, key, key_scope) where there is a key; and the extras: `subtype`, `subtype_code`, `reply_to`, `reply_key`, `reply_text`, `edited`, `deleted`, `forwarded`, `starred`, `lat`, `lon`, `place` (a location shared), `sender_lat`, `sender_lon` (where the sender was, older Viber), `forward_from` (who a forwarded message first came from), `album` (the service's key of files sent together), `pinned` (pinned until, Unix ms; -1 for ever) |
 | `reaction` | `message_id`, `emoji` (NULL where only a code is known), `code`, `count`, `address_id`, `outgoing` |
 | `receipt` | message × address: `delivered_at`, `read_at`, `played_at` (Unix ms; 0 so but when not known; NULL not yet), for the owner's messages |
 | `mention` | message × address: whom its text names with @, and `token`, how the text names them (WhatsApp `@<number or LID's user part>`, Telegram `@username` or the name itself, Viber `@Name`) |
@@ -993,7 +993,7 @@ person; a new address starts as a person of its own, until the user merges it.
 | Table | Contents |
 |---|---|
 | `media` | `sha256` PK, `size`, `mime`, `path` (`media/<ab>/<sha256><ext>`, relative to the media root) |
-| `attachment` | `message_id`, `sha256`, `source_id`, `source_path`; (source, path, message) unique |
+| `attachment` | `message_id`, `sha256`, `source_id`, `source_path`, `name` (the file's name as sent); (source, path, message) unique |
 | `library_link` | (`sha256`, `library`) PK, `asset_id` (for a folder: the path in it), `method` (checksum, phash, clip, upload), `score`, `linked_at`, `instance_id` (the library plugin instance): a file in a photo library; more than one library may hold it |
 | `media_same` | `sha256` PK, `same_as`, `method`, `score`, `linked_at`: a file removed as the same picture as one the archive keeps |
 | `media_decision` | `sha256` PK, `decision` (keep, remove, library), `date_ms` (a date the user gave), `at`: the user's sorting in the app; the newest decision is the one that counts. |

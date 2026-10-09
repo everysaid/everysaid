@@ -19,7 +19,7 @@
   },
   "attachment": {
    "rows": 315,
-   "sha256": "e76c30221d82a0b18fe32c70164c91b77ae92fc31925ca9a3fecc28cfc1f2a85"
+   "sha256": "717bd1cf2e233289397f1d15d9662b909aed3f716685eadaad6d1f8904ee6800"
   },
   "blocked": {
    "rows": 0,
@@ -103,7 +103,7 @@
   },
   "message": {
    "rows": 10582,
-   "sha256": "b910ea741214d47c4489938392f49a51d62bd7c0e28d6b0e1419055fcfbf32a4"
+   "sha256": "f346289903d848dc7f68ffbbf4fc91e06a9b5c1959f91a9cfab8d57c4f22e1b8"
   },
   "message_fts": {
    "rows": 10415,
