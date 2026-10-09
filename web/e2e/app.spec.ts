@@ -38,6 +38,8 @@ test("setup, chats, a chat, search, media, sources, settings", async ({ page }, 
   await expect(page.getByRole("heading", { name: /Συνομιλίες|Chats/ })).toBeVisible({ timeout: 15000 });
   await page.waitForTimeout(800);
   await page.screenshot({ path: `${SHOTS}/${tag}-03-chats.png` });
+  // the unread chats in the title (what Ferdium shows on its icon)
+  await expect(page).toHaveTitle(/^(\(\d+\) )?Everysaid$/);
 
   // a person's chat
   const first = page.locator('a[href^="/chat/p"]').first();

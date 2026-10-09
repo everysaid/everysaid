@@ -158,7 +158,8 @@ func (h *Host) dispatch(ctx context.Context) {
 	}
 }
 
-// describeNew: which chats got what, so that the apps refresh those; push for incoming ones, except
+// describeNew: which chats got what, so that the apps refresh those; notifications (push, and in the
+// event for the apps that show their own) for incoming ones, except
 // in archived chats (which stay archived: it is decided once, when the chat is first seen, then only
 // by the user).
 func (h *Host) describeNew(event M) (out M, err error) {
@@ -203,10 +204,17 @@ func (h *Host) describeNew(event M) (out M, err error) {
 			incoming = append(incoming, Incoming{cid, r.id, r.text.String, r.kind})
 		}
 	}
-	if h.push != nil && len(incoming) > 0 {
-		h.push.Notify(h.store, incoming)
+	out = M{"type": "new", "chats": chats, "calls": c1 - c0}
+	if len(incoming) > 0 {
+		notes := Notifications(h.store, incoming)
+		if h.push != nil {
+			h.push.Notify(h.store, notes)
+		}
+		if len(notes) > 0 {
+			out["notify"] = notes
+		}
 	}
-	return M{"type": "new", "chats": chats, "calls": c1 - c0}, nil
+	return out, nil
 }
 
 // Alert tells the user something about the app (a plugin's warning): on the open apps, and as a push.

@@ -4,7 +4,7 @@ import { flushUnsent } from "./outbox";
 
 export type LiveEvent =
   | { type: "hello" | "ping" | "changed" }
-  | { type: "new"; chats: Record<string, number>; calls: number }
+  | { type: "new"; chats: Record<string, number>; calls: number; notify?: LiveNotification[] }
   | { type: "plugin"; instance: number; running?: string | null; live?: boolean }
   | { type: "plugin_log"; instance: number; line: string }
   | { type: "plugin_progress"; instance: number; line: string }     // a line drawn again (a progress bar)
@@ -12,6 +12,9 @@ export type LiveEvent =
   | { type: "alert"; title: string; body: string }                   // a plugin's warning, in the user's words
   | { type: "reach"; chat: string; service: string; state: string }   // a source's answer: whether a person is on its service
   | { type: "outbox"; chat: string };                                   // what of a chat waits to be sent changed
+
+/** What a push would say, for the browsers without push (lib/push localNotify). */
+export type LiveNotification = { title: string; body: string; chat: string; tag: string };
 
 type Listener = (e: LiveEvent) => void;
 const listeners = new Set<Listener>();
