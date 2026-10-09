@@ -154,3 +154,17 @@ test("a message that cannot go now waits, and goes", async ({ page }, info) => {
   await expect(waiting).toHaveCount(0);
   await expect(stream.filter({ hasText: away })).toHaveCount(1);
 });
+
+// In a group, a sender's name opens their own chat (to write to them alone).
+test("a sender's name in a group opens their chat", async ({ page }, info) => {
+  await signedIn(page, info.project.name);
+  const group = await page.evaluate(async () =>
+    (await (await fetch("/api/chats?kind=group", { headers: { "X-Everysaid": "1" } })).json()).items[0]?.id as string | undefined);
+  test.skip(!group, "no group");
+  await page.goto(`/chat/${group}`);
+  const name = page.locator("[data-sender]").last();
+  await expect(name).toBeVisible();
+  await name.click();
+  await expect(page).toHaveURL(/\/chat\/p\d+/);
+  await expect(page.locator("[data-via], [data-find-first]")).toBeVisible();
+});

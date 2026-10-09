@@ -350,10 +350,14 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
       )}
       <div {...swipe} style={dx ? { transform: `translateX(${dx}px)` } : undefined}
         className={cn("flex max-w-[min(78%,42rem)] touch-pan-y flex-col", out ? "items-end" : "items-start", !dx && "transition-transform")}>
-        {group && !out && first && m.sender && (
+        {group && !out && first && m.sender && (m.sender_id ? (
+          // their own chat, to write to them alone (empty until then)
+          <Link to="/chat/$chatId" params={{ chatId: `p${m.sender_id}` }} data-sender className="mb-0.5 ml-3 text-xs font-semibold hover:underline"
+            style={{ color: nameColor(m.sender) }} title={m.sender_self_named ? t("people.selfNamed") : undefined}>{m.sender_self_named && "~ "}{m.sender}</Link>
+        ) : (
           <span className="mb-0.5 ml-3 text-xs font-semibold" style={{ color: nameColor(m.sender) }}
             title={m.sender_self_named ? t("people.selfNamed") : undefined}>{m.sender_self_named && "~ "}{m.sender}</span>
-        )}
+        ))}
         <div
           className={cn(
             "relative rounded-bubble text-[15px] leading-snug shadow-sm",
