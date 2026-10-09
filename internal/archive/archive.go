@@ -4,8 +4,8 @@
 // (so that a later import knows what it has). Our ids are our own; `message.key` is the service's
 // own id where it has one (Viber token, WhatsApp stanza id, iMessage guid), unique per service, or
 // per conversation for services whose ids are only unique within a chat (`service.key_scope`;
-// `message.key_scope` is then the conversation). Messages without a key carry a `fingerprint`
-// (time, direction, kind and text), the way to tell a message seen before in sources without ids.
+// `message.key_scope` is then the conversation). A message without a key is told from another in
+// its conversation by its time, direction, kind and text (the sources without ids).
 // What a message carries beyond its text (the message it answers, reactions, edits, deletions,
 // forwarding, a star, a place) is in its own columns and in `reaction`, read by package extras;
 // the source rows themselves are not kept: they are in the sources.
@@ -29,10 +29,8 @@ package archive
 
 import (
 	"context"
-	"crypto/sha1"
 	"database/sql"
 	_ "embed"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -747,7 +745,7 @@ func NullID(id int64) any  { return nullID(id) }
 func B2I(b bool) int       { return b2i(b) }
 
 // AddMessage adds a message from a source row; it returns its id. A rowKey "" records no origin
-// (the Adium and Pidgin logs: their messages are known again by their fingerprint).
+// (the Adium and Pidgin logs: their messages are known again by time, direction, kind and text).
 func (a *Archive) AddMessage(sourceID int64, rowKey string, m Message) int64 {
 	x := m.Extras
 	if x == nil {
@@ -764,22 +762,20 @@ func (a *Archive) AddMessage(sourceID int64, rowKey string, m Message) int64 {
 	} else { // on another kind: where the sender was
 		slat, slon = fptr(x.Lat), fptr(x.Lon)
 	}
-	var key, scope, fp any
+	var key, scope any
 	if m.Key != "" {
 		key = m.Key
 		if a.keyScoped[sid] {
 			scope = m.ConversationID
 		}
-	} else {
-		fp = Fingerprint(m.TS, m.Outgoing, m.Kind, txt)
 	}
 	mid, _ := a.Exec(
 		"INSERT INTO message (service_id, conversation_id, ts, outgoing, sender_id, kind_id, text, key, "+
-			"key_scope, fingerprint, subtype, subtype_code, reply_key, reply_text, edited, deleted, forwarded, "+
+			"key_scope, subtype, subtype_code, reply_key, reply_text, edited, deleted, forwarded, "+
 			"starred, lat, lon, place, sender_lat, sender_lon) "+
-			"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 		sid, m.ConversationID, m.TS, b2i(m.Outgoing), nullID(m.SenderID), a.MessageKind.ID(m.Kind), nullStr(txt), key,
-		scope, fp, nullStr(x.Subtype), nullStr(x.SubtypeCode), nullStr(x.ReplyKey), nullStr(x.ReplyText),
+		scope, nullStr(x.Subtype), nullStr(x.SubtypeCode), nullStr(x.ReplyKey), nullStr(x.ReplyText),
 		b2i(x.Edited), b2i(x.Deleted), b2i(x.Forwarded), b2i(x.Starred),
 		lat, lon, nullStr(x.Place), slat, slon).LastInsertId()
 	if txt != "" {
@@ -1031,13 +1027,6 @@ func AndroidExports(root string) []AndroidExport {
 		}
 	}
 	return out
-}
-
-// Fingerprint is what tells a message without a key from another in its conversation: time,
-// direction, kind and text (not the sender, whose address may later be merged).
-func Fingerprint(ts int64, outgoing bool, kind, txt string) string {
-	h := sha1.Sum([]byte(fmt.Sprintf("%d|%d|%s|%s", ts, b2i(outgoing), kind, txt)))
-	return hex.EncodeToString(h[:])[:20]
 }
 
 // Contract is a path as stored: the cache and data folders written as {cache} and {data}.

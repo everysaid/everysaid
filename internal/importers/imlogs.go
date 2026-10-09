@@ -14,9 +14,9 @@
 // meet a later import of Messenger. A handle is an email (MSN, Jabber: shared with every service),
 // an id within the service, or a phone (Adium's WhatsApp plugin).
 //
-// Messages have no ids: a message's key in the archive is its fingerprint, and its origin the file
-// and its index in it. The two programs were used by turns, so the same message is not expected in
-// both; a message whose fingerprint its conversation already has is skipped and counted. Status
+// Messages have no ids: a message is known by its time, direction, kind and text within its
+// conversation, and records no origin. The two programs were used by turns, so the same message is
+// not expected in both; a message its conversation already has is skipped and counted. Status
 // lines are not messages and are left out.
 //
 // Pidgin writes who said what by display name: a message is the owner's when its sender is one of
@@ -922,8 +922,8 @@ type ImlogsKey struct{ Device, Service string }
 // ImlogsStats is what an import found and did.
 type ImlogsStats struct {
 	Added    map[ImlogsKey]int // messages
-	Dupes    map[ImlogsKey]int // skipped as a repeat of a message this run added (fingerprint)
-	Seen     map[ImlogsKey]int // already in the archive before this run (fingerprint)
+	Dupes    map[ImlogsKey]int // skipped as a repeat of a message this run added
+	Seen     map[ImlogsKey]int // already in the archive before this run
 	Chats    map[ImlogsKey]map[int64]bool
 	Span     map[ImlogsKey][2]int64 // first and last ts
 	Outgoing map[ImlogsKey]int
@@ -1060,7 +1060,7 @@ type imImporter struct {
 	out       func(string)
 	moved     map[int64]bool // addresses this run's groupings moved to another person
 	groupings []imGrouping   // the owner's groupings of each program, applied at the end
-	before    int64          // the last message id before this run: a fingerprint above it is a dupe, else seen
+	before    int64          // the last message id before this run: a match above it is a dupe, else seen
 }
 
 type imGrouping struct {
@@ -1122,8 +1122,8 @@ func (imp *imImporter) accountIn(service string, c *imChat, own archive.Handle) 
 	}
 }
 
-// add puts one message into the archive, unless its origin or its fingerprint is already there;
-// its id, 0 for none.
+// add puts one message into the archive, unless its conversation already has it (the same time,
+// direction, kind and text, without a key); its id, 0 for none.
 func (imp *imImporter) add(device, service string, src int64, c *imChat, rec imRecord, sender archive.Handle) int64 {
 	a, key := imp.a, ImlogsKey{device, service}
 	kind := "text"
@@ -1134,8 +1134,9 @@ func (imp *imImporter) add(device, service string, src int64, c *imChat, rec imR
 		return 0
 	}
 	conv := imp.conv(c)
-	fp := archive.Fingerprint(rec.ts, rec.outgoing, kind, rec.text)
-	if id, ok := a.IntOK("SELECT id FROM message WHERE conversation_id = ? AND fingerprint = ?", conv, fp); ok {
+	if id, ok := a.IntOK("SELECT id FROM message WHERE conversation_id = ? AND ts = ? AND outgoing = ? "+
+		"AND kind_id = ? AND key IS NULL AND text IS ?", conv, rec.ts, archive.B2I(rec.outgoing),
+		a.MessageKind.ID(kind), archive.NullStr(rec.text)); ok {
 		if id > imp.before {
 			imp.stats.Dupes[key]++
 		} else {

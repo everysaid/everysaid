@@ -157,7 +157,7 @@ func TestImlogsAdiumAndPidginLogs(t *testing.T) {
 	if len(stats.Problems) != 0 {
 		t.Errorf("problems %v", stats.Problems)
 	}
-	if n := a.Int("SELECT count(*) FROM message_origin"); n != 0 { // known by their fingerprint
+	if n := a.Int("SELECT count(*) FROM message_origin"); n != 0 { // known by time, direction, kind and text
 		t.Errorf("%d origins", n)
 	}
 	tx := a.Tx()

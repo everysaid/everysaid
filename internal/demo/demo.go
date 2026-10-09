@@ -431,7 +431,8 @@ func BuildArchive(seed int64) (path string, err error) {
 	}
 	var sents []sent
 	a.Each("SELECT m.id, m.conversation_id, m.ts, m.service_id, c.is_group FROM message m "+
-		"JOIN conversation c ON c.id = m.conversation_id WHERE m.outgoing AND m.service_id IN (?, ?)",
+		"JOIN conversation c ON c.id = m.conversation_id WHERE m.outgoing AND m.service_id IN (?, ?) "+
+		"ORDER BY m.service_id, m.key, ifnull(m.key_scope, 0), m.id", // the draws below follow this order
 		[]any{whatsapp, telegram}, func(scan func(...any)) {
 			var s sent
 			scan(&s.mid, &s.conv, &s.ts, &s.sid, &s.group)
