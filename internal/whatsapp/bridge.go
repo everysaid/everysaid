@@ -302,6 +302,8 @@ func (b *Bridge) handle(client *whatsmeow.Client, store *MessageStore, evt any) 
 		handleReceipt(store, v, b.log)
 	case *events.JoinedGroup, *events.GroupInfo:
 		handleGroupEvent(client, store, v, b.log)
+	case *events.Picture:
+		store.storeGroupPicture(v, b.log)
 	case *events.Blocklist:
 		handleBlocklist(client, store, v, b.log)
 	case *events.Connected, *events.Disconnected, *events.LoggedOut, *events.TemporaryBan,

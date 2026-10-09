@@ -33,6 +33,7 @@ import (
 	"database/sql"
 	_ "embed"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -696,6 +697,14 @@ type Extras struct {
 	Reactions            []Reaction
 	EditsKey             string
 	ReactsTo             *ReactsTo
+	Notice               *Notice
+}
+
+// Notice is what a notice says, its code and values (the `notice` table), for the interface to put
+// in words; a person in Args is {"address": id}, the owner {"self": true}.
+type Notice struct {
+	Code string
+	Args map[string]any
 }
 
 // Message is a message to add.
@@ -778,6 +787,9 @@ func (a *Archive) AddMessage(sourceID int64, rowKey string, m Message) int64 {
 		a.Exec("INSERT INTO message_tri (rowid, text) VALUES (?, ?)", mid, folded)
 	}
 	a.Exec("INSERT INTO message_origin VALUES (?, ?, ?)", sourceID, rowKey, mid)
+	if x.Notice != nil {
+		a.SetNotice(mid, x.Notice)
+	}
 	a.AddReactions(mid, x.Reactions)
 	if x.EditsKey != "" {
 		a.pendingEdits = append(a.pendingEdits, [2]any{sid, x.EditsKey})
@@ -1100,4 +1112,23 @@ func allDigits(s string) bool {
 		}
 	}
 	return true
+}
+
+// SetNotice writes (or replaces) what a message's notice says.
+func (a *Archive) SetNotice(messageID int64, n *Notice) {
+	a.Exec("INSERT INTO notice VALUES (?, ?, ?) ON CONFLICT (message_id) DO UPDATE SET code = excluded.code, args = excluded.args",
+		messageID, n.Code, NoticeJSON(n))
+}
+
+// NoticeJSON is a notice's values as the archive keeps them.
+func NoticeJSON(n *Notice) string {
+	args := n.Args
+	if args == nil {
+		args = map[string]any{}
+	}
+	js, err := json.Marshal(args)
+	if err != nil {
+		panic(err)
+	}
+	return string(js)
 }

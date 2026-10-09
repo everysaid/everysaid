@@ -317,7 +317,7 @@ func Hydrate(s *Store, rows []Item, chat *Chat) []M {
 				"forwarded": forwarded, "starred": starred, "status": nullString(status),
 				"keyed":     keyed, // the service's own id is known: an answer to it can be sent
 				"location":  location,
-				"reactions": []M{}, "attachments": []M{}, "mentions": []M{}, "receipts": nil,
+				"reactions": []M{}, "attachments": []M{}, "mentions": []M{}, "receipts": nil, "notice": nil,
 			}
 			ex[mid] = &extra{replyTo: replyTo, conv: conv, ts: ts, outgoing: outgoing}
 		})
@@ -392,6 +392,16 @@ func Hydrate(s *Store, rows []Item, chat *Chat) []M {
 					}
 					msgs[mid]["mentions"] = append(msgs[mid]["mentions"].([]M), M{"token": nullString(token),
 						"person_id": pid, "me": ppl.OwnAddresses[who], "name": ppl.NameOfAddress(who)})
+				})
+		}
+		if tbl["notice"] {
+			db.Each(q, "SELECT message_id, code, args FROM notice WHERE message_id IN ("+marks+")", db.Args(mids),
+				func(scan func(...any)) {
+					var mid int64
+					var code string
+					var args sql.NullString
+					scan(&mid, &code, &args)
+					msgs[mid]["notice"] = noticeOf(ppl, code, args)
 				})
 		}
 		var mine []int64

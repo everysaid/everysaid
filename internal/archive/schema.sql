@@ -140,6 +140,11 @@ CREATE INDEX IF NOT EXISTS message_conversation_ts ON message (conversation_id, 
 CREATE INDEX IF NOT EXISTS message_ts ON message (ts);
 CREATE INDEX IF NOT EXISTS message_fingerprint ON message (conversation_id, fingerprint)
     WHERE fingerprint IS NOT NULL;
+CREATE TABLE IF NOT EXISTS notice (     -- what a notice says (a group's change, a timer set...), for the
+    message_id INTEGER PRIMARY KEY REFERENCES message,  -- interface to put in words
+    code TEXT NOT NULL,                 -- what it is: group, timer, pin, unpin, unreadable, story_reply...
+    args TEXT NOT NULL                  -- its values, JSON; a person {"address": id}, the owner {"self": true}
+);
 CREATE TABLE IF NOT EXISTS reaction (
     message_id INTEGER NOT NULL REFERENCES message,
     emoji TEXT,                         -- NULL where only the service's code is known
