@@ -175,6 +175,8 @@ func TestTelegramNotices(t *testing.T) {
 	svc(34, tgBob, M{"_": "MessageActionGroupCall", "call": M{"id": 5}})
 	svc(35, tgBob, M{"_": "MessageActionSetMessagesTTL", "period": 86400})
 	svc(36, tgBob, M{"_": "MessageActionContactSignUp"})
+	svc(38, tgBob, M{"_": "MessageActionTopicCreate", "title": "Trips"})
+	svc(39, tgBob, M{"_": "MessageActionTopicEdit", "closed": true})
 	add(37, M{"_": "Message", "id": 37, "from_id": M{"user_id": tgBob}, "media": M{"_": "MessageMediaPoll",
 		"poll":    M{"question": M{"text": "When?"}, "answers": []M{{"text": "Mon"}, {"text": "Tue"}}, "closed": true},
 		"results": M{"total_voters": 3, "results": []M{{"voters": 1}, {"voters": 2}}}}})
@@ -207,6 +209,7 @@ func TestTelegramNotices(t *testing.T) {
 	eq(t, "timer", []any{code, v["seconds"]}, []any{"timer", float64(86400)})
 	code, _ = notice("36")
 	eq(t, "signed up", code, "signed_up")
+	eq(t, "topic", []any{action("38")["type"], action("38")["title"], action("39")["closed"]}, []any{"topic", "Trips", true})
 	code, v = notice("37")
 	opts, _ := v["options"].([]any)
 	eq(t, "poll", []any{code, len(opts), opts[1].(map[string]any)["votes"], v["ended"], v["voters"]},
