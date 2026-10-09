@@ -238,7 +238,11 @@ func bridgeChanges(a *archive.Archive, bridge *sql.DB, person *waPeople, own map
 			}
 			var outgoing bool
 			var sender sql.NullInt64
-			a.Row("SELECT outgoing, sender_id FROM message WHERE id = ?", []any{mid}, &outgoing, &sender)
+			var conv int64
+			a.Row("SELECT outgoing, sender_id, conversation_id FROM message WHERE id = ?", []any{mid}, &outgoing, &sender, &conv)
+			if c, _ := a.FindConversation("whatsapp", person.conversationKey(str(r["chat_jid"]))); c == 0 || c != conv {
+				continue // a message of another chat (ids are not unique across chats)
+			}
 			deletion := str(r["change"]) == "delete"
 			author := outgoing && truthy(r["is_from_me"])
 			if !outgoing && !truthy(r["is_from_me"]) {

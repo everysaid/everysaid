@@ -11,6 +11,7 @@
 package importers
 
 import (
+	"cmp"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -398,7 +399,7 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 		likes := map[string][]archive.Reaction{}
 		if hasTable(iphone, "ZLIKE") {
 			for _, l := range maps(iphone, "SELECT ZMESSAGETOKEN, ZSENDER, ZLIKEVALUE, ZUNICODEREACTION FROM ZLIKE "+
-				"WHERE ZLIKEVALUE != 0 OR ZUNICODEREACTION IS NOT NULL ORDER BY ZMESSAGETOKEN, ZSENDER") {
+				"WHERE ZLIKEVALUE != 0 OR coalesce(ZUNICODEREACTION, '') != '' ORDER BY ZMESSAGETOKEN, ZSENDER") {
 				k := l["ZLIKEVALUE"]
 				if truthy(l["ZUNICODEREACTION"]) {
 					k = l["ZUNICODEREACTION"]
@@ -730,20 +731,21 @@ func viberMentions(a *archive.Archive, mid int64, text string, info any, person 
 // withWho is a message's reactions with each one's known (from), and the rest of the counts as
 // they were, no one's.
 func withWho(counts, from []archive.Reaction) []archive.Reaction {
+	id := func(r archive.Reaction) string { return cmp.Or(r.Code, r.Emoji) } // an emoji of one's own has no code
 	left := map[string]int{}
 	for _, r := range counts {
 		if r.Who == nil && !r.Outgoing {
-			left[r.Code] += r.Count
+			left[id(r)] += r.Count
 		}
 	}
 	out := slices.Clone(from)
 	for _, r := range from {
-		left[r.Code]--
+		left[id(r)]--
 	}
 	for _, r := range counts {
-		if r.Who == nil && !r.Outgoing && left[r.Code] > 0 {
-			out = append(out, archive.Reaction{Emoji: r.Emoji, Code: r.Code, Count: left[r.Code]})
-			left[r.Code] = 0
+		if r.Who == nil && !r.Outgoing && left[id(r)] > 0 {
+			out = append(out, archive.Reaction{Emoji: r.Emoji, Code: r.Code, Count: left[id(r)]})
+			left[id(r)] = 0
 		}
 	}
 	return out

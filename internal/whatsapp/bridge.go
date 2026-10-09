@@ -323,8 +323,11 @@ func (b *Bridge) handle(client *whatsmeow.Client, store *MessageStore, evt any) 
 			d.queue(v.Info.ID, v.Info.Chat.String())
 		}
 	case *events.HistorySync:
-		handleHistorySync(client, store, v, b.log)
+		ok := handleHistorySync(client, store, v, b.log)
 		b.historyPending(v.Notification.GetDirectPath(), -1)
+		if !ok {
+			return false
+		}
 	case *events.UndecryptableMessage:
 		handleUndecryptable(store, v, b.log)
 	case *events.MediaRetry:
@@ -351,6 +354,10 @@ func (b *Bridge) handle(client *whatsmeow.Client, store *MessageStore, evt any) 
 		handleStateEvent(store, v, b.log)
 		if _, ok := v.(*events.Connected); ok {
 			go refreshBlocklist(client, store, b.log) // not in the event handler: it waits for an answer
+			select { // the history waiting for a connection
+			case b.historyWake <- struct{}{}:
+			default:
+			}
 		}
 		select {
 		case b.said <- v:

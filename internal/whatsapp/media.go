@@ -286,7 +286,7 @@ func (d *Downloads) run() {
 		}
 		var err error
 		for attempt, wait := 1, 10*time.Second; ; attempt, wait = attempt+1, wait*3 {
-			if _, err = d.store.download(d.client, j.id, j.chatJID); err == nil || gone(err) || attempt == 3 {
+			if _, err = d.store.download(d.client, j.id, j.chatJID); err == nil || gone(err) || errors.Is(err, errAskedAgain) || attempt == 3 {
 				break
 			}
 			select {

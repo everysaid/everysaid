@@ -315,8 +315,19 @@ func TestViberReactionsByWhom(t *testing.T) {
 
 	d, _ = db.Open(path)
 	db.Exec(d, "CREATE TABLE ZLIKE (Z_PK INTEGER PRIMARY KEY, ZMESSAGETOKEN INTEGER, ZSENDER INTEGER, ZLIKEVALUE INTEGER, ZUNICODEREACTION VARCHAR)")
-	db.Exec(d, "INSERT INTO ZLIKE VALUES (1, 5001, 2, 1, NULL), (2, 5001, NULL, 1, NULL), (3, 5001, 1, 0, NULL)")
+	db.Exec(d, "INSERT INTO ZLIKE VALUES (1, 5001, 2, 1, NULL), (2, 5001, NULL, 1, NULL), (3, 5001, 1, 0, '')") // 3: taken back
 	d.Close()
 	must(t, Viber(a, nil, ViberOptions{IphoneDB: path, NoDesktop: true}))
 	eq(t, "by whom", desktopReactionsOf(a, "5001"), []string{"❤️ ", "❤️ +15558880002", "❤️  me"})
+}
+
+// Emojis of one's own have no code: each one's rest is its own.
+func TestWithWhoOwnEmojis(t *testing.T) {
+	got := withWho([]archive.Reaction{{Emoji: "🤣", Count: 2}, {Emoji: "😕", Count: 1}},
+		[]archive.Reaction{{Emoji: "🤣", Count: 1, Who: archive.H("phone", "+1555", "")}})
+	var s []string
+	for _, r := range got {
+		s = append(s, fmt.Sprintf("%s%d%v", r.Emoji, r.Count, r.Who != nil))
+	}
+	eq(t, "rest", s, []string{"🤣1true", "🤣1false", "😕1false"})
 }

@@ -444,8 +444,8 @@ func bridgeCalls(a *archive.Archive, calls *CallSet, bridgeDB, storeDB string) {
 			// still ringing, or under way: the next import has it; its end never seen (the bridge was
 			// down then) and an hour gone: taken as it stood, with no end
 			unended := r["ended_at"] == nil
-			if unended && time.Since(time.UnixMilli(ts)) < time.Hour {
-				continue
+			if unended && (time.Since(time.UnixMilli(ts)) < time.Hour || truthy(r["accepted_at"])) {
+				continue // (one answered may go on for hours: its end, when seen, says how long)
 			}
 			accepted, wasAccepted := ms(r["accepted_at"])
 			wasAccepted = wasAccepted && accepted != 0

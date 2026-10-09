@@ -30,5 +30,6 @@ func handleUndecryptable(store *MessageStore, evt *events.UndecryptableMessage, 
 
 // readAfterAll drops the trace of a message that could not be read, once it came.
 func (store *MessageStore) readAfterAll(chat, id string) {
-	store.db.Exec("DELETE FROM chat_events WHERE chat_jid = ? AND id = ? AND code = 'unreadable'", chat, "undecryptable:"+id)
+	// by its id alone: the phone may send it again under the chat's other name (its number, or its LID)
+	store.db.Exec("DELETE FROM chat_events WHERE id = ? AND code = 'unreadable'", "undecryptable:"+id)
 }

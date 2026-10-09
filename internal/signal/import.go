@@ -396,7 +396,19 @@ func describe(e event) (string, *archive.Extras, string) {
 		x.ReplyText = deref(e.Quote.Text)
 		if x.ReplyText == "" && len(e.Quote.Attachments) > 0 { // a reply to a file: what it was
 			q := e.Quote.Attachments[0]
-			x.ReplyText = "📎 " + cmp.Or(deref(q.Filename), deref(q.ContentType))
+			ct := deref(q.ContentType)
+			switch {
+			case deref(q.Filename) != "":
+				x.ReplyText = "📎 " + deref(q.Filename)
+			case strings.HasPrefix(ct, "image/"):
+				x.ReplyText = "📷"
+			case strings.HasPrefix(ct, "video/"):
+				x.ReplyText = "🎥"
+			case strings.HasPrefix(ct, "audio/"):
+				x.ReplyText = "🎤"
+			default:
+				x.ReplyText = "📎"
+			}
 		}
 	}
 	if text == "" && len(atts) > 0 {
