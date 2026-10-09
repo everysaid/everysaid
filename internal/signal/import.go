@@ -17,6 +17,7 @@ package signal
 // too, and the files the helper fetched go to the media store.
 
 import (
+	"cmp"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -338,6 +339,8 @@ func describe(e event) (string, *archive.Extras, string) {
 			parts := []string{}
 			if n := strings.TrimSpace(deref(c.Name)); n != "" {
 				parts = append(parts, n)
+			} else if o := strings.TrimSpace(deref(c.Organization)); o != "" { // as Signal names a card
+				parts = append(parts, o)
 			}
 			parts = append(parts, c.Phones...)
 			parts = append(parts, c.Emails...)
@@ -391,6 +394,18 @@ func describe(e event) (string, *archive.Extras, string) {
 	if e.Quote != nil && e.Quote.Author != nil {
 		x.ReplyKey = Key(*e.Quote.Author, e.Quote.TS)
 		x.ReplyText = deref(e.Quote.Text)
+		if x.ReplyText == "" && len(e.Quote.Attachments) > 0 { // a reply to a file: what it was
+			q := e.Quote.Attachments[0]
+			x.ReplyText = "📎 " + cmp.Or(deref(q.Filename), deref(q.ContentType))
+		}
+	}
+	if text == "" && len(atts) > 0 {
+		// a sticker's emoji, or a file's own caption: words where the message has none (and what is
+		// left of a sticker whose file never came)
+		text = strings.TrimSpace(cmp.Or(deref(atts[0].Emoji), deref(atts[0].Caption)))
+	}
+	if e.ViewOnce && x.SubtypeCode == "" { // to be seen once, kept here: said as such
+		x.SubtypeCode = "signal:view_once"
 	}
 	return kind, x, text
 }
