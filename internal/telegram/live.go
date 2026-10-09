@@ -246,6 +246,9 @@ func notePoll(c *plugins.Context, u *tg.UpdateMessagePoll) (err error) {
 			if len(u.Results.Results) > 0 {
 				db.Exec(tx, "UPDATE message SET json = json_set(json, '$.media.results', json(?)) WHERE chat_id = ? AND id = ?",
 					Dump(&u.Results), k[0], k[1])
+			} else if n, ok := u.Results.GetTotalVoters(); ok { // how many voted, at least
+				db.Exec(tx, "UPDATE message SET json = json_set(json, '$.media.results.total_voters', ?) WHERE chat_id = ? AND id = ?",
+					n, k[0], k[1])
 			}
 			if poll, ok := u.GetPoll(); ok {
 				db.Exec(tx, "UPDATE message SET json = json_set(json, '$.media.poll', json(?)) WHERE chat_id = ? AND id = ?",

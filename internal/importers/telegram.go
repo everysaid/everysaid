@@ -155,6 +155,10 @@ func telegramKindOf(m map[string]any) tgKind {
 		return tgKind{kind: "text", code: code, text: obj(media["game"])["title"]}
 	case "MessageMediaInvoice":
 		return tgKind{kind: "text", code: code, text: joinTruthy("\n", media["title"], media["description"])}
+	case "MessageMediaGiveaway", "MessageMediaGiveawayResults": // what is given, in its own words
+		if truthy(media["prize_description"]) {
+			return tgKind{kind: "text", code: code, text: media["prize_description"]}
+		}
 	}
 	if name != "MessageMediaDocument" || !truthy(media["document"]) {
 		return tgKind{kind: "file", code: code}
