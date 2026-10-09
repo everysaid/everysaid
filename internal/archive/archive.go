@@ -746,7 +746,8 @@ func NullStr(s string) any { return nullStr(s) }
 func NullID(id int64) any  { return nullID(id) }
 func B2I(b bool) int       { return b2i(b) }
 
-// AddMessage adds a message from a source row; it returns its id.
+// AddMessage adds a message from a source row; it returns its id. A rowKey "" records no origin
+// (the Adium and Pidgin logs: their messages are known again by their fingerprint).
 func (a *Archive) AddMessage(sourceID int64, rowKey string, m Message) int64 {
 	x := m.Extras
 	if x == nil {
@@ -786,7 +787,9 @@ func (a *Archive) AddMessage(sourceID int64, rowKey string, m Message) int64 {
 		a.Exec("INSERT INTO message_fts (rowid, text) VALUES (?, ?)", mid, folded)
 		a.Exec("INSERT INTO message_tri (rowid, text) VALUES (?, ?)", mid, folded)
 	}
-	a.Exec("INSERT INTO message_origin VALUES (?, ?, ?)", sourceID, rowKey, mid)
+	if rowKey != "" {
+		a.Exec("INSERT INTO message_origin VALUES (?, ?, ?)", sourceID, rowKey, mid)
+	}
 	if x.Notice != nil {
 		a.SetNotice(mid, x.Notice)
 	}
