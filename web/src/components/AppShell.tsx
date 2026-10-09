@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { markNav } from "@/lib/back";
 import { useTranslation } from "react-i18next";
@@ -115,6 +116,11 @@ function BottomTabs() {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const wide = useWide();
+  // the unread chats in the title too: Ferdium (and the tabs) show the number from it
+  const unread = useUnread();
+  useEffect(() => {
+    document.title = unread > 0 ? `(${unread}) Everysaid` : "Everysaid";
+  }, [unread]);
   const path = useRouterState({ select: (s) => s.location.pathname });
   const inChat = path.startsWith("/chat/");
   const chatsSection = path === "/" || inChat;

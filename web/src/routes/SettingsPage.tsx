@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { api, type Account, type NameSources } from "@/lib/api";
 import { fullDate, number, relative } from "@/lib/format";
 import { setLanguage } from "@/lib/i18n";
-import { currentSubscription, disablePush, enablePush, isIos, isStandalone, pushSupported } from "@/lib/push";
+import { currentSubscription, disablePush, enablePush, isIos, isStandalone, localNotify, notifySupported } from "@/lib/push";
 import { register } from "@/lib/passkeys";
 import { applyTheme, getTheme, type Theme } from "@/lib/theme";
 import { useSettings } from "@/lib/hooks";
@@ -94,6 +94,7 @@ export function SettingsPage() {
   const account = useQuery({ queryKey: ["account"], queryFn: () => api.get<Account>("/api/auth/account") });
   const [theme, setThemeState] = useState<Theme>(getTheme());
   const [push, setPush] = useState(false);
+  const [local, setLocal] = useState(localNotify());
   const [codes, setCodes] = useState<string[] | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [settingPassword, setSettingPassword] = useState(false);
@@ -125,9 +126,10 @@ export function SettingsPage() {
     try {
       if (on) await enablePush();
       else await disablePush();
-      setPush(on);
+      setPush(on && !localNotify());
+      setLocal(localNotify());
     } catch (e: any) {
-      toast.error(e.message === "denied" ? t("settings.pushDenied") : e.message === "unavailable" ? t("settings.pushUnavailable") : e.message);
+      toast.error(e.message === "denied" ? t("settings.pushDenied") : e.message);
     }
   };
 
@@ -213,15 +215,16 @@ export function SettingsPage() {
           {tab === "general" && (
           <Section title={<span className="flex items-center gap-2"><Bell className="size-4" />{t("settings.notifications")}</span>}>
             <Card className="divide-y divide-line">
-              <Line label={t("settings.push")} hint={isIos() && !isStandalone() ? t("settings.pushIos") : t("settings.pushHint")}>
-                <Switch checked={push} onChange={togglePush} disabled={!pushSupported()} />
+              <Line label={t("settings.push")} hint={isIos() && !isStandalone() ? t("settings.pushIos") : local ? t("settings.pushLocal") : t("settings.pushHint")}>
+                <Switch checked={push || local} onChange={togglePush} disabled={!notifySupported()} />
               </Line>
               <Line label={t("settings.pushPreview")}>
                 <Switch checked={(settings.data?.push_preview as boolean | undefined) ?? true} onChange={(v) => put.mutate({ push_preview: v })} />
               </Line>
-              {push && (
+              {(push || local) && (
                 <Line label={t("settings.pushTest")}>
-                  <Button size="sm" onClick={() => api.post("/api/push/test").then(() => toast.success("✓"), (e) => toast.error(e.message))}>{t("common.run")}</Button>
+                  <Button size="sm" onClick={() => local ? new Notification("Everysaid", { body: t("settings.pushTest"), icon: "/icon-192.png" })
+                    : api.post("/api/push/test").then(() => toast.success("✓"), (e) => toast.error(e.message))}>{t("common.run")}</Button>
                 </Line>
               )}
             </Card>

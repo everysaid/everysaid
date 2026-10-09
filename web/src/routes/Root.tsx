@@ -2,9 +2,10 @@ import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { loadServices } from "@/lib/services";
-import { Outlet, useRouterState } from "@tanstack/react-router";
+import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { api } from "@/lib/api";
 import { connectEvents, onEvent } from "@/lib/events";
+import { localNotify } from "@/lib/push";
 import { toast } from "sonner";
 import { Center, Spinner } from "@/components/ui";
 import { AppShell } from "@/components/AppShell";
@@ -34,6 +35,20 @@ export function Root() {
   useEffect(() => onEvent((e) => {
     if (e.type === "alert") toast.warning(e.title, { description: e.body, duration: Infinity, closeButton: true });
   }), []);
+  // no push in this browser: the page shows the notifications itself (not for the chat being looked at)
+  const navigate = useNavigate();
+  useEffect(() => onEvent((e) => {
+    if (e.type !== "new" || !e.notify || !localNotify()) return;
+    for (const n of e.notify) {
+      if (document.visibilityState === "visible" && document.hasFocus() && location.pathname === `/chat/${n.chat}`) continue;
+      const shown = new Notification(n.title, { body: n.body, tag: n.tag, icon: "/icon-192.png" });
+      shown.onclick = () => {
+        window.focus();
+        navigate({ to: "/chat/$chatId", params: { chatId: n.chat } });
+        shown.close();
+      };
+    }
+  }), [navigate]);
   // the server says some things without being asked (logs, notifications): in the language last chosen
   useEffect(() => {
     if (auth.data?.logged_in) api.put("/api/settings", { language: i18n.language }).catch(() => {});

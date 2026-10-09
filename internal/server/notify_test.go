@@ -88,6 +88,8 @@ func TestAnArchivedChatStaysArchivedAndSaysNothingOfNewMessages(t *testing.T) {
 	chats := event["chats"].(map[string]int64)
 	must(t, len(chats) == 2 && chats[archived] == 1 && chats[other] == 1, "both shown as they come: %v", chats)
 	must(t, core.States(s)[archived].Archived, "still archived")
+	notes, _ := event["notify"].([]map[string]any)
+	must(t, len(notes) == 1 && notes[0]["chat"] == other, "the event carries the other chat's notification: %v", event["notify"])
 	deadline := time.Now().Add(5 * time.Second)
 	for rec.count() < 1 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)

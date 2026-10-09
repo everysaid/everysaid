@@ -224,13 +224,17 @@ type Incoming struct {
 	Kind    string
 }
 
-// Notify tells the devices of an archive's users about new incoming messages, one notification per
-// chat (muted chats left out).
-func (p *Push) Notify(store *core.Store, incoming []Incoming) {
-	subs := p.Subscriptions(store.Path)
-	if len(subs) == 0 {
-		return
+// Notify tells the devices of an archive's users about new incoming messages: the notifications
+// made by Notifications.
+func (p *Push) Notify(store *core.Store, payloads []map[string]any) {
+	if subs := p.Subscriptions(store.Path); len(subs) > 0 && len(payloads) > 0 {
+		go p.Send(subs, payloads)
 	}
+}
+
+// Notifications are those of new incoming messages, one per chat (muted chats left out): sent as
+// pushes, and in the "new" event for the apps a browser without push shows them in.
+func Notifications(store *core.Store, incoming []Incoming) []map[string]any {
 	states := core.States(store)
 	preview := truthy(store.SettingAny("push_preview", true))
 	byChat := map[string][]Incoming{}
@@ -272,9 +276,7 @@ func (p *Push) Notify(store *core.Store, incoming []Incoming) {
 		payloads = append(payloads, map[string]any{"title": core.ChatTitle(store, chat), "body": core.Cut(body, 240),
 			"chat": cid, "message": last.Message, "tag": cid})
 	}
-	if len(payloads) > 0 {
-		go p.Send(subs, payloads)
-	}
+	return payloads
 }
 
 // Send sends each payload to each subscription; one the push service says is gone is forgotten.
