@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import * as Popover from "@radix-ui/react-popover";
-import { ArrowDown, ArrowLeft, BellOff, CalendarDays, Check, ChevronDown, CornerUpLeft, Archive, ArchiveRestore, FileText, Info, Lock, MoreVertical, Paperclip, Pencil, Pin, PinOff, Search, SendHorizontal, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, BellOff, CalendarDays, Check, ChevronDown, CornerUpLeft, Archive, ArchiveRestore, FileText, Info, Lock, MoreVertical, Paperclip, Pencil, Pin, PinOff, Search, SendHorizontal, Smile, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, qs, type Attachment, type ChatDetail, type Member, type MessageItem, type StreamItem, type StreamPage } from "@/lib/api";
 import { useBack } from "@/lib/back";
@@ -21,6 +21,7 @@ import { Lightbox, type LightboxItem } from "@/components/Lightbox";
 import { ChatInfo } from "@/components/ChatInfo";
 import { MessageInfo } from "@/components/MessageInfo";
 import { DateField } from "@/components/DateField";
+import { EmojiPicker } from "@/components/EmojiPicker";
 import { avatarUrl } from "@/components/ChatList";
 
 const START = 1_000_000_000;
@@ -768,6 +769,16 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
       .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "")).slice(0, 8);
   }, [asked, members, via]);
   useEffect(() => setPick(0), [asked?.query]);
+  // an emoji where the caret is (or in place of what is selected); the picker stays open for more
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const insert = (e: string) => {
+    const el = ref.current;
+    const from = el?.selectionStart ?? text.length, to = el?.selectionEnd ?? text.length;
+    setText(text.slice(0, from) + e + text.slice(to));
+    const at = from + e.length;
+    setCaret(at);
+    requestAnimationFrame(() => el?.setSelectionRange(at, at));
+  };
   // the person looked for on the services the chat has none of: each answer comes as an event
   const find = () => {
     api.post(`/api/chats/${chatId}/find`, {})
@@ -923,6 +934,22 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
             placeholder={!can ? t("chat.cannotSend", { service: service(via).name }) : file ? t("chat.caption") : t("chat.messageVia", { service: service(via).name })}
             className="max-h-44 border-0 bg-transparent py-2.5 pl-2 focus:ring-0 focus-visible:outline-none disabled:cursor-not-allowed"
           />
+          {can && (
+            <Popover.Root open={emojiOpen} onOpenChange={setEmojiOpen}>
+              <Popover.Trigger asChild>
+                <button data-emoji aria-label={t("emoji.choose")} title={t("emoji.choose")}
+                  className="mb-1 grid size-9 shrink-0 place-items-center rounded-full text-muted hover:bg-panel hover:text-fg data-[state=open]:bg-panel">
+                  <Smile className="size-5" />
+                </button>
+              </Popover.Trigger>
+              <Popover.Portal>
+                <Popover.Content align="end" side="top" sideOffset={8} onCloseAutoFocus={(e) => { e.preventDefault(); ref.current?.focus(); }}
+                  className="z-50 overflow-hidden rounded-2xl border border-line bg-panel shadow-xl">
+                  <EmojiPicker onPick={insert} />
+                </Popover.Content>
+              </Popover.Portal>
+            </Popover.Root>
+          )}
           {canFile && !editing && (
             <>
               <input ref={fileInput} type="file" hidden data-file-input

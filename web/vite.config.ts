@@ -1,8 +1,30 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
+import { readFileSync } from "node:fs";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
 import { fileURLToPath, URL } from "node:url";
+
+// The emoji picker's data (emojibase, English), served by the app itself at /emojibase/en/: no
+// request leaves for a CDN (the server's Content-Security-Policy would not allow one either).
+function emojibase(): Plugin {
+  const files = ["data.json", "messages.json"];
+  const read = (f: string) => readFileSync(fileURLToPath(new URL(`./node_modules/emojibase-data/en/${f}`, import.meta.url)));
+  return {
+    name: "emojibase",
+    configureServer(server) {
+      server.middlewares.use("/emojibase/en/", (req, res, next) => {
+        const f = (req.url ?? "").replace(/^\//, "").split("?")[0];
+        if (!files.includes(f)) return next();
+        res.setHeader("Content-Type", "application/json");
+        res.end(read(f));
+      });
+    },
+    generateBundle() {
+      for (const f of files) this.emitFile({ type: "asset", fileName: `emojibase/en/${f}`, source: read(f) });
+    },
+  };
+}
 
 // The app is served by `everysaid serve` (web/dist). In development, `pnpm dev` proxies /api to it:
 // start the server with EVERYSAID_EXTRA_ORIGINS=http://localhost:5173 so passkeys work there too.
@@ -10,6 +32,7 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    emojibase(),
     VitePWA({
       strategies: "injectManifest",
       srcDir: "src",

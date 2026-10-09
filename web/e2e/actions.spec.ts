@@ -37,12 +37,22 @@ test("a reaction, an edit and a deletion of the user's own message", async ({ pa
   await expect(bubble.locator("[data-reaction][data-mine]")).toHaveText("👍");
   await bubble.locator("[data-actions]").click();
   await page.locator("[data-more-reactions]").click();
-  await page.locator("[data-emoji-input]").fill("🦄");
-  await page.locator("[data-reaction-picker] button[type=submit]").click();
+  await page.locator("[data-reaction-picker] [data-emoji-search]").fill("unicorn");    // any emoji: found in the picker
+  await page.locator("[data-reaction-picker] [data-emoji-option]:visible", { hasText: "🦄" }).click();
   await expect(bubble.locator("[data-reaction][data-mine]")).toHaveText("🦄");
   await expect(bubble.locator("[data-reaction]")).toHaveCount(1);
   await bubble.locator("[data-reaction][data-mine]").click();
   await expect(bubble.locator("[data-reaction]")).toHaveCount(0);
+
+  // an emoji written where the caret is, from the composer's picker (the one used lately first)
+  const field = page.locator("[data-composer-body] textarea");
+  await field.fill("hi ");
+  await page.locator("[data-emoji]").click();
+  await expect(page.locator("[data-emoji-recent] button").first()).toHaveText("🦄");
+  await page.locator("[data-emoji-recent] button").first().click();
+  await expect(field).toHaveValue("hi 🦄");
+  await page.keyboard.press("Escape");
+  await field.fill("");
 
   // an edit: the composer takes the text, then has what it had again
   const composer = page.locator("[data-composer-body] textarea");

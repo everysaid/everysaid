@@ -8,6 +8,7 @@ import { service } from "@/lib/services";
 import { noticeLines, pollOf } from "@/lib/notice";
 import { cn } from "@/lib/utils";
 import { Avatar, Menu, MenuContent, MenuItem, MenuTrigger } from "./ui";
+import { EmojiPicker } from "./EmojiPicker";
 
 const URL_RE = /(https?:\/\/[^\s<>"')\]]+)/g;
 const BIDI = /[\u202a-\u202e\u2066-\u2069]/g;      // direction marks around a name (Viber writes "\u202a@Name\u202c")
@@ -235,19 +236,6 @@ export interface BubbleProps {
   onDelete?: (m: MessageItem) => void;
 }
 
-// what is offered where a service takes any emoji, after its own quick ones
-const COMMON = ["👍", "❤️", "😂", "😮", "😢", "🙏", "👎", "😡", "🔥", "🎉", "👏", "🥰", "😍", "🤣", "😊", "😁", "😉", "😎",
-  "🤔", "🙄", "😅", "😭", "😱", "🤯", "🥳", "🤩", "😘", "🤗", "🙈", "💪", "👌", "✌️", "🤝", "🙌", "💯", "✅", "❌", "⭐",
-  "💔", "💙", "💚", "💛", "🌹", "☕", "🍻", "🎂", "😴", "🤢", "🫠", "👀"];
-
-/** One emoji, as typed or pasted (a flag, a skin tone, a family are one). */
-export function oneEmoji(s: string): string | null {
-  const t = s.trim();
-  if (!t) return null;
-  const parts = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(t)];
-  return parts.length === 1 && /\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(t) ? t : null;
-}
-
 /** The actions of a message: its service's quick reactions, any other it takes, answer, edit,
  * delete for everyone. Opened by its button, or by a long press on a touch screen (open). */
 function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange }: {
@@ -256,12 +244,10 @@ function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange }: {
 }) {
   const { t } = useTranslation();
   const [more, setMore] = useState(false);
-  const [typed, setTyped] = useState("");
-  useEffect(() => { if (!open) { setMore(false); setTyped(""); } }, [open]);
+  useEffect(() => { if (!open) setMore(false); }, [open]);
   const mine = m.reactions.find((r) => r.mine)?.emoji ?? null;
   const put = (e: string) => { onOpenChange(false); react?.on(m, e === mine ? "" : e); };
-  const others = react ? (react.free ? [...react.quick, ...COMMON.filter((e) => !react.quick.includes(e))] : react.all ?? []) : [];
-  const typedOne = oneEmoji(typed);
+  const others = react && !react.free ? react.all ?? [] : [];      // any emoji: the picker instead
   return (
     <Menu open={open} onOpenChange={onOpenChange}>
       <MenuTrigger asChild>
@@ -284,20 +270,14 @@ function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange }: {
           </div>
         )}
         {react && more && (
-          <div data-reaction-picker className="border-t border-line px-1 pb-1 pt-1.5">
-            <div className="grid max-h-48 grid-cols-8 overflow-y-auto">
-              {others.slice(react.free ? 0 : 6).map((e) => (
-                <button key={e} onClick={() => put(e)} aria-label={`${t("chat.react")} ${e}`}
-                  className={cn("grid size-8 place-items-center rounded-lg text-lg hover:bg-panel-2", e === mine && "bg-accent/15")}>{e}</button>
-              ))}
-            </div>
-            {react.free && (
-              <form className="mt-1 flex items-center gap-1 px-1" onSubmit={(e) => { e.preventDefault(); if (typedOne) put(typedOne); }}>
-                <input data-emoji-input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={t("chat.emojiHint")}
-                  onKeyDown={(e) => e.stopPropagation()}
-                  className="h-8 min-w-0 flex-1 rounded-lg border border-line bg-panel-2 px-2 text-sm outline-none focus:border-accent" />
-                <button type="submit" disabled={!typedOne} className="h-8 rounded-lg px-2 text-sm font-medium text-accent disabled:opacity-40">{t("chat.react")}</button>
-              </form>
+          <div data-reaction-picker className="border-t border-line">
+            {react.free ? <EmojiPicker onPick={put} /> : (
+              <div className="grid max-h-48 grid-cols-8 overflow-y-auto px-1 pb-1 pt-1.5">
+                {others.slice(6).map((e) => (
+                  <button key={e} onClick={() => put(e)} aria-label={`${t("chat.react")} ${e}`}
+                    className={cn("grid size-8 place-items-center rounded-lg text-lg hover:bg-panel-2", e === mine && "bg-accent/15")}>{e}</button>
+                ))}
+              </div>
             )}
           </div>
         )}
