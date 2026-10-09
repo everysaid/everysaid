@@ -106,3 +106,51 @@ test("a person found on another service, and a first message there", async ({ pa
   await expect.poll(async () => page.evaluate(async (id) =>
     (await (await fetch(`/api/chats/${id}`, { headers: { "X-Everysaid": "1" } })).json()).services.includes("viber"), chat!.id)).toBe(true);
 });
+
+// What cannot go now waits after the chat's messages: the server's (a limit of pace: "busy:" is refused
+// once by the demo's source), sent again on a word; this device's, when the server cannot be reached,
+// sent once it can. Nothing is lost, nothing goes twice.
+test("a message that cannot go now waits, and goes", async ({ page }, info) => {
+  await signedIn(page, info.project.name);
+  const chat = await page.evaluate(async () => {
+    const h = { "X-Everysaid": "1" };
+    const chats = (await (await fetch("/api/chats", { headers: h })).json()).items;
+    for (const c of chats) {
+      const d = await (await fetch(`/api/chats/${c.id}`, { headers: h })).json();
+      if (d.sendable.includes("whatsapp")) return c.id as string;
+    }
+    return null;
+  });
+  test.skip(!chat, "no chat to send to");
+  await page.goto(`/chat/${chat}`);
+  const via = page.locator("[data-via]");
+  await via.click();
+  await page.getByRole("menuitem", { name: "WhatsApp" }).click();
+  const field = page.locator("[data-composer-body] textarea");
+  const stream = page.locator('[id^="m"]');
+
+  // the server's: kept, then sent at once when asked
+  const busy = `busy: quiet: later ${info.project.name} ${Date.now()}`;
+  await field.fill(busy);
+  await page.locator("[data-send]").click();
+  const kept = page.locator("[data-pending-item]").filter({ hasText: busy });
+  await expect(kept).toBeVisible();
+  await expect(kept).toHaveAttribute("data-pending-item", /queued|sending/);
+  await kept.locator("[data-resend]").click();
+  await expect(kept).toHaveCount(0);
+  await expect(stream.filter({ hasText: busy })).toHaveCount(1);
+
+  // this device's: the server not reached, then reached
+  const away = `quiet: away ${info.project.name} ${Date.now()}`;
+  await page.route("**/api/chats/*/send", (r) => r.abort("connectionrefused"));
+  await field.fill(away);
+  await page.locator("[data-send]").click();
+  const waiting = page.locator('[data-pending-item="waiting"]').filter({ hasText: away });
+  await expect(waiting).toBeVisible();
+  await page.reload();                                  // kept on the device
+  await expect(waiting).toBeVisible();
+  await page.unroute("**/api/chats/*/send");
+  await waiting.locator("[data-resend]").click();
+  await expect(waiting).toHaveCount(0);
+  await expect(stream.filter({ hasText: away })).toHaveCount(1);
+});

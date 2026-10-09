@@ -289,6 +289,9 @@ func (s *Server) Close() {
 	if s.Auth != nil {
 		s.Auth.Close()
 	}
+	if s.Host != nil && s.Host.outbox != nil {
+		s.Host.outbox.Close()
+	}
 	if s.Store != nil {
 		s.Store.Close()
 	}

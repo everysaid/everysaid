@@ -527,10 +527,18 @@ func (p Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conve
 	code, answer := b.Send(req)
 	if code != http.StatusOK { // its refusals: off, blocked, a limit, not a chat they wrote in
 		watchState(c)
-		if answer.Message == "" {
-			return nil, errs.Plugin("Sending failed", 0)
+		// a limit or no connection may pass (kept and sent again), as may a failure on the way
+		status := 0
+		switch {
+		case code == http.StatusTooManyRequests || code == http.StatusServiceUnavailable:
+			status = code
+		case code >= 500:
+			status = http.StatusBadGateway
 		}
-		return nil, errs.Plugin(answer.Message, 0)
+		if answer.Message == "" {
+			return nil, errs.Plugin("Sending failed", status)
+		}
+		return nil, errs.Plugin(answer.Message, status)
 	}
 	if err := runImport(c); err != nil { // the bridge stores what it sent
 		c.Log("error: {e}", map[string]any{"e": err})

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { QueryClient } from "@tanstack/react-query";
+import { flushUnsent } from "./outbox";
 
 export type LiveEvent =
   | { type: "hello" | "ping" | "changed" }
@@ -9,7 +10,8 @@ export type LiveEvent =
   | { type: "plugin_progress"; instance: number; line: string }     // a line drawn again (a progress bar)
   | { type: "plugin_qr"; instance: number; code: string }           // a code to link a device (WhatsApp, Signal): shown as a QR
   | { type: "alert"; title: string; body: string }                   // a plugin's warning, in the user's words
-  | { type: "reach"; chat: string; service: string; state: string };  // a source's answer: whether a person is on its service
+  | { type: "reach"; chat: string; service: string; state: string }   // a source's answer: whether a person is on its service
+  | { type: "outbox"; chat: string };                                   // what of a chat waits to be sent changed
 
 type Listener = (e: LiveEvent) => void;
 const listeners = new Set<Listener>();
@@ -27,6 +29,7 @@ export function connectEvents(qc: QueryClient) {
     socket = new WebSocket(`${proto}//${location.host}/api/events`);
     socket.onopen = () => {
       pause = 1000;
+      flushUnsent();                    // what this device kept while the server could not be reached
       connected = true;
       statusListeners.forEach((f) => f(true));
     };
@@ -42,6 +45,8 @@ export function connectEvents(qc: QueryClient) {
         qc.invalidateQueries({ queryKey: ["plugins"] });
       } else if (e.type === "reach") {
         qc.invalidateQueries({ queryKey: ["chat", e.chat] });
+      } else if (e.type === "outbox") {
+        qc.invalidateQueries({ queryKey: ["outbox", e.chat] });
       }
       listeners.forEach((f) => f(e));
     };
