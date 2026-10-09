@@ -111,6 +111,28 @@ CREATE TABLE IF NOT EXISTS call (
     hangup TEXT,                        -- how it ended: normal, declined, busy, ...
     ended_at INTEGER                    -- Unix ms
 );
+CREATE TABLE IF NOT EXISTS fetch_at (   -- when the files of a message were last asked again, Unix s
+    author TEXT NOT NULL,
+    ts INTEGER NOT NULL,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (author, ts)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS poll_vote (  -- each voter's newest vote in a poll
+    target_author TEXT NOT NULL,
+    target_ts INTEGER NOT NULL,
+    voter TEXT NOT NULL,
+    options TEXT NOT NULL,              -- JSON: the options' places
+    vote_count INTEGER NOT NULL,        -- the voter's own count: a higher one replaces
+    PRIMARY KEY (target_author, target_ts, voter)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS unreadable ( -- messages that could not be decrypted (the sender was asked again)
+    author TEXT NOT NULL,
+    ts INTEGER NOT NULL,                -- the message's sent time
+    chat_kind TEXT NOT NULL,
+    chat TEXT NOT NULL,
+    at INTEGER NOT NULL,                -- when it failed, Unix s
+    PRIMARY KEY (author, ts)
+) WITHOUT ROWID;
 `
 
 // Store is signal.db, written by the plugin as the helper speaks.
@@ -196,6 +218,20 @@ type sharedContact struct {
 type pollEv struct {
 	Question *string  `json:"question"`
 	Options  []string `json:"options"`
+	Multiple bool     `json:"multiple"`
+}
+
+// groupChangesEv is a group's change: who made it, and its actions ({"type", ...}, people by id).
+type groupChangesEv struct {
+	Editor  string           `json:"editor"`
+	Actions []map[string]any `json:"actions"`
+}
+
+// pinEv is a pin or an unpin: the message, and for how long (nil: for good).
+type pinEv struct {
+	TargetAuthor *string `json:"target_author"`
+	TargetTS     int64   `json:"target_ts"`
+	Seconds      *int64  `json:"seconds"`
 }
 
 type ref struct {
@@ -214,6 +250,7 @@ type event struct {
 
 	// a message (or an edit's new content)
 	Text          *string         `json:"text"`
+	LongText      bool            `json:"long_text"` // the whole text of a long message (its body was the first 2 KiB)
 	Mentions      []mentionEv     `json:"mentions"`
 	Quote         *quoteEv        `json:"quote"`
 	Attachments   []attachmentEv  `json:"attachments"`
@@ -231,7 +268,16 @@ type event struct {
 	Payment       bool            `json:"payment"`
 	Gift          bool            `json:"gift"`
 	StoryReply    bool            `json:"story_reply"`
-	GroupRevision *int64          `json:"group_revision"`
+	StoryReaction *string         `json:"story_reaction"` // a reaction to a story: the emoji
+	Unsupported   bool            `json:"unsupported"`    // made by a newer version of Signal
+	GroupChanges  *groupChangesEv `json:"group_changes"`
+	PollEnd       *struct {
+		TargetTS int64 `json:"target_ts"`
+	} `json:"poll_end"`
+	// a vote: the options chosen, the voter's count of votes (the newest wins)
+	Options       []int64 `json:"options"`
+	VoteCount     int64   `json:"vote_count"`
+	GroupRevision *int64  `json:"group_revision"`
 
 	// an edit, a deletion, a reaction
 	TargetAuthor *string `json:"target_author"`
@@ -298,6 +344,11 @@ func (s *Store) Apply(raw []byte) (kept bool, err error) {
 		return false, err
 	}
 	now := time.Now().Unix()
+	// what could not be read and came again (a message, or a reaction, an edit, a call...: its sender
+	// and sent time are the content's) is read
+	if e.Event != "unreadable" && e.Sender != "" && e.TS != 0 {
+		db.Exec(s.DB, "DELETE FROM unreadable WHERE author = ? AND ts = ?", e.Sender, e.TS)
+	}
 	switch e.Event {
 	case "message":
 		if e.Chat == nil {
@@ -305,7 +356,7 @@ func (s *Store) Apply(raw []byte) (kept bool, err error) {
 		}
 		// a copy seen again (history, a fetch again) may have its files now; what was kept of it
 		// stays otherwise
-		if hasFile(e) && db.Int(s.DB, "SELECT count(*) FROM message WHERE author = ? AND ts = ?", e.Sender, e.TS) > 0 {
+		if (hasFile(e) || e.LongText) && db.Int(s.DB, "SELECT count(*) FROM message WHERE author = ? AND ts = ?", e.Sender, e.TS) > 0 {
 			db.Exec(s.DB, "INSERT OR IGNORE INTO late_file VALUES (?, ?)", e.Sender, e.TS)
 		}
 		db.Exec(s.DB, "INSERT INTO message (author, ts, chat_kind, chat, outgoing, server_ts, json) VALUES (?, ?, ?, ?, ?, ?, ?) "+
@@ -342,6 +393,22 @@ func (s *Store) Apply(raw []byte) (kept bool, err error) {
 		}
 	case "call":
 		return s.call(e), nil
+	case "poll_vote":
+		if e.TargetTS == nil || e.TargetAuthor == nil {
+			return false, nil
+		}
+		opts, _ := json.Marshal(e.Options)
+		if e.Options == nil {
+			opts = []byte("[]")
+		}
+		db.Exec(s.DB, "INSERT INTO poll_vote VALUES (?, ?, ?, ?, ?) ON CONFLICT DO UPDATE SET options = excluded.options, "+
+			"vote_count = excluded.vote_count WHERE excluded.vote_count >= poll_vote.vote_count",
+			*e.TargetAuthor, *e.TargetTS, e.Sender, string(opts), e.VoteCount)
+	case "unreadable":
+		if e.Chat == nil {
+			return false, nil
+		}
+		db.Exec(s.DB, "INSERT OR IGNORE INTO unreadable VALUES (?, ?, ?, ?, ?)", e.Sender, e.TS, e.Chat.Kind, e.Chat.ID, now)
 	case "contacts", "contact":
 		// the book's name and the number stay where presage no longer has them (it names those it
 		// saw in a message after their profile, without their number)
@@ -414,9 +481,11 @@ func (s *Store) call(e event) bool {
 			accepted = 1
 		case "not_accepted":
 			accepted = 0
-		case "delete", "observed", "unknown": // the call log changed, not the call
-			db.Exec(s.DB, "INSERT OR IGNORE INTO call (id, chat_kind, chat, ts, video) VALUES (?, ?, ?, ?, ?)",
-				id, kind, chat, e.TS, db.B(e.Type == "video"))
+		case "delete": // an entry taken off the phone's call log: the call was as it was
+			return false
+		case "observed", "unknown": // the call log saw it, nothing of how it went: no call of its own (a
+			// group call never joined would read as missed); a call known otherwise keeps its direction
+			db.Exec(s.DB, "UPDATE call SET outgoing = coalesce(outgoing, ?) WHERE id = ?", outgoing, id)
 			return true
 		}
 		db.Exec(s.DB, "INSERT INTO call (id, chat_kind, chat, ts, outgoing, video, accepted, result) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "+
@@ -471,9 +540,14 @@ const (
 // still to be asked again; each is counted as asked once more.
 func (s *Store) FailedFiles(since int64) []ref {
 	var out []ref
+	// the tries spaced out (at once, an hour on, six hours on), so that a fault of a while does not
+	// use them all
+	now := time.Now().Unix()
 	db.Each(s.DB, "SELECT m.author, m.ts, m.json FROM message m LEFT JOIN fetch_try f ON f.author = m.author AND f.ts = m.ts "+
-		"WHERE m.ts >= ? AND m.json LIKE '%\"error\":%' AND coalesce(f.tries, 0) < ? ORDER BY m.ts",
-		[]any{since, fetchTries}, func(scan func(...any)) {
+		"LEFT JOIN fetch_at w ON w.author = m.author AND w.ts = m.ts "+
+		"WHERE m.ts >= ? AND m.json LIKE '%\"error\":%' AND coalesce(f.tries, 0) < ? "+
+		"AND coalesce(w.at, 0) <= ? - CASE coalesce(f.tries, 0) WHEN 0 THEN 0 WHEN 1 THEN 3600 ELSE 21600 END ORDER BY m.ts",
+		[]any{since, fetchTries, now}, func(scan func(...any)) {
 			var r ref
 			var js string
 			scan(&r.Author, &r.TS, &js)
@@ -490,6 +564,7 @@ func (s *Store) FailedFiles(since int64) []ref {
 		})
 	for _, r := range out {
 		db.Exec(s.DB, "INSERT INTO fetch_try VALUES (?, ?, 1) ON CONFLICT DO UPDATE SET tries = tries + 1", r.Author, r.TS)
+		db.Exec(s.DB, "INSERT INTO fetch_at VALUES (?, ?, ?) ON CONFLICT DO UPDATE SET at = excluded.at", r.Author, r.TS, now)
 	}
 	return out
 }

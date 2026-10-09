@@ -531,7 +531,10 @@ func TestEditChain(t *testing.T) {
 		map[string]any{"event": "edit", "chat": contact(anna), "sender": fakeOwn, "outgoing": true, "ts": 2100, "target_ts": 2000, "text": "y"},
 		map[string]any{"event": "delete", "chat": contact(anna), "sender": fakeOwn, "outgoing": true, "ts": 2200,
 			"target_author": fakeOwn, "target_ts": 2100},
-		map[string]any{"event": "receipt", "sender": anna, "kind": "read", "timestamps": []any{2100}, "ts": 2300})
+		map[string]any{"event": "receipt", "sender": anna, "kind": "read", "timestamps": []any{2100}, "ts": 2300},
+		// a reply to the last version
+		map[string]any{"event": "message", "chat": contact(anna), "sender": fakeOwn, "outgoing": true, "ts": 3000, "text": "ok",
+			"quote": map[string]any{"ts": 1600, "author": anna, "text": "hello!"}})
 	a, err := archive.Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -542,8 +545,12 @@ func TestEditChain(t *testing.T) {
 	}
 	str := func(q string, args ...any) string { return db.Str(a.DB, q, args...) }
 	num := func(q string, args ...any) int64 { return db.Int(a.DB, q, args...) }
-	if num("SELECT count(*) FROM message") != 2 {
-		t.Fatal("two messages")
+	if num("SELECT count(*) FROM message") != 3 {
+		t.Fatal("three messages")
+	}
+	if num("SELECT count(*) FROM message r JOIN message m ON m.id = r.reply_to WHERE r.key = ? AND m.key = ?",
+		fakeOwn+":3000", anna+":1000") != 1 {
+		t.Fatal("the reply to the edited message")
 	}
 	if got := str("SELECT text FROM message WHERE key = ?", anna+":1000"); got != "hello!" {
 		t.Fatalf("the last edit: %q", got)
@@ -738,8 +745,8 @@ func TestRemovedFromThePhone(t *testing.T) {
 	}
 }
 
-// A file that failed to come is asked again at the next receive, a few times; once it comes, it
-// joins its message, already in the archive.
+// A file that failed to come is asked again at the next receive, a few times, hours apart; once it
+// comes, it joins its message, already in the archive.
 func TestFetchAgain(t *testing.T) {
 	msg := map[string]any{"event": "message", "chat": contact(anna), "sender": anna, "ts": time.Now().UnixMilli(),
 		"attachments": []any{map[string]any{"content_type": "image/jpeg", "error": "timed out"}}}
@@ -747,12 +754,27 @@ func TestFetchAgain(t *testing.T) {
 	p := Plugin{}
 	os.WriteFile(filepath.Join(StoreDir(c), "fetch-fails"), nil, 0o600)
 	num := func(q string) int64 { return db.Int(c.Store().Read(), q) }
-	for range 4 {
+	asked := func() int { return len(lines(t, filepath.Join(StoreDir(c), "fetch.jsonl"))) }
+	later := func() { // the hours between tries pass
+		st, _ := OpenStore(dbPath(c))
+		db.Exec(st.DB, "UPDATE fetch_at SET at = at - 7 * 3600")
+		st.Close()
+	}
+	for range 2 {
 		if err := p.RunImport(c); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if got := len(lines(t, filepath.Join(StoreDir(c), "fetch.jsonl"))); got != fetchTries {
+	if asked() != 1 { // the next try waits
+		t.Fatalf("asked %d times at once", asked())
+	}
+	for range 4 {
+		later()
+		if err := p.RunImport(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := asked(); got != fetchTries {
 		t.Fatalf("asked %d times", got)
 	}
 	if num("SELECT count(*) FROM message") != 1 || num("SELECT count(*) FROM attachment") != 0 {
@@ -762,6 +784,7 @@ func TestFetchAgain(t *testing.T) {
 	os.Remove(filepath.Join(StoreDir(c), "fetch-fails"))
 	st, _ := OpenStore(dbPath(c))
 	db.Exec(st.DB, "DELETE FROM fetch_try")
+	db.Exec(st.DB, "DELETE FROM fetch_at")
 	st.Close()
 	if err := p.RunImport(c); err != nil {
 		t.Fatal(err)
@@ -1159,5 +1182,234 @@ func TestIDs(t *testing.T) {
 	}
 	if strings.Join(s.PNIs(), ",") != pni+",PNI:77777777-7777-7777-7777-777777777777" {
 		t.Fatalf("PNIs %v", s.PNIs())
+	}
+}
+
+// A message that could not be decrypted becomes a note in its chat once a day has passed without
+// the sender's sending it again; one sent again is a message like any other, with no note.
+func TestUnreadable(t *testing.T) {
+	dir := folders(t)
+	path := newArchive(t, dir)
+	s, err := OpenStore(filepath.Join(dir, "cache", "signal", "1", "signal.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.Account(Status{Linked: true, ACI: fakeOwn, Phone: fakePhone})
+	apply(t, s,
+		map[string]any{"event": "unreadable", "sender": anna, "device": 1, "ts": 1000, "chat": contact(anna), "retry": true},
+		map[string]any{"event": "unreadable", "sender": bob, "device": 2, "ts": 2000,
+			"chat": map[string]any{"kind": "group", "id": group}, "retry": true},
+		map[string]any{"event": "unreadable", "sender": fakeOwn, "device": 2, "ts": 2500, "chat": contact(fakeOwn), "retry": true},
+		// bob sent his again; anna's second was a reaction, sent again too
+		map[string]any{"event": "message", "chat": map[string]any{"kind": "group", "id": group}, "sender": bob, "ts": 2000, "text": "again"},
+		map[string]any{"event": "unreadable", "sender": anna, "device": 1, "ts": 2700, "chat": contact(anna), "retry": true},
+		map[string]any{"event": "reaction", "chat": contact(anna), "sender": anna, "ts": 2700, "emoji": "👍",
+			"target_author": fakeOwn, "target_ts": 1},
+	)
+
+	a, err := archive.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	notes := func() int64 {
+		return db.Int(a.DB, "SELECT count(*) FROM message WHERE subtype_code = 'signal:unreadable'")
+	}
+	if _, err := Import(a, s.Path, "", 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if notes() != 0 { // not before a day has passed
+		t.Fatal("a note too early")
+	}
+	db.Exec(s.DB, "UPDATE unreadable SET at = at - 2 * 86400")
+	if _, err := Import(a, s.Path, "", 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if notes() != 1 {
+		t.Fatalf("%d notes", notes())
+	}
+	var chat string
+	db.Row(a.DB, "SELECT c.key FROM message m JOIN conversation c ON c.id = m.conversation_id WHERE m.subtype_code = 'signal:unreadable'",
+		nil, &chat)
+	if chat != anna {
+		t.Fatalf("the note is in %q", chat)
+	}
+	if _, err := Import(a, s.Path, "", 0, nil); err != nil || notes() != 1 {
+		t.Fatalf("again: %v, %d notes", err, notes())
+	}
+}
+
+// A long message is its whole text, also when that came after the message was imported.
+func TestLongText(t *testing.T) {
+	dir := folders(t)
+	path := newArchive(t, dir)
+	s, err := OpenStore(filepath.Join(dir, "cache", "signal", "1", "signal.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.Account(Status{Linked: true, ACI: fakeOwn, Phone: fakePhone})
+	short := map[string]any{"event": "message", "chat": contact(anna), "sender": anna, "ts": 1000, "text": "the beginning",
+		"attachments": []any{map[string]any{"content_type": "text/x-signal-plain", "error": "timed out"}}}
+	apply(t, s, short)
+	a, err := archive.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	text := func() string { return db.Str(a.DB, "SELECT text FROM message WHERE key = ?", Key(anna, 1000)) }
+	if _, err := Import(a, s.Path, "", 0, nil); err != nil || text() != "the beginning" {
+		t.Fatalf("%v %q", err, text())
+	}
+	kind := db.Str(a.DB, "SELECT mk.name FROM message m JOIN message_kind mk ON mk.id = m.kind_id WHERE m.key = ?", Key(anna, 1000))
+	if kind != "text" { // the text's file is not a file of the message
+		t.Fatalf("kind %q", kind)
+	}
+	apply(t, s, map[string]any{"event": "message", "chat": contact(anna), "sender": anna, "ts": 1000,
+		"text": "the beginning and all the rest", "long_text": true, "attachments": []any{}})
+	if _, err := Import(a, s.Path, "", 0, nil); err != nil || text() != "the beginning and all the rest" {
+		t.Fatalf("%v %q", err, text())
+	}
+}
+
+// A call taken off the phone's call log is no call: deleting the entry of one from before this
+// computer was linked does not make a missed call of it.
+func TestCallLogDeletion(t *testing.T) {
+	dir := folders(t)
+	s, err := OpenStore(filepath.Join(dir, "cache", "signal", "1", "signal.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	apply(t, s, map[string]any{"event": "call", "source": "sync", "id": "77", "chat": contact(anna), "ts": 1000,
+		"type": "audio", "direction": "outgoing", "result": "delete"},
+		// a group call only seen on the call log, never joined: no call either
+		map[string]any{"event": "call", "source": "sync", "id": "78", "chat": map[string]any{"kind": "group", "id": group},
+			"ts": 2000, "type": "audio", "direction": "incoming", "result": "observed"})
+	if n := db.Int(s.DB, "SELECT count(*) FROM call"); n != 0 {
+		t.Fatalf("%d calls", n)
+	}
+}
+
+// An edited message's files come again with the edit, under other names: the message has each once.
+func TestEditKeepsFilesOnce(t *testing.T) {
+	dir := folders(t)
+	path := newArchive(t, dir)
+	media := filepath.Join(dir, "cache", "signal", "1", "media")
+	os.MkdirAll(media, 0o700)
+	os.WriteFile(filepath.Join(media, "1000-a.jpg"), []byte("a picture"), 0o600)
+	os.WriteFile(filepath.Join(media, "1500-a.jpg"), []byte("a picture"), 0o600)
+	s, err := OpenStore(filepath.Join(dir, "cache", "signal", "1", "signal.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.Account(Status{Linked: true, ACI: fakeOwn, Phone: fakePhone})
+	pic := func(f string) []any { return []any{map[string]any{"content_type": "image/jpeg", "file": f}} }
+	apply(t, s,
+		map[string]any{"event": "message", "chat": contact(anna), "sender": anna, "ts": 1000, "text": "look", "attachments": pic("1000-a.jpg")})
+	a, err := archive.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if _, err := Import(a, s.Path, media, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	apply(t, s, map[string]any{"event": "edit", "chat": contact(anna), "sender": anna, "ts": 1500, "target_ts": 1000,
+		"text": "look at this", "attachments": pic("1500-a.jpg")})
+	if _, err := Import(a, s.Path, media, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if n := db.Int(a.DB, "SELECT count(*) FROM attachment"); n != 1 {
+		t.Fatalf("%d attachments", n)
+	}
+}
+
+// What notices say: a group's change by its actions, a timer, a pin and what it pinned, a poll with
+// its votes as they are now, a reaction to a story, a message too new for this version.
+func TestNotices(t *testing.T) {
+	dir := folders(t)
+	path := newArchive(t, dir)
+	s, err := OpenStore(filepath.Join(dir, "cache", "signal", "1", "signal.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.Account(Status{Linked: true, ACI: fakeOwn, Phone: fakePhone})
+	g := map[string]any{"kind": "group", "id": group}
+	apply(t, s,
+		map[string]any{"event": "message", "chat": g, "sender": anna, "ts": 1000, "group_change": true,
+			"group_changes": map[string]any{"editor": anna, "actions": []any{
+				map[string]any{"type": "added", "who": bob},
+				map[string]any{"type": "title", "title": "Friends"},
+				map[string]any{"type": "admin", "who": fakeOwn, "on": true}}}},
+		map[string]any{"event": "message", "chat": contact(anna), "sender": fakeOwn, "outgoing": true, "ts": 2000,
+			"expire_timer_update": true, "expire_timer": 0},
+		map[string]any{"event": "message", "chat": contact(anna), "sender": anna, "ts": 3000, "text": "pin me"},
+		map[string]any{"event": "message", "chat": contact(anna), "sender": anna, "ts": 3100,
+			"pin": map[string]any{"target_author": anna, "target_ts": 3000, "seconds": 86400}},
+		map[string]any{"event": "message", "chat": g, "sender": bob, "ts": 4000,
+			"poll": map[string]any{"question": "When?", "options": []any{"Mon", "Tue"}, "multiple": false}},
+		map[string]any{"event": "poll_vote", "chat": g, "sender": anna, "ts": 4100, "target_author": bob, "target_ts": 4000,
+			"options": []any{1}, "vote_count": 1},
+		map[string]any{"event": "poll_vote", "chat": g, "sender": anna, "ts": 4200, "target_author": bob, "target_ts": 4000,
+			"options": []any{0}, "vote_count": 2},
+		map[string]any{"event": "poll_vote", "chat": g, "sender": fakeOwn, "ts": 4300, "target_author": bob, "target_ts": 4000,
+			"options": []any{0}, "vote_count": 1},
+		map[string]any{"event": "message", "chat": contact(anna), "sender": anna, "ts": 5000, "story_reaction": "🔥"},
+		map[string]any{"event": "message", "chat": contact(anna), "sender": anna, "ts": 6000, "unsupported": true},
+	)
+	a, err := archive.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if _, err := Import(a, s.Path, "", 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	notice := func(author string, ts int64) (string, map[string]any) {
+		var code, args string
+		if !db.Row(a.DB, "SELECT n.code, n.args FROM notice n JOIN message m ON m.id = n.message_id WHERE m.key = ?",
+			[]any{Key(author, ts)}, &code, &args) {
+			return "", nil
+		}
+		var v map[string]any
+		json.Unmarshal([]byte(args), &v)
+		return code, v
+	}
+	code, args := notice(anna, 1000)
+	acts, _ := args["actions"].([]any)
+	if code != "group" || len(acts) != 3 || args["by"] == nil {
+		t.Fatalf("group: %s %v", code, args)
+	}
+	if who := acts[2].(map[string]any)["who"].(map[string]any); who["self"] != true {
+		t.Fatalf("the owner in an action: %v", who)
+	}
+	if who := acts[0].(map[string]any)["who"].(map[string]any); who["address"] == nil {
+		t.Fatalf("bob in an action: %v", who)
+	}
+	if code, args := notice(fakeOwn, 2000); code != "timer" || args["seconds"] != float64(0) {
+		t.Fatalf("timer: %s %v", code, args)
+	}
+	if code, args := notice(anna, 3100); code != "pin" || args["seconds"] != float64(86400) {
+		t.Fatalf("pin: %s %v", code, args)
+	}
+	if db.Int(a.DB, "SELECT count(*) FROM message p JOIN message m ON m.id = p.reply_to WHERE p.key = ? AND m.key = ?",
+		Key(anna, 3100), Key(anna, 3000)) != 1 {
+		t.Fatal("the pinned message")
+	}
+	code, args = notice(bob, 4000)
+	opts, _ := args["options"].([]any)
+	if code != "poll" || len(opts) != 2 || opts[0].(map[string]any)["votes"] != float64(2) ||
+		opts[1].(map[string]any)["votes"] != float64(0) {
+		t.Fatalf("poll: %s %v", code, args)
+	}
+	if code, args := notice(anna, 5000); code != "story_reaction" || args["emoji"] != "🔥" {
+		t.Fatalf("story reaction: %s %v", code, args)
+	}
+	if code, _ := notice(anna, 6000); code != "unsupported" {
+		t.Fatalf("unsupported: %s", code)
 	}
 }

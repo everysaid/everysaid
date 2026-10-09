@@ -106,8 +106,10 @@ Signal's name for a message) and `server_ts`.
 | `receipt` | `sender` (who), `kind` (`delivery`, `read`, `viewed`), `timestamps` (the owner's messages) |
 | `read` | `messages: [{author, ts}]`: the owner read them on another device |
 | `call` | `id`; from a call message: `action` (`offer`, `answer`, `busy`, `hangup`), `video`, `hangup` (how); from the phone's call log (`source: "sync"`): `type`, `direction`, `result` (`accepted`, `not_accepted`, ...) |
-| `decryption_error` | `sender`: a message that could not be read |
-| `receive_ended` | `error` (null when it ended by itself), `code`: `unlinked` when Signal refused this device (it was removed from the phone's linked devices) |
+| `decryption_error` | `sender`: they could not decrypt a message sent from here |
+| `unreadable` | `sender`, `device`, `ts`, `chat`, `retry`, `resendable`: a message from them could not be decrypted here; with `retry` the sender was asked to send it again (it then comes with the same `ts`). Not said of what was not to be shown (typing, receipts: content hint implicit) |
+| `number_changed` | `phone`: the account's number (its PNI) is no longer the one this device was linked with; checked once a connection |
+| `receive_ended` | `error` (null when it ended by itself), `code`: `unlinked` when Signal refused this device (it was removed from the phone's linked devices), `outdated` when it refused this version (HTTP 499) |
 
 Typing, stories and Signal's own housekeeping messages are not passed on.
 

@@ -11,8 +11,8 @@ package signal
 // `id` within the service); the ACI then joins the same person. A PNI is its number's, or its
 // ACI's, where Signal told them (the `pni` table), at every import: a chat kept under it before
 // joins the person then. The owner's ACI is an account.
-// What changed on messages the archive has (edits, deletions: marked, the text stays as the
-// archive first had it; reactions: as they are now), receipts of the owner's messages, how far the
+// What changed on messages the archive has (edits: the text as last edited, marked so; deletions:
+// marked, the text stays; reactions: as they are now), receipts of the owner's messages, how far the
 // owner read each chat (on any device) and the calls the phone or the others reported are brought
 // too, and the files the helper fetched go to the media store.
 
@@ -146,6 +146,103 @@ func (p *people) handle(id string) archive.Handle {
 	return archive.H("id", id, Service)
 }
 
+// person is someone in a notice: the owner, or their address ("": nobody).
+func (p *people) person(a *archive.Archive, id, own string) map[string]any {
+	switch id {
+	case "":
+		return nil
+	case own:
+		return map[string]any{"self": true}
+	}
+	return map[string]any{"address": a.Address(p.handle(id))}
+}
+
+// noticeOf is what a message's notice says for the interface (nil: it has none; the codes are in
+// docs/design.md), and the key of the message it is about ("" for none).
+func noticeOf(a *archive.Archive, p *people, own, author string, e event, text string) (*archive.Notice, string) {
+	by := p.person(a, author, own)
+	notice := func(code string, args map[string]any) *archive.Notice {
+		if args == nil {
+			args = map[string]any{}
+		}
+		args["by"] = by
+		return &archive.Notice{Code: code, Args: args}
+	}
+	var pin, unpin pinEv
+	hasPin := len(e.PinRaw) > 0 && string(e.PinRaw) != "null" && json.Unmarshal(e.PinRaw, &pin) == nil
+	hasUnpin := len(e.UnpinRaw) > 0 && string(e.UnpinRaw) != "null" && json.Unmarshal(e.UnpinRaw, &unpin) == nil
+	target := func(t pinEv) string {
+		if t.TargetAuthor == nil {
+			return ""
+		}
+		return Key(*t.TargetAuthor, t.TargetTS)
+	}
+	switch {
+	case e.GroupChanges != nil:
+		actions := []any{}
+		for _, act := range e.GroupChanges.Actions {
+			out := map[string]any{}
+			for k, v := range act {
+				if who, ok := v.(string); ok && k == "who" {
+					out[k] = p.person(a, who, own)
+				} else {
+					out[k] = v
+				}
+			}
+			actions = append(actions, out)
+		}
+		n := notice("group", map[string]any{"actions": actions})
+		n.Args["by"] = p.person(a, e.GroupChanges.Editor, own)
+		return n, ""
+	case e.GroupChange && text == "": // a change that could not be read
+		return notice("group", map[string]any{"actions": []any{}}), ""
+	case e.GroupCall:
+		return notice("group_call", nil), ""
+	case hasPin:
+		return notice("pin", map[string]any{"seconds": pin.Seconds}), target(pin)
+	case hasUnpin:
+		return notice("unpin", nil), target(unpin)
+	case e.ExpireUpdate && text == "":
+		return notice("timer", map[string]any{"seconds": e.ExpireTimer}), ""
+	case e.Payment:
+		return notice("payment", nil), ""
+	case e.Gift:
+		return notice("gift", nil), ""
+	case e.Unsupported:
+		return notice("unsupported", nil), ""
+	case e.PollEnd != nil:
+		return notice("poll_end", nil), Key(author, e.PollEnd.TargetTS)
+	case e.StoryReaction != nil:
+		return notice("story_reaction", map[string]any{"emoji": *e.StoryReaction}), ""
+	case e.StoryReply:
+		return notice("story_reply", nil), ""
+	}
+	return nil, ""
+}
+
+// pollNotice is a poll with its votes as they are now: its question and options, each with how
+// many chose it (each voter's newest vote).
+func pollNotice(e event, votes [][]int64, ended bool) *archive.Notice {
+	counts := make([]int, len(e.Poll.Options))
+	voters := 0
+	for _, v := range votes {
+		if len(v) > 0 { // a vote taken back has none
+			voters++
+		}
+		for _, i := range v {
+			if i >= 0 && int(i) < len(counts) {
+				counts[i]++
+			}
+		}
+	}
+	options := []any{}
+	for i, o := range e.Poll.Options {
+		options = append(options, map[string]any{"text": o, "votes": counts[i]})
+	}
+	return &archive.Notice{Code: "poll", Args: map[string]any{"question": deref(e.Poll.Question), "options": options,
+		"multiple": e.Poll.Multiple, "voters": voters, "ended": ended}}
+}
+
 // mentionName is how a text names someone it mentions: their name, else their number, else the
 // start of their ACI.
 func (p *people) mentionName(aci string) string {
@@ -211,9 +308,13 @@ func describe(e event) (string, *archive.Extras, string) {
 	text := deref(e.Text)
 	sub := func(subtype, code string) { x.Subtype, x.SubtypeCode = subtype, code }
 	kind := "text"
+	// a long message's text as a file (not fetched yet) is its text, not a file of it
+	atts := slices.DeleteFunc(slices.Clone(e.Attachments), func(a attachmentEv) bool {
+		return strings.EqualFold(deref(a.ContentType), "text/x-signal-plain")
+	})
 	switch {
-	case len(e.Attachments) > 0:
-		a := e.Attachments[0]
+	case len(atts) > 0:
+		a := atts[0]
 		ct := strings.ToLower(deref(a.ContentType))
 		switch {
 		case a.Sticker:
@@ -255,6 +356,14 @@ func describe(e event) (string, *archive.Extras, string) {
 			lines = append(lines, "- "+o)
 		}
 		x.Text = strings.Join(lines, "\n")
+	case e.StoryReaction != nil:
+		text = *e.StoryReaction
+	case e.Unsupported:
+		kind = "system"
+		sub("notice", "signal:unsupported")
+	case e.PollEnd != nil:
+		kind = "system"
+		sub("poll", "signal:poll_end")
 	case e.GroupChange && text == "":
 		kind = "system"
 		sub("group event", "signal:group_change")
@@ -449,6 +558,15 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 		}
 		edited := asEdited(&e, edits[key]) // its content as last edited
 		kind, x, text := describe(e)
+		if n, about := noticeOf(a, p, own, r.author, e, text); n != nil {
+			x.Notice = n
+			if about != "" {
+				x.ReplyKey = about
+			}
+		}
+		if x.ReplyKey != "" { // a reply to an edited message names one of its versions: the message is the first
+			x.ReplyKey = root(x.ReplyKey)
+		}
 		x.Edited, x.Deleted = edited, deleted[key]
 		text, toks := withMentions(text, e.Mentions, p.mentionName)
 		var sender int64
@@ -463,7 +581,64 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 		}
 		linkFiles(mid, e.Attachments)
 	}
-	// files that came after their message was imported (fetched again)
+	// messages that could not be decrypted and that their sender did not send again within a day: a
+	// note where they were (the owner's own, from another device, have no chat known)
+	db.Each(d, "SELECT u.author, u.ts, u.chat_kind, u.chat FROM unreadable u WHERE u.at < ? AND u.author != ? "+
+		"AND NOT EXISTS (SELECT 1 FROM message m WHERE m.author = u.author AND m.ts = u.ts) ORDER BY u.ts, u.author",
+		[]any{time.Now().Add(-24 * time.Hour).Unix(), own}, func(scan func(...any)) {
+			var r msgRow
+			scan(&r.author, &r.ts, &r.chatKind, &r.chat)
+			key := "unreadable:" + Key(r.author, r.ts)
+			if skip[r.chat] || a.HasOrigin(src, key, "") {
+				return
+			}
+			a.AddMessage(src, key, archive.Message{Service: Service, ConversationID: conv(r.chatKind, r.chat), TS: r.ts,
+				SenderID: a.Address(p.handle(r.author)), Kind: "system", Key: key,
+				Extras: &archive.Extras{Subtype: "notice", SubtypeCode: "signal:unreadable",
+					Notice: &archive.Notice{Code: "unreadable", Args: map[string]any{"by": p.person(a, r.author, own)}}}})
+			n.Messages++
+		})
+	// polls with their votes as they are now
+	votes := map[string][][]int64{}
+	db.Each(d, "SELECT target_author, target_ts, options FROM poll_vote ORDER BY voter", nil, func(scan func(...any)) {
+		var author, opts string
+		var ts int64
+		scan(&author, &ts, &opts)
+		var v []int64
+		if json.Unmarshal([]byte(opts), &v) == nil {
+			votes[Key(author, ts)] = append(votes[Key(author, ts)], v)
+		}
+	})
+	ended := map[string]bool{} // polls their authors closed
+	for _, r := range rows {
+		var e event
+		if strings.Contains(r.js, `"poll_end":{`) && json.Unmarshal([]byte(r.js), &e) == nil && e.PollEnd != nil {
+			ended[Key(r.author, e.PollEnd.TargetTS)] = true
+		}
+	}
+	for _, r := range rows {
+		if !strings.Contains(r.js, `"poll":{`) {
+			continue
+		}
+		var e event
+		key := Key(r.author, r.ts)
+		if json.Unmarshal([]byte(r.js), &e) != nil || e.Poll == nil {
+			continue
+		}
+		mid, ok := a.MessageByKey(Service, key, 0)
+		if !ok {
+			continue
+		}
+		n := pollNotice(e, votes[key], ended[key])
+		js, _ := json.Marshal(n.Args)
+		var now string
+		a.Row("SELECT args FROM notice WHERE message_id = ?", []any{mid}, &now)
+		if now != string(js) { // written only when the votes changed
+			a.SetNotice(mid, n)
+		}
+	}
+	// files (and a long message's whole text) that came after their message was imported (fetched
+	// again)
 	db.Each(d, "SELECT l.author, l.ts, m.json FROM late_file l JOIN message m ON m.author = l.author AND m.ts = l.ts "+
 		"ORDER BY l.ts, l.author", nil, func(scan func(...any)) {
 		var r msgRow
@@ -474,6 +649,11 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 			return
 		}
 		linkFiles(mid, e.Attachments)
+		if e.LongText && edits[Key(r.author, r.ts)] == "" { // its whole text, fetched after it was imported
+			_, _, text := describe(e)
+			text, _ = withMentions(text, e.Mentions, p.mentionName)
+			n.Changes += len(importers.ApplyChange(a, mid, importers.Change{Text: &text}))
+		}
 	})
 
 	n.Changes += changes(a, d, p, own, ownSet, edits, deleted, root, linkFiles)

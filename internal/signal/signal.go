@@ -138,6 +138,8 @@ func (p Plugin) InfoFacts(c *plugins.Context) []plugins.Fact {
 		connection = "linked: bringing what waited on Signal's server"
 	case phase == "ready":
 		connection = "connected to Signal"
+	case longUnconnected(c):
+		connection = staleText
 	}
 	facts := []plugins.Fact{{Label: "Connection", Value: connection}}
 	if url != "" {
@@ -328,6 +330,7 @@ func (n *conn) event(name string, raw []byte) {
 		if first {
 			n.c.Log("Up to date with Signal", nil)
 			n.k.setPhase(n.c, "ready")
+			n.c.SaveState(M{"connected_at": time.Now().Unix()})
 		}
 		// the phone sends its contacts by itself once linked; where they did not come, asked once
 		// (after the queue: Signal's apps send nothing before they have read what waited)
@@ -368,21 +371,43 @@ func (n *conn) event(name string, raw []byte) {
 			Code  string  `json:"code"`
 		}
 		json.Unmarshal(raw, &e)
-		if e.Code == "unlinked" {
+		switch e.Code {
+		case "unlinked":
 			n.c.Log(removedText, nil)
 			n.c.SaveState(M{"unlinked": true})
 			n.k.setPhase(n.c, "")
+		case "outdated":
+			n.c.Log(outdatedText, nil)
+		case "stopped": // the helper is being stopped (an unlink, the end): no failure
+			return
 		}
 		select {
 		case n.ended <- deref(e.Error):
 		default:
 		}
-	case "decryption_error":
+	case "decryption_error": // the other side could not decrypt one of the owner's messages
 		var e struct {
 			Sender string `json:"sender"`
 		}
 		json.Unmarshal(raw, &e)
-		n.c.Log("a message from {who} could not be read", map[string]any{"who": e.Sender})
+		n.c.Log("{who} could not read a message sent from here", map[string]any{"who": e.Sender})
+	case "number_changed":
+		n.c.Log("Signal's number of this account changed since this computer was linked: what is sent to the new number does not come here (the phone has it); link this computer again (“Unlink this computer”, then link it) for what comes from then on", nil)
+	case "unreadable":
+		var e struct {
+			Sender string `json:"sender"`
+			TS     int64  `json:"ts"`
+			Retry  bool   `json:"retry"`
+		}
+		json.Unmarshal(raw, &e)
+		if e.Retry {
+			n.c.Log("a message from {who} could not be read; they were asked to send it again", map[string]any{"who": e.Sender})
+		} else {
+			n.c.Log("a message from {who} could not be read", map[string]any{"who": e.Sender})
+		}
+		if _, err := n.store.Apply(raw); err != nil {
+			n.c.Log("error: {e}", map[string]any{"e": err})
+		}
 	default:
 		kept, err := n.store.Apply(raw)
 		if err != nil {
@@ -394,6 +419,30 @@ func (n *conn) event(name string, raw []byte) {
 		}
 	}
 }
+
+// staleText says that Signal will soon remove this computer for not connecting.
+const staleText = "not connected for over 20 days: Signal removes a linked device after about 30 days without connecting"
+
+// longUnconnected is whether a linked computer last reached Signal over 20 days ago (Signal removes
+// a linked device after about 30 days without connecting).
+func longUnconnected(c *plugins.Context) bool {
+	var at int64
+	switch v := c.State["connected_at"].(type) { // as saved now, or as read back (JSON)
+	case int64:
+		at = v
+	case float64:
+		at = int64(v)
+	default:
+		return false
+	}
+	return time.Since(time.Unix(at, 0)) > 20*24*time.Hour
+}
+
+// healthyRun is how long a connection ran for its end not to count as a failure.
+const healthyRun = 10 * time.Minute
+
+// outdatedText says that Signal's server refuses this version of the helper.
+const outdatedText = "Signal no longer accepts this version: Everysaid needs an update to connect to Signal again"
 
 // removedText says that the phone removed this computer from the account's linked devices, and the
 // way out.
@@ -589,6 +638,7 @@ func (p Plugin) Live(ctx context.Context, c *plugins.Context) error {
 	if err := n.receive(ctx); err != nil {
 		return err
 	}
+	started := time.Now() // connected
 	if err := importNow(c); err != nil {
 		c.Log("error: {e}", map[string]any{"e": err})
 	}
@@ -608,6 +658,12 @@ func (p Plugin) Live(ctx context.Context, c *plugins.Context) error {
 			}
 			if why == "" {
 				why = "the connection to Signal ended"
+			}
+			// after a good while connected, an end is no failure: the host connects again soon,
+			// not after a pause doubled by every end before
+			if time.Since(started) > healthyRun {
+				c.Log("live: {e}; connecting again", map[string]any{"e": why})
+				return nil
 			}
 			return errs.Plugin(why, 0)
 		case <-n.dirty:
@@ -757,7 +813,7 @@ func unlink(ctx context.Context, c *plugins.Context) error {
 			return err
 		}
 	}
-	c.SaveState(M{"aci": "", "phone": "", "contacts_synced": false, "unlinked": false})
+	c.SaveState(M{"aci": "", "phone": "", "contacts_synced": false, "unlinked": false, "connected_at": nil})
 	k.mu.Lock()
 	k.status, k.linkURL = Status{}, ""
 	k.mu.Unlock()

@@ -140,6 +140,11 @@ func (s *Store) Link(source string, sourceID int64, path, rel string, messageID 
 	} else {
 		digest = sha256File(path)
 	}
+	// the same file once on a message (an edited Signal message comes with its files again, under
+	// other names)
+	if a.Exists("SELECT 1 FROM attachment WHERE message_id = ? AND sha256 = ?", messageID, digest) {
+		return
+	}
 	if !a.Exists("SELECT 1 FROM media WHERE sha256 = ?", digest) {
 		_, ext := splitext(path)
 		stored := "media/" + digest[:2] + "/" + digest + strings.ToLower(ext)
