@@ -635,6 +635,10 @@ receipts of the owner's messages up to it (`read_at` 0: read, when not known).
       (`undecryptable:<id>`, gone when the phone sends it again; imported after a day), as notices.
     - `history_pending` (`direct_path`, `notification`, `tries`, `next_at`): history the phone sent,
       kept until it is downloaded and stored (tried again, up to a day apart).
+    - `pending_changes` (`chat_jid`, `target`, `change` edit or delete, `sender`, `is_from_me`,
+      `content`, `timestamp`): a change of a message the bridge never had (from before it was
+      linked); the import applies it to the archive's message (from the iPhone) where its author
+      made it (a deletion in a group: also an admin).
     - in `messages`, `poll` (JSON: `question`, `options`, `multiple`), and `poll_votes`
       (`chat_jid`, `poll_id`, `voter`, `options`: the SHA-256 of each option chosen, as WhatsApp names
       them, `timestamp`): each voter's newest vote; a poll is imported with its votes.
