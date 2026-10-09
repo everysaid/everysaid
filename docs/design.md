@@ -145,11 +145,16 @@ changes in place).
   else initials. Viber member ids are kept in `viber_member`.
 - **Media**: `media` (by content), `attachment`, `library_link` (pointing to a library instance),
   `media_same` (a copy linked to the kept one), `media_decision` (5).
-- **Text search**: two contentless FTS5 indexes of folded text (`internal/text`: case folded,
-  accents and other marks removed, final sigma made σ, compatibility forms made one), so `καλημερα`
-  finds `Καλημέρα`: `message_fts` by words and `message_tri` by trigrams (parts of words). The
-  archive writes them as it adds a message, not a trigger, so that every connection that writes
-  needs no custom function; the snippet is made from the original text.
+- **Text search**: a contentless FTS5 index of folded text (`internal/text`: case folded, accents
+  and other marks removed, final sigma made σ, compatibility forms made one), so `καλημερα` finds
+  `Καλημέρα`: `message_fts`, the words without their places, and `term`, every word it holds. A
+  part of a word finds the words of `term` that contain it, then the messages that have them; a
+  word with signs inside, or of signs and symbols only, is read through the matcher among the
+  messages the index can narrow it to (`core.WordFilters`). Words are split by SQLite's own
+  tokenizer for the index, `term` and the search alike (`archive.Tokens`, `archive.Words`).
+  The archive writes them as it adds a message, not a trigger, so that every connection that
+  writes needs no custom function; `term` is checked against the index (fts5vocab) when the
+  server starts and after an import. The snippet is made from the original text.
 - **Notices** (`notice`: a message's code and values, JSON) say what a notice or a message's context
   is in a form the interface puts in the user's language, whatever the source: the importers write
   the codes below, and the UI and the MCP read them without knowing the service. A person in the

@@ -15,6 +15,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -154,6 +155,16 @@ func New(o Options) (*Server, error) {
 		return nil, err
 	}
 	if s.Store, err = core.Open(abs); err != nil {
+		return nil, err
+	}
+	// the search's word list as the index has it (an import elsewhere may have stopped half way)
+	if err := s.Store.Write(func(tx *sql.Tx) error {
+		if added, _ := archive.SyncTerms(tx); added > 0 {
+			s.log.Warn("search words missing from the word list, added", "words", added)
+		}
+		return nil
+	}); err != nil {
+		s.Store.Close()
 		return nil, err
 	}
 	if s.Auth, err = OpenAuth(o.AuthDB); err != nil {

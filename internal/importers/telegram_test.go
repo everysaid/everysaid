@@ -106,15 +106,22 @@ func TestTelegramChangesToMessagesThere(t *testing.T) {
 	eq(t, "hidden edit", a.Int("SELECT edited FROM message WHERE key = '10' AND outgoing"), int64(0))
 }
 
-// searchKeys are the keys of the messages the search tables find for a word, by words and by
-// trigrams (each must give the same, for a word long enough to have trigrams).
+// searchKeys are the keys of the messages the search index finds for a word, by the word and by
+// the words of `term` that contain it (the word itself among them: each must give the same).
 func searchKeys(a *archive.Archive, word string) []string {
 	words := db.Strs(a.Tx(), "SELECT m.key FROM message m WHERE m.id IN (SELECT rowid FROM message_fts "+
 		"WHERE message_fts MATCH ?) ORDER BY m.key", word)
-	tri := db.Strs(a.Tx(), "SELECT m.key FROM message m WHERE m.id IN (SELECT rowid FROM message_tri "+
-		"WHERE message_tri MATCH ?) ORDER BY m.key", word)
-	if len([]rune(word)) >= 3 && strings.Join(words, ",") != strings.Join(tri, ",") { // trigrams: 3 or more
-		return append(words, "≠ trigrams: "+strings.Join(tri, ","))
+	terms := db.Strs(a.Tx(), "SELECT term FROM term WHERE instr(term, ?) > 0", word)
+	for i, t := range terms {
+		terms[i] = `"` + t + `"`
+	}
+	var parts []string
+	if len(terms) > 0 {
+		parts = db.Strs(a.Tx(), "SELECT m.key FROM message m WHERE m.id IN (SELECT rowid FROM message_fts "+
+			"WHERE message_fts MATCH ?) ORDER BY m.key", strings.Join(terms, " OR "))
+	}
+	if strings.Join(words, ",") != strings.Join(parts, ",") {
+		return append(words, "≠ parts of words: "+strings.Join(parts, ","))
 	}
 	return words
 }

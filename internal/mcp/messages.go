@@ -14,7 +14,6 @@ import (
 	"everysaid/internal/core"
 	"everysaid/internal/db"
 	"everysaid/internal/errs"
-	"everysaid/internal/text"
 )
 
 type listFilter struct {
@@ -60,20 +59,8 @@ func listMessages(s *core.Store, f listFilter) (any, error) {
 		args = append(append(args, db.Args(addrs)...), db.Args(own)...)
 	}
 	// every word, anywhere, accents and case ignored: as core.Search's default
-	for _, w := range text.NewMatcher(f.query, false, false).Words {
-		folded := text.Fold(strings.TrimRight(w, "*"))
-		if folded == "" {
-			continue
-		}
-		quoted := `"` + strings.ReplaceAll(folded, `"`, `""`) + `"`
-		if len([]rune(folded)) < 3 {
-			where = append(where, "m.id IN (SELECT rowid FROM message_fts WHERE message_fts MATCH ?)")
-			args = append(args, quoted+"*")
-		} else {
-			where = append(where, "m.id IN (SELECT rowid FROM message_tri WHERE message_tri MATCH ?)")
-			args = append(args, quoted)
-		}
-	}
+	words, wordArgs, verify := core.WordFilters(s, f.query, false, false)
+	where, args = append(where, words...), append(args, wordArgs...)
 	if f.service != "" {
 		where = append(where, "m.service_id = (SELECT id FROM service WHERE name = ?)")
 		args = append(args, f.service)
@@ -96,14 +83,30 @@ func listMessages(s *core.Store, f listFilter) (any, error) {
 		order = "ASC"
 	}
 	q := s.Read()
-	total := db.Int(q, "SELECT count(*) FROM message m WHERE "+w, args...)
+	var total int64
 	var rows []core.Item
-	db.Each(q, "SELECT m.id, m.ts FROM message m WHERE "+w+" ORDER BY m.ts "+order+", m.id "+order+" LIMIT ? OFFSET ?",
-		append(args, f.limit, f.offset), func(scan func(...any)) {
-			r := core.Item{Type: "m"}
-			scan(&r.ID, &r.TS)
-			rows = append(rows, r)
-		})
+	if verify == nil {
+		total = db.Int(q, "SELECT count(*) FROM message m WHERE "+w, args...)
+		db.Each(q, "SELECT m.id, m.ts FROM message m WHERE "+w+" ORDER BY m.ts "+order+", m.id "+order+" LIMIT ? OFFSET ?",
+			append(args, f.limit, f.offset), func(scan func(...any)) {
+				r := core.Item{Type: "m"}
+				scan(&r.ID, &r.TS)
+				rows = append(rows, r)
+			})
+	} else { // of what the index finds, those that have the words
+		db.Each(q, "SELECT m.id, m.ts, m.text FROM message m WHERE "+w+" ORDER BY m.ts "+order+", m.id "+order, args,
+			func(scan func(...any)) {
+				r := core.Item{Type: "m"}
+				var txt *string
+				scan(&r.ID, &r.TS, &txt)
+				if txt != nil && verify(*txt) {
+					if total >= int64(f.offset) && len(rows) < f.limit {
+						rows = append(rows, r)
+					}
+					total++
+				}
+			})
+	}
 	return core.M{"total": total, "items": withChats(s, core.Hydrate(s, rows, nil))}, nil
 }
 

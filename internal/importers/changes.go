@@ -42,22 +42,19 @@ func ApplyChange(a *archive.Archive, messageID int64, c Change) []string {
 	return changed
 }
 
-// setText replaces a message's text and its rows in message_fts and message_tri (contentless
-// tables: a row is deleted by its rowid and put in again folded, as Archive.AddMessage does).
+// setText replaces a message's text and its row in the search index (taken out by its rowid and put
+// in again folded, as Archive.AddMessage does).
 func setText(a *archive.Archive, messageID int64, newText string) bool {
 	var old sql.NullString
 	if !a.Row("SELECT text FROM message WHERE id = ?", []any{messageID}, &old) || old.String == newText {
 		return false
 	}
 	if old.String != "" {
-		a.Exec("DELETE FROM message_fts WHERE rowid = ?", messageID)
-		a.Exec("DELETE FROM message_tri WHERE rowid = ?", messageID)
+		a.UnindexText(messageID)
 	}
 	a.Exec("UPDATE message SET text = ? WHERE id = ?", archive.NullStr(newText), messageID)
 	if newText != "" {
-		folded := text.Fold(newText)
-		a.Exec("INSERT INTO message_fts (rowid, text) VALUES (?, ?)", messageID, folded)
-		a.Exec("INSERT INTO message_tri (rowid, text) VALUES (?, ?)", messageID, folded)
+		a.IndexText(messageID, text.Fold(newText))
 	}
 	return true
 }

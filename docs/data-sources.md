@@ -985,7 +985,8 @@ person; a new address starts as a person of its own, until the user merges it.
 | `viber_member` | Viber member id → number, as the sources said |
 | `blocked` | `address_id`, `phone` (the device, or `telegram`, `whatsapp`), `original`: handles blocked on a phone (its export) or a service (its blocklist, kept as it changes) |
 | `spam` | `address_id` PK, `decision` (`removed`: removed as spam, and removed again from what each import brings; `kept`: not spam, not suggested again), `name` (the name it had), `at` |
-| `message_fts`, `message_tri` | contentless FTS5 tables (`contentless_delete=1`), by words (`unicode61`) and by trigrams (parts of words), over the text folded by `text.Fold` (Unicode case folding, which also makes a final sigma σ; combining marks removed in every script; compatibility forms brought to one), rowid = `message.id`; written by `Archive.AddMessage` (a trigger cannot fold); a query is folded the same way (`text.Query`) |
+| `message_fts` | contentless FTS5 table (`contentless_delete=1`, `detail=none`: words without their places), by words (`unicode61`), over the text folded by `text.Fold` (Unicode case folding, which also makes a final sigma σ; combining marks removed in every script; compatibility forms brought to one), rowid = `message.id`; written by `Archive.AddMessage` (a trigger cannot fold); a query is folded the same way (`core.WordFilters`) |
+| `term` | every word `message_fts` holds (`term`), for parts of words: written with the index (`Archive.IndexText`), checked against it (`archive.SyncTerms`, fts5vocab) when the server starts and after an import |
 
 **Media:**
 

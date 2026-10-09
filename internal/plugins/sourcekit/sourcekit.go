@@ -97,6 +97,7 @@ func RunImporters(c *plugins.Context, steps []Step) (msgs, calls [2]int64, err e
 			}
 		}
 		a.Exec("UPDATE source SET instance_id = ? WHERE instance_id IS NULL AND imported_at >= ?", c.ID, t0)
+		archive.SyncTerms(a.Tx())
 		a.Commit()
 		msgs[1] = a.Int("SELECT ifnull(max(id), 0) FROM message")
 		calls[1] = a.Int("SELECT ifnull(max(id), 0) FROM call")

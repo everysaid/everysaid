@@ -114,16 +114,16 @@
    "sha256": "c68b280c665f8d9e2b0d637a470379de0c2acef1ab2ebd6c3e5a39dac37b9d72"
   },
   "message_fts_data": {
-   "rows": 36,
-   "sha256": "1608da5e9a9fd0ed2902965bd5faac62c8b8e6392b0117fa8bb64727d0221450"
+   "rows": 22,
+   "sha256": "5ad5a2e5873f181f0a82ebd3322caf49763013a002a1c49d5ecfb075e62f2006"
   },
   "message_fts_docsize": {
    "rows": 10415,
    "sha256": "e49cbb46fab36d7709815e16f1168e9af707bc906566153491440c397d43ea03"
   },
   "message_fts_idx": {
-   "rows": 34,
-   "sha256": "53c32c54f24cdda66fc1dbc0260ee04edbe0f55722f3c15dec49a42d0684bd49"
+   "rows": 20,
+   "sha256": "ebd7c78491d261fa96bc44e81c90385ee3a72ad6ee758f3db79a554284865479"
   },
   "message_kind": {
    "rows": 11,
@@ -132,26 +132,6 @@
   "message_origin": {
    "rows": 10582,
    "sha256": "7e66a91e8f5ab18347f3c145d5d7939d490d02b09c80ef8793b2632172070fe4"
-  },
-  "message_tri": {
-   "rows": 10415,
-   "sha256": "b15a8c1fed6c60732542cb68d79123553c8dd2fd762d68967ecc3fd2604a0a6e"
-  },
-  "message_tri_config": {
-   "rows": 1,
-   "sha256": "c68b280c665f8d9e2b0d637a470379de0c2acef1ab2ebd6c3e5a39dac37b9d72"
-  },
-  "message_tri_data": {
-   "rows": 137,
-   "sha256": "cc4f3c1db5f7822a92c7187e03bafa2b948972de72ec78f6699b48df6b6e0a85"
-  },
-  "message_tri_docsize": {
-   "rows": 10415,
-   "sha256": "75564b91b1f9d7c59b790e099876b08f1d23b90c375449d9220003104fb0b09e"
-  },
-  "message_tri_idx": {
-   "rows": 135,
-   "sha256": "a78ff64a82c0cee12db924d2486e1e84270b402167bc3219f8db3157263c6c6c"
   },
   "name_guess": {
    "rows": 0,
@@ -204,6 +184,10 @@
   "state_report": {
    "rows": 1,
    "sha256": "461e3ac6e8e83c2510fb0d55e5cdb6b80f62ecf9da61506aa31bcc5124e8693e"
+  },
+  "term": {
+   "rows": 187,
+   "sha256": "b36503a6ace1665595b75c699f0a2e2db18acc4b4e5226351d39cedde738a834"
   },
   "viber_member": {
    "rows": 0,

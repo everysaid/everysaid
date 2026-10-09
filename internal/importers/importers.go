@@ -118,5 +118,7 @@ func Run(a *archive.Archive, names []string, out func(string)) (err error) {
 			return err
 		}
 	}
+	archive.SyncTerms(a.Tx())
+	a.Commit()
 	return nil
 }

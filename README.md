@@ -390,7 +390,8 @@ Schema (`internal/archive`):
   user chose), `setting` (the user's, shared by every device), `media_decision` (keep, remove, to the
   library; the newest counts), `message.status` (messages sent from the app). Also: mentions,
   receipts, blocked handles and those removed as spam (`spam`), the user's merges of people and groups, labels and name guesses
-  (`label`, `person_label`, `name_guess`), and a trigram index (`message_tri`) for parts of words.
+  (`label`, `person_label`, `name_guess`), and the list of the index's words (`term`) for parts of
+  words.
   Until the first
   release the schema changes in place, without migrations.
 

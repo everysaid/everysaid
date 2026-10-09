@@ -337,10 +337,11 @@ CREATE TABLE IF NOT EXISTS analysis (   -- the people the local analysis has rea
     models TEXT NOT NULL,               -- which models read it
     at INTEGER NOT NULL
 );
-CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(
-    text, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
-CREATE VIRTUAL TABLE IF NOT EXISTS message_tri USING fts5(     -- the same text in trigrams: parts of words
-    text, content='', contentless_delete=1, tokenize='trigram');
+CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(     -- each message's words, without their places
+    text, content='', contentless_delete=1, detail=none, tokenize='unicode61 remove_diacritics 2');
+CREATE TABLE IF NOT EXISTS term (       -- every word message_fts holds: a part of a word finds the words
+    term TEXT PRIMARY KEY               -- that contain it (terms.go)
+) WITHOUT ROWID;
 CREATE TRIGGER IF NOT EXISTS message_subtype_insert BEFORE INSERT ON message WHEN new.subtype IS NOT NULL AND NOT EXISTS (SELECT 1 FROM vocabulary WHERE field = 'message.subtype' AND name = new.subtype) BEGIN SELECT RAISE(ABORT, 'message.subtype not in the vocabulary'); END;
 CREATE TRIGGER IF NOT EXISTS message_subtype_update BEFORE UPDATE OF subtype ON message WHEN new.subtype IS NOT NULL AND NOT EXISTS (SELECT 1 FROM vocabulary WHERE field = 'message.subtype' AND name = new.subtype) BEGIN SELECT RAISE(ABORT, 'message.subtype not in the vocabulary'); END;
 CREATE TRIGGER IF NOT EXISTS call_detail_insert BEFORE INSERT ON call WHEN new.detail IS NOT NULL AND NOT EXISTS (SELECT 1 FROM vocabulary WHERE field = 'call.detail' AND name = new.detail) BEGIN SELECT RAISE(ABORT, 'call.detail not in the vocabulary'); END;

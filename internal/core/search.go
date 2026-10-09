@@ -109,9 +109,8 @@ func (o SearchOptions) limit() int {
 }
 
 // Search is the messages whose text has every word of q, newest first, with the chat they are in
-// and the matches marked (a word of one or two letters: at the start of words, which is what an
-// index of trigrams cannot do). Without words but with dates: everything of those days, calls too,
-// oldest first (see Between).
+// and the matches marked (a word of one or two letters: at the start of words; WordFilters). Without
+// words but with dates: everything of those days, calls too, oldest first (see Between).
 func Search(s *Store, q string, o SearchOptions) (M, error) {
 	m := text.NewMatcher(q, o.Case, o.Whole)
 	if o.ChatID != "" {
@@ -123,25 +122,7 @@ func Search(s *Store, q string, o SearchOptions) (M, error) {
 		}
 		return Between(s, o)
 	}
-	var where []string
-	var args []any
-	for _, w := range m.Words {
-		folded := text.Fold(strings.TrimRight(w, "*"))
-		if folded == "" {
-			continue
-		}
-		if o.Whole || len([]rune(folded)) < 3 {
-			where = append(where, "m.id IN (SELECT rowid FROM message_fts WHERE message_fts MATCH ?)")
-			if o.Whole {
-				args = append(args, text.Query(w))
-			} else {
-				args = append(args, `"`+strings.ReplaceAll(folded, `"`, `""`)+`"*`)
-			}
-		} else {
-			where = append(where, "m.id IN (SELECT rowid FROM message_tri WHERE message_tri MATCH ?)")
-			args = append(args, `"`+strings.ReplaceAll(folded, `"`, `""`)+`"`)
-		}
-	}
+	where, args, verify := WordFilters(s, q, o.Case, o.Whole)
 	if len(where) == 0 {
 		return M{"items": []M{}, "total": 0}, nil
 	}
@@ -196,7 +177,7 @@ func Search(s *Store, q string, o SearchOptions) (M, error) {
 	var total int64
 	var rows []Item
 	limit := o.limit()
-	if o.Case { // the index is folded: of what it finds, those written as typed
+	if o.Case || verify != nil { // of what the index finds, those that have the words (as typed, with Case)
 		type found struct{ id, ts, conv int64 }
 		var all []found
 		db.Each(q2, "SELECT m.id, m.ts, m.conversation_id, m.text FROM message m WHERE "+every+" ORDER BY m.ts DESC", args,
@@ -204,7 +185,7 @@ func Search(s *Store, q string, o SearchOptions) (M, error) {
 				var f found
 				var txt *string
 				scan(&f.id, &f.ts, &f.conv, &txt)
-				if txt != nil && m.Matches(*txt) {
+				if txt != nil && (verify == nil || verify(*txt)) && (!o.Case || m.Matches(*txt)) {
 					all = append(all, f)
 				}
 			})
