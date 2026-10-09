@@ -389,3 +389,23 @@ func TestIphoneGroupNotices(t *testing.T) {
 	eq(t, "added", []any{len(n.Args["actions"].([]any)), n.Args["by"] != nil}, []any{2, true})
 	eq(t, "unknown kinds stay", iphoneGroupNotice(a, person, own, 2, "15559990001@s.whatsapp.net", nil) == nil, true)
 }
+
+// An edit and a deletion of messages the bridge never had (the archive has them from elsewhere),
+// applied where the one who made them wrote the message; another's edit is not.
+func TestBridgePendingChanges(t *testing.T) {
+	a, _ := newArchive(t)
+	path, d := bridgeDB(t, t.TempDir(), newBridgeSchema+`
+		CREATE TABLE pending_changes (chat_jid TEXT, target TEXT, change TEXT, sender TEXT, is_from_me BOOLEAN,
+			content TEXT, timestamp TIMESTAMP, PRIMARY KEY (chat_jid, target, change));`)
+	waMessage(d, "THEIRS", 1, "teh text", 0, nil)
+	waMessage(d, "MINE", 2, "mine", 1, nil)
+	waMessage(d, "GONE", 3, "oops", 0, nil)
+	runBridge(t, a, path)
+	db.Exec(d, "INSERT INTO pending_changes VALUES (?, 'THEIRS', 'edit', ?, 0, 'the text', ?)", waPeer, waPeer, waTS(4))
+	db.Exec(d, "INSERT INTO pending_changes VALUES (?, 'MINE', 'edit', ?, 0, 'not theirs to edit', ?)", waPeer, waPeer, waTS(5))
+	db.Exec(d, "INSERT INTO pending_changes VALUES (?, 'GONE', 'delete', ?, 0, '', ?)", waPeer, waPeer, waTS(6))
+	runBridge(t, a, path)
+	eq(t, "edited", msgRow(a, "THEIRS", "text, edited"), []any{"the text", int64(1)})
+	eq(t, "not another's", msgRow(a, "MINE", "text, edited"), []any{"mine", int64(0)})
+	eq(t, "deleted", msgRow(a, "GONE", "deleted")[0], int64(1))
+}

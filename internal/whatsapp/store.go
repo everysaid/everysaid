@@ -111,6 +111,9 @@ func (store *MessageStore) create() error {
 	if err := store.migrateHistory(); err != nil {
 		return fmt.Errorf("failed to create the history table: %v", err)
 	}
+	if err := store.migratePending(); err != nil {
+		return fmt.Errorf("failed to create the pending changes table: %v", err)
+	}
 	return nil
 }
 

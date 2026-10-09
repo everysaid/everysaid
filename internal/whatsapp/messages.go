@@ -584,6 +584,8 @@ func processMessage(client *whatsmeow.Client, store *MessageStore, evt *events.M
 					messageText(edited), nullable(strings.Join(mentions, ",")), pm.GetKey().GetID(), chat); err != nil {
 					logger.Warnf("Failed to store edit: %v", err)
 				}
+			} else if chat == "" {
+				store.pendChange(evt, pm.GetKey().GetID(), "edit", messageText(edited))
 			}
 		case waE2E.ProtocolMessage_EPHEMERAL_SETTING: // the timer of a chat (a group's comes as its change)
 			if evt.Info.Chat.Server != types.GroupServer {
@@ -597,6 +599,8 @@ func processMessage(client *whatsmeow.Client, store *MessageStore, evt *events.M
 					pm.GetKey().GetID(), chat); err != nil {
 					logger.Warnf("Failed to store deletion: %v", err)
 				}
+			} else if chat == "" {
+				store.pendChange(evt, pm.GetKey().GetID(), "delete", "")
 			}
 		}
 		return true

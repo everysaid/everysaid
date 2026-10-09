@@ -228,6 +228,39 @@ func bridgeChanges(a *archive.Archive, bridge *sql.DB, person *waPeople, own map
 			}
 		}
 	}
+	// changes of messages the bridge never had (from before it was linked: the archive has them from
+	// the iPhone), where the one who made them wrote the message (or, a deletion, in a group: an admin)
+	if hasTable(bridge, "pending_changes") {
+		for _, r := range maps(bridge, "SELECT "+selectAll(bridge, "pending_changes", "")+" FROM pending_changes ORDER BY timestamp") {
+			mid, ok := a.MessageByKey("whatsapp", str(r["target"]), 0)
+			if !ok || mid == 0 {
+				continue
+			}
+			var outgoing bool
+			var sender sql.NullInt64
+			a.Row("SELECT outgoing, sender_id FROM message WHERE id = ?", []any{mid}, &outgoing, &sender)
+			deletion := str(r["change"]) == "delete"
+			author := outgoing && truthy(r["is_from_me"])
+			if !outgoing && !truthy(r["is_from_me"]) {
+				if h, ok := person.of(str(r["sender"])); ok {
+					author = sender.Valid && a.Address(h) == sender.Int64
+				}
+				group := strings.HasSuffix(str(r["chat_jid"]), "@g.us")
+				author = author || (!group && !sender.Valid)
+			}
+			if !author && !(deletion && strings.HasSuffix(str(r["chat_jid"]), "@g.us")) {
+				continue
+			}
+			c := Change{Deleted: deletion}
+			if !deletion {
+				t := str(r["content"])
+				c.Text, c.Edited = &t, true
+			}
+			for _, k := range ApplyChange(a, mid, c) {
+				out[k]++
+			}
+		}
+	}
 	for _, k := range order {
 		mid, ok := a.MessageByKey("whatsapp", k.message, 0)
 		if !ok || mid == 0 {

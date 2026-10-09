@@ -157,3 +157,29 @@ func historyVotes(client *whatsmeow.Client, store *MessageStore, chat types.JID,
 		}
 	}
 }
+
+// migratePending makes pending_changes: an edit or a deletion of a message this store does not have
+// (one from before the device was linked, which the archive may have from the iPhone), for the
+// import to apply where the author matches.
+func (store *MessageStore) migratePending() error {
+	_, err := store.db.Exec(`
+		CREATE TABLE IF NOT EXISTS pending_changes (
+			chat_jid TEXT,
+			target TEXT,              -- the message changed
+			change TEXT,              -- edit, delete
+			sender TEXT,              -- who did it
+			is_from_me BOOLEAN,
+			content TEXT,             -- an edit's new text
+			timestamp TIMESTAMP,
+			PRIMARY KEY (chat_jid, target, change)
+		);
+	`)
+	return err
+}
+
+// pendChange keeps a change of a message not in the store (the newest edit).
+func (store *MessageStore) pendChange(evt *events.Message, target, change, content string) {
+	store.db.Exec(`INSERT INTO pending_changes VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (chat_jid, target, change)
+		DO UPDATE SET content = excluded.content, timestamp = excluded.timestamp WHERE excluded.timestamp >= pending_changes.timestamp`,
+		evt.Info.Chat.String(), target, change, evt.Info.Sender.ToNonAD().String(), evt.Info.IsFromMe, content, evt.Info.Timestamp)
+}
