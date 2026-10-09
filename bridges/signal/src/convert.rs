@@ -4,7 +4,8 @@
 
 use base64::prelude::*;
 use presage::libsignal_service::content::ContentBody;
-use presage::libsignal_service::prelude::{GroupMasterKey, GroupSecretParams, Uuid};
+use presage::libsignal_service::groups_v2::{AccessRequired, GroupChange, GroupOperations, Role};
+use presage::libsignal_service::prelude::{GroupMasterKey, GroupSecretParams, ProtobufMessage, Uuid};
 use presage::libsignal_service::protocol::ServiceId;
 use presage::proto::{
     body_range, call_message, data_message, receipt_message, sync_message, AttachmentPointer,
@@ -38,6 +39,9 @@ impl Converted {
         Converted { event, attachments: vec![], group: None }
     }
 }
+
+/// The type of the file that carries a long message's whole text (its body has the first 2 KiB).
+pub const LONG_TEXT: &str = "text/x-signal-plain";
 
 /// A group's id as Signal's apps show it (base64 of the identifier derived from its master key);
 /// the master key itself, which lets one read the group, never leaves the helper.
@@ -97,6 +101,11 @@ pub fn convert(meta: &Meta, body: &ContentBody, own: &str) -> Vec<Converted> {
                 Some(k) => (group_chat(&k), Some(k)),
                 None => (contact_chat(peer), None),
             };
+            // a message names itself by the time it was sent, which its envelope says too: one that
+            // says another is not taken (Signal Desktop: "Timestamp mismatch")
+            if meta.sender != own && dm.timestamp.is_some_and(|t| t != meta.ts) {
+                return vec![];
+            }
             let ts = dm.timestamp.unwrap_or(meta.ts);
             data_events(meta, dm, &meta.sender, meta.sender == own, chat, group, ts)
         }
@@ -105,12 +114,18 @@ pub fn convert(meta: &Meta, body: &ContentBody, own: &str) -> Vec<Converted> {
                 Some(k) => (group_chat(&k), Some(k)),
                 None => (contact_chat(peer), None),
             };
+            // as a message, the edit's new content names itself by its envelope's time
+            if meta.sender != own && dm.timestamp.is_some_and(|t| t != meta.ts) {
+                return vec![];
+            }
             edit_event(meta, dm, &meta.sender, meta.sender == own, chat, group, *target)
         }
-        ContentBody::SynchronizeMessage(sm) => sync_events(meta, sm, own),
+        // only from the owner's own account: from anyone else it would forge what the owner sent
+        ContentBody::SynchronizeMessage(sm) if meta.sender == own => sync_events(meta, sm, own),
         ContentBody::CallMessage(cm) => call_events(meta, cm, own),
         ContentBody::ReceiptMessage(rm) => receipt_event(meta, rm),
-        // typing, stories, null messages (padding, or a session reset) and failures: nothing to keep
+        // typing, stories, null messages (padding, or a session reset), failures and sync messages
+        // from others: nothing to keep
         _ => vec![],
     };
     // someone the owner wrote to by number answers from their ACI with a signature of that number's
@@ -142,6 +157,31 @@ fn data_events(
     ts: u64,
 ) -> Vec<Converted> {
     let mut m = base(meta, sender, outgoing, chat, ts);
+    // the group's revision the sender saw, on every event of a group (main.rs checks the sender
+    // was a member against a group at least that recent)
+    if let Some(r) = dm.group_v2.as_ref().and_then(|g| g.revision) {
+        m.insert("group_revision".into(), json!(r));
+    }
+    // a reaction to a story is a message of its own (the story is not kept)
+    if let (Some(r), Some(_)) = (&dm.reaction, &dm.story_context) {
+        if r.remove == Some(true) {
+            return vec![];
+        }
+        m.insert("story_reaction".into(), json!(r.emoji));
+        return vec![Converted { event: event("message", Value::Object(m)), attachments: vec![], group }];
+    }
+    if let Some(v) = &dm.poll_vote {
+        m.insert("target_author".into(), json!(aci(None, v.target_author_aci_binary.as_ref())));
+        m.insert("target_ts".into(), json!(v.target_sent_timestamp));
+        m.insert("options".into(), json!(v.option_indexes));
+        m.insert("vote_count".into(), json!(v.vote_count.unwrap_or(0)));
+        return vec![Converted { event: event("poll_vote", Value::Object(m)), attachments: vec![], group }];
+    }
+    // made by a version of Signal newer than this one knows: kept as such (Signal Desktop does too)
+    if dm.required_protocol_version.is_some_and(|v| v > data_message::ProtocolVersion::Polls as u32 /* CURRENT */) {
+        m.insert("unsupported".into(), json!(true));
+        return vec![Converted { event: event("message", Value::Object(m)), attachments: vec![], group }];
+    }
     if let Some(r) = &dm.reaction {
         m.insert("emoji".into(), json!(r.emoji));
         m.insert("remove".into(), json!(r.remove.unwrap_or(false)));
@@ -185,9 +225,9 @@ fn edit_event(
 
 /// Whether a message event carries anything beyond who and when.
 fn has_content(m: &Map<String, Value>) -> bool {
-    const FIELDS: [&str; 12] = [
+    const FIELDS: [&str; 13] = [
         "text", "attachments", "contacts", "poll", "group_change", "group_call", "expire_timer_update",
-        "pin", "unpin", "payment", "gift", "quote",
+        "pin", "unpin", "payment", "gift", "quote", "poll_end",
     ];
     FIELDS.iter().any(|f| match m.get(*f) {
         None | Some(Value::Null) | Some(Value::Bool(false)) => false,
@@ -284,7 +324,17 @@ fn message_fields(m: &mut Map<String, Value>, dm: &DataMessage) -> Vec<Attachmen
         );
     }
     if dm.group_v2.as_ref().is_some_and(|g| g.group_change.is_some()) {
-        m.insert("group_change".into(), json!(true));
+        match group_changes(dm.group_v2.as_ref()) {
+            // only what the apps do not show (a new profile key, labels): no change to tell
+            Some(c) if c["actions"].as_array().is_some_and(|a| a.is_empty()) => {}
+            Some(c) => {
+                m.insert("group_change".into(), json!(true));
+                m.insert("group_changes".into(), c);
+            }
+            None => {
+                m.insert("group_change".into(), json!(true)); // a change that could not be read
+            }
+        }
     }
     if let Some(g) = &dm.group_v2 {
         if let Some(r) = g.revision {
@@ -298,7 +348,10 @@ fn message_fields(m: &mut Map<String, Value>, dm: &DataMessage) -> Vec<Attachmen
     if flags & data_message::Flags::ExpirationTimerUpdate as u32 != 0 {
         m.insert("expire_timer_update".into(), json!(true));
     }
-    if let Some(t) = dm.expire_timer.filter(|t| *t > 0) {
+    // the timer a message carries; with its update, also when it was turned off (0)
+    if flags & data_message::Flags::ExpirationTimerUpdate as u32 != 0 {
+        m.insert("expire_timer".into(), json!(dm.expire_timer.unwrap_or(0)));
+    } else if let Some(t) = dm.expire_timer.filter(|t| *t > 0) {
         m.insert("expire_timer".into(), json!(t));
     }
     if flags & data_message::Flags::Forward as u32 != 0 {
@@ -308,10 +361,19 @@ fn message_fields(m: &mut Map<String, Value>, dm: &DataMessage) -> Vec<Attachmen
         m.insert("view_once".into(), json!(true));
     }
     if let Some(p) = &dm.pin_message {
+        // for how long (null: for good)
+        let seconds = match p.pin_duration {
+            Some(data_message::pin_message::PinDuration::PinDurationSeconds(s)) => Some(s),
+            _ => None,
+        };
         m.insert(
             "pin".into(),
-            json!({"target_author": aci(None, p.target_author_aci_binary.as_ref()), "target_ts": p.target_sent_timestamp}),
+            json!({"target_author": aci(None, p.target_author_aci_binary.as_ref()), "target_ts": p.target_sent_timestamp,
+                "seconds": seconds}),
         );
+    }
+    if let Some(t) = &dm.poll_terminate {
+        m.insert("poll_end".into(), json!({"target_ts": t.target_sent_timestamp}));
     }
     if let Some(p) = &dm.unpin_message {
         m.insert(
@@ -329,6 +391,73 @@ fn message_fields(m: &mut Map<String, Value>, dm: &DataMessage) -> Vec<Attachmen
         m.insert("story_reply".into(), json!(true));
     }
     pointers
+}
+
+/// A group's change, as its actions (Signal's apps show one line for each): `{"editor", "actions"}`,
+/// each action `{"type", ...}` with people by ACI (or PNI for one invited by number). None where the
+/// change cannot be read (it is then only a change, as before).
+fn group_changes(group: Option<&GroupContextV2>) -> Option<Value> {
+    let key = master_key(&group.cloned())?;
+    let bytes = group?.group_change.as_ref()?;
+    let ops = GroupOperations::new(GroupSecretParams::derive_from_master_key(GroupMasterKey::new(key)));
+    let change = <presage::proto::GroupChange as ProtobufMessage>::decode(bytes.as_slice()).ok()?;
+    let changes = ops.decrypt_group_change(change).ok()?;
+    let editor = changes.editor.service_id_string();
+    let id = |s: ServiceId| s.service_id_string();
+    let aci = |a| id(ServiceId::Aci(a));
+    let level = |l: AccessRequired| match l {
+        AccessRequired::Any => "anyone",
+        AccessRequired::Member => "members",
+        AccessRequired::Administrator => "admins",
+        AccessRequired::Unsatisfiable => "off",
+        AccessRequired::Unknown => "unknown",
+    };
+    let actions: Vec<Value> = changes
+        .changes
+        .into_iter()
+        .filter_map(|c| {
+            Some(match c {
+                GroupChange::NewMember(m) if aci(m.aci) == editor => json!({"type": "joined_link", "who": editor}),
+                GroupChange::NewMember(m) => json!({"type": "added", "who": aci(m.aci)}),
+                GroupChange::DeleteMember(a) if aci(a) == editor => json!({"type": "left", "who": editor}),
+                GroupChange::DeleteMember(a) => json!({"type": "removed", "who": aci(a)}),
+                GroupChange::ModifyMemberRole { aci: a, role } => {
+                    json!({"type": "admin", "who": aci(a), "on": role == Role::Administrator})
+                }
+                GroupChange::NewPendingMember(p) => json!({"type": "invited", "who": id(p.address)}),
+                GroupChange::DeletePendingMember(s) if id(s) == editor => json!({"type": "invite_declined", "who": id(s)}),
+                GroupChange::DeletePendingMember(s) => json!({"type": "invite_revoked", "who": id(s)}),
+                GroupChange::PromotePendingMember { address, .. } => json!({"type": "invite_accepted", "who": id(address)}),
+                GroupChange::PromotePendingPniAciMemberProfileKey(p) => {
+                    json!({"type": "invite_accepted", "who": aci(p.aci)})
+                }
+                GroupChange::NewRequestingMember(r) => json!({"type": "requested", "who": aci(r.aci)}),
+                GroupChange::DeleteRequestingMember(a) if aci(a) == editor => {
+                    json!({"type": "request_withdrawn", "who": editor})
+                }
+                GroupChange::DeleteRequestingMember(a) => json!({"type": "request_denied", "who": aci(a)}),
+                GroupChange::PromoteRequestingMember { aci: a, .. } => json!({"type": "request_approved", "who": aci(a)}),
+                GroupChange::Title(t) => json!({"type": "title", "title": t}),
+                GroupChange::Avatar(a) if a.is_empty() => json!({"type": "avatar", "removed": true}),
+                GroupChange::Avatar(_) => json!({"type": "avatar"}),
+                GroupChange::Timer(t) => json!({"type": "timer", "seconds": t.map_or(0, |t| t.duration)}),
+                GroupChange::Description(d) => json!({"type": "description", "text": d}),
+                GroupChange::AttributeAccess(l) => json!({"type": "access_info", "level": level(l)}),
+                GroupChange::MemberAccess(l) => json!({"type": "access_members", "level": level(l)}),
+                GroupChange::InviteLinkAccess(l) => json!({"type": "access_link", "level": level(l)}),
+                GroupChange::InviteLinkPassword(_) => json!({"type": "link_reset"}),
+                GroupChange::AnnouncementOnly(on) => json!({"type": "announcements", "on": on}),
+                GroupChange::AddBannedMember(b) => json!({"type": "banned", "who": id(b.user_id)}),
+                GroupChange::DeleteBannedMember(s) => json!({"type": "unbanned", "who": id(s)}),
+                GroupChange::TerminateGroup => json!({"type": "ended"}),
+                // a new profile key, member labels and who may set them: nothing the apps show
+                GroupChange::ModifyMemberProfileKey { .. }
+                | GroupChange::MemberLabel { .. }
+                | GroupChange::MemberLabelAccess(_) => return None,
+            })
+        })
+        .collect();
+    Some(json!({"editor": editor, "actions": actions}))
 }
 
 fn sync_events(meta: &Meta, sm: &SyncMessage, own: &str) -> Vec<Converted> {
@@ -532,7 +661,7 @@ pub fn attachment_name(ts: u64, author: &str, index: usize, content_type: Option
             "audio/mp4" => Some("m4a"),
             "video/mp4" => Some("mp4"),
             "image/webp" => Some("webp"),
-            "text/x-signal-plain" => Some("txt"),
+            LONG_TEXT => Some("txt"),
             _ => None,
         };
         known.map(str::to_string).or_else(|| {
@@ -599,7 +728,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let mut out = convert(&meta(ANNA), &ContentBody::DataMessage(dm), ME);
+        let mut out = convert(&Meta { ts: 2000, ..meta(ANNA) }, &ContentBody::DataMessage(dm.clone()), ME);
         let c = out.remove(0);
         assert_eq!(c.group, Some(key));
         assert_eq!(c.attachments.len(), 1);
@@ -612,6 +741,8 @@ mod tests {
         assert_eq!(e["attachments"][0]["voice"], true);
         assert_eq!(e["attachments"][0]["file"], Value::Null);
         assert_eq!(e["group_revision"], 3);
+        // an envelope of another time than the message says is not taken
+        assert!(convert(&meta(ANNA), &ContentBody::DataMessage(dm), ME).is_empty());
     }
 
     #[test]
@@ -638,8 +769,10 @@ mod tests {
             target_sent_timestamp: Some(700),
             data_message: Some(DataMessage { body: Some("fixed".into()), timestamp: Some(1100), ..Default::default() }),
         };
-        let e = one(&meta(ANNA), ContentBody::EditMessage(edit));
+        let e = one(&Meta { ts: 1100, ..meta(ANNA) }, ContentBody::EditMessage(edit.clone()));
         assert_eq!((e["event"].as_str(), e["target_ts"].as_u64(), e["text"].as_str(), e["ts"].as_u64()), (Some("edit"), Some(700), Some("fixed"), Some(1100)));
+        // an envelope of another time than the edit says is not taken
+        assert!(convert(&meta(ANNA), &ContentBody::EditMessage(edit), ME).is_empty());
     }
 
     #[test]
@@ -733,9 +866,11 @@ mod tests {
             read: vec![Read { sender_aci: Some(ANNA.into()), timestamp: Some(500), ..Default::default() }],
             ..Default::default()
         };
-        let e = one(&meta(ME), ContentBody::SynchronizeMessage(sm));
+        let e = one(&meta(ME), ContentBody::SynchronizeMessage(sm.clone()));
         assert_eq!(e["event"], "read");
         assert_eq!(e["messages"], json!([{"author": ANNA, "ts": 500}]));
+        // a sync message from someone else is a forgery
+        assert!(convert(&meta(BOB), &ContentBody::SynchronizeMessage(sm), ME).is_empty());
 
         let rm = ReceiptMessage { r#type: Some(receipt_message::Type::Read as i32), timestamp: vec![1, 2] };
         let e = one(&meta(ANNA), ContentBody::ReceiptMessage(rm));
@@ -854,5 +989,56 @@ mod tests {
         assert_eq!(attachment_name(5, ANNA, 1, Some("x/y"), Some("Report.PDF")), "5-22222222-1.pdf");
         assert_eq!(attachment_name(5, ANNA, 2, None, Some("../../etc")), "5-22222222-2");
         assert_eq!(attachment_name(5, "PNI:abc", 0, None, None), "5-PNIabc-0");
+    }
+
+    #[test]
+    fn notices_and_votes() {
+        use presage::proto::data_message::{pin_message, PinMessage, PollVote, Reaction, StoryContext};
+        // a timer turned off says 0
+        let dm = DataMessage {
+            flags: Some(data_message::Flags::ExpirationTimerUpdate as u32),
+            timestamp: Some(1000),
+            ..Default::default()
+        };
+        let e = one(&meta(ANNA), ContentBody::DataMessage(dm));
+        assert_eq!((e["expire_timer_update"].as_bool(), e["expire_timer"].as_u64()), (Some(true), Some(0)));
+        // a pin for a day
+        let dm = DataMessage {
+            pin_message: Some(PinMessage {
+                target_author_aci_binary: Some(Uuid::parse_str(ANNA).unwrap().as_bytes().to_vec()),
+                target_sent_timestamp: Some(500),
+                pin_duration: Some(pin_message::PinDuration::PinDurationSeconds(86400)),
+            }),
+            timestamp: Some(1000),
+            ..Default::default()
+        };
+        assert_eq!(one(&meta(ANNA), ContentBody::DataMessage(dm))["pin"]["seconds"], 86400);
+        // a vote
+        let dm = DataMessage {
+            poll_vote: Some(PollVote {
+                target_author_aci_binary: Some(Uuid::parse_str(BOB).unwrap().as_bytes().to_vec()),
+                target_sent_timestamp: Some(700),
+                option_indexes: vec![1],
+                vote_count: Some(2),
+            }),
+            timestamp: Some(1000),
+            ..Default::default()
+        };
+        let e = one(&meta(ANNA), ContentBody::DataMessage(dm));
+        assert_eq!(e["event"], "poll_vote");
+        assert_eq!((e["target_author"].as_str(), e["target_ts"].as_u64()), (Some(BOB), Some(700)));
+        assert_eq!((e["options"].clone(), e["vote_count"].as_u64()), (json!([1]), Some(2)));
+        // a reaction to a story is a message
+        let dm = DataMessage {
+            reaction: Some(Reaction { emoji: Some("🔥".into()), ..Default::default() }),
+            story_context: Some(StoryContext::default()),
+            timestamp: Some(1000),
+            ..Default::default()
+        };
+        let e = one(&meta(ANNA), ContentBody::DataMessage(dm));
+        assert_eq!((e["event"].as_str(), e["story_reaction"].as_str()), (Some("message"), Some("🔥")));
+        // made by a newer Signal
+        let dm = DataMessage { required_protocol_version: Some(99), timestamp: Some(1000), ..Default::default() };
+        assert_eq!(one(&meta(ANNA), ContentBody::DataMessage(dm))["unsupported"], true);
     }
 }

@@ -6,11 +6,12 @@ license = "AGPL-3.0-only"
 description = "Everysaid's Signal helper: a linked device (presage) speaking JSON lines on stdin/stdout"
 publish = false
 
-# presage and libsignal are pinned: presage by commit (it has no release on crates.io), libsignal
-# by the tag presage pins (v0.99.0), held by Cargo.lock.
+# presage (whisperfish/presage 33dd1491130793390e356e15a5711f1e6ca14fdb) and libsignal-service-rs
+# (whisperfish/libsignal-service-rs 9e6c08b8e6d413391831dc49065e5b05490d6c82) are copied into vendor/
+# with our fixes (vendor/README.md); libsignal by the tag they pin (v0.99.0), held by Cargo.lock.
 [dependencies]
-presage = { git = "https://github.com/whisperfish/presage", rev = "33dd1491130793390e356e15a5711f1e6ca14fdb" }
-presage-store-sqlite = { git = "https://github.com/whisperfish/presage", rev = "33dd1491130793390e356e15a5711f1e6ca14fdb" }
+presage = { path = "vendor/presage" }
+presage-store-sqlite = { path = "vendor/presage-store-sqlite" }
 
 base64 = "0.22"
 futures = "0.3"
@@ -23,6 +24,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.5"
 
 # As presage's own workspace: its SQLCipher build of libsqlite3-sys.
+[patch."https://github.com/whisperfish/libsignal-service-rs"]
+libsignal-service = { path = "vendor/libsignal-service" }
+
 [patch.crates-io]
 libsqlite3-sys = { version = "0.36.0", git = "https://github.com/whisperfish/rusqlite", rev = "2a42b3354c9194700d08aa070f70a131a470e7dc" }
 

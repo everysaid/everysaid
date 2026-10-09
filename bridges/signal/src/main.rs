@@ -14,8 +14,10 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::prelude::*;
 use futures::{channel::oneshot, future, pin_mut, FutureExt, StreamExt};
 use presage::libsignal_service::configuration::SignalServers;
+use presage::model::messages::ContentHint;
 use presage::libsignal_service::content::{Content, ContentBody, Metadata};
 use presage::libsignal_service::prelude::{phonenumber, AttachmentPointer, ServiceError, Uuid};
 use presage::libsignal_service::protocol::ServiceId;
@@ -35,7 +37,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 use tokio::task::{spawn_local, LocalSet};
 
-use convert::{admin_delete_allowed, attachment_name, contact_names, convert, group_id, Converted, Meta};
+use convert::{admin_delete_allowed, attachment_name, contact_names, convert, group_id, Converted, Meta, LONG_TEXT};
 use protocol::{event, fail, ok, Command, Request};
 
 type Signal = Manager<SqliteStore, Registered>;
@@ -47,6 +49,10 @@ struct State {
     manager: Option<Signal>,
     attachments: PathBuf,
     receiving: bool,
+    handling: bool, // a received item is being handled (its acknowledgement goes when it is done)
+    in_flight: Rc<std::cell::Cell<bool>>, // presage is taking an envelope in (see receive_messages_tracked)
+    stop: Rc<std::cell::Cell<bool>>,      // presage takes no more in
+    stopping: bool, // quit: the receiving ends after the item in hand
     revisions: HashMap<[u8; 32], u32>, // groups described to Everysaid, at their revision
     described: HashSet<String>,        // people described to Everysaid (or being), by ACI
 }
@@ -114,6 +120,7 @@ async fn run() {
     let state: Shared = Rc::new(RefCell::new(State::default()));
     let busy = Rc::new(std::cell::Cell::new(0usize)); // commands under way (not a link: it may wait for ever)
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    let mut quit = false;
     while let Ok(Some(line)) = lines.next_line().await {
         if line.trim().is_empty() {
             continue;
@@ -126,8 +133,12 @@ async fn run() {
             }
         };
         match cmd {
+            // answered once the work under way is done, so that Everysaid waits for it
             Command::Quit => {
+                state.borrow_mut().stopping = true;
+                settle(&state, &busy).await;
                 out.send(ok(id, json!({})));
+                quit = true;
                 break;
             }
             // opened before anything else is read, so that what follows finds it
@@ -151,14 +162,29 @@ async fn run() {
             }
         }
     }
-    // stdin closed or quit: the commands under way end (for half a minute at most), what was written
-    // goes out, then the helper ends
-    let until = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
-    while busy.get() > 0 && tokio::time::Instant::now() < until {
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    // stdin closed: the commands under way end (after a quit they did); what was written goes out,
+    // then the helper ends
+    if !quit {
+        state.borrow_mut().stopping = true;
+        settle(&state, &busy).await;
     }
     let _ = out.0.send(None);
     let _ = done_rx.await;
+}
+
+/// Waits (half a minute at most) for the commands under way and the received item in hand: an
+/// envelope is acknowledged to the server only once handled, and one decrypted but not handled is
+/// lost (its keys are spent, so the server's next delivery cannot be read).
+async fn settle(state: &Shared, busy: &std::cell::Cell<usize>) {
+    state.borrow().stop.set(true);
+    let until = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    let under_way = || {
+        let s = state.borrow();
+        busy.get() > 0 || s.handling || s.in_flight.get()
+    };
+    while under_way() && tokio::time::Instant::now() < until {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
 }
 
 /// A future run with a panic in it (presage's or libsignal's) caught and said, so that a request is
@@ -276,7 +302,9 @@ async fn handle(state: &Shared, out: &Out, cmd: Command) -> Result<Value, Fail> 
             let (state, out) = (state.clone(), out.clone());
             spawn_local(async move {
                 if let Err(e) = guarded(receive(state.clone(), out.clone(), download)).await {
-                    state.borrow_mut().receiving = false;
+                    let mut s = state.borrow_mut();
+                    (s.receiving, s.handling) = (false, false);
+                    drop(s);
                     out.send(event("receive_ended", json!({"error": e})));
                 }
             });
@@ -419,28 +447,70 @@ fn is_unlinked(text: &str) -> bool {
     ["Authorization failed", "unexpected status code: 401", "unexpected status code: 403"].iter().any(|p| text.contains(p))
 }
 
+/// Whether Signal's server refused this version of the client as too old (HTTP 499, Signal
+/// Desktop's "update required"): only an update of the helper brings it back.
+fn is_outdated(text: &str) -> bool {
+    ["status code: 499", "HTTP 499"].iter().any(|p| text.contains(p))
+}
+
+/// The code of a refusal by Signal's server, for Everysaid to say it.
+fn refusal(text: &str) -> Option<&'static str> {
+    if is_unlinked(text) {
+        Some("unlinked")
+    } else if is_outdated(text) {
+        Some("outdated")
+    } else {
+        None
+    }
+}
+
 async fn receive(state: Shared, out: Out, download: bool) {
     let ended = |state: &Shared, out: &Out, error: Option<String>| {
-        state.borrow_mut().receiving = false;
+        let mut s = state.borrow_mut();
+        (s.receiving, s.handling) = (false, false);
+        drop(s);
         out.send(event("receive_ended", json!({"error": error})));
     };
     let Ok(mut manager) = manager_of(&state) else {
         return ended(&state, &out, Some("not linked".into()));
     };
     let own = own_aci(&manager);
-    let messages = match manager.receive_messages().await {
+    let (in_flight, stop) = {
+        let s = state.borrow();
+        (s.in_flight.clone(), s.stop.clone())
+    };
+    let messages = match manager.receive_messages_tracked(in_flight.clone(), stop).await {
         Ok(s) => s,
         Err(e) => {
             let text = error_text(&e);
-            let code = is_unlinked(&text).then_some("unlinked");
+            let code = refusal(&text);
             state.borrow_mut().receiving = false;
             return out.send(event("receive_ended", json!({"error": text, "code": code})));
         }
     };
     pin_mut!(messages);
+    let mut checked_number = false;
     while let Some(item) = messages.next().await {
+        in_flight.set(false);
+        state.borrow_mut().handling = true;
         match item {
-            Received::QueueEmpty => out.send(event("queue_empty", json!({}))),
+            Received::QueueEmpty => {
+                // once a connection: whether the account's number (its PNI) is still the one this
+                // device was linked with; after a change of number, what is sent to the new one
+                // cannot be read here until the device is linked again (said, never done for the
+                // owner)
+                if !checked_number {
+                    checked_number = true;
+                    if let Ok(who) = manager.whoami().await {
+                        let ours = manager.registration_data().service_ids.pni;
+                        if !who.pni.is_nil() && who.pni != ours {
+                            tracing::warn!("the account's number changed since this device was linked");
+                            out.send(event("number_changed", json!({"phone": who.number.to_string()})));
+                        }
+                    }
+                }
+                out.send(event("queue_empty", json!({})))
+            }
             Received::Contacts => match contacts(manager.store()).await {
                 Ok(list) => {
                     let mut s = state.borrow_mut();
@@ -449,12 +519,34 @@ async fn receive(state: Shared, out: Out, download: bool) {
                 }
                 Err(f) => tracing::warn!(error = f.msg, "contacts"),
             },
+            // someone could not read a message sent from here
             Received::DecryptionError(sender) => {
                 out.send(event("decryption_error", json!({"sender": sender.service_id_string()})))
+            }
+            // a message that could not be read here; the sender was asked to send it again
+            // nothing to note of what was not to be shown (typing, receipts...)
+            Received::DecryptionFailed { content_hint: ContentHint::Implicit, sender, .. } => {
+                tracing::info!(sender = sender.service_id_string(), "something not to be shown could not be read")
+            }
+            Received::DecryptionFailed { sender, device, timestamp, group_id, content_hint, retry_requested } => {
+                let sender = sender.service_id_string();
+                let chat = match group_id {
+                    Some(g) if g.len() == 32 => json!({"kind": "group", "id": BASE64_STANDARD.encode(g)}),
+                    _ => json!({"kind": "contact", "id": sender}),
+                };
+                out.send(event(
+                    "unreadable",
+                    json!({"sender": sender, "device": device, "ts": timestamp, "chat": chat, "retry": retry_requested,
+                        "resendable": content_hint == ContentHint::Resendable}),
+                ))
             }
             Received::Content(content) => {
                 let meta = meta_of(&content.metadata);
                 for c in convert(&meta, &content.body, &own) {
+                    if meta.sender != own && !may_write_in(&manager, &c, &meta.sender).await {
+                        tracing::warn!(sender = meta.sender, "a group message from someone not in the group: dropped");
+                        continue;
+                    }
                     deliver(&state, &out, &manager, c, download).await;
                 }
                 if meta.sender != own && state.borrow_mut().described.insert(meta.sender.clone()) {
@@ -463,30 +555,100 @@ async fn receive(state: Shared, out: Out, download: bool) {
                 }
             }
         }
+        let mut s = state.borrow_mut();
+        s.handling = false;
+        if s.stopping {
+            break; // its acknowledgement is not sent: the server delivers it again, then dropped as a duplicate
+        }
+    }
+    // ended by itself, or because the helper is stopping (said, so that it is no failure)
+    if state.borrow().stop.get() {
+        let mut s = state.borrow_mut();
+        (s.receiving, s.handling) = (false, false);
+        drop(s);
+        return out.send(event("receive_ended", json!({"error": null, "code": "stopped"})));
     }
     ended(&state, &out, None);
 }
 
+/// A long message's body has only its first 2 KiB, its whole text comes as a file: fetched (with
+/// `manager`) whatever the setting for files, or read where it is already, it becomes the message's
+/// text, as Signal's apps show it, up to 64 KiB (Signal Desktop's `MAX_BODY_ATTACHMENT_BYTE_LENGTH`).
+/// It says the file's place among the message's, to be taken out of the event once the files are
+/// named; where it cannot be had now it stays a file, fetched again with the others.
+async fn long_text(c: &mut Converted, dir: &Path, manager: Option<&Signal>) -> Option<usize> {
+    const MAX: usize = 64 * 1024;
+    let i = c.attachments.iter().position(|p| p.content_type.as_deref() == Some(LONG_TEXT))?;
+    let ptr = &c.attachments[i];
+    let ts = c.event["ts"].as_u64().unwrap_or(0);
+    let author = c.event["sender"].as_str().unwrap_or("").to_string();
+    let path = dir.join(attachment_name(ts, &author, i, ptr.content_type.as_deref(), ptr.file_name.as_deref()));
+    if ptr.size.is_some_and(|n| n as usize > MAX) {
+        tracing::warn!(size = ptr.size, "the text of a long message is too long: its first 2 KiB are kept");
+        return None;
+    }
+    if !path.exists() {
+        let manager = manager?;
+        if let Err(e) = fetch(manager, ptr, &path).await {
+            tracing::warn!(error = e, "the text of a long message");
+            return None;
+        }
+    }
+    let mut bytes = std::fs::read(&path).ok()?;
+    bytes.truncate(MAX);
+    c.event["text"] = json!(String::from_utf8_lossy(&bytes).trim_end_matches('\u{FFFD}'));
+    c.event["long_text"] = json!(true);
+    Some(i)
+}
+
+/// Whether someone may write in a message's group: as Signal Desktop, one who is not a member of the
+/// group at the message's revision is not heard. Only the stored group at exactly that revision says
+/// so: presage fetches the group as it is now, which may be later (one who left since wrote while a
+/// member) or could not fetch it at all. Taken as it comes: a message of no group or of a group not
+/// known, one of another revision, and a change of the group (one leaving sends it).
+async fn may_write_in(manager: &Signal, c: &Converted, sender: &str) -> bool {
+    let Some(key) = c.group else { return true };
+    if c.event["group_change"] == true {
+        return true;
+    }
+    match manager.store().group(key).await {
+        Ok(Some(g)) => {
+            let same = c.event["group_revision"].as_u64() == Some(u64::from(g.revision));
+            !same || g.members.iter().any(|m| m.aci.service_id_string() == sender)
+        }
+        _ => true,
+    }
+}
+
 /// An event out, its group described first where that changed, its attachments fetched where wanted.
+/// Whether a deletion may be taken: one of another's message only from an admin of its group.
+async fn deletion_allowed(store: &SqliteStore, c: &Converted) -> bool {
+    if c.event["event"] != "delete" || c.event["admin"] != true {
+        return true;
+    }
+    let sender = c.event["sender"].as_str().unwrap_or("").to_string();
+    let mut admins = None;
+    if let Some(key) = c.group {
+        if let Ok(Some(g)) = store.group(key).await {
+            admins = Some(
+                g.members
+                    .iter()
+                    .filter(|m| m.role == presage::libsignal_service::groups_v2::Role::Administrator)
+                    .map(|m| m.aci.service_id_string())
+                    .collect::<Vec<_>>(),
+            );
+        }
+    }
+    let ok = admin_delete_allowed(&sender, c.event["target_author"].as_str().unwrap_or(""), admins.as_deref());
+    if !ok {
+        tracing::warn!(sender, "a deletion of another's message by someone not an admin of the group: ignored");
+    }
+    ok
+}
+
 async fn deliver(state: &Shared, out: &Out, manager: &Signal, mut c: Converted, download: bool) {
-    if c.event["event"] == "delete" && c.event["admin"] == true {
-        let sender = c.event["sender"].as_str().unwrap_or("").to_string();
-        let mut admins = None;
-        if let Some(key) = c.group {
-            if let Ok(Some(g)) = manager.store().group(key).await {
-                admins = Some(
-                    g.members
-                        .iter()
-                        .filter(|m| m.role == presage::libsignal_service::groups_v2::Role::Administrator)
-                        .map(|m| m.aci.service_id_string())
-                        .collect::<Vec<_>>(),
-                );
-            }
-        }
-        if !admin_delete_allowed(&sender, c.event["target_author"].as_str().unwrap_or(""), admins.as_deref()) {
-            tracing::warn!(sender, "a deletion of another's message by someone not an admin of the group: ignored");
-            return;
-        }
+    if !deletion_allowed(manager.store(), &c).await {
+        return;
     }
     if let Some(key) = c.group {
         if let Ok(Some(g)) = manager.store().group(key).await {
@@ -500,18 +662,35 @@ async fn deliver(state: &Shared, out: &Out, manager: &Signal, mut c: Converted, 
     let dir = state.borrow().attachments.clone();
     let ts = c.event["ts"].as_u64().unwrap_or(0);
     let author = c.event["sender"].as_str().unwrap_or("").to_string();
+    // a long message's body has only its first 2 KiB, its whole text comes as a file: fetched
+    // whatever the setting for files, it is the message's text, as Signal's apps show it (where it
+    // cannot be fetched now it stays a file, fetched again with the others)
+    // when stopping, nothing is fetched: what was not is marked so, and fetched again later
+    let stopping = state.borrow().stopping;
+    let long_text = if stopping { None } else { long_text(&mut c, &dir, Some(manager)).await };
     for (i, ptr) in c.attachments.iter().enumerate() {
+        if long_text == Some(i) {
+            continue;
+        }
         let name = attachment_name(ts, &author, i, ptr.content_type.as_deref(), ptr.file_name.as_deref());
         let path = dir.join(&name);
         let slot = &mut c.event["attachments"][i];
         if path.exists() {
             slot["file"] = json!(name);
+        } else if stopping {
+            if download || ptr.content_type.as_deref() == Some(LONG_TEXT) {
+                slot["error"] = json!("stopped");
+            }
         } else if download {
             match fetch(manager, ptr, &path).await {
                 Ok(()) => slot["file"] = json!(name),
                 Err(e) => slot["error"] = json!(e),
             }
         }
+    }
+    // the files keep the names of their places among the message's (the text's taken out after)
+    if let (Some(i), Some(list)) = (long_text, c.event["attachments"].as_array_mut()) {
+        list.remove(i);
     }
     out.send(c.event);
 }
@@ -819,13 +998,20 @@ async fn history(state: &Shared, since: u64, chats: Vec<String>) -> Result<Value
                 continue; // deleted: presage keeps an empty message in its place
             }
             for mut c in convert(&meta_of(&content.metadata), &content.body, &own) {
+                if !deletion_allowed(store, &c).await {
+                    continue;
+                }
                 let ts = c.event["ts"].as_u64().unwrap_or(0);
                 let author = c.event["sender"].as_str().unwrap_or("").to_string();
+                let long = long_text(&mut c, &dir, None).await; // as it was delivered
                 for (i, ptr) in c.attachments.iter().enumerate() {
                     let name = attachment_name(ts, &author, i, ptr.content_type.as_deref(), ptr.file_name.as_deref());
-                    if dir.join(&name).exists() {
+                    if long != Some(i) && dir.join(&name).exists() {
                         c.event["attachments"][i]["file"] = json!(name);
                     }
+                }
+                if let (Some(i), Some(list)) = (long, c.event["attachments"].as_array_mut()) {
+                    list.remove(i);
                 }
                 events.push(c.event);
             }
@@ -859,6 +1045,11 @@ mod tests {
         assert!(is_unlinked(&text), "{text}");
         assert!(is_unlinked("Authorization failed"));
         assert!(!is_unlinked("Websocket error: websocket upgrade failed: error sending request"));
+        assert_eq!(refusal(&text), Some("unlinked"));
+        // a version too old for the server
+        let ws = E("websocket upgrade failed", Some(Box::new(E("unexpected status code: 499 <unknown status code>", None))));
+        assert_eq!(refusal(&format!("Websocket error: {ws}{}", sources_text(&ws))), Some("outdated"));
+        assert_eq!(refusal("Websocket error: websocket upgrade failed: error sending request"), None);
     }
 
     #[tokio::test]
