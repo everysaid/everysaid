@@ -168,9 +168,6 @@ func TestFold(t *testing.T) {
 	if got := text.Fold("Καλημέρα ΦΊΛΟΣ"); got != "καλημερα φιλοσ" {
 		t.Fatal(got)
 	}
-	if got := text.Query(`a* "b`); got != `"a"* """b"` {
-		t.Fatal(got)
-	}
 }
 
 func TestChatsAndStreams(t *testing.T) {

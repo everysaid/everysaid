@@ -55,7 +55,6 @@ func PurgeSpam(q db.Querier, only []int64) (out Purged) {
 			db.Exec(q, "DELETE FROM "+t+" WHERE message_id IN "+marks, ids...)
 		}
 		db.Exec(q, "DELETE FROM message_fts WHERE rowid IN "+marks, ids...)
-		db.Exec(q, "DELETE FROM message_tri WHERE rowid IN "+marks, ids...)
 		db.Exec(q, "DELETE FROM message WHERE id IN "+marks, ids...)
 	})
 	chunked(calls, func(marks string, ids []any) {

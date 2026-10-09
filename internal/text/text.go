@@ -40,40 +40,30 @@ func Fold(s string) string {
 	return norm.NFC.String(b.String())
 }
 
-// Query is a user's search turned into an FTS5 query: each word folded and quoted (so that FTS5's
-// own operators in it are taken as text), a trailing * kept as a prefix search; words are ANDed.
-func Query(q string) string {
-	var words []string
-	for _, w := range strings.Fields(q) {
-		prefix := strings.HasSuffix(w, "*")
-		w = strings.ReplaceAll(Fold(strings.TrimRight(w, "*")), `"`, `""`)
-		if w != "" {
-			s := `"` + w + `"`
-			if prefix {
-				s += "*"
-			}
-			words = append(words, s)
-		}
-	}
-	return strings.Join(words, " ")
-}
-
 // runeFolds holds Fold of one rune as runes, once worked out (ASCII aside: its fold is its lower case).
 var runeFolds sync.Map
 
 func foldRune(c rune) []rune {
+	if c < 0x80 {
+		return foldOne(c)
+	}
+	if f, ok := runeFolds.Load(c); ok {
+		return f.([]rune)
+	}
+	f := foldOne(c)
+	runeFolds.Store(c, f)
+	return f
+}
+
+// foldOne is Fold of one rune, not kept.
+func foldOne(c rune) []rune {
 	if c < 0x80 {
 		if 'A' <= c && c <= 'Z' {
 			c += 'a' - 'A'
 		}
 		return asciiRunes[c : c+1]
 	}
-	if f, ok := runeFolds.Load(c); ok {
-		return f.([]rune)
-	}
-	f := []rune(Fold(string(c)))
-	runeFolds.Store(c, f)
-	return f
+	return []rune(Fold(string(c)))
 }
 
 var asciiRunes = func() []rune {
@@ -102,20 +92,27 @@ func foldedWithMap(s []rune) ([]rune, []int) {
 type Span struct{ Start, End int }
 
 // Matcher says where a search's words are in a text. Case: exact (case and accents as typed);
-// else folded. Whole: whole words only; else anywhere, inside words too.
+// else folded. Whole: whole words only, a word ending in * the start of a word; else anywhere,
+// inside words too (a * at the end means nothing then). A word that is nothing but * is left out.
 type Matcher struct {
 	Case, Whole bool
 	Words       []string
 	needles     [][]rune
+	prefix      []bool
 }
 
 func NewMatcher(q string, caseSensitive, whole bool) *Matcher {
 	m := &Matcher{Case: caseSensitive, Whole: whole, Words: strings.Fields(q)}
 	for _, w := range m.Words {
+		n := strings.TrimRight(w, "*")
 		if !caseSensitive {
-			w = Fold(w)
+			n = Fold(n)
 		}
-		m.needles = append(m.needles, []rune(w))
+		if n == "" {
+			continue
+		}
+		m.needles = append(m.needles, []rune(n))
+		m.prefix = append(m.prefix, whole && strings.HasSuffix(w, "*"))
 	}
 	return m
 }
@@ -133,8 +130,8 @@ func (m *Matcher) Spans(text string) []Span {
 		hay, where = foldedWithMap(src)
 	}
 	var out []Span
-	for _, n := range m.needles {
-		find(hay, n, m.Whole, func(a, b int) bool {
+	for i, n := range m.needles {
+		find(hay, n, m.Whole, m.prefix[i], func(a, b int) bool {
 			if where == nil {
 				out = append(out, Span{a, b})
 			} else {
@@ -153,8 +150,8 @@ func (m *Matcher) Spans(text string) []Span {
 }
 
 // find gives each match [a, b) of the needle n in hay, left to right without overlaps (whole: not
-// inside a word), as long as found says to go on.
-func find(hay, n []rune, whole bool, found func(a, b int) bool) {
+// inside a word; prefix: only its start must be a word's), as long as found says to go on.
+func find(hay, n []rune, whole, prefix bool, found func(a, b int) bool) {
 	if len(n) == 0 {
 		return
 	}
@@ -164,7 +161,7 @@ func find(hay, n []rune, whole bool, found func(a, b int) bool) {
 			continue
 		}
 		b := a + len(n)
-		if whole && ((a > 0 && isAlnum(hay[a-1])) || (b < len(hay) && isAlnum(hay[b]))) {
+		if whole && ((a > 0 && isAlnum(hay[a-1])) || (!prefix && b < len(hay) && isAlnum(hay[b]))) {
 			a = b
 			continue
 		}
@@ -196,12 +193,44 @@ func (m *Matcher) Matches(text string) bool {
 	if !m.Case {
 		hay, _ = foldedWithMap(hay)
 	}
-	for _, n := range m.needles {
+	for i, n := range m.needles {
 		in := false
-		find(hay, n, m.Whole, func(int, int) bool { in = true; return false })
+		find(hay, n, m.Whole, m.prefix[i], func(int, int) bool { in = true; return false })
 		if !in {
 			return false
 		}
 	}
 	return true
+}
+
+var preimages struct {
+	sync.Once
+	of map[rune][]rune // a rune, and the others whose fold (on its own) has it
+}
+
+// Preimage is every rune whose fold (Fold of it alone, as the Matcher folds) has the rune c: a
+// text whose folded form has c has one of them.
+func Preimage(c rune) []rune {
+	preimages.Do(func() {
+		preimages.of = map[rune][]rune{}
+		for r := rune(0); r <= unicode.MaxRune; r++ {
+			if r >= 0xD800 && r <= 0xDFFF {
+				continue
+			}
+			f := foldOne(r) // not kept: a million runes
+			if len(f) == 1 && f[0] == r {
+				continue
+			}
+			for _, x := range f {
+				if p := preimages.of[x]; len(p) == 0 || p[len(p)-1] != r {
+					preimages.of[x] = append(p, r)
+				}
+			}
+		}
+	})
+	var out []rune
+	if f := foldRune(c); len(f) == 1 && f[0] == c {
+		out = append(out, c)
+	}
+	return append(out, preimages.of[c]...)
 }

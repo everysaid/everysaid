@@ -17,8 +17,8 @@
 // Sources belong to a `device`, whose period of use decides which copy of a record found on two
 // devices is kept; each source names the folder its media paths are relative to.
 //
-// Search: `message_fts` (by words) and `message_tri` (by trigrams, for parts of words) hold each
-// message's text folded (text.Fold), written by AddMessage, not by a trigger.
+// Search: `message_fts` holds each message's text folded (text.Fold) as words, and `term` every
+// word it holds, for parts of words (terms.go); written by AddMessage, not by a trigger.
 //
 // The schema has a version (`PRAGMA user_version`), 1 until the first release: until then it
 // changes in place, without migrations.
@@ -779,9 +779,7 @@ func (a *Archive) AddMessage(sourceID int64, rowKey string, m Message) int64 {
 		b2i(x.Edited), b2i(x.Deleted), b2i(x.Forwarded), b2i(x.Starred),
 		lat, lon, nullStr(x.Place), slat, slon).LastInsertId()
 	if txt != "" {
-		folded := text.Fold(txt)
-		a.Exec("INSERT INTO message_fts (rowid, text) VALUES (?, ?)", mid, folded)
-		a.Exec("INSERT INTO message_tri (rowid, text) VALUES (?, ?)", mid, folded)
+		a.IndexText(mid, text.Fold(txt))
 	}
 	if rowKey != "" {
 		a.Exec("INSERT INTO message_origin VALUES (?, ?, ?)", sourceID, rowKey, mid)
