@@ -675,7 +675,7 @@ func live(ctx context.Context, c *plugins.Context) error {
 				if ctx.Err() != nil {
 					return
 				}
-				if err := readers(ctx, c, cn, chat); err != nil {
+				if err := readers(ctx, c, cn, chat, readersAll); err != nil {
 					c.Log("error: {e}", map[string]any{"e": err})
 				}
 			}

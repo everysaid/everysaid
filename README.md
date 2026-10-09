@@ -292,9 +292,9 @@ The live source keeps the update state of the account and of the supergroups it 
 after a restart Telegram says what changed meanwhile (edits, deletions, reactions); reactions and
 poll votes made later are followed as they come. A chat that cannot be read (left, removed) is
 skipped, not the others. Who read the owner's messages: in a chat with one person, the other, as
-Telegram says it; in a group, each one who did, asked of Telegram when someone reads (and at each
-connection) for the owner's latest messages there (`read_by`; Telegram says it for a week, in
-groups of up to a hundred).
+Telegram says it; in a group, each one who did, asked of Telegram for the owner's latest messages
+there when someone reads, and for all of the week's at each connection (`read_by`; Telegram says
+it for a week, in groups of up to a hundred).
 
 The source in the app downloads the files of new messages as they arrive, and at each connection
 and import those of the last week still missing (its setting, on by default); a chat's whole

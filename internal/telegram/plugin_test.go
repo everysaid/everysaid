@@ -543,7 +543,7 @@ func TestGroupReaders(t *testing.T) {
 	if err := noteReads(c, []readItem{{-10, nil, intp(6)}}, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := readers(newTestCtx(), c, cn, -10); err != nil {
+	if err := readers(newTestCtx(), c, cn, -10, readersLast); err != nil {
 		t.Fatal(err)
 	}
 	read := func() int64 {
@@ -553,7 +553,7 @@ func TestGroupReaders(t *testing.T) {
 	if n := read(); n != 1 {
 		t.Fatalf("%d receipts", n)
 	}
-	if err := readers(newTestCtx(), c, cn, -10); err != nil {
+	if err := readers(newTestCtx(), c, cn, -10, readersLast); err != nil {
 		t.Fatal(err)
 	}
 	if n := read(); n != 1 {

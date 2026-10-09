@@ -20,7 +20,8 @@ import (
 
 const (
 	readersBack  = 7 * 24 * time.Hour // how far back Telegram says who read
-	readersLast  = 20                 // the owner's latest messages asked about each time
+	readersLast  = 20                 // the owner's latest messages asked about each time someone reads
+	readersAll   = 200                // and at each connection (the week's, in a busy group)
 	readersEvery = 30 * time.Second   // at most this often for one chat
 )
 
@@ -43,7 +44,7 @@ func askReaders(ctx context.Context, c *plugins.Context, cn *conn, chatID int64)
 	readersAsking.Unlock()
 	go func() {
 		for {
-			if err := readers(ctx, c, cn, chatID); err != nil {
+			if err := readers(ctx, c, cn, chatID, readersLast); err != nil {
 				c.Log("error: {e}", map[string]any{"e": err})
 			}
 			select {
@@ -62,9 +63,9 @@ func askReaders(ctx context.Context, c *plugins.Context, cn *conn, chatID int64)
 	}()
 }
 
-// readers asks who read the owner's messages of the last week in a group, keeps it, and brings it
-// into the archive.
-func readers(ctx context.Context, c *plugins.Context, cn *conn, chatID int64) (err error) {
+// readers asks who read the owner's latest messages (at most last) of the last week in a group,
+// keeps it, and brings it into the archive.
+func readers(ctx context.Context, c *plugins.Context, cn *conn, chatID int64, last int) (err error) {
 	defer db.Recover(&err)
 	store, err := openStore(DBPath())
 	if err != nil {
@@ -77,7 +78,7 @@ func readers(ctx context.Context, c *plugins.Context, cn *conn, chatID int64) (e
 	}
 	ids := db.Ints(store, "SELECT id FROM message WHERE chat_id = ? AND date > ? AND json_extract(json, '$.out') "+
 		"AND json_extract(json, '$._') = 'Message' ORDER BY id DESC LIMIT ?",
-		chatID, time.Now().Add(-readersBack).Unix(), readersLast)
+		chatID, time.Now().Add(-readersBack).Unix(), last)
 	if len(ids) == 0 {
 		return nil
 	}
