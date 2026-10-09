@@ -297,3 +297,26 @@ func TestViberNotices(t *testing.T) {
 	eq(t, "poll", []any{code, len(opts), v["voters"]}, []any{"poll", 2, float64(2)}) // single choice: one each
 	eq(t, "no votes as messages", a.Int("SELECT count(*) FROM message WHERE key IN ('3004', '3005')"), int64(0))
 }
+
+// The iPhone's ZLIKE says who gave each reaction in a group: kept by person (the owner's as theirs),
+// the rest of the counts no one's; a message imported before with bare counts takes them.
+func TestViberReactionsByWhom(t *testing.T) {
+	a, _ := newArchive(t)
+	path := filepath.Join(t.TempDir(), "viber.sqlite")
+	viberDB(t, path)
+	d, err := db.Open(path)
+	must(t, err)
+	db.Exec(d, "INSERT INTO ZVIBERMESSAGE (Z_PK, ZSTATE, ZCONVERSATION, ZDATE, ZTOKEN, ZPHONENUMINDEX, ZTEXT, ZCLIENTMETADATA, ZLIKESCOUNT) "+
+		"VALUES (30, 'received', 20, ?, 5001, 1, 'party', ?, 0)", 1_790_000_200-archive.AppleEpoch,
+		js(M{"Reactions": M{"reactions": M{"1": 3}}}))
+	d.Close()
+	must(t, Viber(a, nil, ViberOptions{IphoneDB: path, NoDesktop: true}))
+	eq(t, "counts only", desktopReactionsOf(a, "5001"), []string{"❤️  x3"})
+
+	d, _ = db.Open(path)
+	db.Exec(d, "CREATE TABLE ZLIKE (Z_PK INTEGER PRIMARY KEY, ZMESSAGETOKEN INTEGER, ZSENDER INTEGER, ZLIKEVALUE INTEGER, ZUNICODEREACTION VARCHAR)")
+	db.Exec(d, "INSERT INTO ZLIKE VALUES (1, 5001, 2, 1, NULL), (2, 5001, NULL, 1, NULL), (3, 5001, 1, 0, NULL)")
+	d.Close()
+	must(t, Viber(a, nil, ViberOptions{IphoneDB: path, NoDesktop: true}))
+	eq(t, "by whom", desktopReactionsOf(a, "5001"), []string{"❤️ ", "❤️ +15558880002", "❤️  me"})
+}

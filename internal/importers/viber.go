@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"unicode/utf16"
 
 	"everysaid/internal/archive"
@@ -392,6 +393,29 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 			locations[toInt(r["Z_PK"])] = location{r["ZLATITUDE"], r["ZLONGITUDE"], r["ZADDRESS"]}
 		}
 		iphoneRecs = map[int64]viberMsg{}
+		// each one's reaction, as the iPhone keeps them (ZLIKE: one row for each person and message, its
+		// sender none for the owner's; 0: taken back)
+		likes := map[string][]archive.Reaction{}
+		if hasTable(iphone, "ZLIKE") {
+			for _, l := range maps(iphone, "SELECT ZMESSAGETOKEN, ZSENDER, ZLIKEVALUE, ZUNICODEREACTION FROM ZLIKE "+
+				"WHERE ZLIKEVALUE != 0 OR ZUNICODEREACTION IS NOT NULL ORDER BY ZMESSAGETOKEN, ZSENDER") {
+				k := l["ZLIKEVALUE"]
+				if truthy(l["ZUNICODEREACTION"]) {
+					k = l["ZUNICODEREACTION"]
+				}
+				e, c := reaction(k)
+				x := archive.Reaction{Emoji: e, Code: c, Count: 1, Outgoing: l["ZSENDER"] == nil}
+				if !x.Outgoing {
+					h := members[toInt(l["ZSENDER"])]
+					if h == nil || own[*h] {
+						continue // someone not known: left in the counts
+					}
+					x.Who = *h
+				}
+				token := pyStr(l["ZMESSAGETOKEN"])
+				likes[token] = append(likes[token], x)
+			}
+		}
 		for _, r := range maps(iphone, "SELECT * FROM ZVIBERMESSAGE ORDER BY Z_PK") {
 			outgoing := !(isStr(r["ZSTATE"]) && str(r["ZSTATE"]) == "received")
 			system := str(r["ZSYSTEMTYPE"])
@@ -428,6 +452,9 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 				panic(&db.Error{Query: "ZVIBERMESSAGE", Err: fmt.Errorf("KeyError: %v", r["ZCONVERSATION"])})
 			}
 			extra := viberIphoneExtras(r, locations)
+			if ls := likes[key]; len(ls) > 0 {
+				extra.Reactions = withWho(extra.Reactions, ls)
+			}
 			var by map[string]any
 			if outgoing {
 				by = map[string]any{"self": true}
@@ -556,6 +583,9 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 				if k, ok := desktopKinds[mt]; ok {
 					kind = k
 				}
+				if kind == "file" && truthy(jsonObj(r["Info"])["audio_ptt"]) { // a voice message sent as a file
+					kind = "voice"
+				}
 			}
 			var sender *archive.Handle
 			if !outgoing {
@@ -612,6 +642,17 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 	for _, pk := range iphoneOrder {
 		if r := iphoneRecs[pk]; r.extra.Notice != nil && r.key != "" {
 			noticed = append(noticed, r)
+		}
+	}
+	// reactions kept as bare counts before, now known by whom (the iPhone's ZLIKE)
+	for _, pk := range iphoneOrder {
+		r := iphoneRecs[pk]
+		if r.key == "" || !slices.ContainsFunc(r.extra.Reactions, func(x archive.Reaction) bool { return x.Who != nil }) {
+			continue
+		}
+		if mid, ok := a.MessageByKey("viber", r.key, 0); ok && mid != 0 &&
+			!a.Exists("SELECT 1 FROM reaction WHERE message_id = ? AND address_id IS NOT NULL", mid) {
+			ReplaceReactions(a, mid, r.extra.Reactions)
 		}
 	}
 	for _, r := range noticed {
@@ -684,4 +725,26 @@ func viberMentions(a *archive.Archive, mid int64, text string, info any, person 
 		}
 		a.Exec("INSERT OR IGNORE INTO mention VALUES (?, ?, ?)", mid, a.Address(who), said)
 	}
+}
+
+// withWho is a message's reactions with each one's known (from), and the rest of the counts as
+// they were, no one's.
+func withWho(counts, from []archive.Reaction) []archive.Reaction {
+	left := map[string]int{}
+	for _, r := range counts {
+		if r.Who == nil && !r.Outgoing {
+			left[r.Code] += r.Count
+		}
+	}
+	out := slices.Clone(from)
+	for _, r := range from {
+		left[r.Code]--
+	}
+	for _, r := range counts {
+		if r.Who == nil && !r.Outgoing && left[r.Code] > 0 {
+			out = append(out, archive.Reaction{Emoji: r.Emoji, Code: r.Code, Count: left[r.Code]})
+			left[r.Code] = 0
+		}
+	}
+	return out
 }

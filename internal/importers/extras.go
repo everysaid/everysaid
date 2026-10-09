@@ -249,6 +249,9 @@ func viberDesktopExtras(raw row) *archive.Extras {
 			out.Place = pyStr(a)
 		}
 	}
+	if name := obj(info["fileInfo"])["FileName"]; truthy(name) && !truthy(raw["Body"]) && out.Text == "" {
+		out.Text = "📎 " + pyStr(name) // a file without words: its name, as Viber shows it
+	}
 	if mtOK && mt == 10 && !truthy(raw["Body"]) {
 		number := info["PhoneNumber"]
 		if !truthy(number) {
@@ -350,6 +353,9 @@ func viberIphoneExtras(raw row, locations map[int64]location) *archive.Extras {
 				out.Place = pyStr(l.place)
 			}
 		}
+	}
+	if name := obj(md["fileInfo"])["FileName"]; truthy(name) && !truthy(raw["ZTEXT"]) {
+		out.Text = "📎 " + pyStr(name) // a file without words: its name, as Viber shows it
 	}
 	if poll, ok := cm["Poll"].([]any); ok && len(poll) > 0 {
 		var options []string
