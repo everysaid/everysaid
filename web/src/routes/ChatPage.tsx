@@ -607,10 +607,11 @@ function ChatHeader({ chat, wide, onInfo, onJumpDate, hidden, onHide }: {
         <button onClick={onInfo} className="shrink-0 rounded-full" tabIndex={-1} aria-hidden>       {/* the name beside it is the same, for keyboards */}
           {chat && <Avatar name={title} src={avatarUrl({ type: chat.type, person_id: chat.person_id, avatar: chat.person?.avatar })} group={chat.type === "group"} size={40} />}
         </button>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <button onClick={onInfo} className="block max-w-full truncate rounded-lg text-left font-semibold hover:underline">{title}</button>
           <div className="flex items-center gap-1 overflow-x-auto text-xs text-muted">
-            {subtitle ?? (chat && chat.services.length > 1
+            {subtitle && <span className="shrink-0">{subtitle} ·</span>}
+            {(chat && chat.services.length > 1
               ? chat.services.map((s) => {
                   const off = hidden.includes(s);
                   const last = !off && hidden.length === chat.services.length - 1;     // one stays on
@@ -619,11 +620,11 @@ function ChatHeader({ chat, wide, onInfo, onJumpDate, hidden, onHide }: {
                       title={t(off ? "chat.showService" : "chat.hideService", { service: service(s).name })}
                       onClick={() => onHide(off ? hidden.filter((x) => x !== s) : [...hidden, s])}
                       className={cn("shrink-0 rounded-full transition disabled:cursor-default", off && "opacity-40 grayscale hover:opacity-70")}>
-                      <ServiceBadge id={s} className="px-1.5 py-0" />
+                      <ServiceBadge id={s} className="px-1.5 py-0" compact />
                     </button>
                   );
                 })
-              : chat?.services.map((s) => <ServiceBadge key={s} id={s} className="px-1.5 py-0" />))}
+              : chat?.services.map((s) => <ServiceBadge key={s} id={s} className="px-1.5 py-0" compact />))}
           </div>
         </div>
       </div>
