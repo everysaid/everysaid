@@ -142,7 +142,9 @@ by all ("all" in a group: whoever the service said got the user's messages there
 the service tells (WhatsApp, Signal; Telegram in a person's chat, read but not when; Viber from the
 iPhone, where the other lets it be seen); a tap on them says who got and read the message, and when.
 
-**WhatsApp's safeguards:** it sends only into chats where the other side has written, within limits
+**WhatsApp's safeguards:** it sends only into chats where the other side has written (or that
+were started from here: a first message to someone found on WhatsApp, only to people in the
+owner's contacts, at most so many new chats a day, 5 at first), within limits
 a minute, an hour and a day (the source's settings: 15, 300, 1000 at first; 0 for none), and never
 the same longer text into more than so many chats an hour (3). When
 WhatsApp warns the account (a temporary ban, a logout) sending is blocked until the user clears it

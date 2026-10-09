@@ -696,3 +696,53 @@ func TestViberCommand(t *testing.T) {
 	}
 	eq(t, "a session of its own", cmd.SysProcAttr.Setsid, true)
 }
+
+// Finding who is on Viber: a contact with a member id, by the last 10 digits; one without (an
+// address-book number not on Viber) and one Viber does not know are not. A first message goes only
+// into a chat Viber Desktop has.
+func TestViberDesktopFind(t *testing.T) {
+	b := newBridge(t)
+	d, err := db.Open(b.data)
+	must(t, err)
+	db.Exec(d, "INSERT INTO Contact VALUES (4, 'Ann', '+15557770004', 'mid-ann'), (5, 'Nick', '+15557770005', NULL), "+
+		"(6, 'Kim', '+15557770006', '')")
+	d.Close()
+	c := instance(t, M{"socket": b.sock, "send": true})
+	os.Remove(snapshotPath(c))
+	ctx := t.Context()
+	got, err := (Plugin{}).Find(ctx, c, []string{"+15557770004", "+15557770005", "+15557770006", "+15557779999", "+0015557770001"})
+	must(t, err)
+	// Ann is on Viber but has no chat in Viber Desktop (one cannot be started from here yet): not offered
+	eq(t, "found", got, []plugins.Found{{Phone: "+0015557770001", Service: "viber", Key: "+0015557770001"}})
+
+	// Viber Desktop away: the last copy says; without one, it cannot be said
+	b.stop()
+	got, err = (Plugin{}).Find(ctx, c, []string{"+15557770001", "+15557770005"})
+	must(t, err)
+	eq(t, "from the last copy", len(got), 1)
+	none := instance(t, M{"socket": b.sock})
+	os.Remove(snapshotPath(none)) // another test's, of an instance with the same id
+	if _, err := (Plugin{}).Find(ctx, none, []string{"+15557770004"}); err == nil {
+		t.Fatal("found with nothing to read")
+	}
+	os.Remove(b.sock)
+	b.start(t)
+
+	// Ann is on Viber but has no chat in Viber Desktop: refused, nothing sent
+	var ue *errs.UserError
+	_, err = (Plugin{}).Send(ctx, c, plugins.Conversation{Key: "+15557770004", Service: "viber"}, "hi", nil, nil, nil)
+	if !errors.As(err, &ue) || ue.Text != noNewChat || ue.Status != 409 {
+		t.Fatal(err)
+	}
+	eq(t, "nothing went", b.take(), []string(nil))
+	// Maria has one (the archive none yet): it goes there, and comes into the archive
+	res, err := (Plugin{}).Send(ctx, c, plugins.Conversation{Key: "+15557770001", Service: "viber"}, "hi", nil, nil, nil)
+	must(t, err)
+	eq(t, "sent", b.take(), []string{"send 4 hi"})
+	s, ok := res.(plugins.Sent)
+	if !ok || len(s.Keys) != 1 {
+		t.Fatalf("sent: %#v", res)
+	}
+	eq(t, "in the archive", db.Strs(c.Store().Read(), "SELECT text FROM message WHERE key = ? AND outgoing", s.Keys[0]),
+		[]string{"hi"})
+}

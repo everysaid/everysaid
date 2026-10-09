@@ -36,7 +36,8 @@ type SendLimits struct {
 	PerMinute int `json:"per_minute"`
 	PerHour   int `json:"per_hour"`
 	PerDay    int `json:"per_day"`
-	SameText  int `json:"same_text_chats"` // the same text into at most this many chats an hour
+	SameText  int `json:"same_text_chats"`   // the same text into at most this many chats an hour
+	NewChats  int `json:"new_chats_per_day"` // chats started from here (a first message) a day
 }
 
 // Short texts ("ok", an emoji) go to many chats in normal use; only longer ones count as the same text.
@@ -67,6 +68,8 @@ type SendRequest struct {
 	Media    []byte   `json:"media"` // a file to send, base64 in the JSON
 	Filename string   `json:"filename"`
 	MimeType string   `json:"mime_type"`
+	// First: a first message to a number WhatsApp has, in a chat not there yet (the owner found them)
+	First bool `json:"first"`
 }
 
 type SendResponse struct {
@@ -111,8 +114,9 @@ func (s *Sender) chatFor(recipient string) (types.JID, error) {
 	return chats[0], nil
 }
 
-// chatsFor is every chat a recipient means where the other side has written: one person's may be
-// kept under both their number and their LID (before and after WhatsApp moved the chat to LIDs).
+// chatsFor is every chat a recipient means where the other side has written, or that the owner
+// started from here: one person's may be kept under both their number and their LID (before and
+// after WhatsApp moved the chat to LIDs).
 func (s *Sender) chatsFor(recipient string) ([]types.JID, error) {
 	candidates, err := s.jidsOf(recipient)
 	if err != nil {
@@ -121,7 +125,8 @@ func (s *Sender) chatsFor(recipient string) ([]types.JID, error) {
 	var chats []types.JID
 	for _, c := range candidates {
 		var n int
-		s.store.db.QueryRow("SELECT count(*) FROM messages WHERE chat_jid = ? AND NOT is_from_me", c.String()).Scan(&n)
+		s.store.db.QueryRow("SELECT (SELECT count(*) FROM messages WHERE chat_jid = ?1 AND NOT is_from_me) + "+
+			"(SELECT count(*) FROM started WHERE chat_jid = ?1)", c.String()).Scan(&n)
 		if n > 0 {
 			chats = append(chats, c)
 		}
@@ -164,6 +169,50 @@ func (s *Sender) jidsOf(recipient string) ([]types.JID, error) {
 	return candidates, nil
 }
 
+// start is the chat of a first message to a number: one WhatsApp has, within the limit of chats
+// started a day (0: none); else why not, with its status.
+func (s *Sender) start(recipient string) (types.JID, int, error) {
+	digits := strings.TrimPrefix(recipient, "+")
+	if digits == "" || strings.Trim(digits, "0123456789") != "" {
+		return types.JID{}, http.StatusBadRequest, fmt.Errorf("a first message goes to a number")
+	}
+	if n := s.limits.NewChats; n > 0 {
+		var count int
+		s.store.db.QueryRow("SELECT count(*) FROM started WHERE at > ?", time.Now().Add(-24*time.Hour).Unix()).Scan(&count)
+		if count >= n {
+			return types.JID{}, http.StatusTooManyRequests, fmt.Errorf("limit reached: %d new chats a day", n)
+		}
+	}
+	got, err := s.client.IsOnWhatsApp(context.Background(), []string{"+" + digits})
+	if err != nil {
+		return types.JID{}, http.StatusBadGateway, fmt.Errorf("asking WhatsApp failed: %v", err)
+	}
+	for _, r := range got {
+		if r.IsIn { // by their number, as their chats are kept (WhatsApp may give their LID first)
+			if !r.PhoneNumber.IsEmpty() {
+				return r.PhoneNumber.ToNonAD(), 0, nil
+			}
+			return r.JID.ToNonAD(), 0, nil
+		}
+	}
+	return types.JID{}, http.StatusForbidden, fmt.Errorf("+%s is not on WhatsApp", digits)
+}
+
+// find is which of the numbers (+digits) WhatsApp has.
+func (s *Sender) find(ctx context.Context, phones []string) (map[string]bool, error) {
+	got, err := s.client.IsOnWhatsApp(ctx, phones)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for _, r := range got {
+		if r.IsIn {
+			out[r.Query] = true
+		}
+	}
+	return out, nil
+}
+
 // send returns an HTTP status and the answer.
 func (s *Sender) send(req SendRequest) (int, SendResponse) {
 	fail := func(code int, format string, args ...interface{}) (int, SendResponse) {
@@ -185,6 +234,14 @@ func (s *Sender) send(req SendRequest) (int, SendResponse) {
 		return fail(http.StatusServiceUnavailable, "not connected to WhatsApp")
 	}
 	chat, err := s.chatFor(req.Recipient)
+	started := false
+	if err != nil && req.First {
+		var code int
+		if chat, code, err = s.start(req.Recipient); err != nil {
+			return fail(code, "%v", err)
+		}
+		started = true
+	}
 	if err != nil {
 		return fail(http.StatusForbidden, "%v", err)
 	}
@@ -234,6 +291,9 @@ func (s *Sender) send(req SendRequest) (int, SendResponse) {
 		return fail(http.StatusInternalServerError, "sending failed: %v", err)
 	}
 	s.store.db.Exec("INSERT INTO sent (at, chat_jid, id, text_hash) VALUES (?, ?, ?, ?)", time.Now().Unix(), chat.String(), resp.ID, hash)
+	if started {
+		s.store.db.Exec("INSERT OR IGNORE INTO started (at, chat_jid) VALUES (?, ?)", time.Now().Unix(), chat.String())
+	}
 	// The bridge does not get its own messages back: store it as WhatsApp would show it.
 	var name string
 	s.store.db.QueryRow("SELECT name FROM chats WHERE jid = ?", chat.String()).Scan(&name)

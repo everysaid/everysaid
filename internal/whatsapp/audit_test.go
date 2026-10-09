@@ -54,7 +54,7 @@ func offline(t *testing.T) (*Bridge, *whatsmeow.Client, *MessageStore) {
 	t.Cleanup(func() { store.Close() })
 	b := New(dir, Options{}, Hooks{})
 	b.store, b.client = store, client
-	b.sender = &Sender{client: client, store: store, enabled: true, limits: SendLimits{6, 60, 300, 3}}
+	b.sender = &Sender{client: client, store: store, enabled: true, limits: SendLimits{6, 60, 300, 3, 5}}
 	return b, client, store
 }
 

@@ -543,9 +543,71 @@ func chatOf(ctx context.Context, c *plugins.Context, conv plugins.Conversation) 
 			"AND substr(k.Number, -10) = ? ORDER BY i.TimeStamp DESC LIMIT 1", n)
 	})
 	if err == nil && id == 0 {
-		err = errs.Plugin("This chat is not in Viber Desktop", 0)
+		err = errs.Plugin(notInViber, 0)
 	}
 	return id, err
+}
+
+const (
+	notInViber = "This chat is not in Viber Desktop"
+	noNewChat  = "Starting a new chat on Viber from here is not possible yet: write the first message from the phone"
+)
+
+// Find says which numbers can be written to on Viber from here: those Viber Desktop's contacts (the
+// phone's address book, as the phone gave it) have with a member id (on Viber), and with a chat in
+// Viber Desktop already (one cannot be started from here yet: one with none is not offered). Read
+// from the last copy of Viber's database, then from a fresh one for those not found in it.
+func (Plugin) Find(ctx context.Context, c *plugins.Context, phones []string) ([]plugins.Found, error) {
+	found := map[string]bool{}
+	read := func() error {
+		q, err := db.ReadOnly(snapshotPath(c))
+		if err != nil {
+			return err
+		}
+		defer q.Close()
+		for _, p := range phones {
+			n := last10(p)
+			if found[p] || len(n) < 6 {
+				continue
+			}
+			// on Viber, with a chat there already: a new chat cannot be started from here yet
+			if db.Int(q, "SELECT count(*) FROM ChatRelation r JOIN Contact k USING (ContactID) "+
+				"JOIN ChatInfo i ON i.ChatID = r.ChatID WHERE (i.Token IS NULL OR i.Token = '' OR i.Token = 0) "+
+				"AND substr(k.Number, -10) = ? AND coalesce(k.MID, '') <> ''", n) > 0 {
+				found[p] = true
+			}
+		}
+		return nil
+	}
+	result := func() (out []plugins.Found) {
+		for _, p := range phones {
+			if found[p] {
+				out = append(out, plugins.Found{Phone: p, Service: "viber", Key: p})
+				found[p] = false // a number given twice, once
+			}
+		}
+		return out
+	}
+	had := false
+	if _, err := os.Stat(snapshotPath(c)); err == nil {
+		if err := read(); err == nil {
+			if len(found) == len(phones) {
+				return result(), nil
+			}
+			had = true
+		}
+	}
+	l := lockOf(c)
+	l.Lock()
+	err := snapshot(ctx, c)
+	l.Unlock()
+	if err == nil {
+		err = read()
+	}
+	if err != nil && !had {
+		return nil, err
+	}
+	return result(), nil // Viber Desktop away: what the last copy said
 }
 
 // eventOf is Viber Desktop's event of a message (by its token).
@@ -669,7 +731,7 @@ func sentDir(c *plugins.Context) (string, error) {
 	return d, nil
 }
 
-// Send sends into a chat Viber Desktop has: a file (Viber sends it without a caption: the text
+// Send sends into a chat Viber Desktop has (a first message, conv.ID 0, too): a file (Viber sends it without a caption: the text
 // follows as a message), the text, a reply quoting a message, mentions of the group's people. What
 // went is known from the events Viber adds for it, and returned once it is in the archive.
 func (Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conversation, text string,
@@ -690,6 +752,11 @@ func (Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Convers
 		return nil, err
 	}
 	chat, err := chatOf(ctx, c, conv)
+	var ue *errs.UserError
+	if conv.ID == 0 && errors.As(err, &ue) && ue.Text == notInViber {
+		// a first message to someone found (Find): only into a chat Viber Desktop has already
+		return nil, errs.Plugin(noNewChat, 0)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -160,7 +160,7 @@ func TestItsCardSaysWhatTheStoreSays(t *testing.T) {
 	p := Plugin{}
 	facts := p.InfoFacts(f.ctx())
 	if facts[0].Value != "not linked yet (Link a device)" || !strings.HasPrefix(facts[1].Value, "on, 0 of 1000 today") ||
-		facts[2].Value != "15 a minute, 300 an hour, 1000 a day; the same text into 3 chats an hour" {
+		facts[2].Value != "15 a minute, 300 an hour, 1000 a day; the same text into 3 chats an hour; 5 new chats a day" {
 		t.Fatalf("no device: %v", facts)
 	}
 	// a device linked, the connection last said connected: not so now (it does not run)
@@ -248,7 +248,7 @@ func TestAMentionIsWrittenAsWhatsAppHasIt(t *testing.T) {
 
 // fakeRunning is a bridge as Run leaves it once connected, but with no client (never connected).
 func fakeRunning(t *testing.T, f *fixture, enabled bool) *Bridge {
-	b := New(f.dir, Options{Send: enabled, Limits: SendLimits{6, 60, 300, 3}}, Hooks{})
+	b := New(f.dir, Options{Send: enabled, Limits: SendLimits{6, 60, 300, 3, 5}}, Hooks{})
 	b.store, b.sender = f.ms, &Sender{store: f.ms, enabled: enabled, limits: b.opts.Limits}
 	runningMu.Lock()
 	running[key(f.dir)] = b
@@ -470,5 +470,27 @@ func TestTheImportBringsTheStoresMessages(t *testing.T) {
 	}
 	if news != 1 || again != 1 {
 		t.Fatalf("new events %d, then %d", news, again)
+	}
+}
+
+// A first message (a conversation not in the archive yet) goes only to someone in the owner's contacts.
+func TestFirstMessageOnlyToContacts(t *testing.T) {
+	f := bridgeInstance(t)
+	fakeRunning(t, f, true)
+	conv := plugins.Conversation{Key: "+15559990000", Service: "whatsapp"}
+	var ue *errs.UserError
+	if _, err := (Plugin{}).Send(context.Background(), f.ctx(), conv, "hi", nil, nil, nil); !errors.As(err, &ue) || ue.Text != notAContact || ue.Status != 409 {
+		t.Fatalf("not a contact: %v", err)
+	}
+	a, err := archive.Open(f.ctx().Store().Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aid := a.Address(archive.H("phone", "+15559990000"))
+	a.Exec("UPDATE person SET contact_uid = 'uid-1' WHERE id = (SELECT person_id FROM person_address WHERE address_id = ?)", aid)
+	a.Commit()
+	a.Close()
+	if _, err := (Plugin{}).Send(context.Background(), f.ctx(), conv, "hi", nil, nil, nil); !errors.As(err, &ue) || ue.Text != "not connected to WhatsApp" {
+		t.Fatalf("a contact: on to the bridge: %v", err)
 	}
 }

@@ -36,6 +36,10 @@ func (store *MessageStore) migrateStatus() error {
 			id TEXT,
 			text_hash TEXT
 		);
+		CREATE TABLE IF NOT EXISTS started (
+			at INTEGER,               -- Unix seconds
+			chat_jid TEXT PRIMARY KEY -- a chat the owner wrote in first, from here
+		);
 	`)
 	return err
 }

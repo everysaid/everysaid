@@ -171,12 +171,12 @@ func TestBlockKeepsTheFirstReason(t *testing.T) {
 
 func TestSendRefusesWhenOffOrBlocked(t *testing.T) {
 	s := oldStore(t)
-	off := &Sender{store: s, enabled: false, limits: SendLimits{6, 60, 300, 3}}
+	off := &Sender{store: s, enabled: false, limits: SendLimits{6, 60, 300, 3, 5}}
 	if code, _ := off.send(SendRequest{Recipient: "1", Message: "hi"}); code != 403 {
 		t.Fatalf("off: %d", code)
 	}
 	s.block("temporary ban: x")
-	on := &Sender{store: s, enabled: true, limits: SendLimits{6, 60, 300, 3}}
+	on := &Sender{store: s, enabled: true, limits: SendLimits{6, 60, 300, 3, 5}}
 	if code, _ := on.send(SendRequest{Recipient: "1", Message: "hi"}); code != 423 {
 		t.Fatalf("blocked: %d", code)
 	}

@@ -19,13 +19,16 @@ func init() {
 		"No QR code was scanned in time":                           "Κανένας κωδικός QR δεν σαρώθηκε εγκαίρως",
 		"Sending allowed again at the bridge (blocked for: {why})": "Η αποστολή επιτρέπεται ξανά στη γέφυρα (ήταν μπλοκαρισμένη για: {why})",
 		"Sending limits":                                           "Όρια αποστολής",
-		"{minute} a minute, {hour} an hour, {day} a day; the same text into {same} chats an hour": "{minute} το λεπτό, {hour} την ώρα, {day} τη μέρα· το ίδιο κείμενο σε {same} συνομιλίες την ώρα",
-		"Messages sent at most a minute": "Μέγιστα μηνύματα το λεπτό",
+		"{minute} a minute, {hour} an hour, {day} a day; the same text into {same} chats an hour; {new} new chats a day": "{minute} το λεπτό, {hour} την ώρα, {day} τη μέρα· το ίδιο κείμενο σε {same} συνομιλίες την ώρα· {new} νέες συνομιλίες τη μέρα",
+		"New chats started from here at most a day":                                      "Μέγιστες νέες συνομιλίες από εδώ τη μέρα",
+		"A first message to someone found on WhatsApp, only to people in your contacts":  "Πρώτο μήνυμα σε κάποιον που βρέθηκε στο WhatsApp, μόνο σε άτομα από τις επαφές σου",
+		"A new WhatsApp chat starts from here only with someone in your contacts":        "Νέα συνομιλία στο WhatsApp ξεκινά από εδώ μόνο με κάποιον από τις επαφές σου",
+		"Messages sent at most a minute":                                                 "Μέγιστα μηνύματα το λεπτό",
 		"Bulk sending is what WhatsApp blocks accounts for; 0 in any of these, no limit": "Το WhatsApp μπλοκάρει λογαριασμούς για μαζικές αποστολές· 0 σε οποιοδήποτε από αυτά σημαίνει χωρίς όριο",
-		"Messages sent at most an hour":                           "Μέγιστα μηνύματα την ώρα",
-		"Messages sent at most a day":                             "Μέγιστα μηνύματα τη μέρα",
-		"The same longer text into at most so many chats an hour": "Το ίδιο μεγάλο κείμενο σε τόσες συνομιλίες το πολύ την ώρα",
-		"unknown action":                                          "άγνωστη ενέργεια",
+		"Messages sent at most an hour":                                                  "Μέγιστα μηνύματα την ώρα",
+		"Messages sent at most a day":                                                    "Μέγιστα μηνύματα τη μέρα",
+		"The same longer text into at most so many chats an hour":                        "Το ίδιο μεγάλο κείμενο σε τόσες συνομιλίες το πολύ την ώρα",
+		"unknown action": "άγνωστη ενέργεια",
 	} {
 		EL[k] = v
 	}
