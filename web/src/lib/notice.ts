@@ -77,7 +77,14 @@ export function noticeLines(n: Notice, t: TFunction): string[] {
       return [timer(a.seconds)];
     case "pin":
       return [typeof a.seconds === "number" && a.seconds > 0 ? say("pinFor", undefined, { duration: durationWords(a.seconds, t) }) : say("pin")];
-    case "unpin": case "poll_end": case "group_call": case "payment": case "gift": case "unsupported": case "unreadable":
+    case "group_call":
+      if (typeof a.seconds === "number" && a.seconds > 0) return [t("notice.group_callLasted", { duration: durationWords(a.seconds, t) })];
+      if (typeof a.scheduled === "number" && a.scheduled > 0)
+        return [t("notice.group_callScheduled", { date: new Date(a.scheduled * 1000).toLocaleString() })];
+      return [say("group_call")];
+    case "group_call_invite":
+      return [say("group_call_invite", undefined, { who: (Array.isArray(a.who) ? (a.who as Person[]) : []).map(name).join(", ") })];
+    case "unpin": case "poll_end": case "payment": case "gift": case "unsupported": case "unreadable":
     case "signed_up": case "screenshot": case "view_once":
       return [say(n.code)];
     case "story": // a story shared, or one that mentions the owner

@@ -116,8 +116,19 @@ func telegramNotice(a *archive.Archive, m map[string]any, person *tgPeople, own 
 		return groupNotice(by, map[string]any{"type": "avatar", "removed": true})
 	case "MessageActionPinMessage": // the message pinned is the one it answers
 		return notice("pin", map[string]any{"seconds": nil})
-	case "MessageActionGroupCall":
+	case "MessageActionGroupCall": // the message is edited when it ends: how long it lasted
+		if d, ok := action["duration"]; ok && truthy(d) {
+			return notice("group_call", map[string]any{"seconds": toInt(d)})
+		}
 		return notice("group_call", nil)
+	case "MessageActionGroupCallScheduled":
+		return notice("group_call", map[string]any{"scheduled": toInt(action["schedule_date"])})
+	case "MessageActionInviteToGroupCall":
+		var invited []any
+		for _, u := range list(action["users"]) {
+			invited = append(invited, who(toInt(u)))
+		}
+		return notice("group_call_invite", map[string]any{"who": invited})
 	case "MessageActionSetMessagesTTL":
 		return notice("timer", map[string]any{"seconds": toInt(action["period"])})
 	case "MessageActionPaymentSent", "MessageActionPaymentSentMe", "MessageActionPaymentRefunded",
