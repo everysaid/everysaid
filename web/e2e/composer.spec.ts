@@ -91,13 +91,8 @@ test("a person found on another service, and a first message there", async ({ pa
   await via.click();
   await page.getByRole("menuitem", { name: /Αναζήτηση σε άλλες υπηρεσίες|Look for them on other services/ }).click();
   const viber = await page.evaluate(async () => (await (await fetch("/api/services", { headers: { "X-Everysaid": "1" } })).json()).viber.name);
-  await expect.poll(async () => {
-    await via.click();
-    const n = await page.getByRole("menuitem", { name: viber }).count();
-    await page.keyboard.press("Escape");
-    return n;
-  }, { timeout: 10_000 }).toBe(1);
-  await via.click();
+  // the menu stays open: what was found shows in it as it comes
+  await expect(page.getByRole("menuitem", { name: viber })).toBeVisible({ timeout: 10_000 });
   await page.getByRole("menuitem", { name: viber }).click();
   await expect(via).toHaveAttribute("data-via", "viber");
   await page.locator("[data-composer-body] textarea").fill("quiet: a first message");
