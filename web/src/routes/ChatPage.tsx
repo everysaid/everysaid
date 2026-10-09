@@ -811,6 +811,25 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
       .then(() => qc.invalidateQueries({ queryKey: ["chat", chatId] }))
       .catch((e) => toast.error((e as Error).message));
   };
+  if (!services.length && findable) {                // nowhere to write yet: look for them first
+    return (
+      <div data-find-first className="flex flex-col items-center gap-2 border-t border-line bg-panel px-3 py-3">
+        <Button variant="primary" size="sm" onClick={find} disabled={Object.values(reach).includes("asking")}>
+          <Search className="size-4" />{t("chat.findElsewhere")}
+        </Button>
+        {Object.keys(reach).length > 0 && (
+          <div className="flex flex-wrap justify-center gap-3 text-xs text-muted">
+            {Object.entries(reach).map(([s, v]) => (
+              <span key={s} data-reach={s} className="inline-flex items-center gap-1">
+                <ServiceIcon id={s} className="size-4" />{service(s).name}
+                {v === "asking" ? <Spinner className="size-3.5" /> : <span>{t(v === "none" ? "chat.notFound" : "chat.notAnswered")}</span>}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
   if (!services.length || !svc) return null;          // calls only: nothing to write
   const can = !!editing || (replyTo ? replyable : sendable).includes(via);
   const canFile = can && fileable.includes(via);

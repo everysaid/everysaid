@@ -710,7 +710,7 @@ type SendRequest struct {
 // File: the text its caption, only through a plugin that can send files.
 func (h *Host) Send(ctx context.Context, chatID string, r SendRequest) (out M, err error) {
 	defer db.Recover(&err)
-	c := core.Index(h.store).Chats[chatID]
+	c := core.ChatOf(h.store, chatID)
 	if c == nil {
 		return nil, core.ErrNotFound
 	}
