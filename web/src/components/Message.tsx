@@ -75,9 +75,33 @@ function Ticks({ r, onInfo }: { r: Receipts; onInfo?: () => void }) {
   );
 }
 
-export function Thumb({ a, onOpen, className }: { a: Attachment; onOpen?: () => void; className?: string }) {
+// LoopVideo is a GIF (sent as a short video without sound): played in place, silent and over and
+// over, while it is in view; fetched only once it first comes into view.
+function LoopVideo({ a, className }: { a: Attachment; className: string }) {
+  const ref = useRef<HTMLVideoElement>(null);
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    const v = ref.current;
+    if (!v) return;
+    const io = new IntersectionObserver(([e]) => {
+      if (e.isIntersecting) {
+        setSeen(true);
+        v.play().catch(() => {});
+      } else v.pause();
+    });
+    io.observe(v);
+    return () => io.disconnect();
+  }, []);
+  return (
+    <video ref={ref} src={seen ? `/api/media/${a.sha256}/original` : undefined} poster={thumbUrl(a.sha256)}
+      muted loop playsInline autoPlay preload="none" className={className} />
+  );
+}
+
+export function Thumb({ a, onOpen, className, loop }: { a: Attachment; onOpen?: () => void; className?: string; loop?: boolean }) {
   const { t } = useTranslation();
   const isVideo = a.mime?.startsWith("video/");
+  const size = "block max-h-80 min-h-24 w-full min-w-40 max-w-72 object-cover";
   if (a.available === "gone") {
     return (
       // a line, not a picture's place: nothing is there to see
@@ -88,15 +112,15 @@ export function Thumb({ a, onOpen, className }: { a: Attachment; onOpen?: () => 
   }
   return (
     <button onClick={onOpen} className={cn("relative block overflow-hidden rounded-xl bg-black/10", className)} aria-label={isVideo ? t("kind.video") : t("kind.image")}>
-      <img
+      {isVideo && loop ? <LoopVideo a={a} className={size} /> : <img
         src={thumbUrl(a.sha256)}
         alt=""
         loading="lazy"
         decoding="async"
-        className="block max-h-80 min-h-24 w-full min-w-40 max-w-72 object-cover"
+        className={size}
         onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")}
-      />
-      {isVideo && (
+      />}
+      {isVideo && !loop && (
         <span className="absolute inset-0 grid place-items-center">
           <span className="grid size-12 place-items-center rounded-full bg-black/55 text-white backdrop-blur"><Play className="size-6 translate-x-0.5" /></span>
         </span>
@@ -382,7 +406,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
           )}
           {media.length > 0 && (
             <div className={cn("grid gap-1", media.length > 1 && "grid-cols-2")}>
-              {media.map((a) => <Thumb key={a.sha256} a={a} onOpen={() => onOpen(a, m)} />)}
+              {media.map((a) => <Thumb key={a.sha256} a={a} loop={m.subtype === "gif"} onOpen={() => onOpen(a, m)} />)}
             </div>
           )}
           {others.map((a) => <div key={a.sha256} className="my-1"><AttachmentView a={a} onOpen={(x) => onOpen(x, m)} /></div>)}
