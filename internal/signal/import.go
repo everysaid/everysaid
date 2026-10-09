@@ -403,6 +403,9 @@ func describe(e event) (string, *archive.Extras, string) {
 		// a sticker's emoji, or a file's own caption: words where the message has none (and what is
 		// left of a sticker whose file never came)
 		text = strings.TrimSpace(cmp.Or(deref(atts[0].Emoji), deref(atts[0].Caption)))
+		if text == "" && kind == "file" && deref(atts[0].Filename) != "" { // a file: its name, as Signal shows it
+			text = "📎 " + deref(atts[0].Filename)
+		}
 	}
 	if e.ViewOnce && x.SubtypeCode == "" { // to be seen once, kept here: said as such
 		x.SubtypeCode = "signal:view_once"

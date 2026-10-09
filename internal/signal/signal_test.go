@@ -1426,6 +1426,10 @@ func TestDescribeWithoutWords(t *testing.T) {
 	if text != "at sea" {
 		t.Fatalf("caption %q", text)
 	}
+	_, _, text = describe(event{Attachments: []attachmentEv{{ContentType: str("application/pdf"), Filename: str("plan.pdf")}}})
+	if text != "📎 plan.pdf" {
+		t.Fatalf("file %q", text)
+	}
 	_, x, _ := describe(event{Contacts: []sharedContact{{Organization: str("ACME"), Phones: []string{"+1555"}}}})
 	if x.Text != "ACME +1555" {
 		t.Fatalf("card %q", x.Text)
