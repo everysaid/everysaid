@@ -50,6 +50,10 @@ export function noticeLines(n: Notice, t: TFunction): string[] {
             return say(x.on ? "group.adminOn" : "group.adminOff", who);
           case "title": case "created":
             return say(`group.${x.type}`, undefined, { title: String(x.title ?? "") });
+          case "topic": // a forum's topic: made, renamed, closed or opened again
+            if (x.closed === true) return say("group.topicClosed");
+            if (x.closed === false) return say("group.topicOpened");
+            return say(x.created ? "group.topic" : "group.topicTitle", undefined, { title: String(x.title ?? "") });
           case "approval": // on or off where the service said which
             return say(x.on === true ? "group.approvalOn" : x.on === false ? "group.approvalOff" : "group.approval");
           case "avatar":

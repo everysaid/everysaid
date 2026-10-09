@@ -162,7 +162,8 @@ changes in place).
     `on`); `title` (`title`); `description` (`text`); `avatar`; `timer` (`seconds`, 0: off);
     `access_info`, `access_members`, `access_link` (`level`: anyone, members, admins, off);
     `link_reset`; `announcements` (`on`); `approval` (joining needs an admin's approval: `on`,
-    absent where the service does not say which); `banned`, `unbanned` (`who`); `ended`. No actions: the
+    absent where the service does not say which); `banned`, `unbanned` (`who`); `ended`; `topic` (a
+    forum's: `created`, `title`, `closed`). No actions: the
     group changed, how is not known.
   - `timer` (`seconds`, 0: off), `pin` (`seconds`, null: for good) and `unpin` (the message is the
     one it answers), `poll` (on the poll itself: `question`, `options` `[{text, votes}]`,
