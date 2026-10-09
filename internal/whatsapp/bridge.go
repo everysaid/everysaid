@@ -354,7 +354,8 @@ func (b *Bridge) handle(client *whatsmeow.Client, store *MessageStore, evt any) 
 		handleStateEvent(store, v, b.log)
 		if _, ok := v.(*events.Connected); ok {
 			go refreshBlocklist(client, store, b.log) // not in the event handler: it waits for an answer
-			select { // the history waiting for a connection
+			// the history waiting for a connection
+			select {
 			case b.historyWake <- struct{}{}:
 			default:
 			}
