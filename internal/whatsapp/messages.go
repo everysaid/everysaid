@@ -196,6 +196,9 @@ func (store *MessageStore) storeMessage(m StoredMessage) error {
 			reply_text = excluded.reply_text, forwarded = excluded.forwarded,
 			lat = excluded.lat, lon = excluded.lon, place = excluded.place,
 			direct_path = coalesce(excluded.direct_path, messages.direct_path),
+			-- a new place for the file: worth trying again
+			media_error = CASE WHEN excluded.direct_path IS NOT messages.direct_path AND excluded.direct_path IS NOT NULL
+				THEN NULL ELSE messages.media_error END,
 			mentions = CASE WHEN messages.edited THEN messages.mentions ELSE excluded.mentions END`,
 		m.ID, m.ChatJID, m.Sender, m.Content, m.Timestamp, m.IsFromMe, m.MediaType, m.Filename, m.URL,
 		m.MediaKey, m.FileSHA256, m.FileEncSHA256, m.FileLength, m.Kind, m.Subtype, m.ReplyTo, m.ReplyText,

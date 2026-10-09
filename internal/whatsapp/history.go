@@ -2,11 +2,15 @@ package whatsapp
 
 import (
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"time"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waWeb"
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
@@ -104,6 +108,52 @@ func fetchHistory(ctx context.Context, client *whatsmeow.Client, store *MessageS
 			return
 		case <-wake:
 		case <-time.After(next):
+		}
+	}
+}
+
+// historyStub keeps what an entry of the history with no message stands for, where it is known: a
+// missed call (as the call log's), a message deleted for everyone.
+func historyStub(client *whatsmeow.Client, store *MessageStore, chat types.JID, w *waWeb.WebMessageInfo, logger waLog.Logger) {
+	key := w.GetKey()
+	t := time.Unix(int64(w.GetMessageTimestamp()), 0)
+	switch st := w.GetMessageStubType(); st {
+	case waWeb.WebMessageInfo_CALL_MISSED_VOICE, waWeb.WebMessageInfo_CALL_MISSED_VIDEO,
+		waWeb.WebMessageInfo_CALL_MISSED_GROUP_VOICE, waWeb.WebMessageInfo_CALL_MISSED_GROUP_VIDEO:
+		video := st == waWeb.WebMessageInfo_CALL_MISSED_VIDEO || st == waWeb.WebMessageInfo_CALL_MISSED_GROUP_VIDEO
+		if _, err := store.db.Exec(`INSERT OR IGNORE INTO calls (id, source, chat_jid, is_from_me, is_group, video, timestamp, outcome, duration)
+			VALUES (?, 'log', ?, ?, ?, ?, ?, 'MISSED', 0)`, key.GetID(), chat.String(), key.GetFromMe(),
+			chat.Server == types.GroupServer, video, t); err != nil {
+			logger.Warnf("Failed to store a missed call from history: %v", err)
+		}
+	case waWeb.WebMessageInfo_REVOKE:
+		store.db.Exec("UPDATE messages SET deleted = 1 WHERE id = ? AND chat_jid = ?", key.GetID(), chat.String())
+	}
+}
+
+// historyVotes keeps the votes a poll of the history carries (already read by the phone).
+func historyVotes(client *whatsmeow.Client, store *MessageStore, chat types.JID, w *waWeb.WebMessageInfo, logger waLog.Logger) {
+	for _, u := range w.GetPollUpdates() {
+		k := u.GetPollUpdateMessageKey()
+		voter := k.GetParticipant()
+		switch {
+		case k.GetFromMe():
+			voter = ownJID(client)
+		case voter == "":
+			voter = chat.String()
+		}
+		if j, err := types.ParseJID(voter); err == nil {
+			voter = j.ToNonAD().String()
+		}
+		chosen := []string{}
+		for _, h := range u.GetVote().GetSelectedOptions() {
+			chosen = append(chosen, hex.EncodeToString(h))
+		}
+		js, _ := json.Marshal(chosen)
+		if _, err := store.db.Exec(`INSERT INTO poll_votes VALUES (?, ?, ?, ?, ?) ON CONFLICT (chat_jid, poll_id, voter)
+			DO UPDATE SET options = excluded.options, timestamp = excluded.timestamp WHERE excluded.timestamp >= poll_votes.timestamp`,
+			chat.String(), w.GetKey().GetID(), voter, string(js), time.UnixMilli(u.GetSenderTimestampMS())); err != nil {
+			logger.Warnf("Failed to store a poll vote from history: %v", err)
 		}
 	}
 }

@@ -4,7 +4,10 @@ import (
 	"testing"
 	"time"
 
+	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waHistorySync"
+	"go.mau.fi/whatsmeow/proto/waWeb"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
@@ -104,5 +107,38 @@ func TestMediaRetryNotOnPhone(t *testing.T) {
 	store.db.QueryRow("SELECT media_error FROM messages WHERE id = 'IMG'").Scan(&failed)
 	if failed == "" || failed == askedAgain {
 		t.Fatalf("%q", failed)
+	}
+}
+
+// The history's entries with no message: a missed call kept, a deletion applied; a poll's votes kept.
+func TestHistoryStubsAndVotes(t *testing.T) {
+	b, client, store := offline(t)
+	person := types.NewJID("15551234567", types.DefaultUserServer)
+	b.handle(client, store, text(person, person, "GONE", "soon deleted", false))
+	now := uint64(time.Now().Unix())
+	key := func(id string) *waCommon.MessageKey {
+		return &waCommon.MessageKey{RemoteJID: proto.String(person.String()), ID: proto.String(id)}
+	}
+	msgs := []*waHistorySync.HistorySyncMsg{
+		{Message: &waWeb.WebMessageInfo{Key: key("CALL"), MessageTimestamp: proto.Uint64(now),
+			MessageStubType: waWeb.WebMessageInfo_CALL_MISSED_VIDEO.Enum()}},
+		{Message: &waWeb.WebMessageInfo{Key: key("GONE"), MessageTimestamp: proto.Uint64(now),
+			MessageStubType: waWeb.WebMessageInfo_REVOKE.Enum()}},
+		{Message: &waWeb.WebMessageInfo{Key: key("POLL"), MessageTimestamp: proto.Uint64(now),
+			Message: &waE2E.Message{PollCreationMessage: &waE2E.PollCreationMessage{Name: proto.String("When?"),
+				Options: []*waE2E.PollCreationMessage_Option{{OptionName: proto.String("Mon")}}}},
+			PollUpdates: []*waWeb.PollUpdate{{PollUpdateMessageKey: key("VOTE"), SenderTimestampMS: proto.Int64(1),
+				Vote: &waE2E.PollVoteMessage{SelectedOptions: [][]byte{{0xab}}}}}}},
+	}
+	b.handle(client, store, &events.HistorySync{Notification: &waE2E.HistorySyncNotification{},
+		Data: &waHistorySync.HistorySync{Conversations: []*waHistorySync.Conversation{{ID: proto.String(person.String()), Messages: msgs}}}})
+	if count(t, store, "SELECT count(*) FROM calls WHERE id = 'CALL' AND outcome = 'MISSED' AND video") != 1 {
+		t.Fatal("missed call")
+	}
+	if count(t, store, "SELECT count(*) FROM messages WHERE id = 'GONE' AND deleted") != 1 {
+		t.Fatal("deletion")
+	}
+	if count(t, store, "SELECT count(*) FROM poll_votes WHERE poll_id = 'POLL' AND options = '[\"ab\"]'") != 1 {
+		t.Fatal("vote")
 	}
 }
