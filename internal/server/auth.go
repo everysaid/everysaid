@@ -96,6 +96,11 @@ CREATE TABLE IF NOT EXISTS push_subscription (
     keys TEXT NOT NULL,
     created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS push_service_off (   -- the services a device is not notified of
+    endpoint TEXT NOT NULL,                     -- a push_subscription's (gone with it)
+    service TEXT NOT NULL,
+    PRIMARY KEY (endpoint, service)
+);
 CREATE TABLE IF NOT EXISTS mcp_token (
     hash TEXT PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES user,

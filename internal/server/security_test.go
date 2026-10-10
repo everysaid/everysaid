@@ -359,7 +359,7 @@ func TestPushGoesOnlyToTheInternet(t *testing.T) {
 	browser, _ := ecdh.P256().GenerateKey(rand.Reader)
 	b64 := base64.RawURLEncoding
 	keys := fmt.Sprintf(`{"p256dh":%q,"auth":%q}`, b64.EncodeToString(browser.PublicKey().Bytes()), b64.EncodeToString(randomBytes(16)))
-	c.s.Push.Send([]subscription{{"https://" + ln.Addr().String() + "/x", keys}}, []map[string]any{{"title": "t"}})
+	c.s.Push.Send([]subscription{{endpoint: "https://" + ln.Addr().String() + "/x", keys: keys}}, []map[string]any{{"title": "t"}})
 	must(t, accepted.Load() == 0, "the push went to this machine")
 }
 

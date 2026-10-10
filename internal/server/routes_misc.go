@@ -336,6 +336,33 @@ func (s *Server) miscRoutes() {
 		return M{"ok": true}, nil
 	})
 
+	// the services a device of the user's is not notified of (where their own app notifies already)
+	h("GET /api/push/services", bodyNone, func(q *req) (any, error) {
+		off, ok := s.Push.ServicesOff(q.uid, q.str("endpoint"))
+		if !ok {
+			return nil, errs.New("push.bad_subscription", 404, nil)
+		}
+		if off == nil {
+			off = []string{}
+		}
+		return M{"off": off}, nil
+	})
+
+	h("PUT /api/push/services", bodyRequired, func(q *req) (any, error) {
+		endpoint, _ := q.get("endpoint").(string)
+		var off []string
+		list, _ := q.get("off").([]any)
+		for _, v := range list {
+			if svc, ok := v.(string); ok && svc != "" {
+				off = append(off, svc)
+			}
+		}
+		if !s.Push.SetServicesOff(q.uid, endpoint, off) {
+			return nil, errs.New("push.bad_subscription", 404, nil)
+		}
+		return M{"ok": true}, nil
+	})
+
 	h("POST /api/push/test", bodyNone, func(q *req) (any, error) {
 		subs := s.Push.Subscriptions(s.Store.Path)
 		if len(subs) == 0 {

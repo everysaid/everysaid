@@ -127,6 +127,12 @@ func hiddenServices(s *Store) map[int64]bool {
 	return out
 }
 
+// Hidden are what the user hid: services (ids) and conversations (of hidden accounts). Nothing of
+// them shows, nor notifies.
+func Hidden(s *Store) (services, conversations map[int64]bool) {
+	return hiddenServices(s), hiddenConversations(s)
+}
+
 // hiddenConversations are the conversations held only by the owner's accounts the user hid
 // (setting `hidden_accounts`, address ids). One also held by an account shown stays.
 func hiddenConversations(s *Store) map[int64]bool {

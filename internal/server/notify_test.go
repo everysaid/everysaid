@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -116,4 +117,82 @@ func TestAnArchivedChatStaysArchivedAndSaysNothingOfNewMessages(t *testing.T) {
 	must(t, event["notify"] == nil, "no notification of what was read: %v", event["notify"])
 	time.Sleep(200 * time.Millisecond)
 	must(t, rec.count() == 1, "no push of what was read: %d sent", rec.count())
+}
+
+// endpointRecorder is a push service that keeps which endpoints it was sent to.
+type endpointRecorder struct {
+	mu   sync.Mutex
+	sent []string
+}
+
+func (p *endpointRecorder) Do(r *http.Request) (*http.Response, error) {
+	p.mu.Lock()
+	p.sent = append(p.sent, r.URL.String())
+	p.mu.Unlock()
+	return &http.Response{StatusCode: 201, Body: io.NopCloser(strings.NewReader("")), Header: http.Header{}}, nil
+}
+
+func (p *endpointRecorder) take() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := p.sent
+	p.sent = nil
+	return out
+}
+
+// A device can leave out services (their own apps notify there already): it gets nothing of them,
+// the other devices still do; nothing at all of a service the user hid. Only the user's own device's
+// choice is read or changed.
+func TestNotificationsByServicePerDevice(t *testing.T) {
+	defer config.DeleteSecret("vapid-private")
+	c := newServer(t)
+	c.login()
+	rec := &endpointRecorder{}
+	c.s.Push.httpClient = rec
+	pushEndpointOK = func(context.Context, string) bool { return true }
+	t.Cleanup(func() { pushEndpointOK = pushEndpoint })
+	for _, e := range []string{"https://push.invalid/phone", "https://push.invalid/desk"} {
+		browser, _ := ecdh.P256().GenerateKey(rand.Reader)
+		must(t, c.post("/api/push/subscribe", M{"endpoint": e, "keys": M{"p256dh": b64.EncodeToString(browser.PublicKey().Bytes()),
+			"auth": b64.EncodeToString(randomBytes(16))}}).status == 200, "subscribe")
+	}
+	s := c.s.Host.Store()
+	var conv int64
+	var service string
+	db.Row(s.Read(), "SELECT m.conversation_id, sv.name FROM message m JOIN service sv ON sv.id = m.service_id "+
+		"JOIN conversation c ON c.id = m.conversation_id WHERE NOT m.outgoing AND NOT c.is_group ORDER BY m.id LIMIT 1", nil, &conv, &service)
+	cid := core.ChatOfConversation(s, conv)
+	must(t, cid != "" && !core.States(s)[cid].Muted && !core.States(s)[cid].Archived, "a chat that notifies: %s", cid)
+	arrive := func() []string {
+		before := db.Int(s.Read(), "SELECT max(id) FROM message")
+		s.MustWrite(func(tx *sql.Tx) {
+			db.Exec(tx, "INSERT INTO message (service_id, conversation_id, ts, outgoing, sender_id, kind_id, text) "+
+				"SELECT service_id, conversation_id, ?, 0, sender_id, kind_id, 'hi' FROM message "+
+				"WHERE conversation_id = ? AND NOT outgoing LIMIT 1", time.Now().UnixMilli(), conv)
+		})
+		ch := c.s.Host.Listen()
+		defer c.s.Host.Unlisten(ch)
+		c.s.Host.Emit(M{"type": "new", "messages": []int64{before, db.Int(s.Read(), "SELECT max(id) FROM message")}})
+		select {
+		case <-ch:
+		case <-time.After(5 * time.Second):
+			t.Fatal("no event")
+		}
+		time.Sleep(300 * time.Millisecond)
+		got := rec.take()
+		sort.Strings(got)
+		return got
+	}
+	must(t, len(arrive()) == 2, "both devices")
+
+	must(t, c.do("PUT", "/api/push/services", M{"endpoint": "https://push.invalid/phone", "off": []string{service}}, H).status == 200, "leave out")
+	must(t, c.getJSON("/api/push/services?endpoint=https://push.invalid/phone")["off"].([]any)[0] == service, "kept")
+	got := arrive()
+	must(t, len(got) == 1 && strings.HasSuffix(got[0], "/desk"), "the other device only: %v", got)
+	must(t, c.get("/api/push/services?endpoint=https://push.invalid/someone-else").status == 404, "not a device of the user's")
+	must(t, c.do("PUT", "/api/push/services", M{"endpoint": "https://push.invalid/someone-else", "off": []string{}}, H).status == 404,
+		"not a device of the user's")
+
+	must(t, c.do("PUT", "/api/settings", M{"hidden_services": []string{service}}, H).status == 200, "hide")
+	must(t, len(arrive()) == 0, "nothing of a hidden service")
 }
