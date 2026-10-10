@@ -366,7 +366,9 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
           className={cn(
             "relative rounded-bubble text-[15px] leading-snug shadow-sm",
             out ? "bg-bubble-out text-bubble-out-fg" : "border border-line/60 bg-bubble-in",
-            out ? (last ? "rounded-br-md" : "") : last ? "rounded-bl-md" : "",
+            // a run of one sender's messages held together: the corners toward the next and the one
+            // before, on the sender's side, tighter; the run's outer corners round (one alone: all)
+            out ? [!first && "rounded-tr-md", !last && "rounded-br-md"] : [!first && "rounded-tl-md", !last && "rounded-bl-md"],
             onlyMedia ? "p-1" : "px-3 py-2",
             m.deleted && "italic opacity-70",
             highlight && "flash",
