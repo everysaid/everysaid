@@ -189,7 +189,7 @@ func TestABridgeFromBeforeImportsAsItDid(t *testing.T) {
 	eq(t, "changes", runBridge(t, a, path), map[string]int{})
 	eq(t, "O1", msgRow(a, "O1", "text"), []any{"hello"})
 	eq(t, "O2", kindOf(a, "O2"), "image")
-	must(t, BridgeCalls(a, NewCallSet(a), path, "")) // no calls table: nothing, no error
+	must(t, BridgeCalls(a, NewCallSet(a), path, nil)) // no calls table: nothing, no error
 }
 
 func TestBridgeCalls(t *testing.T) {
@@ -209,7 +209,7 @@ func TestBridgeCalls(t *testing.T) {
 		db.Exec(d, "INSERT INTO calls VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", c...)
 	}
 	before := a.Int("SELECT count(*) FROM call")
-	must(t, BridgeCalls(a, NewCallSet(a), path, ""))
+	must(t, BridgeCalls(a, NewCallSet(a), path, nil))
 	a.Commit()
 	var got [][]any
 	for _, r := range db.Maps(a.Tx(), "SELECT outgoing, answered, duration, detail, video FROM call ORDER BY ts") {
@@ -219,7 +219,7 @@ func TestBridgeCalls(t *testing.T) {
 	eq(t, "calls", got, [][]any{{int64(1), int64(1), int64(125), nil, int64(1)}, {int64(0), int64(0), int64(0), "missed", int64(0)},
 		{int64(0), int64(1), int64(90), nil, int64(0)}, {int64(0), int64(0), int64(0), "rejected", int64(0)},
 		{int64(0), int64(0), int64(0), "missed", int64(0)}})
-	must(t, BridgeCalls(a, NewCallSet(a), path, "")) // again: nothing new
+	must(t, BridgeCalls(a, NewCallSet(a), path, nil)) // again: nothing new
 	eq(t, "count again", a.Int("SELECT count(*) FROM call"), before+5)
 }
 

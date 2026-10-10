@@ -6,7 +6,6 @@ package whatsapp
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -17,10 +16,14 @@ import (
 	"testing"
 	"time"
 
+	"go.mau.fi/whatsmeow/proto/waAdv"
+	"go.mau.fi/whatsmeow/types"
+
 	"everysaid/internal/archive"
 	"everysaid/internal/config"
 	"everysaid/internal/core"
 	"everysaid/internal/errs"
+	"everysaid/internal/keys"
 	"everysaid/internal/plugins"
 )
 
@@ -37,6 +40,26 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	os.RemoveAll(dir)
 	os.Exit(code)
+}
+
+// linkDevice gives a store folder a linked device in keys.db (the account 15550009999, device 7).
+func linkDevice(t *testing.T, dir string) {
+	ctx := context.Background()
+	c, err := OpenDevices(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := c.NewDevice()
+	device.ID = &types.JID{User: "15550009999", Device: 7, Server: types.DefaultUserServer}
+	device.Account = &waAdv.ADVSignedDeviceIdentity{Details: []byte{}, AccountSignature: make([]byte, 64),
+		AccountSignatureKey: make([]byte, 32), DeviceSignature: make([]byte, 64)}
+	if err := c.PutDevice(ctx, device); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := keys.Open()
+	if err := recordDevice(d, dir, *device.ID); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // sendInConfig writes config.toml with [whatsapp] send as given.
@@ -164,9 +187,7 @@ func TestItsCardSaysWhatTheStoreSays(t *testing.T) {
 		t.Fatalf("no device: %v", facts)
 	}
 	// a device linked, the connection last said connected: not so now (it does not run)
-	d, _ := sql.Open("sqlite", dsn(filepath.Join(f.dir, "whatsapp.db")))
-	d.Exec("CREATE TABLE whatsmeow_device (jid TEXT); INSERT INTO whatsmeow_device VALUES ('1@s.whatsapp.net')")
-	d.Close()
+	linkDevice(t, f.dir)
 	f.ms.setState("connection", "connected")
 	f.ms.db.Exec("INSERT INTO sent (at, chat_jid, id, text_hash) VALUES (?, 'c', 'x', 'h')", time.Now().Unix()-60)
 	facts = p.InfoFacts(f.ctx())
@@ -366,26 +387,11 @@ func TestAStoreOfTheBridgeOpens(t *testing.T) {
 		t.Skip("EVERYSAID_TEST_BRIDGE_STORE not given")
 	}
 	dir := t.TempDir()
-	for _, name := range []string{"whatsapp.db", "messages.db"} {
-		b, err := os.ReadFile(filepath.Join(from, name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		os.WriteFile(filepath.Join(dir, name), b, 0o600)
-	}
-	if !HasDevice(dir) {
-		t.Fatal("no device seen")
-	}
-	c, err := OpenDevices(context.Background(), dir, nil)
+	raw, err := os.ReadFile(filepath.Join(from, "messages.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	dev, err := c.GetFirstDevice(context.Background())
-	if err != nil || dev.ID == nil || dev.ID.User != "15550001111" || dev.ID.Device != 7 || dev.PushName != "Test" {
-		t.Fatalf("device %+v %v", dev, err)
-	}
-	t.Logf("noise key %x, registration %d", dev.NoiseKey.Pub[:], dev.RegistrationID)
-	c.Close()
+	os.WriteFile(filepath.Join(dir, "messages.db"), raw, 0o600)
 	ms, err := OpenMessages(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -432,10 +438,8 @@ func TestRunWaitsToBeLinked(t *testing.T) {
 	if Running(dir) != nil {
 		t.Fatal("still running")
 	}
-	for _, name := range []string{"whatsapp.db", "messages.db"} {
-		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
-			t.Fatal(err)
-		}
+	if _, err := os.Stat(filepath.Join(dir, "messages.db")); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	"everysaid/internal/db"
 	"everysaid/internal/errs"
 	"everysaid/internal/i18n"
+	"everysaid/internal/keys"
 	"everysaid/internal/plugins"
 	"everysaid/internal/plugins/sourcekit"
 )
@@ -86,9 +87,10 @@ func limits(c *plugins.Context) SendLimits {
 		PerDay: int(c.Num("send_per_day")), SameText: int(c.Num("send_same_text")), NewChats: int(c.Num("send_new_chats"))}
 }
 
+// paths are the store folder's messages.db and keys.db, where whatsmeow keeps the device and the
+// chats' settings.
 func paths(c *plugins.Context) (string, string) {
-	d := storeDir(c)
-	return filepath.Join(d, "messages.db"), filepath.Join(d, "whatsapp.db")
+	return filepath.Join(storeDir(c), "messages.db"), keys.Path()
 }
 
 // bridgeState is what the bridge last recorded about its connection (bridge_state: connection,
@@ -267,7 +269,7 @@ func standaloneAnswers(c *plugins.Context) bool {
 }
 
 // Live runs the connection, and imports what it keeps (messages.db) and the chats' state, archived,
-// pinned, muted (whatsapp.db) as they change.
+// pinned, muted (whatsmeow's, in keys.db) as they change.
 func (p Plugin) Live(ctx context.Context, c *plugins.Context) error {
 	if standaloneAnswers(c) {
 		return errs.Plugin("The standalone WhatsApp bridge is running: stop it first (both on one device would end its session)", 409)

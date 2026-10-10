@@ -48,7 +48,7 @@ Contents:
  Android phone ──adb── content query/read ─────► <export>/<device>/android.db (+ *.txt.gz, mms-parts/)
                ──adb pull Android/data/com.viber.voip/files ──► a folder of Viber media
  Viber Desktop (linked to a phone) ── LD_PRELOAD bridge, snapshot ──► <cache>/viber/<instance>/desktop.db
- WhatsApp source (internal/whatsapp, live) ──────► <data>/whatsapp-bridge/messages.db, whatsapp.db, media/
+ WhatsApp source (internal/whatsapp, live) ──────► <data>/whatsapp-bridge/messages.db, media/ (keys: <data>/keys.db)
  Telegram API ── everysaid telegram-sync ────────► <cache>/telegram/telegram.db, media/
 
                      everysaid import sms calls viber whatsapp telegram voip media   (or the sources in the app)
@@ -648,8 +648,9 @@ any device; its `Events.IsRead` stays 0).
     - `bridge_state` (key/value: `connection`, `send_enabled`, `send_blocked`, `ban_until`),
       `bridge_events` (what WhatsApp said about the connection), `sent` (what it sent, for its
       limits).
-  - `whatsapp.db`, whatsmeow's store, has `whatsmeow_lid_map` (`lid`, `pn`) and
-    `whatsmeow_contacts` (names).
+  - whatsmeow's store, in `<data>/keys.db` (encrypted, `internal/keys`), has `whatsmeow_lid_map`
+    (`lid`, `pn`), `whatsmeow_contacts` (names) and `whatsmeow_chat_settings`; `whatsapp_device`
+    names the device of each store folder.
   - The store fills the gap between the last iPhone backup and now.
 - **Not Android.** WhatsApp on Android keeps its database encrypted (`msgstore.db.crypt15`); it is
   not read. Its media folder goes with the app when it is uninstalled.
@@ -1247,7 +1248,7 @@ their own.) The photo-library work is done in the app's media view, or with the 
 | `<backup_root>/<UDID>/` | encrypted iPhone backup (`<data>/iphone-backup` by default) | as written by idevicebackup2 | the user's to back up: the only copy of the call history |
 | `<cache>/iphone/` | decrypted DBs and new media (`iphone-sync`) | 700/600 | no: made again from the backup |
 | `<export>/<device>/` | Android exports (`<data>/android` by default) | 700/600 | yes, while they are not all in the archive |
-| `<data>/whatsapp-bridge/` | the WhatsApp store: `messages.db`, `whatsapp.db` (the session's keys), `media/` | the folder's | yes |
+| `<data>/whatsapp-bridge/` | the WhatsApp store: `messages.db`, `media/` (the session's keys are in `<data>/keys.db`) | the folder's | yes |
 | `<cache>/viber/<instance>/desktop.db` | Viber Desktop snapshot | 700/600 | no: made again by the bridge |
 | `<cache>/telegram/` | `telegram.db`, `media/` (`telegram-sync`) | 700/600 | no: read again from the API |
 | `<data>/media/` | the archive's media until they go to the photo library (`[media] store`) | 700/600 | yes, with the data folder: some exist nowhere else |

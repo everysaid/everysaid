@@ -24,7 +24,7 @@
 //	desktop_export = "..."          # a decrypted copy of Viber Desktop's database (made before the live bridge)
 //
 //	[whatsapp]
-//	bridge = "..."                  # the WhatsApp store folder (messages.db, whatsapp.db)
+//	bridge = "..."                  # the WhatsApp store folder (messages.db, media/)
 //
 //	[telegram]
 //	media = true                    # false: telegram-sync --media downloads nothing (the app's source has its own setting)

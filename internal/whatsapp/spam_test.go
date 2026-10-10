@@ -1,6 +1,7 @@
 package whatsapp
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,13 +15,11 @@ import (
 func TestForgetDropsTheChat(t *testing.T) {
 	f := bridgeInstance(t)
 	lid := "99887766554433@lid"
-	devices, err := db.Open(filepath.Join(f.dir, "whatsapp.db"))
+	devices, err := Devices(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	db.Exec(devices, "CREATE TABLE whatsmeow_lid_map (lid TEXT PRIMARY KEY, pn TEXT UNIQUE NOT NULL)")
-	db.Exec(devices, "INSERT INTO whatsmeow_lid_map VALUES ('99887766554433', '15551234567')")
-	devices.Close()
+	db.Exec(devices, "INSERT OR REPLACE INTO whatsmeow_lid_map (lid, pn) VALUES ('99887766554433', '15551234567')")
 	file := filepath.Join("media", "x", "M1.jpg")
 	os.MkdirAll(filepath.Join(f.dir, "media", "x"), 0o700)
 	os.WriteFile(filepath.Join(f.dir, file), []byte("jpg"), 0o600)

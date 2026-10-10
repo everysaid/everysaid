@@ -131,7 +131,7 @@ TOML, optional: every key has a general default.
 | `[import] importers` | all, in the registry's order | which importers `everysaid import` runs by default |
 | `[import] carrier_notices` | none | the parsers of carriers' missed-call SMS to use (`gr`: the Greek one) |
 | `[viber] desktop_export` | none | a decrypted copy of Viber Desktop's database, imported where there is one |
-| `[whatsapp] bridge` | none (the source uses `<data>/whatsapp-bridge`) | the WhatsApp store folder (`messages.db`, `whatsapp.db`, `media/`); `everysaid import whatsapp` reads it only when set |
+| `[whatsapp] bridge` | none (the source uses `<data>/whatsapp-bridge`) | the WhatsApp store folder (`messages.db`, `media/`; the session's keys are in `keys.db`); `everysaid import whatsapp` reads it only when set |
 | `[whatsapp] send`, `download` | false, true | whether the WhatsApp source may send at all (its own setting is a second key), and whether it downloads the files of messages as they arrive |
 | `[imlogs] adium`, `pidgin` | none | the folders of Adium (`Adium 2.0`, `Users/Default` or `Logs`) and of Pidgin (`.purple` or its `logs`), for the "Adium and Pidgin logs" source |
 | `[telegram] media`, `no_media` | true, none | `telegram-sync --media`: false downloads nothing; `no_media` lists chat ids whose media are passed over |
@@ -306,7 +306,7 @@ can send). Secret chats are on the devices only and cannot be had.
 
 The `whatsapp-bridge` source (`internal/whatsapp`) is a whatsmeow client inside the app, linked to
 the account as a device (like WhatsApp Web). It keeps what arrives after it is linked, files
-included, in its store folder (`messages.db`, `whatsapp.db`, `media/`), and sends where
+included, in its store folder (`messages.db`, `media/`, the session's keys in `keys.db`), and sends where
 `[whatsapp] send` allows. The importer takes from it what the iPhone backup does not have, matched
 by stanza id; LIDs (`...@lid`) are mapped to numbers through the iPhone's WhatsApp contacts and
 the store's `whatsmeow_lid_map`. `bridges/whatsapp/` is the same client as a separate program with
