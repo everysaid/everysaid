@@ -36,7 +36,7 @@ var (
 		return importers.TelegramMembers(a, nil, "", chats)
 	}
 	importMedia = func(a *archive.Archive, out func(string)) error {
-		return importers.Media(a, out, importers.TelegramMedia)
+		return importers.Media(a, out, importers.TelegramMedia, importers.PhotosTelegram)
 	}
 )
 

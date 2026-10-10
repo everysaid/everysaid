@@ -16,6 +16,7 @@ import (
 	"crypto/md5"
 	"database/sql"
 	"encoding/hex"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"everysaid/internal/archive"
+	"everysaid/internal/telegramstore"
 )
 
 // ChatPhotosFromNotices records the group photos the archive's messages tell of: a notice of a new
@@ -385,6 +387,53 @@ func PhotosWhatsAppBridge(database string, devices *sql.DB) MediaStep {
 				a.HandlePhoto(h, "whatsapp", sha, first)
 				a.HandlePhoto(h, "whatsapp", sha, last)
 			}
+		}
+	}
+}
+
+// PhotosTelegram: the photos the Telegram connection recorded (telegram_photo of its store), each at
+// its first and last sighting: a user's to their handle, a group's to its conversation; the files
+// taken into the store (Move), a row whose file has gone known by its digest.
+func PhotosTelegram(a *archive.Archive, s *Store) {
+	if !exists(telegramstore.DB()) {
+		return
+	}
+	d := tgStore(telegramstore.DB())
+	defer d.Close()
+	s.Move = true // the connection's downloads: kept in the store only
+	person := newTGPeople(d)
+	root := telegramstore.Media()
+	for _, r := range maps(d, "SELECT peer_id, photo_id, file, sha256, first_seen, last_seen FROM telegram_photo ORDER BY first_seen, rowid") {
+		sha := ""
+		if toInt(r["photo_id"]) != 0 {
+			sha = strOrEmpty(r["sha256"])
+			rel := filepath.FromSlash(strOrEmpty(r["file"]))
+			local := rel != "" && filepath.IsLocal(rel)
+			switch {
+			case sha != "" && a.Exists("SELECT 1 FROM media WHERE sha256 = ?", sha):
+				if local {
+					s.held(filepath.Join(root, rel), sha) // had: the connection's copy goes
+				}
+			case local:
+				if sha = s.Keep(filepath.Join(root, rel)); sha == "" {
+					continue // its file gone before the archive had it
+				}
+			default:
+				continue
+			}
+		}
+		peer := toInt(r["peer_id"])
+		first, last := toInt(r["first_seen"]), toInt(r["last_seen"])
+		if peer < 0 {
+			if conv, ok := a.FindConversation("telegram", fmt.Sprint(peer)); ok {
+				a.ChatPhoto(conv, "telegram", sha, first)
+				a.ChatPhoto(conv, "telegram", sha, last)
+			}
+			continue
+		}
+		if h := person.of(peer, true); a.Known(h) {
+			a.HandlePhoto(h, "telegram", sha, first)
+			a.HandlePhoto(h, "telegram", sha, last)
 		}
 	}
 }
