@@ -119,11 +119,21 @@ func (p Plugin) InfoFacts(c *plugins.Context) []plugins.Fact {
 		facts = append(facts, plugins.Fact{Label: "Account", Value: phone})
 	}
 	if aci != "" {
-		if s, err := OpenStore("", c.ID); err == nil {
-			contacts, groups := s.Counts()
-			s.Close()
-			facts = append(facts, plugins.Fact{Label: "Contacts", Value: fmt.Sprint(contacts)},
-				plugins.Fact{Label: "Groups", Value: fmt.Sprint(groups)})
+		k.mu.Lock()
+		live := k.live
+		k.mu.Unlock()
+		s, err := (*Store)(nil), error(nil)
+		if live != nil {
+			s = live.store
+		} else if s, err = OpenStore("", c.ID); err == nil {
+			defer s.Close()
+		}
+		if err == nil {
+			// (the live connection's store, closed if it ends meanwhile: then no counts)
+			if contacts, groups, err := s.Counts(); err == nil {
+				facts = append(facts, plugins.Fact{Label: "Contacts", Value: fmt.Sprint(contacts)},
+					plugins.Fact{Label: "Groups", Value: fmt.Sprint(groups)})
+			}
 		}
 	}
 	return facts
@@ -239,12 +249,19 @@ func (n *conn) setStatus(raw json.RawMessage) error {
 	n.k.mu.Lock()
 	n.k.status = st
 	n.k.mu.Unlock()
+	was, _ := n.c.State["aci"].(string)
+	switch {
+	case st.Linked && was != st.ACI:
+		n.c.SaveState(M{"aci": st.ACI, "phone": st.Phone})
+	case !st.Linked && was != "":
+		// the device of an earlier link is not there (that of Signal's earlier helper, or one whose
+		// keys are gone): this computer is to be linked again, as a new device
+		n.c.SaveState(M{"aci": "", "phone": "", "contacts_synced": false, "unlinked": false, "connected_at": nil})
+		n.synced = false
+	}
 	if st.Linked {
 		n.own = st.ACI
 		n.store.Account(st)
-		if was, _ := n.c.State["aci"].(string); was != st.ACI {
-			n.c.SaveState(M{"aci": st.ACI, "phone": st.Phone})
-		}
 	}
 	return nil
 }

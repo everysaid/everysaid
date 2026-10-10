@@ -1524,6 +1524,23 @@ func TestPrune(t *testing.T) {
 	}
 }
 
+// An instance linked before (by Signal's earlier helper, whose device does not carry over) whose
+// device is not there: to be linked again, its card and actions say so.
+func TestLinkedBeforeWithoutADevice(t *testing.T) {
+	c, _, _ := newPlugin(t, nil)
+	c.SaveState(M{"aci": fakeOwn, "phone": fakePhone, "contacts_synced": true})
+	p := Plugin{}
+	if err := p.RunImport(c); err == nil || !strings.Contains(err.Error(), "Not linked") {
+		t.Fatalf("import: %v", err)
+	}
+	if c.State["aci"] != "" || c.State["contacts_synced"] != false {
+		t.Fatalf("state %v", c.State)
+	}
+	if got := p.IdleActions(c); strings.Join(got, ",") != "sync,unlink" {
+		t.Fatalf("idle %v: Link is offered", got)
+	}
+}
+
 // A chat's state on the phone (the storage service, the transfer): into the archive as the
 // instance's report.
 func TestChatState(t *testing.T) {
