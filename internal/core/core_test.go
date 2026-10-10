@@ -299,7 +299,7 @@ func TestPersonAndNames(t *testing.T) {
 	if p["name"] != chat["title"] || len(p["handles"].([]core.M)) == 0 {
 		t.Fatal(p["name"], chat["title"])
 	}
-	if err := core.SetPerson(s, pid, core.To("Κάποιος Άλλος"), core.Opt[string]{}, core.Opt[string]{}); err != nil {
+	if err := core.SetPerson(s, pid, core.To("Κάποιος Άλλος"), core.Opt[string]{}, core.Opt[string]{}, core.Opt[string]{}); err != nil {
 		t.Fatal(err)
 	}
 	if core.Person(s, pid)["name"] != "Κάποιος Άλλος" {
@@ -522,15 +522,15 @@ func TestNameOrder(t *testing.T) {
 		t.Fatal("not self named")
 	}
 	none := core.Opt[string]{}
-	core.SetPerson(s, pid, none, none, core.To("whatsapp/profile")) // pinned to one source
+	core.SetPerson(s, pid, none, none, core.To("whatsapp/profile"), core.Opt[string]{}) // pinned to one source
 	if core.PeopleOf(s).Name(pid) != "Push" {
 		t.Fatal(core.PeopleOf(s).Name(pid))
 	}
-	core.SetPerson(s, pid, none, none, core.To(fmt.Sprintf("address:%d", other))) // pinned to one handle
+	core.SetPerson(s, pid, none, none, core.To(fmt.Sprintf("address:%d", other)), core.Opt[string]{}) // pinned to one handle
 	if core.PeopleOf(s).Name(pid) != "Book Name" {
 		t.Fatal(core.PeopleOf(s).Name(pid))
 	}
-	core.SetPerson(s, pid, core.To("Mine"), none, none)
+	core.SetPerson(s, pid, core.To("Mine"), none, none, core.Opt[string]{})
 	if got := info(); got != [2]string{"Mine", "user"} { // the user's own name comes first
 		t.Fatal(got)
 	}
@@ -1129,7 +1129,7 @@ func TestPeopleWithoutANameToName(t *testing.T) {
 		t.Fatal("not the most first")
 	}
 	first := i64(list[0]["id"])
-	core.SetPerson(s, first, core.To("The courier"), core.Opt[string]{}, core.Opt[string]{})
+	core.SetPerson(s, first, core.To("The courier"), core.Opt[string]{}, core.Opt[string]{}, core.Opt[string]{})
 	for _, p := range core.UnnamedPeople(s, 100, 0, nil)["items"].([]core.M) {
 		if i64(p["id"]) == first {
 			t.Fatal("named person still unnamed")

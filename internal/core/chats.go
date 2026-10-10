@@ -1031,16 +1031,18 @@ func Chats(s *Store, o ChatsOptions) []M {
 		if it.lastTS > since {
 			u = unread(s, chat, since)
 		}
-		avatar := false
+		avatar := ""
 		if chat.Type == "person" {
-			avatar = ppl.Avatar(chat.PersonID) != ""
+			avatar = ppl.Avatar(chat.PersonID)
+		} else {
+			avatar = GroupAvatar(s, chat)
 		}
 		out = append(out, M{
 			"id": chat.ID, "type": chat.Type, "title": it.title,
 			"person_id": personIDOf(chat), "conversation_id": conversationIDOf(chat),
 			"services": chat.ServiceList(), "last_ts": it.lastTS,
 			"last": lastItem(s, chat, false), "unread": u,
-			"pinned": it.pinned, "muted": it.st.Muted, "archived": it.st.Archived, "avatar": avatar,
+			"pinned": it.pinned, "muted": it.st.Muted, "archived": it.st.Archived, "avatar": nullable(avatar),
 		})
 	}
 	return out
@@ -1092,6 +1094,11 @@ func GetChat(s *Store, chatID string) M {
 		"conversations": nonNil(c.Conversations), "last_ts": c.LastTS, "pinned": st.Pinned,
 		"muted": st.Muted, "archived": st.Archived, "read_until": st.ReadUntil, "state_from": st.Origin,
 		"state_reports": stateReports(s, chatID), "state_user": userState}
+	if c.Type == "person" {
+		out["avatar"] = nullable(PeopleOf(s).Avatar(c.PersonID))
+	} else {
+		out["avatar"] = nullable(GroupAvatar(s, c))
+	}
 	convs := c.Conversations
 	lk := lookupsOf(s)
 	out["last_service"] = nil

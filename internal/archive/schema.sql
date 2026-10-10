@@ -54,8 +54,10 @@ CREATE TABLE IF NOT EXISTS person (
     contact_uid TEXT,                   -- the vCard UID of their contact
     contact_url TEXT,                   -- where that contact lives (a CardDAV href, any provider)
     note TEXT,
-    name_source TEXT                    -- where the name comes from when the user pinned one: a source of
+    name_source TEXT,                   -- where the name comes from when the user pinned one: a source of
                                         -- names ('contacts', 'whatsapp/book'), or 'address:<id>'; NULL: by order
+    photo_source TEXT                   -- where the photo comes from when the user pinned one: 'contacts', a
+                                        -- service, 'address:<id>' (that handle's latest), 'none'; NULL: by order
 );
 CREATE TABLE IF NOT EXISTS person_address (
     address_id INTEGER PRIMARY KEY REFERENCES address,

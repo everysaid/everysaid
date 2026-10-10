@@ -544,6 +544,9 @@ func BuildArchive(seed int64) (path string, err error) {
 	for _, l := range links {
 		store.Link("demo/"+l.service, l.src, l.path, l.rel, l.mid)
 	}
+	if err := photos(a, store, people, pics, seed, nowSec); err != nil {
+		return "", err
+	}
 	a.Resolve()
 	a.Exec("INSERT OR REPLACE INTO setting VALUES ('unread_since', ?)", pyjson.Dumps(ms(now.Add(-days(2))), true))
 	a.Commit()

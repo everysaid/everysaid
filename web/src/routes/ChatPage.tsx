@@ -670,7 +670,7 @@ function ChatHeader({ chat, wide, onInfo, onJumpDate, hidden, onHide }: {
       )}
       <div className="flex min-w-0 flex-1 items-center gap-3 px-1">
         <button onClick={onInfo} className="shrink-0 rounded-full" tabIndex={-1} aria-hidden>       {/* the name beside it is the same, for keyboards */}
-          {chat && <Avatar name={title} src={avatarUrl({ type: chat.type, person_id: chat.person_id, avatar: chat.person?.avatar })} group={chat.type === "group"} size={40} />}
+          {chat && <Avatar name={title} src={avatarUrl({ id: chat.id, type: chat.type, person_id: chat.person_id, avatar: chat.avatar ?? chat.person?.avatar })} group={chat.type === "group"} size={40} />}
         </button>
         <div className="min-w-0 flex-1">
           <button onClick={onInfo} className="block max-w-full truncate rounded-lg text-left font-semibold hover:underline">{title}</button>

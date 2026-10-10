@@ -146,7 +146,7 @@ changes in place).
   user merged), `account` (the user's own handles), `handle_name` (every name a service showed for a
   handle). Suggested merges are shown to the user, never applied by themselves; the same phone
   number on two services is one address, so one person. Contacts from an address book (`contact`,
-  `contact_address`) are linked by `contact_uid`/`contact_url`; an avatar is the contact's photo,
+  `contact_address`) are linked by `contact_uid`/`contact_url`; the services' photos of handles and groups are kept with their history (`handle_photo`, `chat_photo`), and a person's photo is chosen as their name is (the order of names, or the user's pin `photo_source`), an address book's at the place of `contacts`, a service's at that of `<service>/profile`;
   else initials. Viber member ids are kept in `viber_member`.
 - **Media**: `media` (by content), `attachment`, `library_link` (pointing to a library instance),
   `media_same` (a copy linked to the kept one), `media_decision` (5).
