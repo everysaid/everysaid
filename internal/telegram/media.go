@@ -26,6 +26,7 @@ import (
 	"everysaid/internal/archive"
 	"everysaid/internal/config"
 	"everysaid/internal/db"
+	"everysaid/internal/importers"
 	"everysaid/internal/plugins"
 )
 
@@ -575,21 +576,9 @@ func (Plugin) FetchMedia(ctx context.Context, c *plugins.Context, messageID int6
 	return dest, nil
 }
 
-// storedFile is the file of a message in the archive's store ("" for none there).
+// storedFile is a message's file in the archive's store ("" for none there).
 func storedFile(c *plugins.Context, messageID int64) string {
-	var rel string
-	if db.Row(c.Store().Read(), "SELECT md.path FROM attachment a JOIN media md ON md.sha256 = a.sha256 "+
-		"WHERE a.message_id = ? ORDER BY a.rowid LIMIT 1", []any{messageID}, &rel) {
-		if p := filepath.Join(archive.MediaRoot(), filepath.FromSlash(rel)); isRegular(p) {
-			return p
-		}
-	}
-	return ""
-}
-
-func isRegular(p string) bool {
-	st, err := os.Stat(p)
-	return err == nil && st.Mode().IsRegular()
+	return importers.StoredFile(c.Store().Read(), messageID)
 }
 
 // mediaBackfill is how far back the files not downloaded yet are looked for, at each connection
