@@ -1,6 +1,7 @@
 package whatsapp
 
-// The profile photos of people and groups (and the account's own): asked of WhatsApp gently, one
+// The profile photos of people and groups (and the account's own) the account has chats with
+// (not the members of groups it never wrote with: not asked for, for now): asked of WhatsApp gently, one
 // at a time with a pause between, each chat at most every few days, unless WhatsApp says one
 // changed (events.Picture), which is asked at once. Each photo is downloaded into
 // <store>/photos/<jid>/<picture id>.jpg and recorded in profile_photo (a row for each photo seen,

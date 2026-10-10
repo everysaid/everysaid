@@ -34,6 +34,17 @@ func TestPhotosFromEntities(t *testing.T) {
 	}{{501, "user", Dump(user)}, {-502, "group", Dump(group)}, {-1000000000503, "channel", Dump(channel)}} {
 		db.Exec(store, "INSERT OR REPLACE INTO telegram_chat (id, kind, title, archived, json) VALUES (?, ?, 'x', 0, ?)", r.id, r.kind, r.js)
 	}
+	// a group's member the account has no chat with: not asked for
+	stranger := &tg.User{ID: 504, AccessHash: 3, Photo: &tg.UserProfilePhoto{PhotoID: 60}}
+	stranger.SetFlags()
+	db.Exec(store, "INSERT OR REPLACE INTO telegram_entity VALUES (504, ?)", Dump(stranger))
+	defer db.Exec(store, "DELETE FROM telegram_entity WHERE id = 504; DELETE FROM telegram_photo_fail")
+	// a download that failed lately: not again yet
+	db.Exec(store, "INSERT INTO telegram_photo_fail VALUES (-502, 80, 900)")
+	if todo, _, _ := scanPhotos(store, 1000); len(todo) != 1 || todo[0].peer != 501 {
+		t.Fatalf("to download: %+v", todo)
+	}
+	db.Exec(store, "UPDATE telegram_photo_fail SET at = ?", 1000-int64(photoRetry.Seconds()))
 	todo, changed, err := scanPhotos(store, 1000)
 	if err != nil {
 		t.Fatal(err)

@@ -2,7 +2,8 @@ package telegram
 
 // The photos of people and groups (the account's own too), as the users and chats Telegram gives
 // carry them (their photo's id): kept up to date by every message and member list, so a change is
-// seen without asking. Every few minutes the store's users and chats are looked over; a photo not
+// seen without asking. Every few minutes the dialogs (the people and groups the account has chats
+// with, its own Saved Messages among them; not the members of groups) are looked over; a photo not
 // had yet is downloaded (its big size, one at a time with a pause between), into
 // media/photos/<peer>/<photo id>.jpg, and recorded in telegram_photo (a row for each photo, its last
 // sighting moved while it stays; photo_id 0 when there is none), for the importer
@@ -30,9 +31,10 @@ import (
 )
 
 var (
-	photoScan  = 10 * time.Minute  // the users and chats looked over
-	photoPause = 5 * time.Second   // between two downloads
-	photoEvery = 24 * time.Hour    // a photo that stays: its sighting moved at most so often
+	photoScan  = 10 * time.Minute // the users and chats looked over
+	photoPause = 5 * time.Second  // between two downloads
+	photoEvery = 24 * time.Hour
+	photoRetry = 24 * time.Hour    // a download that failed tried again after    // a photo that stays: its sighting moved at most so often
 	photoGet   = downloadPeerPhoto // a photo's bytes (a test's own)
 	importPics = func(c *plugins.Context) error {
 		return withArchive(c, func(a *archive.Archive) error { return importers.Media(a, func(string) {}, importers.PhotosTelegram) })
@@ -81,8 +83,7 @@ func scanPhotos(store *sql.DB, now int64) (todo []photoWork, changed int, err er
 		raw string
 	}
 	var all []seen
-	db.Each(store, "SELECT id, json FROM telegram_chat UNION ALL SELECT id, json FROM telegram_entity "+
-		"WHERE id NOT IN (SELECT id FROM telegram_chat)", nil, func(scan func(...any)) {
+	db.Each(store, "SELECT id, json FROM telegram_chat", nil, func(scan func(...any)) {
 		var s seen
 		scan(&s.id, &s.raw)
 		all = append(all, s)
@@ -111,6 +112,9 @@ func scanPhotos(store *sql.DB, now int64) (todo []photoWork, changed int, err er
 					s.id, now, now)
 				changed++
 			}
+		case db.Exists(store, "SELECT 1 FROM telegram_photo_fail WHERE peer_id = ? AND photo_id = ? AND at > ?",
+			s.id, want, now-int64(photoRetry/time.Second)):
+			// failed lately: tried again later
 		default:
 			if input, ok := InputPeer(o); ok {
 				todo = append(todo, photoWork{s.id, want, input})
@@ -198,7 +202,10 @@ func photoRound(ctx context.Context, c *plugins.Context, cn *conn) (int, error) 
 			if ctx.Err() != nil {
 				return changed, nil
 			}
-			continue // not now (the photo gone meanwhile, the connection): the next round
+			// not now (the photo gone meanwhile, the connection): tried again after photoRetry
+			db.Exec(store, "INSERT INTO telegram_photo_fail VALUES (?, ?, ?) ON CONFLICT DO UPDATE SET at = excluded.at",
+				w.peer, w.photoID, time.Now().Unix())
+			continue
 		}
 		if err := keepPhoto(store, w, data, time.Now().Unix()); err != nil {
 			return changed, err
