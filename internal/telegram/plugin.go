@@ -249,3 +249,8 @@ func (l lastLine) Write(p []byte) (int, error) {
 	}
 	return l.w.Write(p)
 }
+
+func (Plugin) Connected(c *plugins.Context) bool {
+	_, on := connected.Load(c.ID)
+	return on
+}

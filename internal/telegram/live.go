@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode/utf16"
@@ -748,6 +749,8 @@ func live(ctx context.Context, c *plugins.Context) error {
 			return err
 		}
 		c.Log("connected to Telegram", nil)
+		online(c.ID, true)
+		defer online(c.ID, false)
 		ctx, stop := context.WithCancel(ctx)
 		defer stop()
 		queue, files := newMemberQueue(), newFileQueue()
@@ -1452,4 +1455,15 @@ func markRead(ctx context.Context, c *plugins.Context, conv plugins.Conversation
 		return 0, err
 	}
 	return 1, nil
+}
+
+// connected are the instances whose live connection is up now (Plugin.Connected).
+var connected sync.Map
+
+func online(iid int64, on bool) {
+	if on {
+		connected.Store(iid, true)
+	} else {
+		connected.Delete(iid)
+	}
 }
