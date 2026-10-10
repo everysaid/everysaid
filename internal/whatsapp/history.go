@@ -137,7 +137,20 @@ func historyStub(client *whatsmeow.Client, store *MessageStore, chat types.JID, 
 			logger.Warnf("Failed to store a missed call from history: %v", err)
 		}
 	case waWeb.WebMessageInfo_REVOKE:
-		store.db.Exec("UPDATE messages SET deleted = 1 WHERE id = ? AND chat_jid = ?", key.GetID(), chat.String())
+		res, err := store.db.Exec("UPDATE messages SET deleted = 1 WHERE id = ? AND chat_jid = ?", key.GetID(), chat.String())
+		if n, _ := res.RowsAffected(); err == nil && n == 0 {
+			// a message the store no longer has (pruned): the deletion reaches the archive's copy
+			sender := key.GetParticipant()
+			if sender == "" {
+				sender = chat.String()
+				if key.GetFromMe() && client != nil && client.Store.ID != nil {
+					sender = client.Store.ID.ToNonAD().String()
+				}
+			}
+			store.db.Exec(`INSERT INTO pending_changes (chat_jid, target, change, sender, is_from_me, content, timestamp)
+				VALUES (?, ?, 'delete', ?, ?, '', ?) ON CONFLICT (chat_jid, target, change) DO NOTHING`,
+				chat.String(), key.GetID(), sender, key.GetFromMe(), t)
+		}
 	}
 }
 

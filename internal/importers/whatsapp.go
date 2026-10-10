@@ -765,6 +765,10 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 		k, isStr := key.(string)
 		if isStr {
 			if mid, ok := a.MessageByKey("whatsapp", k, 0); ok && mid != 0 {
+				// the archive has it from another source: this one's row is recorded as had too
+				// (WhatsAppPrune takes out what the archive has)
+				a.Exec("INSERT OR IGNORE INTO message_origin (source_id, row_key, message_id) VALUES (?, ?, ?)",
+					src[source], rowKey, mid)
 				skipped[source]++
 				return
 			}
@@ -960,13 +964,16 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 					sender = &h
 				}
 				n := groupNotice(by, acts...)
-				// the iPhone's copy of the same change (its own row, a few seconds apart) is kept
-				if a.Exists("SELECT 1 FROM message WHERE conversation_id = ? AND subtype = 'group event' "+
-					"AND subtype_code = 'whatsapp:6' AND abs(ts - ?) <= 5000", convs[jid], tsMS(t)) {
-					return
-				}
 				sum := sha1.Sum([]byte(str(r["actions"])))
 				key := fmt.Sprintf("group_event:%s:%d:%x", jid, tsMS(t), sum[:6])
+				// the iPhone's copy of the same change (its own row, a few seconds apart) is kept, this
+				// row recorded as had by it
+				if mid, ok := a.IntOK("SELECT id FROM message WHERE conversation_id = ? AND subtype = 'group event' "+
+					"AND subtype_code = 'whatsapp:6' AND abs(ts - ?) <= 5000", convs[jid], tsMS(t)); ok {
+					a.Exec("INSERT OR IGNORE INTO message_origin (source_id, row_key, message_id) VALUES (?, ?, ?)",
+						src["bridge"], key, mid)
+					return
+				}
 				add("bridge", key, &archive.Extras{Subtype: "group event", SubtypeCode: "whatsmeow:group_event", Notice: n},
 					convs[jid], tsMS(t), outgoing, sender, "system", "", key)
 			})
@@ -1147,6 +1154,26 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 		}
 		// read up to: what the owner read on any device, as the bridge saw
 		order, reads := bridgeRead(bridge)
+		// and of the messages the store no longer has (pruned), by their copies in the archive
+		if hasTable(bridge, "pending_reads") {
+			for _, r := range maps(bridge, "SELECT chat_jid, id, CAST(read_at AS TEXT) AS ra FROM pending_reads") {
+				jid := str(r["chat_jid"])
+				conv, ok := a.FindConversation("whatsapp", person.conversationKey(jid))
+				if !ok {
+					continue
+				}
+				ts, found := a.IntOK("SELECT ts FROM message WHERE conversation_id = ? AND key = ? AND NOT outgoing",
+					conv, str(r["id"]))
+				if !found {
+					continue
+				}
+				cur, seen := reads[jid]
+				if !seen {
+					order = append(order, jid)
+				}
+				reads[jid] = readAt{max(cur.newest, ts), max(cur.when, isoMS(str(r["ra"])))}
+			}
+		}
 		for _, jid := range order {
 			conv, _ := a.FindConversation("whatsapp", person.conversationKey(jid))
 			a.ReportState(src["bridge"], conv, "read_until", reads[jid].newest, reads[jid].when, reads[jid].when)
@@ -1228,4 +1255,163 @@ func iphoneGroupNotice(a *archive.Archive, person *waPeople, own map[archive.Han
 		return groupNotice(by, actions...)
 	}
 	return nil
+}
+
+// WhatsAppKeep is how long the bridge's store keeps a row once the archive has it: the bridge sends,
+// edits, deletes and downloads within a week (its edit window is 15 minutes, its deletion's two days,
+// its downloads at a start a week back).
+const WhatsAppKeep = 7 * 24 * time.Hour
+
+// WhatsAppPrune takes out of the bridge's store (messages.db) the rows the archive has, last written
+// more than WhatsAppKeep ago (the store's `stored`, kept by triggers: a row changed after an import
+// read it waits for the next one): messages (a file's only once the archive has the file, or it
+// cannot be had; a poll's never: its votes are counted again from it), the reactions, receipts,
+// changes and reads of messages the archive has, chat events, groups' events and calls the archive
+// has; sends older than a day, and all but the last 200 of the connection's events. Nothing is
+// written when there is nothing to take out (a write would bring the live connection's next import).
+func WhatsAppPrune(a *archive.Archive, bridgeDB string) (err error) {
+	defer archive.Recover(&err)
+	if bridgeDB == "" || !exists(bridgeDB) {
+		return nil
+	}
+	d, err := db.Open(bridgeDB, "busy_timeout(5000)")
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	if !hasTable(d, "stored") {
+		return nil // a store from before
+	}
+	cutoff := time.Now().Add(-WhatsAppKeep).Unix()
+	had := func(source string) map[string]int64 {
+		out := map[string]int64{}
+		a.Each("SELECT o.row_key, o.message_id FROM message_origin o JOIN source s ON s.id = o.source_id WHERE s.name = ?",
+			[]any{source}, func(scan func(...any)) {
+				var k string
+				var id int64
+				scan(&k, &id)
+				out[k] = id
+			})
+		return out
+	}
+	imported := had("whatsapp-bridge")
+	calls := map[string]bool{}
+	for _, source := range []string{"whatsapp-bridge/calls", "whatsapp-bridge/call-events"} {
+		a.Each("SELECT o.row_key FROM call_origin o JOIN source s ON s.id = o.source_id WHERE s.name = ?",
+			[]any{source}, func(scan func(...any)) {
+				var k string
+				scan(&k)
+				calls[k] = true
+			})
+	}
+	inArchive := func(key string) bool {
+		mid, ok := a.MessageByKey("whatsapp", key, 0)
+		return ok && mid != 0
+	}
+	old := func(table string) string {
+		return fmt.Sprintf("FROM %[1]s t JOIN stored s ON s.tbl = '%[1]s' AND s.rid = t.rowid WHERE s.at < %d", table, cutoff)
+	}
+	gone := map[string][]int64{}
+	cols := columns(d, "messages")
+	for _, r := range maps(d, "SELECT t.rowid AS rid, t.chat_jid, t.id, coalesce(t.media_type, '') AS media_type, "+
+		pick2(cols["media_error"], "t.media_error", "NULL")+" AS media_error, "+pick2(cols["subtype"], "t.subtype", "NULL")+" AS subtype, "+
+		pick2(cols["poll"], "coalesce(t.poll, '')", "''")+" AS poll "+old("messages")) {
+		jid, rowKey := str(r["chat_jid"]), str(r["chat_jid"])+"/"+str(r["id"])
+		mid, ok := imported[rowKey]
+		if (!ok && !isWAChannel(jid)) || str(r["poll"]) != "" {
+			continue
+		}
+		if str(r["media_type"]) != "" && !isWAChannel(jid) {
+			settled := a.Exists("SELECT 1 FROM attachment WHERE message_id = ?", mid) || str(r["subtype"]) == "view_once" ||
+				(str(r["media_error"]) != "" && str(r["media_error"]) != "asked again")
+			if !settled {
+				continue
+			}
+		}
+		gone["messages"] = append(gone["messages"], toInt(r["rid"]))
+	}
+	for table, key := range map[string]string{"reactions": "message_id", "receipts": "message_id",
+		"pending_changes": "target", "pending_reads": "id"} {
+		if !hasTable(d, table) {
+			continue
+		}
+		for _, r := range maps(d, "SELECT t.rowid AS rid, t."+key+" AS k "+old(table)) {
+			if inArchive(str(r["k"])) {
+				gone[table] = append(gone[table], toInt(r["rid"]))
+			}
+		}
+	}
+	if hasTable(d, "chat_events") {
+		for _, r := range maps(d, "SELECT t.rowid AS rid, t.chat_jid, t.id "+old("chat_events")) {
+			if _, ok := imported[str(r["chat_jid"])+"/"+str(r["id"])]; ok {
+				gone["chat_events"] = append(gone["chat_events"], toInt(r["rid"]))
+			}
+		}
+	}
+	if hasTable(d, "group_event") {
+		for _, r := range maps(d, "SELECT t.rowid AS rid, t.group_jid, CAST(t.timestamp AS TEXT) AS ts, t.actions "+old("group_event")) {
+			t, ok := fromISO(str(r["ts"]))
+			if !ok {
+				continue
+			}
+			sum := sha1.Sum([]byte(str(r["actions"])))
+			if _, ok := imported[fmt.Sprintf("group_event:%s:%d:%x", str(r["group_jid"]), tsMS(t), sum[:6])]; ok {
+				gone["group_event"] = append(gone["group_event"], toInt(r["rid"]))
+			}
+		}
+	}
+	var callIDs []string
+	if hasTable(d, "calls") {
+		for _, r := range maps(d, "SELECT t.rowid AS rid, t.id "+old("calls")) {
+			if calls[str(r["id"])] {
+				gone["calls"] = append(gone["calls"], toInt(r["rid"]))
+				callIDs = append(callIDs, str(r["id"]))
+			}
+		}
+	}
+	dayAgo := time.Now().Add(-24 * time.Hour).Unix()
+	sends := hasTable(d, "sent") && db.Exists(d, "SELECT 1 FROM sent WHERE at < ?", dayAgo)
+	events := hasTable(d, "bridge_events") && db.Int(d, "SELECT count(*) FROM bridge_events") > 200
+	n := len(callIDs)
+	for _, ids := range gone {
+		n += len(ids)
+	}
+	if n == 0 && !sends && !events {
+		return nil
+	}
+	tx, err := d.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for table, ids := range gone {
+		for _, id := range ids {
+			db.Exec(tx, "DELETE FROM "+table+" WHERE rowid = ?", id)
+		}
+	}
+	for _, id := range callIDs {
+		if hasTable(d, "call_participants") {
+			db.Exec(tx, "DELETE FROM call_participants WHERE call_id = ?", id)
+		}
+	}
+	if sends {
+		db.Exec(tx, "DELETE FROM sent WHERE at < ?", dayAgo)
+	}
+	if events {
+		db.Exec(tx, "DELETE FROM bridge_events WHERE rowid NOT IN (SELECT rowid FROM bridge_events ORDER BY rowid DESC LIMIT 200)")
+	}
+	// the times of rows gone some other way (made anew by INSERT OR REPLACE)
+	for _, t := range []string{"messages", "reactions", "receipts", "chat_events", "group_event", "calls", "pending_changes", "pending_reads"} {
+		if hasTable(d, t) {
+			db.Exec(tx, "DELETE FROM stored WHERE tbl = ? AND rid NOT IN (SELECT rowid FROM "+t+")", t)
+		}
+	}
+	return tx.Commit()
+}
+
+func pick2(ok bool, a, b string) string {
+	if ok {
+		return a
+	}
+	return b
 }

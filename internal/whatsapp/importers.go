@@ -6,9 +6,10 @@ package whatsapp
 // media.run(a, [whatsapp_bridge(bridge)]).
 
 import (
+	"context"
+
 	"everysaid/internal/archive"
 	"everysaid/internal/importers"
-	"everysaid/internal/keys"
 	"everysaid/internal/plugins"
 	"everysaid/internal/plugins/sourcekit"
 )
@@ -16,7 +17,7 @@ import (
 // runImport brings the messages, the calls and the files the bridge downloaded.
 func runImport(c *plugins.Context) error {
 	bridge, _ := paths(c)
-	devices, err := keys.Open()
+	devices, err := Devices(context.Background()) // whatsmeow's tables made, also before a first connection
 	if err != nil {
 		return err
 	}
@@ -34,6 +35,9 @@ func runImport(c *plugins.Context) error {
 		}},
 		{Label: "files", Run: func(a *archive.Archive, out func(string)) error {
 			return importers.Media(a, out, importers.MediaWhatsAppBridge(bridge))
+		}},
+		{Label: "WhatsApp store", Run: func(a *archive.Archive, out func(string)) error {
+			return importers.WhatsAppPrune(a, bridge) // what the archive has, a week old, out of messages.db
 		}},
 	})
 	if err != nil {

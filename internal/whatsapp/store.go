@@ -113,6 +113,9 @@ func (store *MessageStore) create() error {
 	if err := store.migratePending(); err != nil {
 		return fmt.Errorf("failed to create the pending changes table: %v", err)
 	}
+	if err := store.migratePrune(); err != nil {
+		return fmt.Errorf("failed to prepare the store's pruning: %v", err)
+	}
 	return nil
 }
 

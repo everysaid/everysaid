@@ -43,8 +43,15 @@ func (store *MessageStore) storeReceipt(chatJID, messageID, jid, kind string, t 
 }
 
 // markedRead records that the account read these messages (on any device); the first time stays.
-func (store *MessageStore) markedRead(ids []string, at time.Time) {
+func (store *MessageStore) markedRead(chat string, ids []string, at time.Time) {
 	for _, id := range ids {
+		// by its id, as the receipt's chat may be the other jid (a LID for a number) of the one stored
+		var n int
+		store.db.QueryRow("SELECT count(*) FROM messages WHERE id = ?", id).Scan(&n)
+		if n == 0 { // a message the store no longer has (pruned): the importer moves the chat's read state
+			store.db.Exec("INSERT OR IGNORE INTO pending_reads (chat_jid, id, read_at) VALUES (?, ?, ?)", chat, id, at)
+			continue
+		}
 		store.db.Exec("UPDATE messages SET read_at = ? WHERE id = ? AND NOT is_from_me AND read_at IS NULL", at, id)
 	}
 }
@@ -62,7 +69,7 @@ func handleReceipt(store *MessageStore, v *events.Receipt, logger waLog.Logger) 
 	case types.ReceiptTypePlayed:
 		kind = "played"
 	case types.ReceiptTypeReadSelf, types.ReceiptTypePlayedSelf:
-		store.markedRead(v.MessageIDs, v.Timestamp)
+		store.markedRead(v.Chat.ToNonAD().String(), v.MessageIDs, v.Timestamp)
 		return
 	default:
 		return
@@ -144,7 +151,7 @@ func (s *Sender) markRead(req ReadRequest) (int, map[string]interface{}) {
 		if err := s.client.MarkRead(context.Background(), b.ids, now, b.chat, b.from, kind); err != nil {
 			return fail(http.StatusInternalServerError, "marking read failed: %v", err)
 		}
-		s.store.markedRead(b.ids, now)
+		s.store.markedRead(b.chat.ToNonAD().String(), b.ids, now)
 		marked += len(b.ids)
 	}
 	return http.StatusOK, map[string]interface{}{"success": true, "marked": marked}
