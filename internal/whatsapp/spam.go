@@ -7,7 +7,6 @@ package whatsapp
 
 import (
 	"context"
-	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +18,7 @@ import (
 
 	"everysaid/internal/db"
 	"everysaid/internal/errs"
+	"everysaid/internal/keys"
 	"everysaid/internal/plugins"
 )
 
@@ -109,11 +109,11 @@ func (p Plugin) ReportSpam(ctx context.Context, c *plugins.Context, conv plugins
 // Forget drops the chat from messages.db (under its number and its LID), with its downloaded files.
 func (p Plugin) Forget(c *plugins.Context, conv plugins.Conversation) (err error) {
 	defer db.Recover(&err)
-	messages, devices := paths(c)
+	messages, _ := paths(c)
 	if _, err := os.Stat(messages); err != nil {
 		return nil // no store: nothing kept
 	}
-	jids := chatJIDs(devices, recipient(conv.Key))
+	jids := chatJIDs(recipient(conv.Key))
 	store, err := OpenMessages(storeDir(c))
 	if err != nil {
 		return err
@@ -146,16 +146,15 @@ func (p Plugin) Forget(c *plugins.Context, conv plugins.Conversation) (err error
 
 // chatJIDs are the jids a one-to-one chat may be kept under: its number's and its LID, as the
 // device's store maps them.
-func chatJIDs(devices, recipient string) []string {
+func chatJIDs(recipient string) []string {
 	var pn, lid string
 	if strings.HasSuffix(recipient, "@lid") {
 		lid = strings.TrimSuffix(recipient, "@lid")
 	} else {
 		pn = strings.TrimSuffix(recipient, "@s.whatsapp.net")
 	}
-	if d, err := sql.Open("sqlite", readOnly(devices)); err == nil {
+	if d, err := keys.Open(); err == nil {
 		func() {
-			defer d.Close()
 			defer func() { recover() }() // no map (a store never linked): the key's own jid only
 			if pn != "" {
 				lid = db.Str(d, "SELECT lid FROM whatsmeow_lid_map WHERE pn = ?", pn)

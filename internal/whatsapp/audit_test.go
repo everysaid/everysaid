@@ -34,11 +34,10 @@ import (
 // offline is a bridge on a temporary store folder with a client that never connects.
 func offline(t *testing.T) (*Bridge, *whatsmeow.Client, *MessageStore) {
 	dir := t.TempDir()
-	c, err := OpenDevices(context.Background(), dir, nil)
+	c, err := OpenDevices(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { c.Close() })
 	device := c.NewDevice() // as linked: the account 15550009999, this device 7
 	device.ID = &types.JID{User: "15550009999", Device: 7, Server: types.DefaultUserServer}
 	device.Account = &waAdv.ADVSignedDeviceIdentity{Details: []byte{}, AccountSignature: make([]byte, 64),
@@ -327,21 +326,13 @@ func TestTheStoreIsPrivate(t *testing.T) {
 	}
 	dir := filepath.Join(t.TempDir(), "store")
 	os.MkdirAll(dir, 0o755)
-	for _, name := range []string{"whatsapp.db", "messages.db"} {
-		os.WriteFile(filepath.Join(dir, name), nil, 0o644)
-	}
-	c, err := OpenDevices(context.Background(), dir, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.Close()
+	os.WriteFile(filepath.Join(dir, "messages.db"), nil, 0o644)
 	s, err := OpenMessages(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
-	for path, want := range map[string]os.FileMode{dir: 0o700, filepath.Join(dir, "whatsapp.db"): 0o600,
-		filepath.Join(dir, "messages.db"): 0o600} {
+	for path, want := range map[string]os.FileMode{dir: 0o700, filepath.Join(dir, "messages.db"): 0o600} {
 		if st, err := os.Stat(path); err != nil || st.Mode().Perm() != want {
 			t.Errorf("%s: %v %v", filepath.Base(path), st.Mode().Perm(), err)
 		}

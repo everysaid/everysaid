@@ -26,6 +26,7 @@ import (
 	"everysaid/internal/archive"
 	"everysaid/internal/config"
 	"everysaid/internal/db"
+	secrets "everysaid/internal/keys"
 )
 
 // WhatsAppIphoneDB and the others are where the iPhone's WhatsApp databases are.
@@ -42,11 +43,17 @@ func BridgeDB() string {
 	return filepath.Join(config.WhatsappBridge, "messages.db")
 }
 
-func BridgeStore() string {
+// Devices is whatsmeow's device store (in keys.db), where config names a bridge; nil otherwise, or
+// where keys.db holds no WhatsApp device. It is shared: never closed here.
+func Devices() *sql.DB {
 	if config.WhatsappBridge == "" {
-		return ""
+		return nil
 	}
-	return filepath.Join(config.WhatsappBridge, "whatsapp.db")
+	d, err := secrets.Open()
+	if err != nil || !hasTable(d, "whatsmeow_device") {
+		return nil
+	}
+	return d
 }
 
 // ZWAMESSAGE.ZMESSAGETYPE, from the files each type carries (`file`, `ffprobe`) and its metadata:
@@ -497,6 +504,26 @@ type waPeople struct {
 
 // newWAPeople: each may be nil: the iPhone's contacts and messages, the bridge's store and messages.
 func newWAPeople(contacts, store, iphone, bridge *sql.DB) *waPeople {
+	return newWAPeopleOf(contacts, store, iphone, bridge, "")
+}
+
+// ownFilter and ownArgs limit a query of whatsmeow's per-device tables to one device ("": all).
+func ownFilter(own string) string {
+	if own == "" {
+		return ""
+	}
+	return " WHERE our_jid = ?"
+}
+
+func ownArgs(own string) []any {
+	if own == "" {
+		return nil
+	}
+	return []any{own}
+}
+
+// newWAPeopleOf is newWAPeople with the device store's contacts limited to own's ("": all).
+func newWAPeopleOf(contacts, store, iphone, bridge *sql.DB, own string) *waPeople {
 	p := &waPeople{lidPhone: map[string]string{}, lids: map[string]bool{}, names: map[waName]string{}}
 	if contacts != nil {
 		for _, r := range maps(contacts, "SELECT ZLID, ZWHATSAPPID FROM ZWAADDRESSBOOKCONTACT "+
@@ -543,8 +570,8 @@ func newWAPeople(contacts, store, iphone, bridge *sql.DB) *waPeople {
 		named
 		kind string
 	}
-	add := func(q *sql.DB, query, kind string) {
-		for _, r := range maps(q, query) {
+	add := func(q *sql.DB, query, kind string, args ...any) {
+		for _, r := range maps(q, query, args...) {
 			var j, n any
 			for k, v := range r {
 				if k == "j" {
@@ -564,7 +591,7 @@ func newWAPeople(contacts, store, iphone, bridge *sql.DB) *waPeople {
 			"SELECT ZLID, ZFULLNAME FROM ZWAADDRESSBOOKCONTACT", "book")
 	}
 	if store != nil {
-		add(store, "SELECT their_jid AS j, full_name AS n FROM whatsmeow_contacts", "book")
+		add(store, "SELECT their_jid AS j, full_name AS n FROM whatsmeow_contacts"+ownFilter(own), "book", ownArgs(own)...)
 	}
 	if iphone != nil {
 		add(iphone, "SELECT ZCONTACTJID AS j, ZPARTNERNAME AS n FROM ZWACHATSESSION "+
@@ -575,7 +602,7 @@ func newWAPeople(contacts, store, iphone, bridge *sql.DB) *waPeople {
 		add(bridge, "SELECT jid AS j, name AS n FROM chats WHERE jid LIKE '%@s.whatsapp.net' OR jid LIKE '%@lid'", "chat")
 	}
 	if store != nil {
-		add(store, "SELECT their_jid AS j, push_name AS n FROM whatsmeow_contacts", "profile")
+		add(store, "SELECT their_jid AS j, push_name AS n FROM whatsmeow_contacts"+ownFilter(own), "profile", ownArgs(own)...)
 	}
 	for _, r := range rows {
 		if !truthy(r.jid) {
@@ -658,9 +685,24 @@ func waConversation(a *archive.Archive, person *waPeople, jid string, title any,
 }
 
 // WhatsAppOptions: the databases; "" is the default one, and NoX leaves it out (Python's None).
+// Devices: whatsmeow's device store (keys.db; nil: Devices(), unless NoStore), and OwnJID the
+// device whose contacts and chats' settings are read ("": all).
 type WhatsAppOptions struct {
-	IphoneDB, ContactsDB, BridgeDB, StoreDB string
+	IphoneDB, ContactsDB, BridgeDB          string
+	Devices                                 *sql.DB
+	OwnJID                                  string
 	NoIphone, NoContacts, NoBridge, NoStore bool
+}
+
+// devicesOf is the device store an import reads.
+func devicesOf(given *sql.DB, none bool) *sql.DB {
+	switch {
+	case none:
+		return nil
+	case given != nil:
+		return given
+	}
+	return Devices()
 }
 
 func pick(path string, none bool, def func() string) string {
@@ -680,7 +722,6 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 	iphoneDB := pick(opt.IphoneDB, opt.NoIphone, WhatsAppIphoneDB)
 	contactsDB := pick(opt.ContactsDB, opt.NoContacts, WhatsAppContactsDB)
 	bridgeDB := pick(opt.BridgeDB, opt.NoBridge, BridgeDB)
-	storeDB := pick(opt.StoreDB, opt.NoStore, BridgeStore)
 	iphone, bridge := roBridge(iphoneDB), roBridge(bridgeDB)
 	for _, d := range []*sql.DB{iphone, bridge} {
 		if d != nil {
@@ -695,13 +736,11 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 		say(out, "no source: neither {a} nor {b}", map[string]any{"a": iphoneDB, "b": b})
 		return map[string]int{}, nil
 	}
-	contacts, store := roBridge(contactsDB), roBridge(storeDB)
-	for _, d := range []*sql.DB{contacts, store} {
-		if d != nil {
-			defer d.Close()
-		}
+	contacts, store := roBridge(contactsDB), devicesOf(opt.Devices, opt.NoStore)
+	if contacts != nil {
+		defer contacts.Close()
 	}
-	person := newWAPeople(contacts, store, iphone, bridge)
+	person := newWAPeopleOf(contacts, store, iphone, bridge, opt.OwnJID)
 	own := a.Own()
 	src := map[string]int64{}
 	var srcOrder []string
@@ -1052,11 +1091,7 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 		seen["iphone"] = int64(mtime(iphoneDB))
 	}
 	if bridge != nil {
-		p := bridgeDB
-		if storeDB != "" && exists(storeDB) {
-			p = storeDB
-		}
-		seen["bridge"] = int64(mtime(p))
+		seen["bridge"] = int64(mtime(bridgeDB))
 	}
 	var newest int64
 	for _, v := range seen {
@@ -1098,7 +1133,8 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 	}
 	if bridge != nil {
 		if store != nil {
-			for _, r := range maps(store, "SELECT chat_jid, muted_until, pinned, archived FROM whatsmeow_chat_settings") {
+			for _, r := range maps(store, "SELECT chat_jid, muted_until, pinned, archived FROM whatsmeow_chat_settings"+
+				ownFilter(opt.OwnJID), ownArgs(opt.OwnJID)...) {
 				jid := str(r["chat_jid"])
 				report("bridge", jid, "archived", int64(archive.B2I(truthy(r["archived"]))), seen["bridge"])
 				report("bridge", jid, "pinned", int64(archive.B2I(truthy(r["pinned"]))), seen["bridge"])

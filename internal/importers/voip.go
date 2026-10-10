@@ -176,7 +176,7 @@ func whatsappCalls(a *archive.Archive, calls *CallSet) {
 		}
 		return d
 	}
-	person := newWAPeople(open(WhatsAppContactsDB()), open(BridgeStore()), iphone, open(BridgeDB()))
+	person := newWAPeople(open(WhatsAppContactsDB()), Devices(), iphone, open(BridgeDB()))
 	for _, d := range closers {
 		defer d.Close()
 	}
@@ -357,14 +357,14 @@ var bridgeOutcomes = map[string]string{"MISSED": "missed", "FAILED": "failed", "
 // call offered, accepted, ended), for calls no log message came for. One call in several of these,
 // or already in the archive from the iPhone, is kept once (same person and direction within a
 // minute). bridgeDB and storeDB "" are none.
-func BridgeCalls(a *archive.Archive, calls *CallSet, bridgeDB, storeDB string) (err error) {
+func BridgeCalls(a *archive.Archive, calls *CallSet, bridgeDB string, devices *sql.DB) (err error) {
 	defer archive.Recover(&err)
-	bridgeCalls(a, calls, bridgeDB, storeDB)
+	bridgeCalls(a, calls, bridgeDB, devices)
 	a.PurgeSpam()
 	return nil
 }
 
-func bridgeCalls(a *archive.Archive, calls *CallSet, bridgeDB, storeDB string) {
+func bridgeCalls(a *archive.Archive, calls *CallSet, bridgeDB string, store *sql.DB) {
 	bridge := roBridge(bridgeDB)
 	if bridge == nil {
 		return
@@ -372,10 +372,6 @@ func bridgeCalls(a *archive.Archive, calls *CallSet, bridgeDB, storeDB string) {
 	defer bridge.Close()
 	if !hasTable(bridge, "calls") {
 		return
-	}
-	store := roBridge(storeDB)
-	if store != nil {
-		defer store.Close()
 	}
 	person := newWAPeople(nil, store, nil, bridge)
 	own := a.Own()
@@ -589,7 +585,7 @@ func VoIP(a *archive.Archive, out func(string), opt VoIPOptions) (err error) {
 	calls := NewCallSet(a)
 	whatsappCalls(a, calls)
 	if !opt.NoBridge && BridgeDB() != "" {
-		bridgeCalls(a, calls, BridgeDB(), BridgeStore())
+		bridgeCalls(a, calls, BridgeDB(), Devices())
 	}
 	viberCalls(a, calls)
 	for _, c := range enabled {

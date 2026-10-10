@@ -17,11 +17,11 @@ import (
 
 	"github.com/mdp/qrterminal"
 	"go.mau.fi/whatsmeow"
-	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
 	"everysaid/internal/config"
+	"everysaid/internal/keys"
 )
 
 // Options are what the bridge's flags were: sending allowed (-send), its limits, and downloading the
@@ -134,19 +134,6 @@ func (l *logger) Sub(module string) waLog.Logger {
 	return &logger{b: l.b, module: module}
 }
 
-// OpenDevices opens the store folder's whatsapp.db (whatsmeow's device store), made if it is not there.
-func OpenDevices(ctx context.Context, dir string, log waLog.Logger) (*sqlstore.Container, error) {
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return nil, err
-	}
-	path := filepath.Join(dir, "whatsapp.db")
-	c, err := sqlstore.New(ctx, "sqlite", dsn(path), log)
-	if err == nil {
-		private(dir, path)
-	}
-	return c, err
-}
-
 // private keeps the store folder and a database of it to the user alone: the session's keys and the
 // messages are in them (SQLite makes a database, and its journal, as the umask allows, often
 // readable by all; a store made by the standalone bridge is so).
@@ -173,17 +160,17 @@ func (b *Bridge) Run(ctx context.Context) error {
 		runningMu.Unlock()
 	}()
 
-	container, err := OpenDevices(ctx, b.Dir, b.log.Sub("Database"))
+	if err := os.MkdirAll(b.Dir, 0o700); err != nil {
+		return err
+	}
+	container, err := OpenDevices(ctx, b.log.Sub("Database"))
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %v", err)
 	}
-	defer container.Close()
-	deviceStore, err := container.GetFirstDevice(ctx)
+	devices, _ := keys.Open()
+	deviceStore, err := device(ctx, container, devices, b.Dir)
 	if err != nil {
-		if err != sql.ErrNoRows {
-			return fmt.Errorf("failed to get device: %v", err)
-		}
-		deviceStore = container.NewDevice()
+		return fmt.Errorf("failed to get device: %v", err)
 	}
 	client := whatsmeow.NewClient(deviceStore, b.log.Sub("Client"))
 	// as mautrix-whatsapp: a message acknowledged only once stored (and kept decrypted meanwhile, so
@@ -233,6 +220,11 @@ func (b *Bridge) Run(ctx context.Context) error {
 		return fmt.Errorf("failed to connect: %v", err)
 	}
 	return b.stay(ctx, func() {
+		if client.Store.ID != nil {
+			if err := recordDevice(devices, b.Dir, *client.Store.ID); err != nil {
+				b.log.Errorf("failed to record the device: %v", err)
+			}
+		}
 		nameLIDChats(client, store, b.log)
 		go refreshGroups(client, store, b.log)
 		store.setState("send_enabled", "")
@@ -489,24 +481,6 @@ func (b *Bridge) Linked() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.client != nil && b.client.Store.ID != nil
-}
-
-// HasDevice says whether a store folder holds a linked device (read only; false when there is none).
-func HasDevice(dir string) bool {
-	path := filepath.Join(dir, "whatsapp.db")
-	if _, err := os.Stat(path); err != nil {
-		return false
-	}
-	d, err := sql.Open("sqlite", readOnly(path))
-	if err != nil {
-		return false
-	}
-	defer d.Close()
-	var n int
-	if d.QueryRow("SELECT count(*) FROM whatsmeow_device").Scan(&n) != nil {
-		return false
-	}
-	return n > 0
 }
 
 func readOnly(path string) string {

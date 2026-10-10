@@ -23,11 +23,10 @@ import (
 // linked is the instance's bridge running as if connected, linked as the account 15550009999,
 // with a stand-in for WhatsApp that keeps what it is given.
 func linked(t *testing.T, f *fixture) (*Bridge, *[]*waE2E.Message) {
-	c, err := OpenDevices(context.Background(), f.dir, nil)
+	c, err := OpenDevices(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { c.Close() })
 	device := c.NewDevice()
 	device.ID = &types.JID{User: "15550009999", Device: 7, Server: types.DefaultUserServer}
 	device.Account = &waAdv.ADVSignedDeviceIdentity{Details: []byte{}, AccountSignature: make([]byte, 64),

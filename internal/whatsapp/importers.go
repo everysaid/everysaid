@@ -8,23 +8,29 @@ package whatsapp
 import (
 	"everysaid/internal/archive"
 	"everysaid/internal/importers"
+	"everysaid/internal/keys"
 	"everysaid/internal/plugins"
 	"everysaid/internal/plugins/sourcekit"
 )
 
 // runImport brings the messages, the calls and the files the bridge downloaded.
 func runImport(c *plugins.Context) error {
-	bridge, store := paths(c)
+	bridge, _ := paths(c)
+	devices, err := keys.Open()
+	if err != nil {
+		return err
+	}
+	own := DeviceJID(devices, storeDir(c))
 	changed := false
-	_, _, err := sourcekit.RunImporters(c, []sourcekit.Step{
+	_, _, err = sourcekit.RunImporters(c, []sourcekit.Step{
 		{Label: "WhatsApp (bridge)", Run: func(a *archive.Archive, out func(string)) error {
 			updated, err := importers.WhatsApp(a, out, importers.WhatsAppOptions{NoIphone: true, NoContacts: true,
-				BridgeDB: bridge, StoreDB: store})
+				BridgeDB: bridge, Devices: devices, OwnJID: own})
 			changed = changed || len(updated) > 0
 			return err
 		}},
 		{Label: "WhatsApp calls (bridge)", Run: func(a *archive.Archive, out func(string)) error {
-			return importers.BridgeCalls(a, importers.NewCallSet(a), bridge, store)
+			return importers.BridgeCalls(a, importers.NewCallSet(a), bridge, devices)
 		}},
 		{Label: "files", Run: func(a *archive.Archive, out func(string)) error {
 			return importers.Media(a, out, importers.MediaWhatsAppBridge(bridge))
