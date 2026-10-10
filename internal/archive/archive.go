@@ -381,6 +381,7 @@ func (a *Archive) Close() error {
 	if a.conn != nil {
 		a.conn.Close()
 	}
+	db.Checkpoint(a.DB) // an import's writes leave no WAL of their size behind
 	return a.DB.Close()
 }
 

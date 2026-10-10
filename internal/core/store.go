@@ -85,13 +85,17 @@ func Open(path string) (*Store, error) {
 	writer.SetMaxOpenConns(1)
 	// readers stay open between requests, as the Python's one per thread: database/sql keeps only
 	// two idle by default, and the rest were closed and opened again (their cache lost) under a
-	// few requests at once, which made them take twice as long
+	// few requests at once, which made them take twice as long. At most 16, each with its own page
+	// cache, and those idle for minutes are closed, so that their memory goes back when it is quiet.
+	read.SetMaxOpenConns(16)
 	read.SetMaxIdleConns(16)
+	read.SetConnMaxIdleTime(5 * time.Minute)
 	s := &Store{Path: abs, read: read, writer: writer, cache: map[string]cacheEntry{}, building: map[string]*sync.Mutex{}}
 	if v := archive.Version(read); v != archive.SchemaVersion {
 		s.Close()
 		return nil, fmt.Errorf("%s: schema v%d, known: v%d", abs, v, archive.SchemaVersion)
 	}
+	db.Checkpoint(writer) // a WAL a crash or an older version left large is emptied at the start
 	return s, nil
 }
 
@@ -240,6 +244,7 @@ func (s *Store) Close() {
 	}
 	s.probeMu.Unlock()
 	s.read.Close()
+	db.Checkpoint(s.writer)
 	s.writer.Close()
 }
 
