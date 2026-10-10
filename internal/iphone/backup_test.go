@@ -324,8 +324,10 @@ func TestSync(t *testing.T) {
 	base := isolate(t)
 	root := filepath.Join(base, "backups")
 	wa := sqliteFile(t, "CREATE TABLE ZWAMEDIAITEM (ZMEDIALOCALPATH TEXT)",
-		"INSERT INTO ZWAMEDIAITEM VALUES ('Media/chat/one.jpg'), ('Media/chat/two.jpg'), (NULL)")
-	vb := sqliteFile(t, "CREATE TABLE ZATTACHMENT (ZNAME TEXT)", "INSERT INTO ZATTACHMENT VALUES ('pic.jpg'), (NULL)")
+		"INSERT INTO ZWAMEDIAITEM VALUES ('Media/chat/one.jpg'), ('Media/chat/two.jpg'), (NULL)",
+		"CREATE TABLE ZWACHATSESSION (ZCONTACTJID TEXT)", "INSERT INTO ZWACHATSESSION VALUES ('306900000001@s.whatsapp.net')")
+	vb := sqliteFile(t, "CREATE TABLE ZATTACHMENT (ZNAME TEXT)", "INSERT INTO ZATTACHMENT VALUES ('pic.jpg'), (NULL)",
+		"CREATE TABLE ZMEMBER (Z_PK INTEGER, ZICONID TEXT, ZPREVICONID TEXT)", "INSERT INTO ZMEMBER VALUES (1, '0-04-05-abc', NULL)")
 	const waDomain = "AppDomainGroup-group.net.whatsapp.WhatsApp.shared"
 	bk := makeBackup(t, root, []testFile{
 		{domain: "HomeDomain", path: "Library/SMS/sms.db", data: []byte("sms")},
@@ -339,6 +341,11 @@ func TestSync(t *testing.T) {
 		{domain: waDomain, path: "Message/Media/chat/one.thumb", data: []byte("thumb")},
 		{domain: "AppDomain-com.viber", path: "Documents/Attachments/pic.jpg", data: []byte("pic")},
 		{domain: "AppDomain-com.viber", path: "Documents/Other/pic.jpg", data: []byte("other")},
+		// the photos of people: those the databases name
+		{domain: waDomain, path: "Media/Profile/306900000001-1700000000.thumb", data: []byte("face")},
+		{domain: waDomain, path: "Media/Profile/306999999999-1700000000.thumb", data: []byte("stranger")},
+		{domain: "AppDomain-com.viber", path: "Library/Caches/Icons/0-04-05-abc", data: []byte("viber face")},
+		{domain: "AppDomain-com.viber", path: "Library/Caches/Icons/0-04-05-zzz", data: []byte("viber stranger")},
 	})
 	// the archive already took two.jpg
 	os.MkdirAll(config.Data, 0o700)
@@ -366,7 +373,8 @@ func TestSync(t *testing.T) {
 	}
 	for name, want := range map[string]string{"sms.db": "sms", "CallHistory.storedata": "calls",
 		"whatsapp-contacts.sqlite": "contacts", "whatsapp-calls.sqlite": "wa calls",
-		"whatsapp-media/chat/one.jpg": "one", "viber-media/Attachments/pic.jpg": "pic"} {
+		"whatsapp-media/chat/one.jpg": "one", "viber-media/Attachments/pic.jpg": "pic",
+		"whatsapp-photos/306900000001-1700000000.thumb": "face", "viber-photos/0-04-05-abc": "viber face"} {
 		got, err := os.ReadFile(filepath.Join(out, name))
 		if err != nil || string(got) != want {
 			t.Errorf("%s: %q %v", name, got, err)
@@ -375,7 +383,8 @@ func TestSync(t *testing.T) {
 			t.Errorf("%s: mode %o", name, st.Mode().Perm())
 		}
 	}
-	for _, gone := range []string{"sms.db-wal", "whatsapp-media/chat/two.jpg", "whatsapp-media/chat/one.thumb", "sms.db.part"} {
+	for _, gone := range []string{"sms.db-wal", "whatsapp-media/chat/two.jpg", "whatsapp-media/chat/one.thumb", "sms.db.part",
+		"whatsapp-photos/306999999999-1700000000.thumb", "viber-photos/0-04-05-zzz"} {
 		if _, err := os.Stat(filepath.Join(out, gone)); err == nil {
 			t.Errorf("%s is there", gone)
 		}

@@ -11,6 +11,7 @@ import { Avatar, Button, Input, Segmented, ServiceBadge, Textarea } from "./ui";
 import { avatarUrl } from "./ChatList";
 import { GroupParts } from "./GroupMerge";
 import { ChatLabels } from "./Labels";
+import { PhotoFrom } from "./Photos";
 
 export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => void }) {
   const { t } = useTranslation();
@@ -50,7 +51,7 @@ export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => 
         </div>
       )}
       <div className="flex flex-col items-center gap-3 text-center">
-        <Avatar name={chat.title} src={avatarUrl({ type: chat.type, person_id: chat.person_id, avatar: p?.avatar })} group={chat.type === "group"} size={96} />
+        <Avatar name={chat.title} src={avatarUrl({ id: chat.id, type: chat.type, person_id: chat.person_id, avatar: chat.avatar ?? p?.avatar })} group={chat.type === "group"} size={96} />
         <div>
           <div className="text-lg font-semibold">{chat.title}</div>
           {p?.contact && <div className="text-xs text-muted">{t("people.contact")}{p.contact.organization ? ` · ${p.contact.organization}` : ""}</div>}
@@ -74,6 +75,7 @@ export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => 
             </div>
           </div>
           <NameFrom chat={chat} />
+          <PhotoFrom p={p} />
           <div className="space-y-2">
             <div className="text-xs font-semibold uppercase tracking-wide text-muted">{t("people.handles")}</div>
             <div className="divide-y divide-line rounded-2xl border border-line">

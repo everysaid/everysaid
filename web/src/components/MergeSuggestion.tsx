@@ -8,6 +8,7 @@ import { api, type Person, type StreamPage } from "@/lib/api";
 import { dateOnly, number } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Avatar, Button, Dialog, ServiceBadge } from "@/components/ui";
+import { personAvatarUrl } from "@/lib/avatar";
 
 export interface Suggestion { name: string; why: string[]; people: Person[] }
 
@@ -69,7 +70,7 @@ function Candidate({ p, on, toggle }: { p: Person; on: boolean; toggle: () => vo
           className={cn("mt-1 grid size-6 shrink-0 place-items-center rounded-md border", on ? "border-accent bg-accent text-white" : "border-line")}>
           {on && <Check className="size-4" />}
         </button>
-        <Avatar name={p.name} src={p.avatar ? `/api/avatar/${p.id}` : null} size={40} />
+        <Avatar name={p.name} src={personAvatarUrl(p)} size={40} />
         <div className="min-w-0 flex-1">
           <Link to="/people/$personId" params={{ personId: String(p.id) }} className="font-medium hover:underline">{p.name}</Link>
           <div className="mt-0.5 text-xs text-muted">

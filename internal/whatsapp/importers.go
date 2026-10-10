@@ -34,7 +34,7 @@ func runImport(c *plugins.Context) error {
 			return importers.BridgeCalls(a, importers.NewCallSet(a), bridge, devices)
 		}},
 		{Label: "files", Run: func(a *archive.Archive, out func(string)) error {
-			return importers.Media(a, out, importers.MediaWhatsAppBridge(bridge))
+			return importers.Media(a, out, importers.MediaWhatsAppBridge(bridge), importers.PhotosWhatsAppBridge(bridge, devices))
 		}},
 		{Label: "WhatsApp store", Run: func(a *archive.Archive, out func(string)) error {
 			return importers.WhatsAppPrune(a, bridge) // what the archive has, a week old, out of messages.db

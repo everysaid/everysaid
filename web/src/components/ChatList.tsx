@@ -12,15 +12,14 @@ import { noticeLines } from "@/lib/notice";
 import { cn } from "@/lib/utils";
 import { service } from "@/lib/services";
 import { Avatar, Button, Empty, Menu, MenuContent, MenuItem, MenuTrigger, Segmented, ServiceDot, Spinner } from "./ui";
+import { avatarUrl } from "@/lib/avatar";
 import { Logo } from "./Logo";
 import { GroupSuggestions } from "./GroupMerge";
 import { ChatFiltersButton, filterParams, keepFilters, savedFilters, type ChatFilters } from "./ChatFilters";
 
 type Filter = "all" | "person" | "group" | "unread";
 
-export function avatarUrl(c: { type: string; person_id?: number | null; avatar?: boolean }) {
-  return c.type === "person" && c.avatar && c.person_id ? `/api/avatar/${c.person_id}` : null;
-}
+export { avatarUrl };
 
 function Preview({ c }: { c: ChatSummary }) {
   const { t } = useTranslation();

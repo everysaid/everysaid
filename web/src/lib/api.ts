@@ -96,7 +96,7 @@ export interface ChatSummary {
   pinned: boolean;
   muted: boolean;
   archived: boolean;
-  avatar: boolean;
+  avatar: string | null;     // a key of the person's or group's photo (it changes with it); null: initials
 }
 
 export interface Handle {
@@ -121,12 +121,37 @@ export interface Person {
   name_source: string | null;                    // where the user pinned it to come from
   self_named: boolean;                           // a name they chose themselves
   aka: { name: string; source: string; first_seen: number; last_seen: number; current: boolean }[];
-  avatar: boolean;
+  avatar: string | null;                          // a key of the photo shown (it changes with it); null: initials
+  photo_source: string | null;                    // where the user pinned it to come from: contacts, a service, address:<id>, none
+  photo_from: string | null;                      // where the photo shown comes from
+  photo_choices: PhotoChoice[];                   // what it may be pinned to
+  photo_history: PhotoSeen[];                     // every photo the services have shown, the latest first
   stats: { messages: number; calls: number; first: number | null; last: number | null; by_service: Record<string, number> };
   groups: { chat_id: string; title: string | null }[];
   labels?: PersonLabel[];                         // the user's, and the models' where the user shows them
   guess?: Guess | null;                           // a name found for someone without one
   analysed?: { at: number; messages: number } | null;     // when the local models read their chat
+}
+
+/** A choice of where a person's photo comes from: a source, or one handle of a source with several. */
+export interface PhotoChoice {
+  pin: string;
+  source: string;
+  address_id: number | null;
+  label: string | null;
+}
+
+/** A photo a service showed for one of a person's handles. */
+export interface PhotoSeen {
+  source: string;
+  address_id: number;
+  label: string | null;
+  sha: string;
+  first_seen: number;       // Unix seconds
+  last_seen: number;
+  removed_at: number | null;
+  current: boolean;         // the handle's latest
+  available: boolean;       // its file is here
 }
 
 export type LabelKind = "tone" | "relation";
@@ -182,6 +207,7 @@ export interface ChatDetail {
   editable?: Record<string, number>;             // where the user's message can be edited: for how many seconds (0: always)
   deletable?: Record<string, number>;            // where it can be deleted for everyone: for how many seconds (0: always)
   last_service: string | null;   // where the chat was last active: the way to answer by default
+  avatar?: string | null;        // a key of the person's or group's photo; null: initials
   person_id?: number | null;
   conversation_id?: number | null;
   conversations: number[];

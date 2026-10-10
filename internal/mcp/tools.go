@@ -464,7 +464,7 @@ func addTools(srv *sdk.Server, env Env) {
 	tool(srv, "set_person_note", "Write the user's note about a person (replaces it). Ask the user before using.",
 		object([]string{"person_id", "note"}, arg("person_id", "integer", nil), arg("note", "string", nil)), false, true,
 		func(ctx context.Context, in noteIn) (any, error) {
-			if err := core.SetPerson(store, in.PersonID, core.Opt[string]{}, core.To(in.Note), core.Opt[string]{}); err != nil {
+			if err := core.SetPerson(store, in.PersonID, core.Opt[string]{}, core.To(in.Note), core.Opt[string]{}, core.Opt[string]{}); err != nil {
 				return nil, noPerson(err)
 			}
 			return core.M{"ok": true}, nil
@@ -478,7 +478,7 @@ func addTools(srv *sdk.Server, env Env) {
 		"Ask the user before using.",
 		object([]string{"person_id", "name"}, arg("person_id", "integer", nil), arg("name", "string", nil)), false, true,
 		func(ctx context.Context, in renameIn) (any, error) {
-			if err := core.SetPerson(store, in.PersonID, core.To(in.Name), core.Opt[string]{}, core.Opt[string]{}); err != nil {
+			if err := core.SetPerson(store, in.PersonID, core.To(in.Name), core.Opt[string]{}, core.Opt[string]{}, core.Opt[string]{}); err != nil {
 				return nil, noPerson(err)
 			}
 			return core.M{"ok": true, "name": core.Person(store, in.PersonID)["name"]}, nil

@@ -753,6 +753,7 @@ func live(ctx context.Context, c *plugins.Context) error {
 		queue, files := newMemberQueue(), newFileQueue()
 		go queue.run(ctx, c, cn)
 		go files.run(ctx, c, cn)
+		go photos(ctx, c, cn)
 		cn.readers = func(chat int64) { askReaders(ctx, c, cn, chat) }
 		go func() { // one chat after another: not all asked at once
 			for _, chat := range recentGroups() {

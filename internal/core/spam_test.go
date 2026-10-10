@@ -112,7 +112,7 @@ func TestRemoveSpam(t *testing.T) {
 func TestSpamRefusedForSomeoneKnown(t *testing.T) {
 	s := store(t)
 	pid, _ := spammer(t, s, false)
-	if err := core.SetPerson(s, pid, core.To("Someone I know"), core.Opt[string]{}, core.Opt[string]{}); err != nil {
+	if err := core.SetPerson(s, pid, core.To("Someone I know"), core.Opt[string]{}, core.Opt[string]{}, core.Opt[string]{}); err != nil {
 		t.Fatal(err)
 	}
 	if c, _, _ := core.SpamCheck(s, pid); c["refused"] != "named" {
