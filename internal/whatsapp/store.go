@@ -116,6 +116,9 @@ func (store *MessageStore) create() error {
 	if err := store.migratePrune(); err != nil {
 		return fmt.Errorf("failed to prepare the store's pruning: %v", err)
 	}
+	if err := store.migratePhotos(); err != nil {
+		return fmt.Errorf("failed to create the photos' tables: %v", err)
+	}
 	return nil
 }
 
