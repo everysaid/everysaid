@@ -1,10 +1,11 @@
 package meta
 
-// The live connection: messagix connected to Meta with the account's cookies, its tables written
-// into the archive as they come (one at a time, in order), the encrypted chats through whatsmeow
-// beside it, the files downloaded as they arrive, and each chat's earlier history brought back to
-// what the archive has, where the user wants it. What the session needs to connect again (the
-// cookies as Meta renews them, messagix's state) goes back to keys.db as it changes.
+// The live connection: messagix (Messenger) or instameow (Instagram) connected to Meta with the
+// account's cookies, what they say written into the archive as it comes (one thing at a time, in
+// order), Messenger's encrypted chats through whatsmeow beside it, the files downloaded as they
+// arrive, and each chat's earlier history brought back to what the archive has, where the user
+// wants it. What the session needs to connect again (the cookies as Meta renews them, the client's
+// state) goes back to keys.db as it changes.
 
 import (
 	"context"
@@ -48,14 +49,17 @@ func running(iid int64) *liveSession {
 
 // liveSession is one instance's connection.
 type liveSession struct {
-	c        *plugins.Context
-	service  string
-	cli      client
-	sess     *session
-	self     string
-	selfName string
-	tr       *translator
-	names    map[string]importers.MetaUser
+	c            *plugins.Context
+	service      string
+	cli          client   // Messenger's
+	ig           igClient // Instagram's
+	sess         *session
+	self         string
+	selfName     string
+	selfUsername string
+	tr           *translator
+	names        map[string]importers.MetaUser
+	igCursor     string // Instagram: where the inbox's second page starts
 
 	mu      sync.Mutex
 	threads map[string]threadInfo
@@ -68,17 +72,81 @@ type liveSession struct {
 	fatal     chan error
 	wake      chan struct{}
 	history   chan rangeOp
+	igHistory chan igHistoryOp
 	saved     time.Time
 	connected atomic.Bool
 }
 
-// item is something to write, in order: a table, or an encrypted chat's event; done hears how it
-// went (an encrypted message is acknowledged only once it is in the archive).
+// item is something to write, in order: a table, an encrypted chat's event or an Instagram change,
+// or what was read already; done hears how it went (a message is acknowledged only once it is in
+// the archive).
 type item struct {
 	tbl     *table.LSTable
 	initial bool
 	wa      any
+	ops     *ops
 	done    chan error
+}
+
+// newTranslator reads for an account.
+func newTranslator(self string) *translator {
+	return &translator{self: self, fbToWA: map[string]string{}, igKeys: map[string]string{}}
+}
+
+// newSession is a session of an instance, with what keys.db knows of its threads.
+func newSession(c *plugins.Context, service string, sess *session, threads map[string]threadInfo) *liveSession {
+	s := &liveSession{c: c, service: service, sess: sess, self: sess.UserID, selfName: sess.Name,
+		names: map[string]importers.MetaUser{}, threads: threads, events: make(chan item, 64), fatal: make(chan error, 1),
+		wake: make(chan struct{}, 1), history: make(chan rangeOp, 256), igHistory: make(chan igHistoryOp, 256),
+		tr: newTranslator(sess.UserID)}
+	for k, t := range threads {
+		if t.FBKey != "" {
+			s.tr.fbToWA[t.FBKey] = k
+		}
+		if t.IGID != "" {
+			s.tr.igKeys[t.IGID] = k
+		}
+	}
+	return s
+}
+
+func register(s *liveSession) {
+	sessionsMu.Lock()
+	sessions[s.c.ID] = s
+	sessionsMu.Unlock()
+}
+
+func unregister(s *liveSession) {
+	sessionsMu.Lock()
+	if sessions[s.c.ID] == s {
+		delete(sessions, s.c.ID)
+	}
+	sessionsMu.Unlock()
+}
+
+// fail ends the connection with an error.
+func (s *liveSession) fail(err error) {
+	select {
+	case s.fatal <- err:
+	default:
+	}
+}
+
+// loop writes what comes, in order, until ctx ends or the connection fails.
+func (s *liveSession) loop(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case err := <-s.fatal:
+			return err
+		case it := <-s.events:
+			err := s.handle(ctx, it)
+			if it.done != nil {
+				it.done <- err
+			}
+		}
+	}
 }
 
 func (s *liveSession) label() string {
@@ -89,7 +157,7 @@ func (s *liveSession) label() string {
 }
 
 func (s *liveSession) selfUser() importers.MetaUser {
-	return importers.MetaUser{ID: s.self, Name: s.selfName}
+	return importers.MetaUser{ID: s.self, Name: s.selfName, Username: s.selfUsername}
 }
 
 func (s *liveSession) waClient() *whatsmeow.Client {
@@ -110,6 +178,15 @@ func (s *liveSession) noteThread(key string, t threadInfo) {
 	old, ok := s.threads[key]
 	if t.FBKey == "" {
 		t.FBKey = old.FBKey
+	}
+	if t.IGID == "" {
+		t.IGID = old.IGID
+	}
+	if t.IGThread == "" {
+		t.IGThread = old.IGThread
+	}
+	if t.IGID != "" {
+		s.tr.igKeys[t.IGID] = key
 	}
 	if t.Type == 0 || isEncrypted(old.Type) && !isEncrypted(t.Type) {
 		t.Type = old.Type // an encrypted chat stays one (Meta's tables may still call it by its old type)
@@ -145,18 +222,35 @@ func loggedIn(sess *session) bool {
 }
 
 // errLoggedOut: Meta no longer takes the cookies.
-var errLoggedOut = errs.Plugin("Logged out of Messenger: log in again (paste the cookies)", 409)
+var (
+	errLoggedOut   = errs.Plugin("Logged out of Messenger: log in again (paste the cookies)", 409)
+	errLoggedOutIG = errs.Plugin("Logged out of Instagram: log in again (paste the cookies)", 409)
+)
+
+// errAnotherAccount: the cookies are not of the account the source has.
+var errAnotherAccount = errs.Plugin("The cookies are of another account than this source's", 409)
 
 // errCheck: Meta asks for a check on its site first.
 var errCheck = errs.Plugin("Meta asks for a check on its site: open facebook.com in the browser, then try again", 409)
 
-// connectError is what a failure to load the messages page means for the user.
-func connectError(err error, sess *session, iid int64) error {
+// loggedOutError is a service's "logged out".
+func loggedOutError(service string) error {
+	if service == "instagram" {
+		return errLoggedOutIG
+	}
+	return errLoggedOut
+}
+
+// connectError is what a failure to load the messages page means for the user (iid 0: a login,
+// with no session to clear).
+func connectError(err error, service string, sess *session, iid int64) error {
 	switch {
 	case errors.Is(err, httpclient.ErrTokenInvalidated):
-		sess.Cookies, sess.State = json.RawMessage("{}"), nil // logged out: the device's keys stay
-		saveSession(iid, sess)
-		return errLoggedOut
+		if iid != 0 {
+			sess.Cookies, sess.State = json.RawMessage("{}"), nil // logged out: the device's keys stay
+			saveSession(iid, sess)
+		}
+		return loggedOutError(service)
 	case errors.Is(err, httpclient.ErrChallengeRequired), errors.Is(err, httpclient.ErrCheckpointRequired),
 		errors.Is(err, httpclient.ErrConsentRequired), errors.Is(err, httpclient.ErrAccountSuspended):
 		return errCheck
@@ -179,15 +273,7 @@ func live(ctx context.Context, c *plugins.Context, service string) error {
 	}
 	logger, closer := libraryLog(c.ID)
 	defer closer.Close()
-	s := &liveSession{c: c, service: service, sess: sess, self: sess.UserID, selfName: sess.Name,
-		names: map[string]importers.MetaUser{}, threads: threads, events: make(chan item, 64), fatal: make(chan error, 1),
-		wake: make(chan struct{}, 1), history: make(chan rangeOp, 256)}
-	s.tr = &translator{self: sess.UserID, fbToWA: map[string]string{}}
-	for k, t := range threads {
-		if t.FBKey != "" {
-			s.tr.fbToWA[t.FBKey] = k
-		}
-	}
+	s := newSession(c, service, sess, threads)
 	s.cli = newClient(cookiesOf(sess), logger)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -196,23 +282,17 @@ func live(ctx context.Context, c *plugins.Context, service string) error {
 	if len(sess.State) == 0 || s.cli.LoadState(sess.State) != nil {
 		user, tbl, err := s.cli.LoadMessagesPage(ctx)
 		if err != nil {
-			return connectError(err, sess, c.ID)
+			return connectError(err, service, sess, c.ID)
 		}
 		if id := strconv.FormatInt(user.GetFBID(), 10); id != sess.UserID {
-			return errs.Plugin("The cookies are of another account than this source's", 409)
+			return errAnotherAccount
 		}
 		s.selfName = user.GetName()
 		initial = tbl
 	}
-	sessionsMu.Lock()
-	sessions[c.ID] = s
-	sessionsMu.Unlock()
+	register(s)
 	defer func() {
-		sessionsMu.Lock()
-		if sessions[c.ID] == s {
-			delete(sessions, c.ID)
-		}
-		sessionsMu.Unlock()
+		unregister(s)
 		s.cli.SetEventHandler(nil)
 		s.cli.Disconnect()
 		if e := s.waClient(); e != nil {
@@ -233,19 +313,7 @@ func live(ctx context.Context, c *plugins.Context, service string) error {
 	go s.downloader(ctx)
 	go s.historyLoop(ctx)
 	s.wakeDownloader()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case err := <-s.fatal:
-			return err
-		case it := <-s.events:
-			err := s.handle(ctx, it)
-			if it.done != nil {
-				it.done <- err
-			}
-		}
-	}
+	return s.loop(ctx)
 }
 
 // onEvent is what messagix says, from its own goroutines.
@@ -271,10 +339,7 @@ func (s *liveSession) onEvent(ctx context.Context, evt any) {
 			s.logOut()
 			err = errLoggedOut
 		}
-		select {
-		case s.fatal <- err:
-		default:
-		}
+		s.fail(err)
 	}
 }
 
@@ -289,6 +354,8 @@ func (s *liveSession) push(ctx context.Context, it item) {
 func (s *liveSession) handle(ctx context.Context, it item) error {
 	o := &ops{}
 	switch {
+	case it.ops != nil:
+		o = it.ops
 	case it.tbl != nil:
 		o = s.tr.translate(it.tbl)
 	case it.wa != nil:
@@ -297,6 +364,11 @@ func (s *liveSession) handle(ctx context.Context, it item) error {
 			s.tr.waMessage(o, e)
 		case *events.Receipt:
 			s.tr.waReceipt(o, e)
+		default:
+			var err error
+			if o, err = s.handleIG(ctx, e); err != nil {
+				return err
+			}
 		}
 	}
 	res, err := s.apply(o)
@@ -311,10 +383,18 @@ func (s *liveSession) handle(ctx context.Context, it item) error {
 		s.wakeDownloader()
 	}
 	if s.c.Bool("history") {
-		for i, r := range o.ranges {
-			if r.HasMoreBefore && i < len(res.allNew) && res.allNew[i] && r.MinID != "" {
+		for _, r := range o.ranges {
+			if r.HasMoreBefore && res.allNew(r.IDs) && r.MinID != "" {
 				select {
 				case s.history <- r:
+				default:
+				}
+			}
+		}
+		for _, h := range o.igHistory {
+			if h.HasMore && h.IGID != "" && h.Cursor != "" && res.allNew(h.IDs) {
+				select {
+				case s.igHistory <- h:
 				default:
 				}
 			}
@@ -335,16 +415,32 @@ func (s *liveSession) save(now bool) {
 		return
 	}
 	s.saved = time.Now()
-	if ck, err := json.Marshal(s.cli.GetCookies()); err == nil && cookiesOf(&session{Platform: s.sess.Platform, Cookies: ck}).IsLoggedIn() {
+	jar, dump := s.cookieJar, s.dumpState
+	if ck, err := json.Marshal(jar()); err == nil && cookiesOf(&session{Platform: s.sess.Platform, Cookies: ck}).IsLoggedIn() {
 		s.sess.Cookies = ck
 	}
-	if st, err := s.cli.DumpState(); err == nil && len(st) > 0 {
+	if st, err := dump(); err == nil && len(st) > 0 {
 		s.sess.State = st
 	}
 	s.sess.Name = s.selfName
 	if err := saveSession(s.c.ID, s.sess); err != nil {
 		s.c.Logf("keys.db: %v", err)
 	}
+}
+
+// cookieJar, dumpState: the client's cookies as they are now, its state.
+func (s *liveSession) cookieJar() *cookies.Cookies {
+	if s.ig != nil {
+		return s.ig.GetCookies()
+	}
+	return s.cli.GetCookies()
+}
+
+func (s *liveSession) dumpState() (json.RawMessage, error) {
+	if s.ig != nil {
+		return s.ig.DumpState()
+	}
+	return s.cli.DumpState()
 }
 
 // logOut: Meta no longer takes the cookies. They go (the encryption device's keys stay, for when the

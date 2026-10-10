@@ -1,14 +1,15 @@
-// Package meta is Messenger (and Instagram's history) as sources of the archive: Meta's export
-// ("Download your information") imported, and Messenger live through mautrix-meta's messagix
-// client (third_party/mautrix-meta), linked into the binary: its chats as they change, end-to-end
-// encrypted ones too (through whatsmeow), their files, the earlier history of each chat, and
-// sending, reactions, edits, unsends and read receipts.
+// Package meta is Messenger and Instagram as sources of the archive: Meta's export ("Download your
+// information") imported, and both live through mautrix-meta's clients (third_party/mautrix-meta),
+// linked into the binary: messagix for Messenger (its end-to-end encrypted chats through
+// whatsmeow), instameow for Instagram. Their chats as they change, their files, the earlier history
+// of each chat, and sending, reactions, edits, unsends and read receipts.
 //
-// The login is the browser's: the user logs in to facebook.com (or messenger.com) and pastes its
-// cookies into the source's settings; they are checked with Meta, kept in keys.db (internal/keys,
-// tables meta_*) with what the connection needs, and taken out of the settings' secret.
+// The login is the browser's: the user logs in to facebook.com, messenger.com or instagram.com and
+// pastes its cookies into the source's settings; they are checked with Meta, kept in keys.db
+// (internal/keys, tables meta_*) with what the connection needs, and taken out of the settings'
+// secret.
 //
-// The library's types stay in this package: the archive sees only what importers.MetaWriter takes.
+// The libraries' types stay in this package: the archive sees only what importers.MetaWriter takes.
 package meta
 
 import (
@@ -31,7 +32,7 @@ import (
 
 type M = plugins.M
 
-// Plugin is a Meta service as a source: messenger, or instagram (its export only).
+// Plugin is a Meta service as a source: messenger or instagram.
 type Plugin struct{ service string }
 
 func init() {
@@ -39,8 +40,11 @@ func init() {
 	plugins.Register(Plugin{"instagram"})
 }
 
-// The emoji Messenger offers first.
-var reactions = []string{"❤️", "😆", "😮", "😢", "😠", "👍"}
+// The emoji each offers first.
+var (
+	reactions   = []string{"❤️", "😆", "😮", "😢", "😠", "👍"}
+	igReactions = []string{"❤️", "😂", "😮", "😢", "😡", "👍"}
+)
 
 var exportSettings = []plugins.Setting{
 	{Key: "export", Label: "The export (Download your information), unpacked", Type: "path",
@@ -48,6 +52,18 @@ var exportSettings = []plugins.Setting{
 	{Key: "owner", Label: "Your name as the export writes it",
 		Help: "Only where the export does not say whose it is"},
 }
+
+var liveSettings = []plugins.Setting{
+	{Key: "media", Label: "Download pictures, videos and files", Type: "bool", Default: true,
+		Help: "As they arrive (Meta's addresses for them expire)"},
+	{Key: "history", Label: "Bring each chat's earlier messages", Type: "bool", Default: true,
+		Help: "Back to what the archive has, a page at a time"},
+	{Key: "read_receipts", Label: "Send read receipts", Type: "bool", Default: false,
+		Help: "When a chat is opened here, the others see it read, and it is read on the phone too"},
+}
+
+var logout = plugins.Action{ID: "logout", Label: "Log out",
+	Confirm: "The source forgets the account's cookies and its encrypted chats' device; the archive keeps everything"}
 
 var messengerInfo = &plugins.Info{
 	ID: "messenger", Name: "Messenger", Kind: "source", Services: []string{"messenger"},
@@ -60,34 +76,41 @@ var messengerInfo = &plugins.Info{
 	Modes:       []string{"import", "live"},
 	LiveDefault: true,
 	Needs:       []string{"the cookies of facebook.com or messenger.com, where you are logged in", "or Meta's export"},
-	Settings: append([]plugins.Setting{
+	Settings: append(append([]plugins.Setting{
 		{Key: "cookies", Label: "Cookies of facebook.com or messenger.com", Type: "secret",
 			Help: "From the browser where you are logged in: a JSON object of them, a request copied as cURL from the " +
 				"developer tools, or the Cookie header (c_user, xs and datr are needed). Checked with Meta and kept in " +
 				"keys.db; give them again when Meta logs the source out"},
 		{Key: "site", Label: "The cookies are of", Type: "select", Default: "facebook",
 			Options: []plugins.Option{{Value: "facebook", Label: "facebook.com"}, {Value: "messenger", Label: "messenger.com"}}},
-		{Key: "media", Label: "Download pictures, videos and files", Type: "bool", Default: true,
-			Help: "As they arrive (Meta's addresses for them expire)"},
-		{Key: "history", Label: "Bring each chat's earlier messages", Type: "bool", Default: true,
-			Help: "Back to what the archive has, a page at a time"},
-		{Key: "read_receipts", Label: "Send read receipts", Type: "bool", Default: false,
-			Help: "When a chat is opened here, the others see it read, and it is read on the phone too"},
-	}, exportSettings...),
+	}, liveSettings...), exportSettings...),
 	CanSend: true, CanReply: true, CanMention: true, CanMarkRead: true, CanSendFiles: true,
 	CanReact: true, Reactions: reactions, FreeReactions: true, CanEdit: true, CanDelete: true,
 	EditWindow: 15 * time.Minute, // Messenger's own: edits within 15 minutes
-	Actions: []plugins.Action{{ID: "logout", Label: "Log out",
-		Confirm: "The source forgets the account's cookies and its encrypted chats' device; the archive keeps everything"}},
+	Actions:    []plugins.Action{logout},
 }
 
 var instagramInfo = &plugins.Info{
 	ID: "instagram", Name: "Instagram", Kind: "source", Services: []string{"instagram"},
-	ServiceInfo: sourcekit.Looks("instagram"),
-	Description: "Instagram's direct messages from Meta's export (Download your information), with their files.",
-	Modes:       []string{"import"},
-	Needs:       []string{"Meta's export"},
-	Settings:    exportSettings,
+	ServiceInfo:  sourcekit.Looks("instagram"),
+	NameWeights:  []plugins.Weight{{Key: "instagram/profile", Weight: 40}},
+	StateWeights: map[string]int{"muted": 60},
+	Description: "Instagram's direct messages with the user's own account, logged in with the browser's cookies: " +
+		"every chat as it changes, with each chat's earlier history; and Meta's export (Download your information) " +
+		"for what is older. Unofficial: Meta may ask to check the account.",
+	Modes:       []string{"import", "live"},
+	LiveDefault: true,
+	Needs:       []string{"the cookies of instagram.com, where you are logged in", "or Meta's export"},
+	Settings: append(append([]plugins.Setting{
+		{Key: "cookies", Label: "Cookies of instagram.com", Type: "secret",
+			Help: "From the browser where you are logged in: a JSON object of them, a request copied as cURL from the " +
+				"developer tools, or the Cookie header (sessionid, csrftoken and ds_user_id are needed). Checked with " +
+				"Meta and kept in keys.db; give them again when Meta logs the source out"},
+	}, liveSettings...), exportSettings...),
+	CanSend: true, CanReply: true, CanMention: true, CanMarkRead: true, CanSendFiles: true,
+	CanReact: true, Reactions: igReactions, FreeReactions: true, CanEdit: true, CanDelete: true,
+	EditWindow: 15 * time.Minute, // Instagram's own: edits within 15 minutes
+	Actions:    []plugins.Action{logout},
 }
 
 func (p Plugin) Info() *plugins.Info {
@@ -98,36 +121,38 @@ func (p Plugin) Info() *plugins.Info {
 }
 
 func (p Plugin) Check(c *plugins.Context) (bool, string) {
-	if p.service == "messenger" {
-		sess, _ := loadSession(c.ID)
-		if loggedIn(sess) || c.Secret("cookies") != "" {
-			return true, "ready"
-		}
-	}
-	if c.Str("export") != "" {
+	sess, _ := loadSession(c.ID)
+	if loggedIn(sess) || c.Secret("cookies") != "" || c.Str("export") != "" {
 		return true, "ready"
 	}
-	if p.service == "messenger" {
-		return false, "missing: the cookies or the export"
-	}
-	return false, "missing: the export"
+	return false, "missing: the cookies or the export"
 }
 
-// platform is messagix's platform of the cookies given.
-func platform(c *plugins.Context) tps.Platform {
-	if c.Str("site") == "messenger" {
+// platform is the platform of the cookies given: Instagram's, or Messenger's site.
+func (p Plugin) platform(c *plugins.Context) tps.Platform {
+	switch {
+	case p.service == "instagram":
+		return tps.Instagram
+	case c.Str("site") == "messenger":
 		return tps.Messenger
 	}
 	return tps.Facebook
 }
 
+func (p Plugin) label() string {
+	if p.service == "instagram" {
+		return "Instagram"
+	}
+	return "Messenger"
+}
+
 // login checks pasted cookies with Meta and keeps the session in keys.db; the settings' secret goes.
-func login(ctx context.Context, c *plugins.Context, text string) (*session, error) {
+func (p Plugin) login(ctx context.Context, c *plugins.Context, text string) (*session, error) {
 	values, err := parseCookies(text)
 	if err != nil {
 		return nil, errs.Plugin("No cookies found in what was pasted", 400)
 	}
-	plat := platform(c)
+	plat := p.platform(c)
 	ck := &cookies.Cookies{Platform: plat}
 	named := map[cookies.MetaCookieName]string{}
 	for k, v := range values {
@@ -144,56 +169,69 @@ func login(ctx context.Context, c *plugins.Context, text string) (*session, erro
 	}
 	logger, closer := libraryLog(c.ID)
 	defer closer.Close()
-	cli := newClient(ck, logger)
-	user, _, err := cli.LoadMessagesPage(ctx)
+	var id, name string
+	var jar *cookies.Cookies
+	if p.service == "instagram" {
+		cli := newIGClient(ck, logger)
+		viewer, _, err := cli.LoadIndex(ctx)
+		if err != nil {
+			return nil, connectError(err, p.service, nil, 0)
+		}
+		own := cli.GetOwnFBID()
+		if own == 0 {
+			return nil, errs.Plugin("Instagram did not say the account's id", 502)
+		}
+		id, name, jar = strconv.FormatInt(own, 10), viewer.GetName(), cli.GetCookies()
+	} else {
+		cli := newClient(ck, logger)
+		user, _, err := cli.LoadMessagesPage(ctx)
+		if err != nil {
+			return nil, connectError(err, p.service, nil, 0)
+		}
+		if user.GetFBID() != ck.GetUserID() {
+			return nil, errs.Plugin("The cookies are of another account than the one logged in", 409)
+		}
+		id, name, jar = strconv.FormatInt(user.GetFBID(), 10), user.GetName(), cli.GetCookies()
+	}
 	old, _ := loadSession(c.ID)
 	if old == nil {
 		old = &session{}
 	}
-	if err != nil {
-		return nil, connectError(err, &session{}, 0)
-	}
-	if user.GetFBID() != ck.GetUserID() {
-		return nil, errs.Plugin("The cookies are of another account than the one logged in", 409)
-	}
-	id := strconv.FormatInt(user.GetFBID(), 10)
 	if old.UserID != "" && old.UserID != id {
-		return nil, errs.Plugin("The cookies are of another account than this source's", 409)
+		return nil, errAnotherAccount
 	}
-	b, _ := json.Marshal(cli.GetCookies())
-	sess := &session{Platform: plat.String(), UserID: id, Name: user.GetName(), Cookies: b, WADevice: old.WADevice}
+	b, _ := json.Marshal(jar)
+	sess := &session{Platform: plat.String(), UserID: id, Name: name, Cookies: b, WADevice: old.WADevice}
 	if err := saveSession(c.ID, sess); err != nil {
 		return nil, err
 	}
 	c.DeleteSecret("cookies")
-	c.Log("{service}: logged in as {name}", map[string]any{"service": "Messenger", "name": sess.Name})
+	c.Log("{service}: logged in as {name}", map[string]any{"service": p.label(), "name": sess.Name})
 	return sess, nil
 }
 
 // pendingLogin logs in with cookies given in the settings, if any.
-func pendingLogin(ctx context.Context, c *plugins.Context) error {
+func (p Plugin) pendingLogin(ctx context.Context, c *plugins.Context) error {
 	text := c.Secret("cookies")
 	if text == "" {
 		return nil
 	}
-	_, err := login(ctx, c, text)
+	_, err := p.login(ctx, c, text)
 	return err
 }
 
 func (p Plugin) RunImport(c *plugins.Context) error {
 	ctx := context.Background()
-	if p.service == "messenger" {
-		if err := pendingLogin(ctx, c); err != nil {
+	if err := p.pendingLogin(ctx, c); err != nil {
+		return err
+	}
+	if sess, _ := loadSession(c.ID); loggedIn(sess) {
+		// the account's own handle, at once (the live connection brings the rest)
+		if _, _, err := sourcekit.RunImporters(c, []sourcekit.Step{{Label: liveLabel(p.service), Run: func(a *archive.Archive, _ func(string)) error {
+			writer(a, c, p.service).Self(importers.MetaUser{ID: sess.UserID, Name: sess.Name})
+			return nil
+		}}}); err != nil {
 			return err
-		}
-		if sess, _ := loadSession(c.ID); loggedIn(sess) {
-			// the account's own handle, at once (the live connection brings the rest)
-			if _, _, err := sourcekit.RunImporters(c, []sourcekit.Step{{Label: "Messenger", Run: func(a *archive.Archive, _ func(string)) error {
-				writer(a, c, p.service).Self(importers.MetaUser{ID: sess.UserID, Name: sess.Name})
-				return nil
-			}}}); err != nil {
-				return err
-			}
 		}
 	}
 	if dir := c.Str("export"); dir != "" {
@@ -211,12 +249,12 @@ func (p Plugin) RunImport(c *plugins.Context) error {
 }
 
 func (p Plugin) Live(ctx context.Context, c *plugins.Context) error {
-	if err := pendingLogin(ctx, c); err != nil {
+	if err := p.pendingLogin(ctx, c); err != nil {
 		return err
 	}
 	if sess, _ := loadSession(c.ID); !loggedIn(sess) {
 		// set up for the export only: nothing to connect, until cookies are given
-		c.Log("{service}: not logged in (the cookies in its settings)", map[string]any{"service": "Messenger"})
+		c.Log("{service}: not logged in (the cookies in its settings)", map[string]any{"service": p.label()})
 		for {
 			select {
 			case <-ctx.Done():
@@ -228,11 +266,14 @@ func (p Plugin) Live(ctx context.Context, c *plugins.Context) error {
 			}
 		}
 	}
+	if p.service == "instagram" {
+		return liveInstagram(ctx, c)
+	}
 	return live(ctx, c, p.service)
 }
 
 func (p Plugin) Action(c *plugins.Context, name string) error {
-	if name != "logout" || p.service != "messenger" {
+	if name != "logout" {
 		return nil
 	}
 	sess, err := loadSession(c.ID)
@@ -240,10 +281,16 @@ func (p Plugin) Action(c *plugins.Context, name string) error {
 		return err
 	}
 	if s := running(c.ID); s != nil {
-		s.cli.Disconnect()
+		if s.ig != nil {
+			s.ig.Disconnect()
+		} else {
+			s.cli.Disconnect()
+		}
 		if e := s.waClient(); e != nil {
 			e.Disconnect()
 		}
+		s.logOut()
+		s.fail(loggedOutError(p.service))
 	}
 	if sess != nil && sess.WADevice != 0 {
 		ctx := context.Background()
@@ -258,14 +305,11 @@ func (p Plugin) Action(c *plugins.Context, name string) error {
 		return err
 	}
 	c.SaveState(M{"threads_listed": false})
-	c.Log("{service}: logged out", map[string]any{"service": "Messenger"})
+	c.Log("{service}: logged out", map[string]any{"service": p.label()})
 	return nil
 }
 
 func (p Plugin) IdleActions(c *plugins.Context) []string {
-	if p.service != "messenger" {
-		return nil
-	}
 	if sess, _ := loadSession(c.ID); sess == nil {
 		return []string{"logout"}
 	}
@@ -273,21 +317,20 @@ func (p Plugin) IdleActions(c *plugins.Context) []string {
 }
 
 func (p Plugin) InfoFacts(c *plugins.Context) []plugins.Fact {
-	if p.service != "messenger" {
-		return nil
-	}
 	sess, _ := loadSession(c.ID)
 	if !loggedIn(sess) {
 		return []plugins.Fact{{Label: "Account", Value: "not logged in"}}
 	}
 	facts := []plugins.Fact{{Label: "Account", Value: sess.Name + " (" + sess.UserID + ")"}}
 	if s := running(c.ID); s != nil && s.connected.Load() {
-		e2ee := "not connected"
-		if s.waClient() != nil {
-			e2ee = "connected"
+		facts = append(facts, plugins.Fact{Label: "Connection", Value: "connected"})
+		if s.ig == nil {
+			e2ee := "not connected"
+			if s.waClient() != nil {
+				e2ee = "connected"
+			}
+			facts = append(facts, plugins.Fact{Label: "Encrypted chats", Value: e2ee})
 		}
-		facts = append(facts, plugins.Fact{Label: "Connection", Value: "connected"},
-			plugins.Fact{Label: "Encrypted chats", Value: e2ee})
 	} else {
 		facts = append(facts, plugins.Fact{Label: "Connection", Value: "not connected"})
 	}
@@ -298,9 +341,6 @@ func (p Plugin) InfoFacts(c *plugins.Context) []plugins.Fact {
 }
 
 func (p Plugin) NotSending(c *plugins.Context) string {
-	if p.service != "messenger" {
-		return "only the export"
-	}
 	if sess, _ := loadSession(c.ID); !loggedIn(sess) {
 		return "not logged in"
 	}

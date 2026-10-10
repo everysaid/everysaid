@@ -164,9 +164,31 @@ func send(ctx context.Context, c *plugins.Context, service string, conv plugins.
 	}
 	var id string
 	var ts int64
-	if s.encrypted(conv.Key) {
+	switch {
+	case s.ig != nil:
+		var ids []string
+		ids, ts, err = s.igSend(ctx, conv.Key, text, reply, mentions, file, mime)
+		if err == nil && len(ids) > 1 { // the file, then its text as a message of its own
+			id = ids[0]
+			sent := plugins.Sent{Keys: ids}
+			ms := []importers.MetaMessage{{Thread: conv.Key, ID: ids[0], TS: ts, Outgoing: true, Kind: fileKind(mime)},
+				{Thread: conv.Key, ID: ids[1], TS: ts + 1, Outgoing: true, Text: text, Kind: "text"}}
+			if reply != nil {
+				ms[0].ReplyTo = reply.Key
+			}
+			ms[0].Files = sentFile(c, conv.Key, id, file, mime)
+			return sent, s.write(func(w *importers.MetaWriter, a *archive.Archive) {
+				for _, m := range ms {
+					w.Add(m)
+				}
+			}, true)
+		}
+		if len(ids) > 0 {
+			id = ids[0]
+		}
+	case s.encrypted(conv.Key):
 		id, ts, err = s.sendWA(ctx, conv, text, reply, file, mime)
-	} else {
+	default:
 		id, ts, err = s.sendFB(ctx, conv, text, reply, mentions, file, mime)
 	}
 	if err != nil {
@@ -178,16 +200,22 @@ func send(ctx context.Context, c *plugins.Context, service string, conv plugins.
 	}
 	if file != nil {
 		m.Kind = fileKind(mime)
-		f := pendingFile{Thread: conv.Key, Message: id, Name: file.Filename, Mime: mime}
-		path := filepath.Join(mediaDir(c.ID), fileName(f))
-		if os.MkdirAll(filepath.Dir(path), 0o700) == nil && os.WriteFile(path, file.Data, 0o600) == nil {
-			m.Files = []importers.MetaFile{{Path: path, Name: file.Filename, Rel: filepath.Base(path)}}
-		}
+		m.Files = sentFile(c, conv.Key, id, file, mime)
 	}
 	err = s.write(func(w *importers.MetaWriter, a *archive.Archive) {
 		w.Add(m)
 	}, len(m.Files) > 0)
 	return plugins.Sent{Keys: []string{id}}, err
+}
+
+// sentFile is a file sent, written into the download folder for the store to take.
+func sentFile(c *plugins.Context, thread, id string, file *plugins.File, mime string) []importers.MetaFile {
+	f := pendingFile{Thread: thread, Message: id, Name: file.Filename, Mime: mime}
+	path := filepath.Join(mediaDir(c.ID), fileName(f))
+	if os.MkdirAll(filepath.Dir(path), 0o700) != nil || os.WriteFile(path, file.Data, 0o600) != nil {
+		return nil
+	}
+	return []importers.MetaFile{{Path: path, Name: file.Filename, Rel: filepath.Base(path)}}
 }
 
 // write writes into the archive, the store taking the files it links (Move).
@@ -364,7 +392,11 @@ func react(ctx context.Context, c *plugins.Context, service string, conv plugins
 	if err != nil {
 		return err
 	}
-	if s.encrypted(conv.Key) {
+	if s.ig != nil {
+		if err := s.igReact(ctx, conv, msg, emoji); err != nil {
+			return err
+		}
+	} else if s.encrypted(conv.Key) {
 		e := s.waClient()
 		if e == nil {
 			return errNotConnected(service)
@@ -393,7 +425,11 @@ func edit(ctx context.Context, c *plugins.Context, service string, conv plugins.
 	if err != nil {
 		return err
 	}
-	if s.encrypted(conv.Key) {
+	if s.ig != nil {
+		if err := s.igEdit(ctx, conv, msg, text); err != nil {
+			return err
+		}
+	} else if s.encrypted(conv.Key) {
 		e := s.waClient()
 		if e == nil {
 			return errNotConnected(service)
@@ -424,7 +460,11 @@ func unsend(ctx context.Context, c *plugins.Context, service string, conv plugin
 	if err != nil {
 		return err
 	}
-	if s.encrypted(conv.Key) {
+	if s.ig != nil {
+		if err := s.igUnsend(ctx, conv, msg); err != nil {
+			return err
+		}
+	} else if s.encrypted(conv.Key) {
 		e := s.waClient()
 		if e == nil {
 			return errNotConnected(service)
@@ -448,6 +488,9 @@ func markRead(ctx context.Context, c *plugins.Context, service string, conv plug
 	s := running(c.ID)
 	if s == nil || !s.connected.Load() {
 		return 0, nil
+	}
+	if s.ig != nil {
+		return s.igMarkRead(ctx, conv, until)
 	}
 	q := c.Store().Read()
 	type in struct {

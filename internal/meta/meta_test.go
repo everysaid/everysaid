@@ -291,7 +291,7 @@ func TestEncryptedMessagesIntoTheArchive(t *testing.T) {
 	loggedInSession(t, in.iid)
 	s := &liveSession{c: in.ctx(), service: "messenger", self: "100", selfName: "Me Owner", names: map[string]importers.MetaUser{},
 		threads: map[string]threadInfo{}, wake: make(chan struct{}, 1), history: make(chan rangeOp, 1),
-		tr: &translator{self: "100", fbToWA: map[string]string{}}, cli: &fakeClient{}, sess: &session{}}
+		tr: newTranslator("100"), cli: &fakeClient{}, sess: &session{}}
 	chat := types.NewJID("200", types.MessengerServer)
 	at := time.UnixMilli(1600000000000)
 	text := func(id, body string, quote string) *events.FBMessage {
@@ -354,10 +354,10 @@ func TestLoginWithCookies(t *testing.T) {
 	f := &fakeClient{user: &table.LSVerifyContactRowExists{ContactId: me, Name: "Me Owner"}}
 	defer useFake(f)()
 	c := in.ctx()
-	if _, err := login(context.Background(), c, "c_user=100; xs=1%3Aabc"); err == nil || !strings.Contains(err.Error(), "Missing cookies") {
+	if _, err := (Plugin{"messenger"}).login(context.Background(), c, "c_user=100; xs=1%3Aabc"); err == nil || !strings.Contains(err.Error(), "Missing cookies") {
 		t.Fatalf("missing datr: %v", err)
 	}
-	sess, err := login(context.Background(), c, `curl 'https://www.facebook.com/' \
+	sess, err := (Plugin{"messenger"}).login(context.Background(), c, `curl 'https://www.facebook.com/' \
   -H 'accept: */*' \
   -b 'datr=D; c_user=100; xs=1%3Aabc; fr=x'`)
 	if err != nil {
@@ -371,7 +371,7 @@ func TestLoginWithCookies(t *testing.T) {
 	}
 	// the cookies of another account
 	f.user = &table.LSVerifyContactRowExists{ContactId: 999, Name: "Other"}
-	if _, err := login(context.Background(), c, `{"c_user":"999","xs":"a","datr":"b"}`); err == nil {
+	if _, err := (Plugin{"messenger"}).login(context.Background(), c, `{"c_user":"999","xs":"a","datr":"b"}`); err == nil {
 		t.Error("another account's cookies taken")
 	}
 	if err := (Plugin{"messenger"}).Action(c, "logout"); err != nil {
@@ -403,7 +403,7 @@ func TestParseCookies(t *testing.T) {
 }
 
 func TestTranslateKeepsFoldersAndSpamOut(t *testing.T) {
-	tr := &translator{self: "100", fbToWA: map[string]string{}}
+	tr := newTranslator("100")
 	o := tr.translate(&table.LSTable{LSDeleteThenInsertThread: []*table.LSDeleteThenInsertThread{
 		{ThreadKey: 1, ThreadType: table.ONE_TO_ONE, FolderName: "spam"},
 		{ThreadKey: 2, ThreadType: table.FOLDER},
