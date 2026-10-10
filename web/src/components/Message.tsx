@@ -248,6 +248,7 @@ function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange }: {
   const { t } = useTranslation();
   const [more, setMore] = useState(false);
   useEffect(() => { if (!open) setMore(false); }, [open]);
+  const toComposer = useRef(false);      // an answer or an edit: the field keeps the focus, not this button
   const mine = m.reactions.find((r) => r.mine)?.emoji ?? null;
   const put = (e: string) => { onOpenChange(false); react?.on(m, e === mine ? "" : e); };
   const others = react && !react.free ? react.all ?? [] : [];      // any emoji: the picker instead
@@ -260,11 +261,12 @@ function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange }: {
         <button data-actions aria-label={label} title={label}
           className={cn("absolute top-1/2 -translate-y-1/2 rounded-full p-1.5 text-fg/70 opacity-0 transition hover:bg-fg/12 hover:text-fg focus:opacity-100 group-hover/msg:opacity-100 data-[state=open]:bg-fg/12 data-[state=open]:opacity-100",
             // beside the bubble, at the middle of the bubble itself (not of its sender's name and reactions)
-            m.outgoing ? "right-full mr-0.5" : "left-full ml-0.5")}>
+            m.outgoing ? "right-full mr-1.5" : "left-full ml-1.5")}>
           <EllipsisVertical className="size-4" strokeWidth={3} />
         </button>
       </MenuTrigger>
-      <MenuContent align={m.outgoing ? "end" : "start"} className="w-72">
+      <MenuContent align={m.outgoing ? "end" : "start"} className="w-72"
+        onCloseAutoFocus={(e) => { if (toComposer.current) { e.preventDefault(); toComposer.current = false; } }}>
         {react && (
           <div data-reactions className="flex items-center gap-0.5 px-1 py-1">
             {react.quick.slice(0, 6).map((e) => (
@@ -292,9 +294,9 @@ function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange }: {
         {mine && react && <MenuItem onSelect={() => react.on(m, "")}><span className="w-5 text-center">{mine}</span>{t("chat.removeReaction")}</MenuItem>}
         {m.text && <MenuItem icon={<Copy className="size-4" />} onSelect={() => copy(copyText(m.text!))}>{t("common.copy")}</MenuItem>}
         {file && <MenuItem icon={<Copy className="size-4" />} onSelect={() => copy(copyFile(file))}>{t("chat.copyFile")}</MenuItem>}
-        {onEdit && <MenuItem icon={<Pencil className="size-4" />} onSelect={() => onEdit(m)}>{t("chat.edit")}</MenuItem>}
+        {onEdit && <MenuItem icon={<Pencil className="size-4" />} onSelect={() => { toComposer.current = true; onEdit(m); }}>{t("chat.edit")}</MenuItem>}
         {onDelete && <MenuItem danger icon={<Trash2 className="size-4" />} onSelect={() => onDelete(m)}>{t("chat.deleteForAll")}</MenuItem>}
-        {onReply && <MenuItem icon={<CornerUpLeft className="size-4" />} onSelect={() => onReply(m)}>{t("chat.reply")}</MenuItem>}
+        {onReply && <MenuItem icon={<CornerUpLeft className="size-4" />} onSelect={() => { toComposer.current = true; onReply(m); }}>{t("chat.reply")}</MenuItem>}
       </MenuContent>
     </Menu>
   );

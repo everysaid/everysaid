@@ -179,6 +179,7 @@ test("replying: pick a message, the bar shows it (Esc cancels), the answer goes 
       await row(page, asked).hover();
       await row(page, asked).locator("[data-actions]").click();
       await page.getByRole("menuitem", { name: /^(Απάντηση|Reply)$/ }).click();
+      await expect(field(page)).toBeFocused();              // to write the answer at once, not on the menu's button
     }
     await expect(page.locator("[data-replying]")).toContainText(asked);
   };
