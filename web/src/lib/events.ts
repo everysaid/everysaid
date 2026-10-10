@@ -64,8 +64,20 @@ export function connectEvents(qc: QueryClient) {
     };
   };
   open();
+  // a page frozen or hidden (a browser's background tab, an app as Ferdium that sets its services to
+  // sleep) may have missed what was said meanwhile: as after a lost connection, once it is back
+  const back = () => {
+    if (document.visibilityState !== "visible") return;
+    listeners.forEach((f) => f({ type: "reconnected" }));
+    qc.invalidateQueries({ queryKey: ["outbox"] });
+    qc.invalidateQueries({ queryKey: ["chats"] });
+  };
+  document.addEventListener("visibilitychange", back);
+  document.addEventListener("resume", back);
   return () => {
     stopped = true;
+    document.removeEventListener("visibilitychange", back);
+    document.removeEventListener("resume", back);
     socket?.close();
   };
 }
