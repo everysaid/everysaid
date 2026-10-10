@@ -95,6 +95,8 @@ const (
 	startsWithLive = "Viber Desktop is not running: the live connection starts it"
 )
 
+func (Plugin) Connected(c *plugins.Context) bool { return running(c) }
+
 func (Plugin) Check(c *plugins.Context) (bool, string) {
 	if !running(c) {
 		switch {

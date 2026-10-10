@@ -225,6 +225,12 @@ type Liver interface {
 	Live(ctx context.Context, c *Context) error
 }
 
+// Connecter says whether an instance's live connection is up now: its loop may run while it is not
+// (waiting for the phone, for the program it drives, for the service to answer again).
+type Connecter interface {
+	Connected(c *Context) bool
+}
+
 // Conversation is a conversation as a plugin is given it.
 type Conversation struct {
 	ID      int64

@@ -321,6 +321,11 @@ func (p Plugin) IdleActions(c *plugins.Context) []string {
 	return nil
 }
 
+func (Plugin) Connected(c *plugins.Context) bool {
+	s := running(c.ID)
+	return s != nil && s.connected.Load()
+}
+
 func (p Plugin) InfoFacts(c *plugins.Context) []plugins.Fact {
 	sess, _ := loadSession(c.ID)
 	if !loggedIn(sess) {

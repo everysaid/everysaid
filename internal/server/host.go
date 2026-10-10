@@ -310,6 +310,12 @@ func (h *Host) Status(iid int64, lang string) (M, error) {
 	out["ready_text"] = i18n.Tr(readyText, lang)
 	out["live_capable"] = p != nil && p.Info().HasMode("live")
 	out["live"] = live
+	// whether that live connection is up now, where the source says (else null)
+	var connected any
+	if cn, ok := p.(plugins.Connecter); ok && live {
+		connected = cn.Connected(ctx)
+	}
+	out["connected"] = connected
 	out["can_send"] = p != nil && p.Info().CanSend
 	out["log"] = logLines
 	out["bar"] = bar

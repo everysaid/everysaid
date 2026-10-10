@@ -327,6 +327,11 @@ var (
 
 func (testLive) LiveStopped(c *plugins.Context) { liveStopped <- c.ID }
 
+// liveUp: whether test-live says its connection is up (it says no until told).
+var liveUp atomic.Bool
+
+func (testLive) Connected(c *plugins.Context) bool { return liveUp.Load() }
+
 func (testLive) Info() *plugins.Info {
 	return &plugins.Info{ID: "test-live", Name: "Test live", Kind: "source", Modes: []string{"import", "live"}}
 }

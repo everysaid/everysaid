@@ -139,6 +139,13 @@ func (p Plugin) InfoFacts(c *plugins.Context) []plugins.Fact {
 	return facts
 }
 
+func (Plugin) Connected(c *plugins.Context) bool {
+	k := instanceOf(c.ID)
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.phase == "ready" || k.phase == "syncing"
+}
+
 func (p Plugin) IdleActions(c *plugins.Context) []string {
 	if aci, _ := c.State["aci"].(string); aci != "" {
 		return []string{"link"}

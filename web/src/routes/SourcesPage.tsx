@@ -109,7 +109,10 @@ function InstanceCard({ i, manifest }: { i: PluginInstance; manifest?: PluginMan
             <span className="font-semibold">{i.label}</span>
             <span className="text-xs text-muted">{i.name}</span>
             {i.is_default && <span className="rounded-full bg-accent/15 px-2 py-0.5 text-[11px] font-medium text-accent">{t("sources.default")}</span>}
-            {i.live && <span className="flex items-center gap-1 rounded-full bg-ok/15 px-2 py-0.5 text-[11px] font-medium text-ok"><Radio className="size-3" />{i.kind === "analysis" ? t("sources.analysisOn") : t("sources.liveBadge")}</span>}
+            {/* live: green only while the connection is up, where the source says whether it is */}
+            {i.live && (i.connected === false
+              ? <span data-live="down" className="flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400"><Radio className="size-3" />{t("sources.liveDown")}</span>
+              : <span data-live="up" className="flex items-center gap-1 rounded-full bg-ok/15 px-2 py-0.5 text-[11px] font-medium text-ok"><Radio className="size-3" />{i.kind === "analysis" ? t("sources.analysisOn") : t("sources.liveBadge")}</span>)}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
             <span className={cn("flex items-center gap-1", i.ready ? "text-ok" : "text-danger")}>

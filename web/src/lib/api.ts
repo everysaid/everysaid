@@ -404,6 +404,7 @@ export interface PluginInstance {
   ready_text: string;
   live_capable: boolean;
   live: boolean;
+  connected: boolean | null;      // while live: whether the connection is up now (null: the source does not say)
   can_send: boolean;
   log: string[];
   bar: string;                    // a progress bar's line, drawn in place under the log

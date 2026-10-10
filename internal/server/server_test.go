@@ -882,6 +882,12 @@ func TestLiveConnectionsAndRuns(t *testing.T) {
 		t.Fatal("not connected")
 	}
 	must(t, strings.Contains(db.Str(c.s.Store.Read(), "SELECT settings FROM plugin_instance WHERE id = ?", iid), `"_live":true`), "remembered")
+	// live, but not connected until the source says so; a source that does not say: null
+	card := func() M { return c.getJSON(fmt.Sprintf("/api/plugins/%d", iid)) }
+	must(t, card()["connected"] == false, "live, not connected: %v", card()["connected"])
+	liveUp.Store(true)
+	must(t, card()["connected"] == true, "connected: %v", card()["connected"])
+	liveUp.Store(false)
 	// a failure: connected again after a pause, and said in its log
 	liveFailing <- fmt.Errorf("the network went")
 	var st2 M

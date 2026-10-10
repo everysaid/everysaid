@@ -179,6 +179,15 @@ func cardStatus(c *plugins.Context) map[string]any {
 		"send_enabled": opts.Send, "limits": limits(c), "sent": sent, "linked": HasDevice(storeDir(c))}
 }
 
+func (Plugin) Connected(c *plugins.Context) bool {
+	b := Running(storeDir(c))
+	if b == nil {
+		return false
+	}
+	s := b.Status()
+	return s != nil && s["connected"] == true
+}
+
 func (p Plugin) InfoFacts(c *plugins.Context) []plugins.Fact {
 	s := cardStatus(c)
 	str := func(k string) string { v, _ := s[k].(string); return v }
