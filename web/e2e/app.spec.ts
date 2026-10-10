@@ -112,13 +112,15 @@ test("setup, chats, a chat, search, media, sources, settings", async ({ page }, 
     const chats = (await (await fetch("/api/chats", { headers: h })).json()).items;
     for (const c of chats) {
       const page = await (await fetch(`/api/chats/${c.id}/stream?limit=200`, { headers: h })).json();
-      if (page.items.some((i: any) => i.reactions?.length)) return c.id;
+      const m = page.items.find((i: any) => i.reactions?.length);
+      if (m) return { chat: c.id, id: m.id };
     }
     return null;
   });
   if (withReaction) {
-    await page.goto(`/chat/${withReaction}`);
-    await page.waitForTimeout(1000);                  // the list settles at the latest first
+    // at the message itself: others' tests may have written after it, beyond what the list draws
+    await page.goto(`/chat/${withReaction.chat}?m=${withReaction.id}`);
+    await page.waitForTimeout(1000);                  // the list settles at the message first
     await page.locator("[data-reaction]").first().evaluate((el) => el.scrollIntoView({ block: "center" }));
     await page.waitForTimeout(500);
     // a chip on screen: its top edge (over the bubble) is the chip itself, not the bubble
