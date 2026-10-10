@@ -296,12 +296,14 @@ func TestSendingSaysWhyNot(t *testing.T) {
 	}
 }
 
-func TestReadReceiptsOnlyWhereTheUserTurnedThemOn(t *testing.T) {
+// Read here, a chat is marked read on the account's devices whatever the setting (the others told
+// only with read receipts on): through the live connection only.
+func TestMarkingReadNeedsTheConnection(t *testing.T) {
 	f := bridgeInstance(t)
 	fakeRunning(t, f, true)
 	p := Plugin{}
 	conv := plugins.Conversation{ID: 1, Key: "+15551234567", Service: "whatsapp"}
-	if n, err := p.MarkRead(context.Background(), f.ctx(), conv, 1_790_000_000_500); n != 0 || err != nil { // off by default
+	if n, err := p.MarkRead(context.Background(), f.ctx(), conv, 1_790_000_000_500); n != 0 || err != nil { // receipts off
 		t.Fatal(n, err)
 	}
 	on := true
