@@ -74,3 +74,32 @@ test("two sendings answered in the other order: in the order sent", async ({ pag
   const y = async (t: string) => (await stream.getByText(t, { exact: true }).boundingBox())!.y;
   expect(await y(one)).toBeLessThan(await y(two));
 });
+
+// A page set to sleep (a background tab, an app as Ferdium) misses the server's events; once it is
+// shown again it brings what came meanwhile.
+test("back from sleep: what came meanwhile is brought", async ({ page }, info) => {
+  await signedIn(page, info.project.name);
+  const chat = await page.evaluate(async () => {
+    const h = { "X-Everysaid": "1" };
+    const chats = (await (await fetch("/api/chats", { headers: h })).json()).items.filter((c: any) => c.type === "person");
+    for (const c of chats.slice(0, 12)) {
+      const d = await (await fetch(`/api/chats/${c.id}`, { headers: h })).json();
+      if (d.sendable.includes(d.last_service)) return c.id as string;
+    }
+    return "";
+  });
+  test.skip(!chat, "no chat");
+  await page.routeWebSocket("**/api/events", (ws) => {
+    const server = ws.connectToServer();
+    server.onMessage(() => {});         // nothing the server says arrives
+  });
+  await page.goto(`/chat/${chat}`);
+  await expect(page.locator("[data-stream] [data-virtuoso-scroller]")).toBeVisible();
+  const text = `while asleep ${info.project.name} ${Date.now()}`;
+  await page.request.post("/api/demo/incoming", { data: { chat, text }, headers: { "X-Everysaid": "1" } });
+  await page.waitForTimeout(1500);
+  const said = page.locator("[data-stream]").getByText(text, { exact: true });
+  await expect(said).toHaveCount(0);   // not said: not here yet
+  await page.evaluate(() => document.dispatchEvent(new Event("resume")));
+  await expect(said).toBeVisible({ timeout: 10000 });
+});
