@@ -50,6 +50,8 @@ Contents:
  Viber Desktop (linked to a phone) ── LD_PRELOAD bridge, snapshot ──► <cache>/viber/<instance>/desktop.db
  WhatsApp source (internal/whatsapp, live) ──────► <data>/whatsapp-bridge/messages.db, media/ (keys: <data>/keys.db)
  Telegram API ── everysaid telegram-sync ────────► <data>/keys.db (telegram_*), <cache>/telegram/media/
+ Messenger, Instagram (internal/meta, live) ─────► the archive directly (sessions: <data>/keys.db, meta_*)
+ Meta's export (Download your information) ──────► the archive (everysaid import messenger instagram)
 
                      everysaid import sms calls viber whatsapp telegram voip media   (or the sources in the app)
                                                           ▼
@@ -939,7 +941,7 @@ migrations.
 **Lookup tables and vocabularies:**
 
 - `service` (sms, mms, imessage, rcs, viber, whatsapp, phone, facetime, telegram, messenger,
-  signal; a call app found in the iPhone's log adds its own), with `key_scope`: `service` where a
+  signal, instagram; a call app found in the iPhone's log adds its own), with `key_scope`: `service` where a
   message id is unique across the service, `conversation` where only within a chat (Telegram);
 - `address_kind`: `phone`, `email`, `sender` (an SMS sender name), `uri` (sip:...), shared by every
   service; `id`, `username`, `name`, within one service (`address.service_id`): a Viber member id,
@@ -1092,6 +1094,7 @@ everysaid import [--db PATH] [sms calls viber whatsapp telegram voip media]
 | WhatsApp | `Z_PK` / `<jid>/<id>` | stanza id (`message.key`); iPhone first within one run |
 | Media | `(source, source_path, message)` | content sha256 (`media`) |
 | Services with ids per chat (Telegram) | `(source, row_key)` | (`message.key`, `key_scope`) |
+| Messenger, Instagram | live: `<thread>/<message id>`; export: `<thread>/<ms>/<n>` | the message id (`message.key`); the export's: time (ms), direction and text, or an Adium/Pidgin log's within 2 s |
 | Adium and Pidgin logs (no ids) | time, direction, kind and text within the conversation (no key), no `message_origin` | the same (README, "Adium and Pidgin") |
 
 ---

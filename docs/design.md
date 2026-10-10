@@ -27,8 +27,9 @@ the services themselves (it reads them; where a service allows, it also sends).
                 │                         plugin host: plugin instances       │
                 └──────────────────────────────────┬──────────────────────────┘
                                                     │
-   iPhone backup · adb · Adium/Pidgin logs · Telegram API · WhatsApp (whatsmeow) ·
-   Viber Desktop (bridge) · Signal (helper) · CardDAV / .vcf · immich / folder · Ollama
+   iPhone backup · adb · Adium/Pidgin logs · Telegram API · WhatsApp (whatsmeow) · Messenger and
+   Instagram (messagix, instameow) · Viber Desktop (bridge) · Signal (helper) · CardDAV / .vcf ·
+   immich / folder · Ollama
 ```
 
 One program, `everysaid` (Go, one static binary, `CGO_ENABLED=0`; see `docs/go.md`):
@@ -72,7 +73,7 @@ backup" and "WhatsApp live" are two plugins. The plugins today:
 
 | Kind | Plugins |
 |---|---|
-| source | `iphone-backup`, `android-adb`, `carrier-notices`, `im-logs` (`internal/plugins/sources`); `telegram`, `whatsapp-bridge`, `signal`, `viber-desktop` (packages of their own) |
+| source | `iphone-backup`, `android-adb`, `carrier-notices`, `im-logs` (`internal/plugins/sources`); `telegram`, `whatsapp-bridge`, `signal`, `viber-desktop`, `messenger`, `instagram` (packages of their own) |
 | library | `folder`, `immich` (`internal/plugins/libraries`) |
 | contacts | `carddav`, `vcard-file` (`internal/plugins/contacts`) |
 | analysis | `ollama` (`internal/plugins/analysis`) |
@@ -113,6 +114,12 @@ The live sources:
 - **Signal** (`internal/signal`): a separate helper program, `everysaid-signal` (`bridges/signal`,
   Rust, on presage, AGPL-3.0), started by the plugin and spoken to in JSON lines on its stdin and
   stdout; none of its code is linked into `everysaid`.
+- **Messenger and Instagram** (`internal/meta`): in the process, on mautrix-meta's client
+  libraries (`third_party/mautrix-meta`: messagix, instameow), logged in with the browser's cookies
+  (kept in `keys.db`). What the clients give (Messenger's Lightspeed tables, Instagram's changes)
+  is read into the archive by the package itself, with mautrix-meta's bridge as the reference; the
+  libraries' types stay in it. Messenger's encrypted chats through whatsmeow, with a device of the
+  account's own. Meta's export of both is imported by the same sources.
 - **Viber** (`internal/viber`): through Viber Desktop on Linux, driven from inside by Everysaid's
   bridge (`bridges/viber`, an `LD_PRELOAD` library; `docs/viber-bridge.md`). The plugin starts
   Viber Desktop headless, in a session of its own so that the server's restarts leave it running,
@@ -448,7 +455,8 @@ Windows on amd64 or arm64 (`docs/go.md`), and, where Signal is wanted, its helpe
 
 `internal/core/` (store, names, queries, changes, labels), `internal/archive/` (schema, writing),
 `internal/importers/`, `internal/plugins/` and the packages of the live sources
-(`internal/telegram`, `internal/whatsapp`, `internal/signal`, `internal/viber`), `bridges/` (the
+(`internal/telegram`, `internal/whatsapp`, `internal/signal`, `internal/viber`, `internal/meta`),
+`third_party/` (client libraries taken in and patched), `bridges/` (the
 Signal helper, the Viber bridge), `internal/server/` (routes, auth, host, push, events),
 `internal/mcp`, `internal/demo`, `cmd/everysaid` (the binary), `web/` (the PWA); tests beside the
 code they test, `internal/checks` over the whole code, and `web/e2e/`.
