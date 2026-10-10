@@ -338,3 +338,53 @@ func ViberDesktopPhotos(database string, avatars ...string) MediaStep {
 		}
 	}
 }
+
+// PhotosWhatsAppBridge: the profile photos the WhatsApp bridge asked for (messages.db's
+// profile_photo; devices: whatsmeow's store, for the LIDs' numbers), each at its first and last
+// sighting; the files taken into the store (Move), a row whose file has gone known by its digest.
+func PhotosWhatsAppBridge(database string, devices *sql.DB) MediaStep {
+	return func(a *archive.Archive, s *Store) {
+		bridge := roBridge(database)
+		if bridge == nil {
+			return
+		}
+		defer bridge.Close()
+		if !hasTable(bridge, "profile_photo") {
+			return
+		}
+		s.Move = true // the bridge's downloads: kept in the store only
+		folder := filepath.Dir(database)
+		person := newWAPeople(nil, devices, nil, bridge)
+		for _, r := range maps(bridge, "SELECT jid, picture_id, path, sha256, first_seen, last_seen FROM profile_photo "+
+			"ORDER BY first_seen, rowid") {
+			jid := str(r["jid"])
+			sha := ""
+			if str(r["picture_id"]) != "" {
+				sha = strOrEmpty(r["sha256"])
+				if sha == "" || !a.Exists("SELECT 1 FROM media WHERE sha256 = ?", sha) {
+					rel := strOrEmpty(r["path"])
+					if rel == "" || filepath.IsAbs(rel) || !filepath.IsLocal(filepath.FromSlash(rel)) {
+						continue
+					}
+					if sha = s.Keep(filepath.Join(folder, filepath.FromSlash(rel))); sha == "" {
+						continue // its file gone before the archive had it
+					}
+				} else if rel := strOrEmpty(r["path"]); rel != "" && filepath.IsLocal(filepath.FromSlash(rel)) {
+					s.held(filepath.Join(folder, filepath.FromSlash(rel)), sha) // had: the bridge's copy goes
+				}
+			}
+			first, last := toInt(r["first_seen"]), toInt(r["last_seen"])
+			if strings.HasSuffix(jid, "@g.us") {
+				if conv, ok := a.FindConversation("whatsapp", jid); ok {
+					a.ChatPhoto(conv, "whatsapp", sha, first)
+					a.ChatPhoto(conv, "whatsapp", sha, last)
+				}
+				continue
+			}
+			if h, ok := person.of(jid); ok && a.Known(h) {
+				a.HandlePhoto(h, "whatsapp", sha, first)
+				a.HandlePhoto(h, "whatsapp", sha, last)
+			}
+		}
+	}
+}

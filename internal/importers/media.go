@@ -534,7 +534,7 @@ var Phones = []MediaStep{MediaWhatsApp, MediaViberIphone, MediaSMSIphone, MediaM
 func Media(a *archive.Archive, out func(string), steps ...MediaStep) (err error) {
 	defer archive.Recover(&err)
 	if len(steps) == 0 {
-		steps = append(append([]MediaStep{}, Phones...), TelegramMedia, MediaWhatsAppBridge(""))
+		steps = append(append([]MediaStep{}, Phones...), TelegramMedia, MediaWhatsAppBridge(""), PhotosWhatsAppBridge(BridgeDB(), Devices()))
 	}
 	s := NewStore(a)
 	for _, step := range steps {
