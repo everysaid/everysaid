@@ -115,10 +115,12 @@ func historyReceipts(store *MessageStore, chat types.JID, webMsg *waWeb.WebMessa
 type ReadRequest struct {
 	Recipient string `json:"recipient"` // the chat: a number's digits or a jid
 	Until     int64  `json:"until"`     // Unix seconds: messages up to then (0: all)
+	Self      bool   `json:"self"`      // read only on the account's own devices: the others are not told
 }
 
 // markRead sends read receipts for the messages of a chat not read yet, up to a time and at most
-// readBack old, as the phone does when a chat is opened.
+// readBack old, as the phone does when a chat is opened; with Self, receipts only the account's own
+// devices get (read-self, as WhatsApp sends when its read receipts are off).
 func (s *Sender) markRead(req ReadRequest) (int, map[string]interface{}) {
 	fail := func(code int, format string, args ...interface{}) (int, map[string]interface{}) {
 		return code, map[string]interface{}{"success": false, "message": fmt.Sprintf(format, args...)}
@@ -134,8 +136,12 @@ func (s *Sender) markRead(req ReadRequest) (int, map[string]interface{}) {
 		return fail(http.StatusNotFound, "%v", err)
 	}
 	now, marked := time.Now(), 0
+	kind := types.ReceiptTypeRead
+	if req.Self {
+		kind = types.ReceiptTypeReadSelf
+	}
 	for _, b := range batches {
-		if err := s.client.MarkRead(context.Background(), b.ids, now, b.chat, b.from); err != nil {
+		if err := s.client.MarkRead(context.Background(), b.ids, now, b.chat, b.from, kind); err != nil {
 			return fail(http.StatusInternalServerError, "marking read failed: %v", err)
 		}
 		s.store.markedRead(b.ids, now)
