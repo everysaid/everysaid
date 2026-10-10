@@ -221,8 +221,7 @@ func viberCommand(c *plugins.Context) (*exec.Cmd, error) {
 	var env []string
 	for _, e := range os.Environ() {
 		if k, _, _ := strings.Cut(e, "="); k != "DISPLAY" && k != "WAYLAND_DISPLAY" && k != "DBUS_SESSION_BUS_ADDRESS" &&
-			k != "LD_PRELOAD" && !strings.HasPrefix(k, "VIBER_") && k != "QT_QPA_PLATFORM" && k != "HOME" &&
-			!strings.HasPrefix(k, "XDG_") || k == "XDG_RUNTIME_DIR" {
+			k != "LD_PRELOAD" && !strings.HasPrefix(k, "VIBER_") && k != "QT_QPA_PLATFORM" && !jailed[k] {
 			env = append(env, e)
 		}
 	}

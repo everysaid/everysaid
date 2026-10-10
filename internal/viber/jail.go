@@ -37,6 +37,11 @@ var (
 	emptied = map[string]bool{"QmlUrlCache": true, "QmlWebCache": true, "Temporary": true, "Thumbnails": true}
 )
 
+// jailed are the variables jailEnv sets (the others of the user's, XDG_DATA_DIRS, XDG_RUNTIME_DIR and
+// the rest, stay: Qt and D-Bus need them).
+var jailed = map[string]bool{"HOME": true, "XDG_CONFIG_HOME": true, "XDG_DATA_HOME": true, "XDG_CACHE_HOME": true,
+	"XDG_STATE_HOME": true}
+
 // jailEnv is the environment that keeps Viber in its home.
 func jailEnv(c *plugins.Context) []string {
 	h := Home(c)
