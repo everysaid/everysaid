@@ -4,8 +4,8 @@
 // lost on the way), it is not sent twice; and before each new try the chat is looked at, in case it
 // went after all (a source that said it failed, though it sent).
 //
-// It is kept in a database of its own beside the archive (<archive>-outbox.db): what waits to be
-// sent, not the archive's history.
+// It is kept in the archive's table `outbox` (schema.sql): a file waiting to be sent is there until
+// it goes, and is let go once it has.
 package server
 
 import (
@@ -13,7 +13,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -23,22 +22,6 @@ import (
 	"everysaid/internal/i18n"
 	"everysaid/internal/plugins"
 )
-
-const outboxSchema = `
-CREATE TABLE IF NOT EXISTS outbox (
-    id TEXT PRIMARY KEY,            -- the app's own id of the message
-    chat TEXT NOT NULL,
-    request TEXT NOT NULL,          -- JSON: text, conversation_id, service, reply_to, mentions, file_name, file_type
-    file BLOB,
-    created_at INTEGER NOT NULL,    -- Unix ms
-    state TEXT NOT NULL,            -- queued, sending, sent, failed
-    attempts INTEGER NOT NULL DEFAULT 0,
-    next_at INTEGER NOT NULL DEFAULT 0,
-    error TEXT,                     -- JSON: the last failure (code, status, text, params)
-    result TEXT                     -- JSON: what the sending said, once sent
-);
-CREATE INDEX IF NOT EXISTS outbox_chat ON outbox (chat, state);
-`
 
 // how long a message is tried for, and the pauses between tries (doubling up to the last)
 const (
@@ -72,15 +55,10 @@ type outboxRequest struct {
 	FileType       string            `json:"file_type,omitempty"`
 }
 
-// outboxDB is the outbox's database, opened at its first use.
+// outboxDB is a connection to the archive for the outbox, opened at its first use.
 func (h *Host) outboxDB() *sql.DB {
 	h.outboxOnce.Do(func() {
-		p := h.store.Path
-		path := strings.TrimSuffix(p, filepath.Ext(p)) + "-outbox.db"
-		d, err := db.Open(path, "journal_mode(WAL)")
-		if err == nil {
-			_, err = d.Exec(outboxSchema)
-		}
+		d, err := db.Open(h.store.Path)
 		if err != nil {
 			panic(err)
 		}

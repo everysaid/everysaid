@@ -340,6 +340,19 @@ CREATE TABLE IF NOT EXISTS analysis (   -- the people the local analysis has rea
     models TEXT NOT NULL,               -- which models read it
     at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS outbox (     -- a message sent from the app that could not go at once, tried again
+    id TEXT PRIMARY KEY,                -- the app's own id of the message (server/outbox.go)
+    chat TEXT NOT NULL,
+    request TEXT NOT NULL,              -- JSON: text, conversation_id, service, reply_to, mentions, file_name, file_type
+    file BLOB,                          -- the file to send, until it has gone
+    created_at INTEGER NOT NULL,        -- Unix ms
+    state TEXT NOT NULL,                -- queued, sending, sent, failed
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_at INTEGER NOT NULL DEFAULT 0,
+    error TEXT,                         -- JSON: the last failure (code, status, text, params)
+    result TEXT                         -- JSON: what the sending said, once sent
+);
+CREATE INDEX IF NOT EXISTS outbox_chat ON outbox (chat, state);
 CREATE VIRTUAL TABLE IF NOT EXISTS message_fts USING fts5(     -- each message's words, without their places
     text, content='', contentless_delete=1, detail=none, tokenize='unicode61 remove_diacritics 2');
 CREATE TABLE IF NOT EXISTS term (       -- every word message_fts holds: a part of a word finds the words

@@ -279,7 +279,7 @@ UI (planned); on an iPhone that is not possible at all, and the backup stays.
 - **Nothing written is lost**: each message carries the app's own id. The app keeps it on the device
   (IndexedDB) until the server has it, and sends it again with that id once the server answers; the
   server sends one id only once. A message the server has but that cannot go now (a plugin's 429,
-  502, 503, 504, or a failure it did not word) waits in its outbox (`<archive>-outbox.db`) and is
+  502, 503, 504, or a failure it did not word) waits in the outbox (the archive's table `outbox`) and is
   sent by itself, each chat's in order, with growing pauses, for a day; before each try the chat is
   looked at, in case it went after all. A refusal is said at once. What waits shows after the chat's
   messages, to be sent again now or discarded.
