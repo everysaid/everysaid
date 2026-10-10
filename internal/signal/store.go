@@ -212,10 +212,11 @@ func (s *Store) Own() string {
 }
 
 // Counts are how many contacts and groups the store has.
-func (s *Store) Counts() (contacts, groups int64) {
+func (s *Store) Counts() (contacts, groups int64, err error) {
+	defer db.Recover(&err)
 	db.Row(s.DB, "SELECT (SELECT count(*) FROM signal_contact WHERE instance = ?1), "+
 		"(SELECT count(*) FROM signal_group WHERE instance = ?1)", []any{s.Instance}, &contacts, &groups)
-	return contacts, groups
+	return contacts, groups, nil
 }
 
 type chatRef struct {
