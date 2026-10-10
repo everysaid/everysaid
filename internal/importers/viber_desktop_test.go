@@ -169,3 +169,36 @@ func TestViberDesktopKeepsWhatItDoesNotKnow(t *testing.T) {
 	must(t, Viber(a, nil, opt))
 	eq(t, "kept", desktopReactionsOf(a, "6200000000000000001"), []string{"😮 +15557770002"})
 }
+
+// How far the owner read each chat, on any device, and how far the other person in a chat with one
+// saw the owner's messages: from the desktop's chats, as from the iPhone's.
+func TestViberDesktopReads(t *testing.T) {
+	a, _ := newArchive(t)
+	path := filepath.Join(t.TempDir(), "desktop.db")
+	f := newDesktop(t, path)
+	db.Exec(f.d, "INSERT INTO ChatInfo (ChatID, Name, Token, Flags, TimeStamp, PGType) VALUES (3, NULL, NULL, 0, 0, 255)")
+	db.Exec(f.d, "INSERT INTO ChatRelation (ChatID, ContactID) VALUES (3, 1), (3, 2)")
+	f.message(3, dtMaria, false, 7001, 1, "are you there?", "{}")
+	f.message(3, dtMe, true, 7002, 1, "yes", "{}")
+	f.message(3, dtMe, true, 7003, 1, "and now?", "{}")
+	f.message(3, dtMaria, false, 7004, 1, "later", "{}")
+	db.Exec(f.d, "UPDATE ChatInfo SET LastReadMessageToken = 7001, LastSeenMessageToken = 7002 WHERE ChatID = 3")
+	a.Exec("INSERT INTO plugin_instance (plugin, kind, label, created_at) VALUES ('viber-desktop', 'source', 'V', 0)")
+	a.Exec("INSERT INTO source (name, path, instance_id) VALUES ('viber-desktop/viber', ?, ?)", path,
+		a.Int("SELECT max(id) FROM plugin_instance"))
+	opt := ViberOptions{DesktopDB: path, NoIphone: true, DesktopSource: "viber-desktop/viber"}
+	must(t, Viber(a, nil, opt))
+	conv := a.Int("SELECT conversation_id FROM message WHERE key = '7001'")
+	eq(t, "read up to the first", a.Int("SELECT value FROM state_report WHERE field = 'read_until' AND conversation_id = ?", conv),
+		a.Int("SELECT ts FROM message WHERE key = '7001'"))
+	eq(t, "seen: the first of the owner's", db.Strs(a.Tx(), "SELECT m.key FROM receipt r JOIN message m ON m.id = r.message_id "+
+		"WHERE r.read_at IS NOT NULL ORDER BY m.key"), []string{"7002"})
+
+	// read and seen on the phone since
+	db.Exec(f.d, "UPDATE ChatInfo SET LastReadMessageToken = 7004, LastSeenMessageToken = 7003 WHERE ChatID = 3")
+	must(t, Viber(a, nil, opt))
+	eq(t, "read up to the last", a.Int("SELECT max(value) FROM state_report WHERE field = 'read_until' AND conversation_id = ?", conv),
+		a.Int("SELECT ts FROM message WHERE key = '7004'"))
+	eq(t, "seen: both", db.Strs(a.Tx(), "SELECT m.key FROM receipt r JOIN message m ON m.id = r.message_id "+
+		"WHERE r.read_at IS NOT NULL ORDER BY m.key"), []string{"7002", "7003"})
+}

@@ -142,8 +142,8 @@ see it is Viber's own "seen" setting). The others are told only where the source
 receipts" is on (off by default); on Telegram, which cannot tell one without the other, nothing
 goes out without it. The user's messages show ✓ sent, ✓✓ delivered to all, coloured when read
 by all ("all" in a group: whoever the service said got the user's messages there about then), where
-the service tells (WhatsApp, Signal; Telegram in a person's chat, read but not when; Viber from the
-iPhone, where the other lets it be seen); a tap on them says who got and read the message, and when.
+the service tells (WhatsApp, Signal; Telegram in a person's chat, read but not when; Viber, from the
+iPhone and Viber Desktop, where the other lets it be seen); a tap on them says who got and read the message, and when.
 
 **WhatsApp's safeguards:** it sends only into chats where the other side has written (or that
 were started from here: a first message to someone found on WhatsApp, only to people in the

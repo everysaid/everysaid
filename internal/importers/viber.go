@@ -158,28 +158,52 @@ func iphoneMarks(a *archive.Archive, iphone *sql.DB, src int64, convs map[int64]
 	}
 	for _, r := range maps(iphone, "SELECT Z_PK, ZGROUPID, ZLASTREADTOKEN, ZSEENSTATUSLASTTOKEN FROM ZCONVERSATION") {
 		pk := toInt(r["Z_PK"])
-		conv, ok := convs[pk]
-		if !ok || conv == 0 {
-			continue
+		var peer *archive.Handle
+		if !truthy(r["ZGROUPID"]) && len(convMembers[pk]) == 1 {
+			peer = &convMembers[pk][0]
 		}
-		if read := r["ZLASTREADTOKEN"]; truthy(read) {
-			var ts int64
-			if mid, ok := a.MessageByKey("viber", pyStr(read), 0); ok && mid != 0 {
-				ts = a.Int("SELECT ts FROM message WHERE id = ?", mid)
-			} else {
-				ts = tokenTime(nil, toInt(read))
-			}
-			a.ReportState(src, conv, "read_until", ts, observed, 0)
+		viberReads(a, src, convs[pk], r["ZLASTREADTOKEN"], r["ZSEENSTATUSLASTTOKEN"], peer, observed)
+	}
+}
+
+// desktopMarks reads, from Viber Desktop, the same as iphoneMarks of the chats: how far the owner
+// read each (LastReadMessageToken, kept as the owner reads on any device) and, with one person, how
+// far they saw the owner's messages (LastSeenMessageToken).
+func desktopMarks(a *archive.Archive, desktop *sql.DB, src int64, chats map[any]int64,
+	chatMembers map[any][]archive.Handle, observed int64) {
+	for _, r := range maps(desktop, "SELECT ChatID, Token, LastReadMessageToken, LastSeenMessageToken FROM ChatInfo") {
+		var peer *archive.Handle
+		if !truthy(r["Token"]) && len(chatMembers[r["ChatID"]]) == 1 {
+			peer = &chatMembers[r["ChatID"]][0]
 		}
-		if seen := r["ZSEENSTATUSLASTTOKEN"]; truthy(seen) && !truthy(r["ZGROUPID"]) && len(convMembers[pk]) == 1 {
-			peer := a.Address(convMembers[pk][0])
-			mine := "SELECT id FROM message WHERE conversation_id = ? AND outgoing AND key IS NOT NULL " +
-				"AND CAST(key AS INTEGER) <= ?"
-			a.Exec("INSERT OR IGNORE INTO receipt (message_id, address_id, read_at) SELECT id, ?, 0 FROM ("+mine+")",
-				peer, conv, seen)
-			a.Exec("UPDATE receipt SET read_at = 0 WHERE address_id = ? AND read_at IS NULL "+
-				"AND message_id IN ("+mine+")", peer, conv, seen)
+		viberReads(a, src, chats[r["ChatID"]], r["LastReadMessageToken"], r["LastSeenMessageToken"], peer, observed)
+	}
+}
+
+// viberReads keeps what a source says of a chat: read (a token: its message's time, or the token's
+// own) up to there, as its read_until; and, in a chat with one person (peer), the owner's messages
+// up to seen as read by them (receipts, known but not when).
+func viberReads(a *archive.Archive, src, conv int64, read, seen any, peer *archive.Handle, observed int64) {
+	if conv == 0 {
+		return
+	}
+	if truthy(read) {
+		var ts int64
+		if mid, ok := a.MessageByKey("viber", pyStr(read), 0); ok && mid != 0 {
+			ts = a.Int("SELECT ts FROM message WHERE id = ?", mid)
+		} else {
+			ts = tokenTime(nil, toInt(read))
 		}
+		a.ReportState(src, conv, "read_until", ts, observed, 0)
+	}
+	if truthy(seen) && peer != nil {
+		aid := a.Address(*peer)
+		mine := "SELECT id FROM message WHERE conversation_id = ? AND outgoing AND key IS NOT NULL " +
+			"AND CAST(key AS INTEGER) <= ?"
+		a.Exec("INSERT OR IGNORE INTO receipt (message_id, address_id, read_at) SELECT id, ?, 0 FROM ("+mine+")",
+			aid, conv, seen)
+		a.Exec("UPDATE receipt SET read_at = 0 WHERE address_id = ? AND read_at IS NULL "+
+			"AND message_id IN ("+mine+")", aid, conv, seen)
 	}
 }
 
@@ -485,6 +509,8 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 	var noticed []viberMsg // the desktop export's rows with a notice (iphoneRecs has the iPhone's)
 	var takenOrder []int64
 	events := "—"
+	var desktopChats map[any]int64 // ChatID: conversation, and its members: for desktopMarks
+	var desktopMembers map[any][]archive.Handle
 	if desktop != nil {
 		contact := map[any]*archive.Handle{}
 		for _, r := range maps(desktop, "SELECT ContactID, MID, Number FROM Contact") {
@@ -632,6 +658,7 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 		})
 		events = fmt.Sprint(db.Int(desktop, "SELECT count(*) FROM Events"))
 		followDesktop(a, follows, person)
+		desktopChats, desktopMembers = chats, chatMembers
 	}
 
 	for _, pk := range iphoneOrder {
@@ -681,6 +708,9 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 	}
 	if iphone != nil { // observed: when the backup's copy was made
 		iphoneMarks(a, iphone, src["iphone"], convs, convMembers, person, int64(mtime(iphoneDB)*1000))
+	}
+	if desktop != nil && columns(desktop, "ChatInfo")["LastReadMessageToken"] { // an Android export has not
+		desktopMarks(a, desktop, src["desktop"], desktopChats, desktopMembers, int64(mtime(desktopDB)*1000))
 	}
 	a.Resolve()
 	ApplyPins(a, "viber")

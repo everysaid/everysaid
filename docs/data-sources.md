@@ -444,7 +444,7 @@ A later copy of the same profile is a superset of an earlier one.
 | `Events` | `EventID`, `TimeStamp` (Unix ms), `Direction` (0 in, 1 out), `ChatID`, `ContactID`, `Token`, `Type` (3 = system event, also a reaction) |
 | `Messages` | by `EventID`: `Type` (1 text, 2 image, 3 video, 4 sticker, 5 location, 6 voice, 9 text, 10 contact, 11 file, 15 system, 72 deleted by its sender), `Body`, `Info` (JSON: `fileInfo.FileSize`, `fileInfo.Duration`, `fileInfo.mediaInfo.Width/Height`, edits, mentions), `Subject`, `PayloadPath` (the file Viber Desktop has), `ThumbnailPath`, `StickerID`, `PttID`, `Duration`, `PGIsLiked`, `SelfReaction` |
 | `LikeRelation` | `MessageToken`, `LikeEventID`: a reaction event and the message it is on |
-| `ChatInfo` | `ChatID`, `Name`, `Token` (non-empty for groups), `PGType` (3 = channel), `Flags` (bit 19: "My Notes") |
+| `ChatInfo` | `ChatID`, `Name`, `Token` (non-empty for groups), `PGType` (3 = channel), `Flags` (bit 19: "My Notes"), `LastReadMessageToken`, `LastSeenMessageToken` (as the iPhone's `ZLASTREADTOKEN`, `ZSEENSTATUSLASTTOKEN`; Viber Desktop, not an Android export) |
 | `ChatRelation` | `ChatID`, `ContactID` (members) |
 | `Contact` | `ContactID`, `MID` (Viber member id), `Number` |
 | `DownloadFile` | `EventID`, `DownloadID` (`0-02-05-<64 hex>`, the server's media id; not read by the importer, see 5.5) |
@@ -541,9 +541,11 @@ deletions, forwards, links and pins (`subtype_code` `viber:9`/`viber:url`,
 `sender_lon`). What the desktop says now of a message already in the archive (edited, deleted,
 reactions) is brought to it.
 
-**Marks** (iPhone only): mentions into `mention` (the token as the text has it);
+**Marks**: mentions into `mention` (the token as the text has it, iPhone);
 `ZLASTREADTOKEN` as the chat's `read_until`; `ZSEENSTATUSLASTTOKEN`, in a person's chat, as
-receipts of the owner's messages up to it (`read_at` 0: read, when not known).
+receipts of the owner's messages up to it (`read_at` 0: read, when not known). Viber Desktop's
+`ChatInfo.LastReadMessageToken` and `LastSeenMessageToken` the same (kept as the owner reads on
+any device; its `Events.IsRead` stays 0).
 
 **Order and choice of origin.**
 
