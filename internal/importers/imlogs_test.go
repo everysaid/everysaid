@@ -298,13 +298,76 @@ func TestImlogsHandles(t *testing.T) {
 		want         bool
 	}{
 		{"msn", "msn%20chat@hotmail.com.chat", true},
-		{"jabber", "-600000001@chat.facebook.com", true},
+		{"jabber", "-600000001@chat.facebook.com", false}, // every contact of Facebook's XMPP chat
 		{"aim", "chat100000000000000000", true},
 		{"jabber", "friend@jabber.org", false},
 	} {
 		if got := imIsGroup(c.service, c.raw); got != c.want {
 			t.Errorf("imIsGroup(%q, %q) = %v", c.service, c.raw, got)
 		}
+	}
+}
+
+// Facebook's chat over XMPP: an account on chat.facebook.com, one person in each conversation
+// (-<id>@chat.facebook.com, Pidgin naming them by display name), Messenger's like those of Adium's
+// own Facebook plugin, and the same chat as theirs.
+func TestImlogsFacebookOverXMPP(t *testing.T) {
+	tmp := imSetup(t)
+	adium := filepath.Join(tmp, "Adium 2.0", "Users", "Default", "Logs")
+	log := filepath.Join(adium, "Jabber.me@chat.facebook.com", "-600000001@chat.facebook.com",
+		"-600000001@chat.facebook.com (2012-03-01T10.00.00+0200).chatlog")
+	imWrite(t, filepath.Join(log, "-600000001@chat.facebook.com (2012-03-01T10.00.00+0200).xml"),
+		`<?xml version="1.0" encoding="UTF-8" ?>
+<chat xmlns="http://purl.org/net/ulf/ns/0.4-02" account="me@chat.facebook.com" service="Jabber">
+<message sender="-600000001@chat.facebook.com" time="2012-03-01T10:00:00+02:00" alias="Pal"><div>hi</div></message>
+<message sender="me@chat.facebook.com" time="2012-03-01T10:00:05+02:00"><div>hello</div></message>
+</chat>
+`)
+	plog := filepath.Join(adium, "Facebook.me@example.com", "600000001", "600000001 (2010-01-01T10.00.00+0200).chatlog")
+	imWrite(t, filepath.Join(plog, "600000001 (2010-01-01T10.00.00+0200).xml"),
+		`<?xml version="1.0" encoding="UTF-8" ?>
+<chat xmlns="http://purl.org/net/ulf/ns/0.4-02" account="me@example.com" service="Facebook">
+<message sender="600000001" time="2010-01-01T10:00:00+02:00"><div>earlier</div></message>
+</chat>
+`)
+	purple := filepath.Join(tmp, "purple")
+	imWrite(t, filepath.Join(purple, "logs", "jabber", "me@chat.facebook.com", "-600000001@chat.facebook.com", "2011-05-16.200000+0300EEST.txt"),
+		`Conversation with -600000001@chat.facebook.com at 2011-05-16 20:00:00 on me@chat.facebook.com/Pidgin (jabber)
+(20:00:01) Pal Name: hey
+(20:00:05) Me Myself: yo
+`)
+	imWrite(t, filepath.Join(purple, "accounts.xml"), `<?xml version='1.0' encoding='UTF-8' ?>
+<account version='1.0'><account><protocol>prpl-jabber</protocol><name>me@chat.facebook.com/Pidgin</name><alias>Me Myself</alias></account></account>
+`)
+	a := imOpen(t, filepath.Join(tmp, "archive.db"))
+	if _, err := Imlogs(a, nil, ImlogsOptions{Adium: filepath.Join(tmp, "Adium 2.0"), Pidgin: purple, NoMedia: true}); err != nil {
+		t.Fatal(err)
+	}
+	type conv struct {
+		service, key string
+		group, n     int
+	}
+	var got []conv
+	a.Each("SELECT s.name, c.key, c.is_group, (SELECT count(*) FROM message WHERE conversation_id = c.id) "+
+		"FROM conversation c JOIN service s ON s.id = c.service_id", nil, func(scan func(...any)) {
+		var c conv
+		scan(&c.service, &c.key, &c.group, &c.n)
+		got = append(got, c)
+	})
+	if len(got) != 1 || got[0] != (conv{"messenger", "600000001", 0, 5}) {
+		t.Fatalf("conversations %v", got)
+	}
+	var senders []string
+	a.Each("SELECT DISTINCT ad.value FROM message m JOIN address ad ON ad.id = m.sender_id WHERE NOT m.outgoing", nil, func(scan func(...any)) {
+		var v string
+		scan(&v)
+		senders = append(senders, v)
+	})
+	if len(senders) != 1 || senders[0] != "600000001" {
+		t.Errorf("senders %v", senders)
+	}
+	if n := a.Int("SELECT count(*) FROM message WHERE outgoing"); n != 2 {
+		t.Errorf("%d of the owner's", n)
 	}
 }
 

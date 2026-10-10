@@ -136,13 +136,21 @@ func imHandle(service, raw string) archive.Handle {
 	return archive.H("id", strings.ReplaceAll(text.Lower(s), " ", ""), service)
 }
 
+// imChatService is the service of an account's conversations: Facebook's chat over XMPP (an
+// account on chat.facebook.com, every contact a -<id>@chat.facebook.com) is Messenger's.
+func imChatService(service, uid string) string {
+	if service == "jabber" && strings.HasSuffix(text.Lower(uid), "@chat.facebook.com") {
+		return "messenger"
+	}
+	return service
+}
+
 func imIsGroup(service, raw string) bool {
 	s := text.Lower(pyUnquote(raw))
 	if strings.HasSuffix(s, ".chat") {
 		return true
 	}
-	if strings.Contains(s, "@groupchat.") || strings.Contains(s, "@conference.") || strings.HasSuffix(s, "@thread.skype") ||
-		strings.HasPrefix(s, "-") && imFacebook.MatchString(s) {
+	if strings.Contains(s, "@groupchat.") || strings.Contains(s, "@conference.") || strings.HasSuffix(s, "@thread.skype") {
 		return true
 	}
 	return service == "aim" && imChatN.MatchString(s) || service == "irc" && strings.HasPrefix(s, "#")
@@ -1259,8 +1267,8 @@ func (imp *imImporter) adium(root string) {
 	}
 	a, device := imp.a, imDevices["adium"]
 	for _, ac := range adiumConversations(logs) {
-		service := ac.service
-		own := imHandle(service, ac.uid)
+		own := imHandle(ac.service, ac.uid)
+		service := imChatService(ac.service, ac.uid)
 		a.Account(own, service, "")
 		src := imp.source(device, service, logs)
 		group := imIsGroup(service, ac.contact)
@@ -1302,8 +1310,9 @@ func (imp *imImporter) pidgin(root string) {
 	accounts := pidginAccounts(purple)
 	owners := map[[2]string]map[string]bool{}
 	for _, pc := range pidginConversations(logs) {
-		service, uid := pc.service, pc.uid
-		own := imHandle(service, uid)
+		uid := pc.uid
+		own := imHandle(pc.service, uid)
+		service := imChatService(pc.service, uid)
 		a.Account(own, service, "")
 		src := imp.source(device, service, logs)
 		ok := [2]string{pc.proto, uid}
