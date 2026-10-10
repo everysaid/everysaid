@@ -49,6 +49,7 @@ const changed = () => listeners.forEach((f) => f());
 
 // those being sent from the chat now (shown there as they are sent, not here)
 const inFlight = new Set<string>();
+export const isFlying = (id: string) => inFlight.has(id);
 export function flying(id: string, on: boolean) {
   if (on) inFlight.add(id);
   else inFlight.delete(id);

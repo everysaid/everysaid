@@ -62,7 +62,7 @@ test("at the end, sending: it shows at once, once, and the chat stays at its end
   await send(page, words, phone);
   await expect(inStream(page, words)).toBeVisible();
   await expect(field(page)).toHaveValue("");
-  await expect(page.locator("[data-stream]").getByText(/Αποστολή…|Sending…/)).toHaveCount(0, { timeout: 10000 });
+  await expect(page.locator("[data-stream] [data-sending]")).toHaveCount(0, { timeout: 10000 });
   await expect(inStream(page, words)).toHaveCount(1);
   expect(await gap(page)).toBeLessThan(40);
   if (!phone) expect(await page.evaluate(() => document.activeElement?.tagName)).toBe("TEXTAREA");
@@ -73,7 +73,7 @@ test("the message in before the sending says done: shown once", async ({ page },
   await send(page, words, info.project.name === "mobile");
   await expect(inStream(page, words)).toBeVisible();
   await page.waitForTimeout(2500);
-  await expect(page.locator("[data-stream]").getByText(/Αποστολή…|Sending…/)).toHaveCount(0);
+  await expect(page.locator("[data-stream] [data-sending]")).toHaveCount(0);
   await expect(inStream(page, words)).toHaveCount(1);
 });
 
@@ -82,7 +82,7 @@ test("two of the same text at once: two, none left as being sent", async ({ page
   const words = `quiet: twice ${Date.now()}`;
   await send(page, words, phone);
   await send(page, words, phone);
-  await expect(page.locator("[data-stream]").getByText(/Αποστολή…|Sending…/)).toHaveCount(0, { timeout: 10000 });
+  await expect(page.locator("[data-stream] [data-sending]")).toHaveCount(0, { timeout: 10000 });
   await expect(inStream(page, words)).toHaveCount(2);
 });
 
@@ -91,7 +91,8 @@ test("said failed though it went: shown once, not as not sent", async ({ page },
   await send(page, words, info.project.name === "mobile");
   await page.waitForTimeout(2500);
   await expect(inStream(page, words)).toHaveCount(1);
-  await expect(page.locator("[data-stream]").getByText(/Αποστολή…|Sending…|Δεν στάλθηκε|Not sent/)).toHaveCount(0);
+  await expect(page.locator("[data-stream] [data-sending]")).toHaveCount(0);
+  await expect(page.locator("[data-stream]").getByText(/Δεν στάλθηκε|Not sent/)).toHaveCount(0);
 });
 
 test("higher up, sending: the chat goes to its end", async ({ page }, info) => {
@@ -102,7 +103,7 @@ test("higher up, sending: the chat goes to its end", async ({ page }, info) => {
   await expect(inStream(page, words)).toBeVisible();
   await page.waitForTimeout(600);
   expect(await gap(page)).toBeLessThan(40);
-  await expect(page.locator("[data-stream]").getByText(/Αποστολή…|Sending…/)).toHaveCount(0, { timeout: 10000 });
+  await expect(page.locator("[data-stream] [data-sending]")).toHaveCount(0, { timeout: 10000 });
   expect(await gap(page)).toBeLessThan(40);
 });
 
@@ -110,7 +111,7 @@ test("typing while it sends: the new text is kept, the sent one shows once", asy
   const words = `quiet: first ${Date.now()}`;
   await send(page, words, info.project.name === "mobile");
   await field(page).pressSequentially("the next one");
-  await expect(page.locator("[data-stream]").getByText(/Αποστολή…|Sending…/)).toHaveCount(0, { timeout: 10000 });
+  await expect(page.locator("[data-stream] [data-sending]")).toHaveCount(0, { timeout: 10000 });
   await expect(field(page)).toHaveValue("the next one");
   await expect(inStream(page, words)).toHaveCount(1);
 });
@@ -193,7 +194,7 @@ test("replying: pick a message, the bar shows it (Esc cancels), the answer goes 
   await send(page, words, phone);
   await expect(page.locator("[data-replying]")).toHaveCount(0);
   await expect(row(page, words)).toContainText(asked);                         // quoted at once
-  await expect(page.locator("[data-stream]").getByText(/Αποστολή…|Sending…/)).toHaveCount(0, { timeout: 10000 });
+  await expect(page.locator("[data-stream] [data-sending]")).toHaveCount(0, { timeout: 10000 });
   await expect(inStream(page, words)).toHaveCount(1);
   await expect(row(page, words)).toContainText(asked);                         // and still, as it came back
 });

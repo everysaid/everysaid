@@ -35,7 +35,7 @@ test("a sending whose answer is lost: asked again, sent once", async ({ page }, 
   await page.locator("[data-send]").click();
   const stream = page.locator("[data-stream]");
   await expect(stream.getByText(text, { exact: true })).toBeVisible();
-  await expect(stream.getByText(/Αποστολή…|Sending…/)).toHaveCount(0, { timeout: 25000 });
+  await expect(stream.locator("[data-sending]")).toHaveCount(0, { timeout: 25000 });
   await expect(stream.getByText(text, { exact: true })).toHaveCount(1);
 });
 
@@ -70,7 +70,7 @@ test("two sendings answered in the other order: in the order sent", async ({ pag
   await field.fill(two);
   await page.locator("[data-send]").click();
   const stream = page.locator("[data-stream]");
-  await expect(stream.getByText(/Αποστολή…|Sending…/)).toHaveCount(0, { timeout: 15000 });
+  await expect(stream.locator("[data-sending]")).toHaveCount(0, { timeout: 15000 });
   const y = async (t: string) => (await stream.getByText(t, { exact: true }).boundingBox())!.y;
   expect(await y(one)).toBeLessThan(await y(two));
 });
