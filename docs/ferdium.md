@@ -30,9 +30,8 @@ everysaid ferdium install            # into each of Ferdium, Ferdi, Franz found 
 everysaid ferdium install --url https://chat.example --dir PATH/recipes/dev
 ```
 
-On another machine: in the app, Settings → Notifications → "Ferdium, Franz" → Download, or
-`everysaid ferdium zip everysaid-ferdium.zip` on the server. Unpack the zip into the app's folder of
-development recipes, which then holds `everysaid/package.json`:
+On another machine: `everysaid ferdium zip everysaid-ferdium.zip` on the server, then unpack the
+zip into the app's folder of development recipes, which then holds `everysaid/package.json`:
 
 | System | Folder |
 |---|---|

@@ -4,7 +4,7 @@
 // Notifications need nothing of it: Ferdium shows the page's own (a browser without push).
 //
 // The recipe is made here, with the server's address in it: written into the apps' folders of
-// development recipes (`everysaid ferdium install`), or as a zip from the server (Settings).
+// development recipes (`everysaid ferdium install`), or as a zip (`everysaid ferdium zip`).
 package ferdium
 
 import (

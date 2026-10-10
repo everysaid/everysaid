@@ -261,9 +261,6 @@ export function SettingsPage() {
                 </Line>
               )}
               {push && <PushServices />}
-              <Line label={t("settings.ferdium")} hint={t("settings.ferdiumHint")}>
-                <Button size="sm" onClick={() => location.assign("/api/ferdium/recipe.zip")}>{t("common.download")}</Button>
-              </Line>
             </Card>
           </Section>
           )}
