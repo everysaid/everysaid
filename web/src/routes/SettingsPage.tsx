@@ -85,6 +85,36 @@ function HiddenServices() {
   );
 }
 
+/** The services this device is notified of (by push): off where their own app notifies already. */
+function PushServices() {
+  const { t } = useTranslation();
+  const [endpoint, setEndpoint] = useState<string | null>(null);
+  useEffect(() => { currentSubscription().then((s) => setEndpoint(s?.endpoint ?? null)); }, []);
+  const used = useQuery({ queryKey: ["services-used"], queryFn: () => api.get<{ items: { id: string; messages: number; hidden: boolean }[] }>("/api/services/used") });
+  const off = useQuery({ queryKey: ["push-services", endpoint], enabled: !!endpoint,
+    queryFn: () => api.get<{ off: string[] }>(`/api/push/services?endpoint=${encodeURIComponent(endpoint!)}`) });
+  const items = (used.data?.items ?? []).filter((s) => s.messages > 0 && !s.hidden);
+  if (!endpoint || !off.data || items.length === 0) return null;
+  const set = (id: string, on: boolean) => {
+    const next = on ? off.data.off.filter((x) => x !== id) : [...off.data.off, id];
+    api.put("/api/push/services", { endpoint, off: next }).then(() => off.refetch(), (e) => toast.error(e.message));
+  };
+  return (
+    <div className="px-4 py-3.5">
+      <div className="text-sm font-medium">{t("settings.pushServices")}</div>
+      <div className="mt-0.5 text-xs text-muted">{t("settings.pushServicesHint")}</div>
+      <div className="mt-2 divide-y divide-line">
+        {items.map((s) => (
+          <div key={s.id} className="flex items-center gap-3 py-2 text-sm" data-push-service={s.id}>
+            <span className="flex min-w-0 flex-1 items-center gap-2"><ServiceDot id={s.id} />{service(s.id).name}</span>
+            <Switch checked={!off.data.off.includes(s.id)} onChange={(v) => set(s.id, v)} label={service(s.id).name} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function SettingsPage() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
@@ -227,6 +257,7 @@ export function SettingsPage() {
                     : api.post("/api/push/test").then(() => toast.success("✓"), (e) => toast.error(e.message))}>{t("common.run")}</Button>
                 </Line>
               )}
+              {push && <PushServices />}
             </Card>
           </Section>
           )}

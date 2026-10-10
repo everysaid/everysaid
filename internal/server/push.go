@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -191,10 +192,35 @@ func (p *Push) Subscribe(uid int64, sub map[string]any) {
 }
 
 func (p *Push) Unsubscribe(uid int64, endpoint any) {
-	db.Exec(p.auth.db, "DELETE FROM push_subscription WHERE user_id = ? AND endpoint = ?", uid, endpoint)
+	if n, _ := db.Exec(p.auth.db, "DELETE FROM push_subscription WHERE user_id = ? AND endpoint = ?", uid, endpoint).RowsAffected(); n > 0 {
+		db.Exec(p.auth.db, "DELETE FROM push_service_off WHERE endpoint = ?", endpoint)
+	}
 }
 
-type subscription struct{ endpoint, keys string }
+// ServicesOff are the services a user's device is not notified of; ok false: not their device.
+func (p *Push) ServicesOff(uid int64, endpoint string) (off []string, ok bool) {
+	if !db.Exists(p.auth.db, "SELECT 1 FROM push_subscription WHERE user_id = ? AND endpoint = ?", uid, endpoint) {
+		return nil, false
+	}
+	return db.Strs(p.auth.db, "SELECT service FROM push_service_off WHERE endpoint = ? ORDER BY service", endpoint), true
+}
+
+// SetServicesOff chooses the services a user's device is not notified of; false: not their device.
+func (p *Push) SetServicesOff(uid int64, endpoint string, off []string) bool {
+	if !db.Exists(p.auth.db, "SELECT 1 FROM push_subscription WHERE user_id = ? AND endpoint = ?", uid, endpoint) {
+		return false
+	}
+	db.Exec(p.auth.db, "DELETE FROM push_service_off WHERE endpoint = ?", endpoint)
+	for _, s := range off {
+		db.Exec(p.auth.db, "INSERT OR IGNORE INTO push_service_off VALUES (?, ?)", endpoint, s)
+	}
+	return true
+}
+
+type subscription struct {
+	endpoint, keys string
+	off            map[string]bool // services it is not notified of
+}
 
 // Subscriptions are those of the users of an archive.
 func (p *Push) Subscriptions(archivePath string) []subscription {
@@ -205,7 +231,30 @@ func (p *Push) Subscriptions(archivePath string) []subscription {
 			scan(&s.endpoint, &s.keys)
 			out = append(out, s)
 		})
+	for i := range out {
+		for _, svc := range db.Strs(p.auth.db, "SELECT service FROM push_service_off WHERE endpoint = ?", out[i].endpoint) {
+			if out[i].off == nil {
+				out[i].off = map[string]bool{}
+			}
+			out[i].off[svc] = true
+		}
+	}
 	return out
+}
+
+// wanted says whether a device is notified of a payload: of a chat, unless every service its
+// messages came by is one the device left out.
+func (s subscription) wanted(payload map[string]any) bool {
+	services, _ := payload["services"].([]string)
+	if len(services) == 0 {
+		return true
+	}
+	for _, svc := range services {
+		if !s.off[svc] {
+			return true
+		}
+	}
+	return false
 }
 
 // Alert is a notice about the app itself (a plugin's warning), to every device of the archive's users.
@@ -222,6 +271,7 @@ type Incoming struct {
 	Chat    string
 	Message int64
 	TS      int64
+	Service string
 	Text    string
 	Kind    string
 }
@@ -235,7 +285,8 @@ func (p *Push) Notify(store *core.Store, payloads []map[string]any) {
 }
 
 // Notifications are those of new incoming messages, one per chat (muted chats left out): sent as
-// pushes, and in the "new" event for the apps a browser without push shows them in.
+// pushes (to each device unless it left out the services they came by), and in the "new" event for
+// the apps a browser without push shows them in.
 func Notifications(store *core.Store, incoming []Incoming) []map[string]any {
 	states := core.States(store)
 	preview := truthy(store.SettingAny("push_preview", true))
@@ -275,8 +326,14 @@ func Notifications(store *core.Store, incoming []Incoming) []map[string]any {
 		if len(msgs) > 1 {
 			body = fmt.Sprintf("(%d) %s", len(msgs), body)
 		}
+		var services []string
+		for _, m := range msgs {
+			if !slices.Contains(services, m.Service) {
+				services = append(services, m.Service)
+			}
+		}
 		payloads = append(payloads, map[string]any{"title": core.ChatTitle(store, chat), "body": core.Cut(body, 240),
-			"chat": cid, "message": last.Message, "ts": last.TS, "tag": cid})
+			"chat": cid, "message": last.Message, "ts": last.TS, "services": services, "tag": cid})
 	}
 	return payloads
 }
@@ -298,6 +355,9 @@ func (p *Push) Send(subs []subscription, payloads []map[string]any) {
 		var keys webpush.Keys
 		json.Unmarshal([]byte(s.keys), &keys)
 		for _, payload := range payloads {
+			if !s.wanted(payload) {
+				continue
+			}
 			var b bytes.Buffer
 			enc := json.NewEncoder(&b)
 			enc.SetEscapeHTML(false)
@@ -312,6 +372,7 @@ func (p *Push) Send(subs []subscription, payloads []map[string]any) {
 			resp.Body.Close()
 			if resp.StatusCode == 404 || resp.StatusCode == 410 { // gone
 				db.Exec(p.auth.db, "DELETE FROM push_subscription WHERE endpoint = ?", s.endpoint)
+				db.Exec(p.auth.db, "DELETE FROM push_service_off WHERE endpoint = ?", s.endpoint)
 				break
 			}
 		}
