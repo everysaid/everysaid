@@ -15,6 +15,7 @@ package meta
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"time"
 
@@ -217,6 +218,10 @@ func (p Plugin) pendingLogin(ctx context.Context, c *plugins.Context) error {
 		return nil
 	}
 	_, err := p.login(ctx, c, text)
+	var refused *errs.UserError
+	if errors.As(err, &refused) && refused.Status != 502 {
+		c.DeleteSecret("cookies") // cookies Meta does not take are not tried again and again
+	}
 	return err
 }
 
