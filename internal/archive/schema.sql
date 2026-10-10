@@ -132,7 +132,6 @@ CREATE TABLE IF NOT EXISTS message (
     starred INTEGER NOT NULL DEFAULT 0,
     lat REAL, lon REAL, place TEXT,     -- a location shared
     sender_lat REAL, sender_lon REAL,   -- where the sender was when sending (older Viber)
-    status TEXT,                        -- a message sent from the app: sending, sent, failed (NULL: as imported)
     forward_from TEXT,                  -- who a forwarded message first came from, as the service names them
     album TEXT,                         -- the service's key of the group of files sent together
     pinned INTEGER                      -- pinned until (Unix milliseconds), -1 for ever; NULL: not pinned

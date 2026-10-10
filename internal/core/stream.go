@@ -289,15 +289,15 @@ func Hydrate(s *Store, rows []Item, chat *Chat) []M {
 	if len(mids) > 0 {
 		marks := db.Marks(len(mids))
 		db.Each(q, "SELECT id, ts, service_id, conversation_id, outgoing, sender_id, kind_id, text, subtype, reply_to, "+
-			"reply_text, edited, deleted, forwarded, starred, lat, lon, place, status, key IS NOT NULL, forward_from, album, pinned "+
+			"reply_text, edited, deleted, forwarded, starred, lat, lon, place, key IS NOT NULL, forward_from, album, pinned "+
 			"FROM message WHERE id IN ("+marks+")", db.Args(mids), func(scan func(...any)) {
 			var mid, ts, sid, conv, kind int64
 			var outgoing, edited, deleted, forwarded, starred, keyed bool
 			var sender, replyTo, pinned sql.NullInt64
-			var txt, subtype, replyText, place, status, forwardFrom, album sql.NullString
+			var txt, subtype, replyText, place, forwardFrom, album sql.NullString
 			var lat, lon sql.NullFloat64
 			scan(&mid, &ts, &sid, &conv, &outgoing, &sender, &kind, &txt, &subtype, &replyTo, &replyText, &edited,
-				&deleted, &forwarded, &starred, &lat, &lon, &place, &status, &keyed, &forwardFrom, &album, &pinned)
+				&deleted, &forwarded, &starred, &lat, &lon, &place, &keyed, &forwardFrom, &album, &pinned)
 			var senderID, senderName any
 			selfNamed := false
 			if sender.Valid && sender.Int64 != 0 {
@@ -316,7 +316,7 @@ func Hydrate(s *Store, rows []Item, chat *Chat) []M {
 				"outgoing": outgoing, "kind": lk.Kind[kind], "subtype": nullString(subtype), "text": nullString(txt),
 				"sender_id": senderID, "sender": senderName, "sender_self_named": selfNamed,
 				"reply_to": nullInt(replyTo), "reply_text": nullString(replyText), "edited": edited, "deleted": deleted,
-				"forwarded": forwarded, "starred": starred, "status": nullString(status),
+				"forwarded": forwarded, "starred": starred, "status": nil,
 				"forward_from": nullString(forwardFrom), "album": nullString(album),
 				"pinned":    pinned.Valid && (pinned.Int64 < 0 || pinned.Int64 > now), // pinned now
 				"keyed":     keyed,                                                    // the service's own id is known: an answer to it can be sent
