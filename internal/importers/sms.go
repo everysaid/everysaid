@@ -523,6 +523,12 @@ func SMS(a *archive.Archive, out func(string), opt SMSOptions) (err error) {
 	a.RecordPairs(sources, bothWays(pairList), "")
 	a.Resolve()
 	takeTapbacksBack(a, iphone)
+	observed := map[string]int64{iph + "/sms": int64(mtime(iphoneDB) * 1000)}
+	for _, e := range exports {
+		observed[e.Device+"/sms"] = int64(mtime(e.DB) * 1000)
+		observed[e.Device+"/mms"] = observed[e.Device+"/sms"]
+	}
+	smsReads(a, sources, observed, append(append([]*smsRec(nil), iphone...), android...))
 	for _, s := range order {
 		a.Imported(sources[s])
 	}
@@ -556,4 +562,87 @@ func SMS(a *archive.Archive, out func(string), opt SMSOptions) (err error) {
 		say(out, "new:    none", nil)
 	}
 	return nil
+}
+
+// smsReads keeps what the phones say of reading: how far the owner read each conversation (the
+// newest message from others marked read: the iPhone's is_read, an Android phone's read), as each
+// source's read_until; and, where the service tells (iMessage, RCS, in a chat with one person), the
+// owner's messages the other got and read (the iPhone's date_delivered and date_read).
+func smsReads(a *archive.Archive, sources, observed map[string]int64, recs []*smsRec) {
+	type at struct{ source, conv int64 }
+	newest, changed := map[at]int64{}, map[at]int64{}
+	var order []at
+	for _, r := range recs {
+		if r.kind == "system" {
+			continue
+		}
+		iphone := r.source == archive.Iphone()+"/sms"
+		service := r.service
+		if service == "mms" {
+			service = "sms"
+		}
+		if r.outgoing {
+			if iphone && (service == "imessage" || service == "rcs") && len(r.members) == 1 {
+				smsReceipt(a, sources[r.source], r)
+			}
+			continue
+		}
+		read := truthy(r.raw["is_read"]) || str(r.raw["read"]) == "1"
+		if !read {
+			continue
+		}
+		k := at{sources[r.source], a.Conversation(service, r.members, "", "")}
+		if _, ok := newest[k]; !ok {
+			order = append(order, k)
+		}
+		newest[k] = max(newest[k], r.ts)
+		if d := appleTime(r.raw["date_read"]); d > 0 {
+			changed[k] = max(changed[k], d)
+		}
+	}
+	names := map[int64]string{}
+	for name, id := range sources {
+		names[id] = name
+	}
+	for _, k := range order {
+		a.ReportState(k.source, k.conv, "read_until", newest[k], observed[names[k.source]], changed[k])
+	}
+}
+
+// smsReceipt: one of the owner's iMessage or RCS messages, got and read by the one it went to.
+func smsReceipt(a *archive.Archive, source int64, r *smsRec) {
+	delivered, read := appleTime(r.raw["date_delivered"]), appleTime(r.raw["date_read"])
+	if !truthy(r.raw["is_delivered"]) {
+		delivered = 0
+	}
+	if !truthy(r.raw["is_read"]) {
+		read = 0
+	}
+	if delivered == 0 && read == 0 {
+		return
+	}
+	mid, ok := a.IntOK("SELECT message_id FROM message_origin WHERE source_id = ? AND row_key = ?", source, r.rowKey)
+	if !ok {
+		return
+	}
+	aid := a.Address(r.members[0])
+	a.Exec("INSERT OR IGNORE INTO receipt (message_id, address_id) VALUES (?, ?)", mid, aid)
+	if delivered > 0 {
+		a.Exec("UPDATE receipt SET delivered_at = ? WHERE message_id = ? AND address_id = ?", delivered, mid, aid)
+	}
+	if read > 0 {
+		a.Exec("UPDATE receipt SET read_at = ? WHERE message_id = ? AND address_id = ?", read, mid, aid)
+	}
+}
+
+// appleTime is an sms.db time (nanoseconds since 2001, or seconds on older iOS) as Unix ms; 0 for none.
+func appleTime(v any) int64 {
+	d := toInt(v)
+	if d <= 0 {
+		return 0
+	}
+	if float64(d) > 1e11 {
+		return floorDiv(d, 1_000_000) + archive.AppleEpoch*1000
+	}
+	return (d + archive.AppleEpoch) * 1000
 }
