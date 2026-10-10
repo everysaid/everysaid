@@ -638,12 +638,27 @@ func ChatTitle(s *Store, chat *Chat) string {
 	if chat.Type == "conversation" {
 		return i18n.Tr("Notes", s.Language()) // notes to oneself
 	}
+	// its people but the owner; when its source listed no one else, those who wrote in it, most first
 	ppl := PeopleOf(s)
 	var names []string
-	for _, a := range db.Ints(s.Read(), "SELECT address_id FROM conversation_member WHERE conversation_id = ? LIMIT 4", chat.ConversationID) {
-		if n := ppl.NameOf(a); n != "" {
-			names = append(names, n)
+	seen := map[int64]bool{}
+	add := func(addrs []int64) {
+		for _, a := range addrs {
+			pid, ok := ppl.PersonOf[a]
+			if len(names) == 4 || ppl.OwnAddresses[a] || !ok || ppl.Me[pid] || seen[pid] {
+				continue
+			}
+			seen[pid] = true
+			if n := ppl.Name(pid); n != "" {
+				names = append(names, n)
+			}
 		}
+	}
+	q := s.Read()
+	add(db.Ints(q, "SELECT address_id FROM conversation_member WHERE conversation_id = ?", chat.ConversationID))
+	if len(names) == 0 {
+		add(db.Ints(q, "SELECT sender_id FROM message WHERE conversation_id = ? AND outgoing = 0 AND sender_id IS NOT NULL "+
+			"GROUP BY sender_id ORDER BY count(*) DESC, min(ts)", chat.ConversationID))
 	}
 	if len(names) > 0 {
 		return strings.Join(names, ", ")
