@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf16"
 
@@ -98,8 +99,11 @@ type hybridOp struct {
 	Type       table.ThreadType
 }
 
-// translator reads tables for one account.
+// translator reads tables for one account; who uses it holds its lock (its maps change as it reads,
+// and as sending learns a thread's ids).
 type translator struct {
+	sync.Mutex
+
 	self   string            // the owner's id
 	fbToWA map[string]string // an encrypted group's Facebook thread key to its own
 	igKeys map[string]string // an Instagram thread's short id to its key

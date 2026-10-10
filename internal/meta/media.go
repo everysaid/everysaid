@@ -73,6 +73,9 @@ func downloadHeaders(h http.Header, mimeType string) {
 	h.Set("sec-ch-ua-platform", useragent.SecCHPlatform)
 }
 
+// errNoWA: the encrypted chats are not connected (yet).
+var errNoWA = errors.New("not connected to the encrypted chats")
+
 // errForbidden: the address has expired (or was never ours).
 var errForbidden = errors.New("Meta refused the file (its address has expired)")
 
@@ -218,7 +221,7 @@ func (s *liveSession) download(ctx context.Context, f pendingFile) (string, erro
 func (s *liveSession) downloadWA(ctx context.Context, f pendingFile, w io.Writer) error {
 	e := s.waClient()
 	if e == nil {
-		return errors.New("not connected to the encrypted chats")
+		return errNoWA
 	}
 	var wf waFile
 	if err := json.Unmarshal(f.WA, &wf); err != nil {
@@ -236,8 +239,9 @@ func (s *liveSession) downloadWA(ctx context.Context, f pendingFile, w io.Writer
 	return err
 }
 
-// link takes downloaded files into the archive's store, linked to their messages.
-func link(c *plugins.Context, service string, files map[string]pendingFile) error {
+// link takes downloaded files into the archive's store, linked to their messages; the paths it took.
+func link(c *plugins.Context, service string, files map[string]pendingFile) (map[string]bool, error) {
+	linked := map[string]bool{}
 	_, _, err := sourcekit.RunImporters(c, []sourcekit.Step{{Label: "files", Run: func(a *archive.Archive, out func(string)) error {
 		w := writer(a, c, service)
 		st := importers.NewStore(a)
@@ -248,12 +252,13 @@ func link(c *plugins.Context, service string, files map[string]pendingFile) erro
 				continue // a message the archive does not have (yet)
 			}
 			st.LinkNamed(w.SourceName, w.Source, path, filepath.Base(path), mid, f.Name)
+			linked[path] = true
 		}
 		a.Commit()
 		st.Release()
 		return nil
 	}}})
-	return err
+	return linked, err
 }
 
 // fetchFiles downloads what is still to download (of one message where given) and links it; it
@@ -275,6 +280,9 @@ func (s *liveSession) fetchFiles(ctx context.Context, message string) int {
 			continue
 		}
 		path, err := s.download(ctx, f)
+		if errors.Is(err, errNoWA) {
+			continue // the encrypted chats not connected yet: later, not a try
+		}
 		if err != nil {
 			s.c.Log("{file}: not downloaded ({e})", map[string]any{"file": fileName(f), "e": err.Error()})
 			if errors.Is(err, errForbidden) {
@@ -289,14 +297,19 @@ func (s *liveSession) fetchFiles(ctx context.Context, message string) int {
 	if len(got) == 0 {
 		return 0
 	}
-	if err := link(s.c, s.service, got); err != nil {
+	linked, err := link(s.c, s.service, got)
+	if err != nil {
 		s.c.Logf("files: %v", err)
 		return 0
 	}
-	for _, f := range got {
-		fileDone(s.c.ID, f)
+	for path, f := range got {
+		if linked[path] {
+			fileDone(s.c.ID, f)
+		} else {
+			os.Remove(path) // its message is not in the archive (yet): downloaded again when asked
+		}
 	}
-	return len(got)
+	return len(linked)
 }
 
 // downloader fetches files as they are queued, until ctx ends.

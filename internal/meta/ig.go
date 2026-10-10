@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -90,8 +91,10 @@ func igUser(u *slidetypes.User) importers.MetaUser {
 	return importers.MetaUser{ID: strconv.FormatInt(u.InteropMessagingUserFBID, 10), Name: u.FullName, Username: u.Username}
 }
 
-// igThread reads a thread's information (and the messages it carries) into o.
-func (t *translator) igThread(o *ops, th *slidetypes.ThreadInfo) {
+// igThread reads a thread's information into o, with the messages it carries where they are whole
+// (a thread asked for by itself; an inbox's are stubs, as mautrix-meta's bridge says: there its
+// first page of messages is asked for instead).
+func (t *translator) igThread(o *ops, th *slidetypes.ThreadInfo, withMessages bool) {
 	if th == nil || th.ThreadKey == 0 {
 		return
 	}
@@ -129,8 +132,10 @@ func (t *translator) igThread(o *ops, th *slidetypes.ThreadInfo) {
 			o.reads = append(o.reads, readOp{key, importers.MetaUser{ID: id}, rr.WatermarkTimestampMS.UnixMilli(), 0})
 		}
 	}
-	if th.SlideMessages != nil {
+	if withMessages && th.SlideMessages != nil {
 		t.igPage(o, key, th.ID, th.SlideMessages)
+	} else if th.ID != "" {
+		o.igHistory = append(o.igHistory, igHistoryOp{Key: key, IGID: th.ID, First: true})
 	}
 }
 
@@ -140,6 +145,7 @@ type igThreadOp struct{ Key, IGID, IGThread string }
 type igHistoryOp struct {
 	Key, IGID, Cursor string
 	HasMore           bool
+	First             bool // the thread's newest page, still to ask for
 	IDs               []string
 }
 
@@ -435,6 +441,7 @@ func liveInstagram(ctx context.Context, c *plugins.Context) error {
 	}
 	register(s)
 	defer func() {
+		cancel()
 		unregister(s)
 		s.ig.SetEventHandler(nil)
 		s.ig.Disconnect()
@@ -442,9 +449,11 @@ func liveInstagram(ctx context.Context, c *plugins.Context) error {
 	}()
 	if mailbox != nil {
 		o := &ops{}
+		s.tr.Lock()
 		for _, e := range mailbox.ThreadsByFolder.Edges {
-			s.tr.igThread(o, e.Node.AsIGDirectThread)
+			s.tr.igThread(o, e.Node.AsIGDirectThread, false)
 		}
+		s.tr.Unlock()
 		if err := s.handle(ctx, item{ops: o}); err != nil {
 			return err
 		}
@@ -514,18 +523,29 @@ func (s *liveSession) handleIG(ctx context.Context, evt any) (*ops, error) {
 		s.sessMu.Unlock()
 		return o, saveSeq(s.c.ID, e.SeqID, e.Timestamp.UnixMilli())
 	case *slidetypes.Delta:
-		if !s.tr.igDelta(o, e) {
-			igID := e.ThreadIGID
-			if ev, ok := e.Data.(*slidetypes.NewMessageEvent); ok && igID == "" && ev.Message != nil {
-				igID = ev.Message.ThreadFBID
-			}
-			resp, err := s.ig.GetThread(ctx, slidetypes.MakeGetThreadInfoRequest(igID))
-			if err != nil {
-				return o, err
-			}
-			s.tr.igThread(o, resp.ThreadInfo.AsIGDirectThread)
-			s.tr.igDelta(o, e)
+		s.tr.Lock()
+		known := s.tr.igDelta(o, e)
+		s.tr.Unlock()
+		if known {
+			return o, nil
 		}
+		igID := e.ThreadIGID
+		if ev, ok := e.Data.(*slidetypes.NewMessageEvent); ok && igID == "" && ev.Message != nil {
+			igID = ev.Message.ThreadFBID
+		}
+		if igID == "" {
+			return o, nil // a change of no thread: nothing to bring
+		}
+		resp, err := s.ig.GetThread(ctx, slidetypes.MakeGetThreadInfoRequest(igID))
+		if err != nil || resp.ThreadInfo.AsIGDirectThread == nil {
+			// left as it is (asking again and again would hold every change after it)
+			s.c.Log("{service}: a chat not brought ({e})", map[string]any{"service": s.label(), "e": fmt.Sprint(err)})
+			return o, nil
+		}
+		s.tr.Lock()
+		s.tr.igThread(o, resp.ThreadInfo.AsIGDirectThread, true)
+		s.tr.igDelta(o, e)
+		s.tr.Unlock()
 	}
 	return o, nil
 }
@@ -556,17 +576,19 @@ func (s *liveSession) igHistoryLoop(ctx context.Context) {
 			return
 		case <-time.After(historyPause):
 		}
-		cursor := h.Cursor
-		resp, err := s.ig.PaginateMessages(ctx, &slidetypes.PaginateMessagesRequest{AfterCursor: &cursor, ThreadID: h.IGID,
-			FirstN: 20, InitialMessagePageCount: 20})
+		req := &slidetypes.PaginateMessagesRequest{ThreadID: h.IGID, FirstN: 20, InitialMessagePageCount: 20}
+		if !h.First {
+			cursor := h.Cursor
+			req.AfterCursor = &cursor
+		}
+		resp, err := s.ig.PaginateMessages(ctx, req)
 		if err != nil {
 			s.c.Log("{service}: earlier messages not brought ({e})", map[string]any{"service": s.label(), "e": err.Error()})
 			continue
 		}
 		if page := resp.ThreadInfo.AsIGDirectThread; page != nil && page.Messages != nil {
-			o := &ops{}
-			s.tr.igPage(o, h.Key, h.IGID, page.Messages)
-			s.submit(ctx, o)
+			key, igID, msgs := h.Key, h.IGID, page.Messages
+			s.submitRead(ctx, func(o *ops) { s.tr.igPage(o, key, igID, msgs) })
 		}
 	}
 }
@@ -590,11 +612,12 @@ func (s *liveSession) igThreadBackfill(ctx context.Context) {
 			}
 			return
 		}
-		o := &ops{}
-		for _, e := range resp.Mailbox.ThreadsByFolder.Edges {
-			s.tr.igThread(o, e.Node.AsIGDirectThread)
-		}
-		s.submit(ctx, o)
+		edges := resp.Mailbox.ThreadsByFolder.Edges
+		s.submitRead(ctx, func(o *ops) {
+			for _, e := range edges {
+				s.tr.igThread(o, e.Node.AsIGDirectThread, false)
+			}
+		})
 		if !resp.Mailbox.ThreadsByFolder.PageInfo.HasNextPage || resp.Mailbox.ThreadsByFolder.PageInfo.EndCursor == cursor {
 			break
 		}
@@ -605,10 +628,11 @@ func (s *liveSession) igThreadBackfill(ctx context.Context) {
 	}
 }
 
-// submit writes what was read in order with the rest, from another goroutine.
-func (s *liveSession) submit(ctx context.Context, o *ops) error {
+// submitRead reads (in the loop, where the translator is) and writes, in order with the rest, from
+// another goroutine.
+func (s *liveSession) submitRead(ctx context.Context, read func(o *ops)) error {
 	done := make(chan error, 1)
-	s.push(ctx, item{ops: o, done: done})
+	s.push(ctx, item{read: read, done: done})
 	select {
 	case err := <-done:
 		return err

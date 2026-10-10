@@ -239,12 +239,20 @@ func (w *MetaWriter) twin(m MetaMessage) int64 {
 	if m.ID != "" {
 		q += " AND key IS NULL"
 	}
+	// not one of this source's own (two alike messages of one source are two)
+	mine := " AND id NOT IN (SELECT message_id FROM message_origin WHERE source_id = ?)"
 	sid := w.A.Service.ID(w.Service)
-	ids := w.A.Ints(q+" ORDER BY id LIMIT 2", sid, m.TS, archive.B2I(m.Outgoing), archive.NullStr(m.Text))
-	if len(ids) == 0 && m.ID == "" && m.Text != "" {
+	ids := w.A.Ints(q+mine+" ORDER BY id LIMIT 2", sid, m.TS, archive.B2I(m.Outgoing), archive.NullStr(m.Text), w.Source)
+	switch {
+	case len(ids) > 0:
+	case m.ID == "" && m.Text != "":
 		ids = w.A.Ints("SELECT id FROM message WHERE service_id = ? AND ts BETWEEN ? AND ? AND ts % 1000 = 0 "+
-			"AND outgoing = ? AND text = ? AND key IS NULL ORDER BY id LIMIT 2", sid, m.TS-2000, m.TS+2000,
-			archive.B2I(m.Outgoing), m.Text)
+			"AND outgoing = ? AND text = ? AND key IS NULL"+mine+" ORDER BY id LIMIT 2", sid, m.TS-2000, m.TS+2000,
+			archive.B2I(m.Outgoing), m.Text, w.Source)
+	case m.ID != "" && m.TS%1000 == 0 && m.Text != "":
+		// an encrypted chat's message has whole seconds, the export milliseconds
+		ids = w.A.Ints("SELECT id FROM message WHERE service_id = ? AND ts >= ? AND ts < ? AND outgoing = ? AND text = ? "+
+			"AND key IS NULL"+mine+" ORDER BY id LIMIT 2", sid, m.TS, m.TS+1000, archive.B2I(m.Outgoing), m.Text, w.Source)
 	}
 	if len(ids) != 1 {
 		return 0
@@ -262,6 +270,7 @@ func (w *MetaWriter) Add(m MetaMessage) (int64, bool) {
 	}
 	var mid int64
 	if a.Row("SELECT message_id FROM message_origin WHERE source_id = ? AND row_key = ?", []any{w.Source, rowKey}, &mid) {
+		w.files(mid, m.Files) // a file sent, its message come back from the service first
 		return mid, false
 	}
 	cid := w.conv(m.Thread)
