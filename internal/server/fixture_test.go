@@ -220,6 +220,14 @@ func (testSource) Send(ctx context.Context, c *plugins.Context, conv plugins.Con
 	if strings.HasPrefix(text, "refuse:") {
 		return nil, errs.Plugin("not allowed", 0)
 	}
+	if strings.HasPrefix(text, "slow:") { // a sending that takes a while (the server may be stopped meanwhile)
+		select {
+		case <-time.After(600 * time.Millisecond):
+			return M{"id": 1}, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	askedCh <- asked{what: "send", service: conv.Service, text: text, mentions: mentions, file: file}
 	if strings.HasPrefix(text, "write:") { // as a source that has what it sent in the archive
 		return writeSent(c, conv, text)

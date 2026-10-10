@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -286,6 +287,52 @@ func TestIdleConnectionsAreClosed(t *testing.T) {
 	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	_, err = rd.ReadByte()
 	must(t, errors.Is(err, io.EOF), "an idle connection is kept: %v", err)
+}
+
+// A message being sent as the server is stopped goes: the server takes no new requests, lets those
+// under way finish, and only then ends them.
+func TestSendingUnderWayWhenStopped(t *testing.T) {
+	c := newServer(t)
+	c.login()
+	var group string
+	for _, x := range items(c.getJSON("/api/chats?kind=group")) {
+		group = x["id"].(string)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() { served <- c.s.Serve(ctx, ln) }()
+	u, _ := url.Parse("http://" + base)
+	cookie := c.jar.Cookies(u)[0]
+	got := make(chan int, 1)
+	go func() {
+		body := strings.NewReader(`{"text": "slow: on its way", "service": "whatsapp", "client_id": "stopping-1"}`)
+		req, _ := http.NewRequest("POST", "http://"+ln.Addr().String()+"/api/chats/"+group+"/send", body)
+		req.Host = base
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Everysaid", "1")
+		req.AddCookie(cookie)
+		r, err := http.DefaultClient.Do(req)
+		if err != nil {
+			got <- 0
+			return
+		}
+		r.Body.Close()
+		got <- r.StatusCode
+	}()
+	time.Sleep(200 * time.Millisecond)
+	cancel() // stopped while it sends
+	select {
+	case code := <-got:
+		must(t, code == 200, "sent as the server stopped: %d", code)
+	case <-time.After(5 * time.Second):
+		t.Fatal("no answer")
+	}
+	<-served
+	must(t, db.Str(c.s.Host.outboxDB(), "SELECT state FROM outbox WHERE id = 'stopping-1'") == "sent", "kept as sent")
 }
 
 // slowReader marks read slowly, counting how often it is asked.

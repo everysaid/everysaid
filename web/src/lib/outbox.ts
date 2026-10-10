@@ -82,9 +82,10 @@ export function useUnsent(chatId: string): Unsent[] {
   return list;
 }
 
-/** Whether a failure means the server was not reached (or did not answer), rather than a refusal. */
+/** Whether a failure means the server was not reached (or did not answer, or failed itself: 500, as
+ *  while it is stopped), rather than a refusal: kept, and sent again with its id (sent once). */
 export function unreached(e: unknown) {
-  return !(e instanceof ApiError) || [502, 503, 504].includes(e.status);
+  return !(e instanceof ApiError) || [500, 502, 503, 504].includes(e.status);
 }
 
 export interface Went { conversation_id?: number; messages?: unknown[]; queued?: boolean; id?: string }
