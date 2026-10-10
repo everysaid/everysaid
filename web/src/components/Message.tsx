@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { Check, CheckCheck, Copy, CornerUpLeft, Ellipsis, FileText, Forward, ImageOff, MapPin, Pencil, Phone, Pin, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Plus, SmilePlus, Trash2, Video } from "lucide-react";
+import { Check, CheckCheck, Copy, CornerUpLeft, EllipsisVertical, FileText, Forward, ImageOff, MapPin, Pencil, Phone, Pin, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Plus, Trash2, Video } from "lucide-react";
 import { thumbUrl, type Attachment, type CallItem, type Mention, type MessageItem, type Receipts } from "@/lib/api";
 import { bytes, duration, time } from "@/lib/format";
 import { service } from "@/lib/services";
@@ -251,13 +251,16 @@ function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange }: {
   const put = (e: string) => { onOpenChange(false); react?.on(m, e === mine ? "" : e); };
   const others = react && !react.free ? react.all ?? [] : [];      // any emoji: the picker instead
   const file = m.attachments.find((a) => a.available !== "gone");    // the first, to paste in a chat (any service's)
+  const label = react ? t("chat.actions") : t("chat.messageActions");     // the reactions said where there are any
   const copy = (p: Promise<void>) => p.then(() => toast.success(t("common.copied")), () => toast.error(t("chat.actionFailed")));
   return (
     <Menu open={open} onOpenChange={onOpenChange}>
       <MenuTrigger asChild>
-        <button data-actions aria-label={t("chat.actions")} title={t("chat.actions")}
-          className="self-center rounded-full p-1.5 text-muted opacity-0 transition hover:bg-panel-2 hover:text-fg focus:opacity-100 group-hover/msg:opacity-100 data-[state=open]:opacity-100">
-          {react ? <SmilePlus className="size-4" /> : <Ellipsis className="size-4" />}
+        <button data-actions aria-label={label} title={label}
+          className={cn("absolute top-1/2 -translate-y-1/2 rounded-full p-1.5 text-fg/70 opacity-0 transition hover:bg-fg/12 hover:text-fg focus:opacity-100 group-hover/msg:opacity-100 data-[state=open]:bg-fg/12 data-[state=open]:opacity-100",
+            // beside the bubble, at the middle of the bubble itself (not of its sender's name and reactions)
+            m.outgoing ? "right-full mr-0.5" : "left-full ml-0.5")}>
+          <EllipsisVertical className="size-4" strokeWidth={3} />
         </button>
       </MenuTrigger>
       <MenuContent align={m.outgoing ? "end" : "start"} className="w-72">
@@ -343,7 +346,6 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
   const poll = pollOf(m.notice);
   return (
     <div id={`m${m.id}`} className={cn("group/msg flex gap-2 px-3 md:px-6", out ? "justify-end" : "justify-start", first ? "mt-2" : "mt-0.5")}>
-      {out && actions}
       {group && !out && (
         <div className="w-8 shrink-0 self-end">{last && <Avatar name={m.sender || "?"} size={32} />}</div>
       )}
@@ -367,6 +369,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
             highlight && "flash",
           )}
         >
+          {actions}
           {hidden ? (
             <button data-deleted onClick={() => setReveal(true)} title={t("chat.showDeleted")}
               className="flex items-center gap-1.5 text-left opacity-80">
@@ -447,7 +450,6 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
           </div>
         )}
       </div>
-      {!out && actions}
     </div>
   );
 });

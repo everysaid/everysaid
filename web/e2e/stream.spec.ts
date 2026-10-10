@@ -95,8 +95,8 @@ test("said failed though it went: shown once, not as not sent", async ({ page },
 });
 
 test("higher up, sending: the chat goes to its end", async ({ page }, info) => {
-  await up(page);
-  expect(await gap(page)).toBeGreaterThan(1000);
+  // up again while the older ones still load above (the list may not yet be that tall)
+  await expect.poll(async () => { await up(page); return gap(page); }, { timeout: 10000 }).toBeGreaterThan(1000);
   const words = `quiet: from higher up ${Date.now()}`;
   await send(page, words, info.project.name === "mobile");
   await expect(inStream(page, words)).toBeVisible();
