@@ -72,8 +72,7 @@ func liveFor(ctx context.Context, c *plugins.Context, service string) (*liveSess
 
 // encrypted says whether a thread is an end-to-end encrypted chat.
 func (s *liveSession) encrypted(key string) bool {
-	t := s.thread(key)
-	return t.Type == int64(table.ENCRYPTED_OVER_WA_ONE_TO_ONE) || t.Type == int64(table.ENCRYPTED_OVER_WA_GROUP)
+	return isEncrypted(s.thread(key).Type)
 }
 
 func (s *liveSession) group(key string) bool {

@@ -111,8 +111,8 @@ func (s *liveSession) noteThread(key string, t threadInfo) {
 	if t.FBKey == "" {
 		t.FBKey = old.FBKey
 	}
-	if t.Type == 0 {
-		t.Type = old.Type
+	if t.Type == 0 || isEncrypted(old.Type) && !isEncrypted(t.Type) {
+		t.Type = old.Type // an encrypted chat stays one (Meta's tables may still call it by its old type)
 	}
 	changed := !ok || old != t
 	s.threads[key] = t
@@ -125,6 +125,11 @@ func (s *liveSession) noteThread(key string, t threadInfo) {
 			s.c.Logf("keys.db: %v", err)
 		}
 	}
+}
+
+// isEncrypted says whether a thread type is of an end-to-end encrypted chat.
+func isEncrypted(typ int64) bool {
+	return typ == int64(table.ENCRYPTED_OVER_WA_ONE_TO_ONE) || typ == int64(table.ENCRYPTED_OVER_WA_GROUP)
 }
 
 // cookiesOf is a session's cookies as messagix takes them.

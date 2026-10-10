@@ -144,6 +144,9 @@ func (t *translator) translate(tbl *table.LSTable) *ops {
 		if folder == "spam" || typ == table.FOLDER || typ == table.COMMUNITY_FOLDER {
 			return nil
 		}
+		if folder == "e2ee_cutover" && typ == table.ONE_TO_ONE { // moved to the encrypted chats
+			typ = table.ENCRYPTED_OVER_WA_ONE_TO_ONE
+		}
 		th := &threadOp{MetaThread: importers.MetaThread{Key: k, Group: !typ.IsOneToOne() && typ != table.UNKNOWN_THREAD_TYPE},
 			Type: typ}
 		if th.Group {
@@ -187,6 +190,14 @@ func (t *translator) translate(tbl *table.LSTable) *ops {
 		}
 		if p.ReadWatermarkTimestampMs > 0 {
 			o.reads = append(o.reads, readOp{k, t.user(p.ContactId), p.ReadWatermarkTimestampMs, p.ReadActionTimestampMs})
+		}
+	}
+	for _, m := range tbl.LSMoveThreadToE2EECutoverFolder {
+		k := t.key(m.ThreadKey)
+		if th, ok := threads[k]; ok && th.Type == table.ONE_TO_ONE {
+			th.Type = table.ENCRYPTED_OVER_WA_ONE_TO_ONE
+		} else if !ok {
+			o.threads = append(o.threads, &threadOp{MetaThread: importers.MetaThread{Key: k}, Type: table.ENCRYPTED_OVER_WA_ONE_TO_ONE})
 		}
 	}
 	for _, m := range tbl.LSUpdateThreadMuteSetting {
