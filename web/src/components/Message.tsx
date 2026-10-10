@@ -345,6 +345,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
   const others = m.attachments.filter((a) => !media.includes(a));
   // pictures alone: the time over them (not when none of them is there any more: a line of text then)
   const onlyMedia = !(m.deleted && !reveal) && media.some((a) => a.available !== "gone") && !m.text && !others.length && !m.reply;
+  const tail = last && !onlyMedia;     // the run's last says it is said, by its sender's side
   const label = m.kind !== "text" && !m.attachments.length && !m.text && !m.location ? t(`kind.${m.kind}`, { defaultValue: m.kind }) : null;
   const poll = pollOf(m.notice);
   return (
@@ -369,11 +370,13 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
             // a run of one sender's messages held together: the corners toward the next and the one
             // before, on the sender's side, tighter; the run's outer corners round (one alone: all)
             out ? [!first && "rounded-tr-md", !last && "rounded-br-md"] : [!first && "rounded-tl-md", !last && "rounded-bl-md"],
+            tail && (out ? "rounded-br-none" : "rounded-bl-none"),     // the run's last: its corner the tail's
             onlyMedia ? "p-1" : "px-3 py-2",
             m.deleted && "italic opacity-70",
             highlight && "flash",
           )}
         >
+          {tail && <Tail out={out} />}
           {actions}
           {hidden ? (
             <button data-deleted onClick={() => setReveal(true)} title={t("chat.showDeleted")}
@@ -477,4 +480,16 @@ function nameColor(name: string) {
   let h = 0;
   for (const c of name) h = (h * 31 + c.charCodeAt(0)) | 0;
   return NAME_COLORS[Math.abs(h) % NAME_COLORS.length];
+}
+
+// The tail of a run's last bubble, at its lower corner on the sender's side, as the bubble's own
+// (its colour; the incoming one's border too); it covers the bubble's edge where they meet.
+function Tail({ out }: { out: boolean }) {
+  return (
+    <svg aria-hidden viewBox="0 0 9 13" className={cn("pointer-events-none absolute -bottom-px h-[13px] w-[9px]",
+      out ? "-right-2 scale-x-[-1] text-bubble-out" : "-left-2 text-bubble-in")}>
+      <path d="M9 0 C8 6 5 10 1 12 Q0 12.6 1 13 H9 Z" fill="currentColor" />
+      {!out && <path d="M8.6 0 C7.6 6 4.6 9.6 1 11.6 Q-0.4 12.6 1 12.6 H9" fill="none" className="stroke-line/60" strokeWidth="1" />}
+    </svg>
+  );
 }
