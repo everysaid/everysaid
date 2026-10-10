@@ -10,7 +10,7 @@ tells how to run them, `docs/design.md` how they are built, `docs/ferdium.md` ho
 
 The goal is a complete, permanent history that does not depend on what the phones keep: a message
 stays in the archive after the phone that held it is gone, deleted or replaced. Nothing goes
-through iCloud. Telegram, WhatsApp, Signal, Messenger and Instagram
+
 can also be live: new messages arrive in the app as they come, and can be answered from it.
 
 Backups are not the project's job. Keeping the archive itself safe (and the phone backups it reads,
@@ -32,21 +32,21 @@ history); nothing in the tracked documentation depends on it.
 | Integrity check of an iPhone backup | working (`everysaid iphone-verify`) |
 | Looking inside a backup without extracting | working (`everysaid iphone-ls`) |
 | Android call log, SMS, MMS and blocked numbers over adb | working (`everysaid android-export`) |
+
 | Telegram through its API | working (`everysaid telegram-sync`) |
 | WhatsApp through a whatsmeow client linked as a device (the `whatsapp-bridge` source) | working (`internal/whatsapp`) |
-| Signal through a signalmeow client linked as a device, with the history the phone transfers at link time | working (`internal/signal`, built with `-tags signal`) |
+| Signal through a helper linked as a device | working (`bridges/signal/`, `internal/signal`) |
 | Meta's export (Download your information) of Messenger and Instagram | working (`internal/importers/meta_export.go`; the `messenger` and `instagram` sources, `everysaid import messenger instagram`) |
 | Messenger and Instagram live, through mautrix-meta's clients linked in, logged in with the browser's cookies | written, tested on fakes only (`internal/meta`, `third_party/mautrix-meta`) |
 | Unified archive, deduplicated across sources | working (`everysaid import`, `internal/importers`) |
 | Replies, reactions, edits, locations, call outcomes | working (`internal/importers/extras.go`) |
-| WhatsApp, Viber and SIP (Acrobits) calls, carrier missed-call notices | working (`internal/importers/voip.go`) |
+| WhatsApp and Viber calls, carrier missed-call notices | working (`internal/importers/voip.go`) |
 | Chat media matched against a photo library (immich) and uploaded with the right date | separate tools, not part of the app (see "Media") |
 | The core: chats, a person's stream across services, search ignoring accents, people, calls, media, statistics | working (`internal/core/`) |
 | Plugins: sources, photo libraries (folder, immich), contacts (CardDAV, .vcf), as instances | working (`internal/plugins/`) |
 | The app: passkeys, the messenger, search, media, people, sources, settings, push, PWA | working (`everysaid serve`, `internal/server`, `web/`) |
-| Live Telegram, WhatsApp (bridge) and Signal, sending where the plugin can | working |
-| Reactions, edits and deletions for everyone from the app (WhatsApp, Telegram, Signal) | working |
-| Deletion for the user alone from the app (WhatsApp, Signal, Telegram, Messenger), and from their other devices | working |
+
+| Reactions, edits and deletions for everyone from the app (WhatsApp, Telegram, Signal, Viber) | working |
 | Strangers removed as spam (reported and blocked on Telegram, blocked on WhatsApp); those blocked on a phone or a service suggested | working (`internal/core/spam.go`) |
 | The MCP server | working (`everysaid mcp`) |
 | A demo archive of invented people | working (`everysaid demo`) |
@@ -63,7 +63,7 @@ Linux the XDG folders, so `XDG_DATA_HOME` and the like move them):
 
 | Folder | Linux | Holds |
 |---|---|---|
-| data | `~/.local/share/everysaid` | what cannot be made again: `archive.db`, `server.db`, the archive's media, the iPhone backups, the Android exports, the WhatsApp store, `keys.db` (the live services' keys) |
+| data | `~/.local/share/everysaid` | what cannot be made again: `archive.db`, `server.db`, the archive's media, the iPhone backups, the Android exports, the WhatsApp and Signal stores |
 | cache | `~/.cache/everysaid` | what can: the iPhone's extracts, `telegram/`, thumbnails, avatars |
 | config | `~/.config/everysaid` | `config.toml`, and the secrets' files where there is no keyring |
 | state | `~/.local/state/everysaid` | `logs/`: the server's and each plugin's |
@@ -86,8 +86,6 @@ own (users, passkeys, sessions, push subscriptions, audit; mode 600).
 <data>/whatsapp-bridge/                   the WhatsApp source's store (default; [whatsapp] bridge)
 <data>/keys.db (meta_*)                   Messenger's and Instagram's sessions (cookies), what they learned of threads, files still to download
 <cache>/meta/<instance>/media/            their downloads, until the store takes them
-<data>/keys.db (signalmeow_*, signal_*)   Signal's device (its keys), and what it received until imported
-<cache>/signal/<instance>/media/          the files it fetched, until imported
 ```
 
 (The archive's media are in the data folder, not the cache: some exist nowhere else once their source
@@ -99,9 +97,7 @@ Everything is a subcommand of the one binary (`everysaid -h` lists them): `serve
 `demo`, `user`, and the extraction the sources run, which can also be run by hand:
 `iphone-sync`, `iphone-ls`, `iphone-verify`, `android-export`, `telegram-sync`. External programs,
 looked up on the PATH, with a clear message when one is missing: exiftool, ffmpeg,
-libimobiledevice (`idevicebackup2`, `idevice_id`), adb. Optional, to show office documents
-instead of only downloading them: the OnlyOffice desktop editors (opened once, so that they make
-their list of fonts) or LibreOffice; the server says at its start which it uses for what.
+libimobiledevice (`idevicebackup2`, `idevice_id`), adb.
 
 ### Secrets
 
@@ -143,7 +139,8 @@ TOML, optional: every key has a general default.
 | `[android] device` | `android` | the device name of an export kept as one file, `<export>/<device>.db`, and of its sources |
 | `[import] importers` | all, in the registry's order | which importers `everysaid import` runs by default |
 | `[import] carrier_notices` | none | the parsers of carriers' missed-call SMS to use (`gr`: the Greek one) |
-| `[whatsapp] bridge` | none (the source uses `<data>/whatsapp-bridge`) | the live WhatsApp's store folder (its downloads on their way into the archive; its state and the session's keys are in `keys.db`) |
+
+| `[whatsapp] bridge` | none (the source uses `<data>/whatsapp-bridge`) | the WhatsApp store folder (`messages.db`, `media/`; the session's keys are in `keys.db`); `everysaid import whatsapp` reads it only when set |
 | `[whatsapp] send`, `download` | false, true | whether the WhatsApp source may send at all (its own setting is a second key), and whether it downloads the files of messages as they arrive |
 | `[imlogs] adium`, `pidgin` | none | the folders of Adium (`Adium 2.0`, `Users/Default` or `Logs`) and of Pidgin (`.purple` or its `logs`), for the "Adium and Pidgin logs" source |
 | `[telegram] media`, `no_media` | true, none | `telegram-sync --media`: false downloads nothing; `no_media` lists chat ids whose media are passed over |
@@ -257,6 +254,32 @@ adb shell content query --uri content://sms
 
 WhatsApp on Android keeps its database encrypted (`msgstore.db.crypt15`); it is not read.
 
+
+
+Viber keeps no message content on its servers and offers no export; its Google Drive backup can
+only be opened by the Android app. The history of an Android phone can be had by linking Viber
+Desktop to it (a fresh profile) and letting it sync.
+
+
+transformed internally, so it does not open with SQLCipher). 
+(`/`, `docs/.md`) is an `` library inside the running Viber
+Desktop: it reads that history through , follows what arrives and sends.
+
+imported too. Tables `Events` (`TimeStamp` in ms, `Direction` 0 in / 1
+out, `ChatID`, `ContactID`), `Messages` (by `EventID`), `ChatInfo`, `Contact`. Calls are not synced
+to the desktop (`Calls` is empty), nor the media of the synced history: only the files Viber
+Desktop downloaded or sent itself (`Messages.PayloadPath`) are linked to their messages. On Android
+the media are in `Android/data/com.viber.voip` (readable with `adb pull`).
+
+The message token, `Events.Token` on the desktop and `ZVIBERMESSAGE.ZTOKEN` on the iPhone, is the
+same id on both, and the deduplication key. A token carries its send time
+(`(token >> 22) + 292057776050` is Unix ms, within about 2 s). Media files from Android
+(`IMG-<hex>-V.jpg`, `video-<hex>-V.mp4`, `<hex>.vptt`) are named by `md5(DownloadID)`, the server's
+media id, kept in `DownloadFile.DownloadID` on the desktop and `ZATTACHMENT.ZID` on the iPhone.
+Size alone is not a safe key: Android keeps downscaled copies, and different pictures often share
+a size by chance; `FileHash` and `EncParams` concern the encrypted upload and cannot be checked
+against the files.
+
 ### Telegram: through its API
 
 `everysaid telegram-sync` (and the Telegram source) reads the user's own account through the
@@ -266,10 +289,6 @@ each time, the API works for any user and brings only what is new.
 - `--save-credentials`: api_id and api_hash from my.telegram.org, as secrets.
 - `--login`: the code arrives inside Telegram, not by SMS; the session, full access to the account,
   is kept as a secret (`telegram-session-go`, in keys.db).
-- The Telegram source's "Log in" does both from the app: it asks, as the login reaches them, the
-  api_id and api_hash (where they are not kept yet), the phone, the code and the two-step
-  verification password (where the account has one), in the source's card; the password is kept
-  nowhere.
 - `--survey`: every chat with its kind, size and dates, no content, in `<cache>/telegram/survey.tsv`.
 - With no option: every chat but channels and bots into the Telegram store (`keys.db`, tables `telegram_*`), each message
   whole (as JSON); later runs bring only what is new, from where each chat's history was last read
@@ -296,25 +315,21 @@ can send). Secret chats are on the devices only and cannot be had.
 ### WhatsApp: linked as a device
 
 The `whatsapp-bridge` source (`internal/whatsapp`) is a whatsmeow client inside the app, linked to
-the account as a device (like WhatsApp Web). It writes what arrives after it is linked, files
-included, straight into the archive (what it needs to go on, and the session's keys, are in
-`keys.db`), and sends where `[whatsapp] send` allows. A message there from the iPhone backup is the
-same message, matched by stanza id; LIDs (`...@lid`) are mapped to numbers through the iPhone's
-WhatsApp contacts, whatsmeow's `whatsmeow_lid_map` and the groups' members. Unofficial clients may get an account blocked by WhatsApp; sending
-raises that risk.
+the account as a device (like WhatsApp Web). It keeps what arrives after it is linked, files
+included, in its store folder (`messages.db`, `media/`, the session's keys in `keys.db`), and sends where
+`[whatsapp] send` allows. The importer takes from it what the iPhone backup does not have, matched
+by stanza id; LIDs (`...@lid`) are mapped to numbers through the iPhone's WhatsApp contacts and
+the store's `whatsmeow_lid_map`. `bridges/whatsapp/` is the same client as a separate program with
+a REST API; the two must never run on the same store at once. Unofficial clients may get an
+account blocked by WhatsApp; sending raises that risk.
 
 ### Signal: linked as a device
 
-The `signal` source (`internal/signal`) is a client inside the app, mautrix-signal's signalmeow on
-Signal's libsignal (AGPL-3.0, as Everysaid; built in with the tag `signal`, `docs/go.md`), linked
-to the account as a secondary device (like Signal Desktop) by a QR code. The device's keys are in
-`keys.db` (signalmeow's tables `signalmeow_*`); what it receives goes to the store there (tables
-`signal_*`), its files to `<cache>/signal/<instance>/media/`, and from there into the archive, a
-message leaving the store once the archive has had it for 30 days. Besides what arrives after the
-link, it takes the history the phone offers to transfer when it links it (Signal's "transfer
-message history": the chats with their messages, edits, reactions, receipts and calls; files only
-where Signal's server still has them), and the chats' state on the phone (archived, pinned, muted)
-from Signal's storage service. `docs/data-sources.md`, section 15, has its commands and events.
+The `signal` source (`internal/signal`) runs a helper, `everysaid-signal` (`bridges/signal/`, Rust
+on presage and libsignal, AGPL-3.0, a program of its own spoken to in JSON lines), linked to the
+account as a secondary device. Its keys are kept encrypted in `<data>/signal/<instance>/`; what it
+receives goes to `<cache>/signal/<instance>/` and from there into the archive. Only what arrives
+after the link can be had.
 
 ### Messenger and Instagram
 
@@ -392,9 +407,6 @@ Schema (`internal/archive`):
   `forwarded`, `starred`, `lat`/`lon`/`place` (a shared location, or on Viber messages of other
   kinds the sender's position). `reaction`: emoji (Viber codes 1-5 as ❤️😂😮😢😡, others `viber:N`),
   count, who, and whether it was the user's own; iMessage tapbacks become reactions.
-  `link_preview`: a link's preview as its service sent it (the sender's app or the service made it;
-  nothing is fetched from the page): `url`, `site`, `title`, `description`, and its picture in
-  `link_preview_image` (small JPEG, at most 480 px, kept in the archive apart from the media).
 - Calls also carry `detail` (missed, unanswered, rejected, blocked, busy, and WhatsApp's outcomes 4
   and 5 by code), `video`, `attempts`, `conversation_id` (group calls) and, in `call_member`, who
   took part and how.
@@ -409,8 +421,7 @@ Schema (`internal/archive`):
   final sigma as sigma), so `καλημερα` finds `Καλημέρα`; written by the archive as it adds a message.
 - The app's tables: `plugin_instance` (every source, library and address book in use, with its
   settings and state; `source.instance_id`, `library_link.instance_id` point to it), `contact` and
-  `contact_address` (an address book's people, joined to the addresses they list; one deleted from
-  the address book is kept, in `contact_gone`, its name still its person's), `handle_name`
+  `contact_address` (an address book's people, joined to the addresses they list), `handle_name`
   (every name a service has shown for a handle, of a kind, with when it was seen), `state_report`
   (what each source says about a chat: hidden, muted, pinned, read up to) and `chat_state` (what the
   user chose), `setting` (the user's, shared by every device), `media_decision` (keep, remove, to the
@@ -432,8 +443,8 @@ origin recorded; where the sources differ, the copy of the device in use at the 
   taken once. On newer iOS many messages have `text` NULL and the text only in `attributedBody`,
   decoded by the importer.
 - Calls (`internal/importers/calls.go`): same number, direction and second.
-- Viber (`internal/importers/viber.go`): the iPhone's `viber.sqlite`. People are matched by member
-  id and stored by phone number where known,
+
+  token. People are matched by member id and stored by phone number where either source knows it,
   so they meet their SMS and calls; groups by group token. The token's time fills in a missing
   date.
 - WhatsApp (`internal/importers/whatsapp.go`): the iPhone's `ChatStorage.sqlite`, then the
@@ -453,9 +464,11 @@ origin recorded; where the sources differ, the copy of the device in use at the 
 - Media (`internal/importers/media.go`): each file is stored once by content, hard-linked (no extra space)
   as `media/<ab>/<sha256><ext>`; `media` (sha256, size, mime, path) and `attachment` (message,
   sha256, source, the file's path in that source). Links: iPhone WhatsApp by stanza id
-  (`ZWAMEDIAITEM.ZMEDIALOCALPATH`), iPhone Viber by token (`ZATTACHMENT.ZNAME`), Android MMS by MMS id, Telegram by message, the WhatsApp store
+
+  by token (`Messages.PayloadPath`), Android MMS by MMS id, Telegram by message, the WhatsApp store
   by message.
-- Channels are never imported: Viber chats of type 3 (`ZCONVERSATION.ZSUBTYPE`), WhatsApp `...@newsletter`, `status@broadcast` and each contact's status (`...@status`, `...@lid.status`), Telegram channels; Telegram
+- Channels are never imported: Viber chats of type 3 (`ZCONVERSATION.ZSUBTYPE`, desktop
+  `ChatInfo.PGType`), WhatsApp `...@newsletter`, `status@broadcast` and each contact's status (`...@status`, `...@lid.status`), Telegram channels; Telegram
   bots neither. A service's notes-to-self chat (Viber's, Telegram's Saved Messages) is imported like
   any other.
 
@@ -515,11 +528,7 @@ pages) are separate, outside this repository and not part of the app.
    in the data folder, grows without limit. To decide: when a source's copy goes once the archive
    holds the file, how the store gives way to the photo library (only with the user's approval),
    and what happens to the files no one keeps.
-6. **Deleted for the user alone, in the archive.** Today a message deleted for the user alone is
-   kept like one deleted for everyone (marked deleted, its text there on a tap), for one behaviour
-   across services. To decide whether the archive should tell the two apart (or hide the first, or
-   let it go), and how the interface then shows each.
-7. **Names written back to the address book**: from the people without a name, a new contact, or a
+6. **Names written back to the address book**: from the people without a name, a new contact, or a
    handle added to an existing one, in the user's CardDAV address book (today contacts are only
    read), so that a name lives there and not only in the app.
 ## License

@@ -10,9 +10,23 @@ require (
 )
 
 require (
+	github.com/apache/thrift v0.24.0 // indirect
+	github.com/beeper/poly1305 v0.0.0-20250815183548-d4eede7bbf3c // indirect
+	github.com/google/go-querystring v1.2.0 // indirect
+	github.com/icholy/digest v1.2.0 // indirect
+	github.com/imroc/req/v3 v3.56.0 // indirect
+	github.com/quic-go/qpack v0.6.0 // indirect
+	github.com/quic-go/quic-go v0.61.0 // indirect
+	github.com/tidwall/gjson v1.19.0 // indirect
+	github.com/tidwall/match v1.2.0 // indirect
+	github.com/tidwall/pretty v1.2.1 // indirect
+	go.mau.fi/mautrix-meta v0.2609.0 // indirect
+)
+
+require (
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/SherClockHolmes/webpush-go v1.4.1-0.20260422052225-76cc00f5ac2d // indirect
-	github.com/andybalholm/brotli v1.2.1 // indirect
+	github.com/andybalholm/brotli v1.2.2 // indirect
 	github.com/beeper/argo-go v1.1.2 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -41,7 +55,7 @@ require (
 	github.com/gotd/log v0.1.0 // indirect
 	github.com/gotd/neo v0.1.5 // indirect
 	github.com/gotd/td v0.162.0 // indirect
-	github.com/klauspost/compress v1.19.1 // indirect
+	github.com/klauspost/compress v1.19.2 // indirect
 	github.com/mattn/go-colorable v0.1.15 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mdp/qrterminal v1.0.1 // indirect
@@ -64,7 +78,7 @@ require (
 	github.com/vektah/gqlparser/v2 v2.5.27 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
-	github.com/yuin/goldmark v1.8.5 // indirect
+	github.com/yuin/goldmark v1.8.6 // indirect
 	go.mau.fi/libsignal v0.2.2 // indirect
 	go.mau.fi/mautrix-signal v0.2609.0
 	go.mau.fi/util v0.10.1 // indirect
@@ -98,3 +112,7 @@ require (
 )
 
 replace go.mau.fi/mautrix-signal => ./third_party/mautrix-signal
+
+replace go.mau.fi/mautrix-meta => ./third_party/mautrix-meta
+
+replace github.com/imroc/req/v3 => github.com/beeper/req/v3 v3.0.0-20260808092153-100cef0a2fbd
