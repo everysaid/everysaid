@@ -29,13 +29,16 @@ func Devices(ctx context.Context) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	return d, UpgradeDevices(ctx, d)
+}
+
+// UpgradeDevices brings whatsmeow's tables up to date in a keys database, and makes whatsapp_device.
+func UpgradeDevices(ctx context.Context, d *sql.DB) error {
 	if err := sqlstore.NewWithDB(d, keys.Driver, waLog.Noop).Upgrade(ctx); err != nil {
-		return nil, err
+		return err
 	}
-	if _, err := d.Exec(devicesSchema); err != nil {
-		return nil, err
-	}
-	return d, nil
+	_, err := d.Exec(devicesSchema)
+	return err
 }
 
 // OpenDevices is whatsmeow's container over keys.db. It shares keys.db's connections: never Close it.
