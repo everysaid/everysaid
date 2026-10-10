@@ -13,7 +13,7 @@ import (
 	"github.com/gotd/td/tg"
 )
 
-// TestRoundTrip reads a telegram.db that Telethon wrote (read only), turns each stored object into
+// TestRoundTrip reads a the store that Telethon wrote (read only), turns each stored object into
 // gotd's by Load, writes it again by Dump and compares the two: structurally, and byte for byte.
 // Only counts by class and the path of a difference are said, never a value. It runs only when
 // EVERYSAID_TELEGRAM_DB names such a file.

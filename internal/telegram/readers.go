@@ -72,11 +72,11 @@ func readers(ctx context.Context, c *plugins.Context, cn *conn, chatID int64, la
 		return err
 	}
 	defer store.Close()
-	kind := db.Str(store, "SELECT kind FROM chat WHERE id = ?", chatID)
+	kind := db.Str(store, "SELECT kind FROM telegram_chat WHERE id = ?", chatID)
 	if kind != "group" && kind != "supergroup" {
 		return nil
 	}
-	ids := db.Ints(store, "SELECT id FROM message WHERE chat_id = ? AND date > ? AND json_extract(json, '$.out') "+
+	ids := db.Ints(store, "SELECT id FROM telegram_message WHERE chat_id = ? AND date > ? AND json_extract(json, '$.out') "+
 		"AND json_extract(json, '$._') = 'Message' ORDER BY id DESC LIMIT ?",
 		chatID, time.Now().Add(-readersBack).Unix(), last)
 	if len(ids) == 0 {
@@ -101,7 +101,7 @@ func readers(ctx context.Context, c *plugins.Context, cn *conn, chatID int64, la
 			return err
 		}
 		for _, r := range rs {
-			res := db.Exec(store, "INSERT INTO read_by (chat_id, id, user_id, at) VALUES (?, ?, ?, ?) "+
+			res := db.Exec(store, "INSERT INTO telegram_read_by (chat_id, id, user_id, at) VALUES (?, ?, ?, ?) "+
 				"ON CONFLICT (chat_id, id, user_id) DO NOTHING", chatID, id, r.UserID, r.Date)
 			if n, _ := res.RowsAffected(); n > 0 {
 				got = true
@@ -134,7 +134,7 @@ func recentGroups() (ids []int64) {
 		return nil
 	}
 	defer store.Close()
-	return db.Ints(store, "SELECT DISTINCT m.chat_id FROM message m JOIN chat c ON c.id = m.chat_id "+
+	return db.Ints(store, "SELECT DISTINCT m.chat_id FROM telegram_message m JOIN telegram_chat c ON c.id = m.chat_id "+
 		"WHERE c.kind IN ('group', 'supergroup') AND m.date > ? AND json_extract(m.json, '$.out')",
 		time.Now().Add(-readersBack).Unix())
 }

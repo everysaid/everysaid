@@ -328,7 +328,7 @@ func mediaRun(ctx context.Context, c *conn, dryRun bool, sel mediaSel, out *prin
 	todo := map[int64][]int{}
 	var order []int64
 	var size int64
-	db.Each(store, "SELECT chat_id, id, json FROM message WHERE file IS NULL AND date >= ?", []any{sel.since}, func(scan func(...any)) {
+	db.Each(store, "SELECT chat_id, id, json FROM telegram_message WHERE file IS NULL AND date >= ?", []any{sel.since}, func(scan func(...any)) {
 		var chatID int64
 		var id int
 		var js string
@@ -378,7 +378,7 @@ func mediaRun(ctx context.Context, c *conn, dryRun bool, sel mediaSel, out *prin
 }
 
 // fetchFiles downloads the files of a chat's messages into the media folder and records each in
-// the store (telegram.db); wrote is told of each file written, failed of each one Telegram would
+// the store (the store); wrote is told of each file written, failed of each one Telegram would
 // not give, which does not keep the others back (it is tried again another time). A flood wait or
 // the end of ctx stops it.
 func fetchFiles(ctx context.Context, c *conn, store *sql.DB, chatID int64, ids []int, wrote func(),
@@ -437,7 +437,7 @@ func fetchFiles(ctx context.Context, c *conn, store *sql.DB, chatID int64, ids [
 			if !ok {
 				continue // a picture without a size to download
 			}
-			db.Exec(store, "UPDATE message SET file = ? WHERE chat_id = ? AND id = ?", rel, chatID, m.GetID())
+			db.Exec(store, "UPDATE telegram_message SET file = ? WHERE chat_id = ? AND id = ?", rel, chatID, m.GetID())
 			wrote()
 		}
 	}
@@ -474,7 +474,7 @@ func (Plugin) FetchMedia(ctx context.Context, c *plugins.Context, messageID int6
 	}
 	defer store.Close()
 	var have sql.NullString
-	if db.Row(store, "SELECT file FROM message WHERE chat_id = ? AND id = ?", []any{chatID, id}, &have) && have.Valid {
+	if db.Row(store, "SELECT file FROM telegram_message WHERE chat_id = ? AND id = ?", []any{chatID, id}, &have) && have.Valid {
 		p := filepath.Join(MediaPath(), filepath.FromSlash(have.String))
 		if _, err := os.Stat(p); err == nil {
 			return p, nil
@@ -507,7 +507,7 @@ func (Plugin) FetchMedia(ctx context.Context, c *plugins.Context, messageID int6
 	if err != nil || !wrote {
 		return "", err
 	}
-	db.Exec(store, "UPDATE message SET file = ? WHERE chat_id = ? AND id = ?", rel, chatID, id)
+	db.Exec(store, "UPDATE telegram_message SET file = ? WHERE chat_id = ? AND id = ?", rel, chatID, id)
 	return dest, nil
 }
 
@@ -561,8 +561,8 @@ func (q *fileQueue) recent(c *plugins.Context) (err error) {
 	defer store.Close()
 	skip := idSet(currentSettings(c)["skip_chats"])
 	// not those deleted on Telegram (asked again in vain on every start)
-	db.Each(store, "SELECT chat_id, id, json FROM message m WHERE file IS NULL AND date >= ? "+
-		"AND NOT EXISTS (SELECT 1 FROM deleted d WHERE d.chat_id = m.chat_id AND d.id = m.id)",
+	db.Each(store, "SELECT chat_id, id, json FROM telegram_message m WHERE file IS NULL AND date >= ? "+
+		"AND NOT EXISTS (SELECT 1 FROM telegram_deleted d WHERE d.chat_id = m.chat_id AND d.id = m.id)",
 		[]any{time.Now().Add(-mediaBackfill).Unix()}, func(scan func(...any)) {
 			var chat int64
 			var id int
@@ -619,7 +619,7 @@ func fetchQueued(ctx context.Context, c *plugins.Context, cn *conn, todo map[int
 			var ids []int
 			for id := range todo[chat] {
 				var none int
-				if db.Row(store, "SELECT 1 FROM message WHERE chat_id = ? AND id = ? AND file IS NULL", []any{chat, id}, &none) {
+				if db.Row(store, "SELECT 1 FROM telegram_message WHERE chat_id = ? AND id = ? AND file IS NULL", []any{chat, id}, &none) {
 					ids = append(ids, id)
 				}
 			}

@@ -54,7 +54,11 @@ func OpenAt(path string) (*sql.DB, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	if d := opens[path]; d != nil {
-		return d, nil
+		if _, err := os.Stat(path); err == nil {
+			return d, nil
+		}
+		d.Close() // removed since (a test, a reset): made again
+		delete(opens, path)
 	}
 	key, err := keyFor(path)
 	if err != nil {
@@ -75,6 +79,26 @@ func OpenAt(path string) (*sql.DB, error) {
 	os.Chmod(path, 0o600)
 	opens[path] = d
 	return d, nil
+}
+
+// Own is a connection pool of its own to the keys database at path ("" for Path()), for a caller
+// that sets its pool's limits and closes it; immediate: its transactions begin as writers'.
+func Own(path string, immediate bool) (*sql.DB, error) {
+	if path == "" {
+		path = Path()
+	}
+	if _, err := OpenAt(path); err != nil { // made, and its key checked, once
+		return nil, err
+	}
+	key, err := keyFor(path)
+	if err != nil {
+		return nil, err
+	}
+	dsn := DSN(path, key)
+	if immediate {
+		dsn += "&_txlock=immediate"
+	}
+	return sql.Open(Driver, dsn)
 }
 
 // DSN is the data source name of an encrypted database at path with key (hex), WAL, a wait of

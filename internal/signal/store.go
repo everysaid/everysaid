@@ -1,7 +1,7 @@
 package signal
 
 // New (the Python never had Signal). `<cache>/signal/<instance>/signal.db`: what the helper said,
-// kept as it said it, the way the Telegram live connection keeps telegram.db and the WhatsApp bridge
+// kept as it said it, the way the Telegram live connection keeps the store and the WhatsApp bridge
 // messages.db; the importer (import.go) reads it into the archive. Facts only (a message, an edit,
 // a deletion, a reaction, a receipt, a read, a call): what they mean together is the importer's.
 // It can be made again from the helper's own store (the `history` command).

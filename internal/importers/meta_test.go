@@ -16,7 +16,7 @@ func TestTelegramForwardAlbumPin(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "telegram.db")
 	d := telegramDB(t, path)
 	add := func(id int64, m M) {
-		db.Exec(d, "INSERT INTO message (chat_id, id, date, json) VALUES (?, ?, ?, ?)", tgMaria, id, 1_790_000_100+id, js(m))
+		db.Exec(d, "INSERT INTO telegram_message (chat_id, id, date, json) VALUES (?, ?, ?, ?)", tgMaria, id, 1_790_000_100+id, js(m))
 	}
 	add(30, M{"_": "Message", "id": 30, "from_id": M{"user_id": tgMaria}, "message": "a", "grouped_id": 9001, "pinned": true,
 		"fwd_from": M{"_": "MessageFwdHeader", "from_id": M{"user_id": tgBob}}})
@@ -26,7 +26,7 @@ func TestTelegramForwardAlbumPin(t *testing.T) {
 	eq(t, "30", msgRow(a, "30", "forward_from, album, pinned"), []any{"Bob", "9001", int64(-1)})
 	eq(t, "31", msgRow(a, "31", "forward_from, album, pinned"), []any{"Hidden Person", "9001", nil})
 
-	db.Exec(d, "UPDATE message SET json = json_set(json, '$.pinned', json('false')) WHERE id = 30")
+	db.Exec(d, "UPDATE telegram_message SET json = json_set(json, '$.pinned', json('false')) WHERE id = 30")
 	must(t, Telegram(a, nil, TelegramOptions{DBPath: path}))
 	eq(t, "unpinned", msgRow(a, "30", "pinned")[0], nil)
 

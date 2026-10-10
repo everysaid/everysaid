@@ -43,13 +43,13 @@ func withMembers() *fake {
 
 func storedMembers(t *testing.T, chat int64) (ids []int64, complete int64) {
 	t.Helper()
-	d, err := db.ReadOnly(DBPath())
+	d, err := readStore()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer d.Close()
-	db.Row(d, "SELECT complete FROM chat_member_list WHERE chat_id = ?", []any{chat}, &complete)
-	return db.Ints(d, "SELECT user_id FROM chat_member WHERE chat_id = ? ORDER BY user_id", chat), complete
+	db.Row(d, "SELECT complete FROM telegram_chat_member_list WHERE chat_id = ?", []any{chat}, &complete)
+	return db.Ints(d, "SELECT user_id FROM telegram_chat_member WHERE chat_id = ? ORDER BY user_id", chat), complete
 }
 
 func count(calls []string, name string) int {
@@ -84,9 +84,9 @@ func TestSyncMembers(t *testing.T) {
 	if n := count(f.calls, "getFullChat"); n != 1 { // not for private chats, channels or bots
 		t.Fatalf("%d getFullChat", n)
 	}
-	d, _ := db.ReadOnly(DBPath())
+	d, _ := readStore()
 	var js string
-	db.Row(d, "SELECT json FROM entity WHERE id = 4", nil, &js)
+	db.Row(d, "SELECT json FROM telegram_entity WHERE id = 4", nil, &js)
 	d.Close()
 	if !strings.Contains(js, `"first_name":"Carol"`) || !strings.Contains(js, `"access_hash":44`) {
 		t.Fatalf("Carol's entity %s", js)

@@ -19,11 +19,12 @@ import (
 func TestTelegramKindsCallsAndFiles(t *testing.T) {
 	t.Cleanup(config.Load) // after the folder is put back
 	t.Setenv("EVERYSAID_CACHE", t.TempDir())
+	t.Setenv("EVERYSAID_DATA", t.TempDir())
 	config.Load()
 	a, _ := newArchive(t)
 	d := telegramDB(t, telegramstore.DB())
 	add := func(id int64, m M) {
-		db.Exec(d, "INSERT INTO message (chat_id, id, date, json) VALUES (?, ?, ?, ?)", tgMaria, id, 1_790_000_100+id, js(m))
+		db.Exec(d, "INSERT INTO telegram_message (chat_id, id, date, json) VALUES (?, ?, ?, ?)", tgMaria, id, 1_790_000_100+id, js(m))
 	}
 	add(20, M{"_": "Message", "id": 20, "from_id": M{"user_id": tgMaria}, "media": M{"_": "MessageMediaPoll",
 		"poll": M{"question": M{"_": "TextWithEntities", "text": "When?"}, "answers": []M{{"text": "Mon"}, {"text": M{"text": "Tue"}}}}}})
@@ -34,7 +35,7 @@ func TestTelegramKindsCallsAndFiles(t *testing.T) {
 	add(23, M{"_": "MessageService", "id": 23, "out": true, "action": M{"_": "MessageActionPhoneCall", "call_id": 777,
 		"reason": M{"_": "PhoneCallDiscardReasonMissed"}, "video": false}})
 	add(24, M{"_": "Message", "id": 24, "out": true, "message": "look", "media": M{"_": "MessageMediaPhoto"}})
-	db.Exec(d, "UPDATE message SET file = 'maria/24.jpg' WHERE id = 24")
+	db.Exec(d, "UPDATE telegram_message SET file = 'maria/24.jpg' WHERE id = 24")
 	must(t, os.MkdirAll(filepath.Join(telegramstore.Media(), "maria"), 0o700))
 	must(t, os.WriteFile(filepath.Join(telegramstore.Media(), "maria", "24.jpg"), []byte("jpeg"), 0o600))
 
@@ -71,7 +72,9 @@ func TestTelegramChangesToMessagesThere(t *testing.T) {
 	a, _ := newArchive(t)
 	path := filepath.Join(t.TempDir(), "telegram.db")
 	d := telegramDB(t, path)
-	set := func(m M) { db.Exec(d, "UPDATE message SET json = ? WHERE chat_id = ? AND id = 11", js(m), tgMaria) }
+	set := func(m M) {
+		db.Exec(d, "UPDATE telegram_message SET json = ? WHERE chat_id = ? AND id = 11", js(m), tgMaria)
+	}
 	only := map[[2]int64]bool{{tgMaria, 11}: true}
 	must(t, Telegram(a, nil, TelegramOptions{DBPath: path}))
 	reactions := func() []string {
@@ -100,7 +103,7 @@ func TestTelegramChangesToMessagesThere(t *testing.T) {
 	eq(t, "taken back", len(reactions()), 0)
 
 	// an edit Telegram hides (a bot's buttons changed, a link preview fetched) is not the sender's edit
-	db.Exec(d, "UPDATE message SET json = ? WHERE chat_id = ? AND id = 10", js(M{"_": "Message", "id": 10, "message": "mine 1",
+	db.Exec(d, "UPDATE telegram_message SET json = ? WHERE chat_id = ? AND id = 10", js(M{"_": "Message", "id": 10, "message": "mine 1",
 		"out": true, "edit_date": 1_790_000_600, "edit_hide": true}), tgMaria)
 	must(t, Telegram(a, nil, TelegramOptions{DBPath: path}))
 	eq(t, "hidden edit", a.Int("SELECT edited FROM message WHERE key = '10' AND outgoing"), int64(0))
@@ -137,10 +140,10 @@ func TestTelegramMembers(t *testing.T) {
 	for _, e := range []M{{"_": "User", "id": carol, "first_name": "Carol", "username": "carol_c"},
 		{"_": "User", "id": bot, "first_name": "Helper", "bot": true}, {"_": "User", "id": gone, "deleted": true},
 		{"_": "User", "id": dan, "first_name": "Dan"}} {
-		db.Exec(d, "INSERT INTO entity VALUES (?, ?)", e["id"], js(e))
+		db.Exec(d, "INSERT INTO telegram_entity VALUES (?, ?)", e["id"], js(e))
 	}
 	for _, u := range []int64{tgMe, tgMaria, carol, bot, gone} {
-		db.Exec(d, "INSERT INTO chat_member VALUES (?, ?)", tgGroup, u)
+		db.Exec(d, "INSERT INTO telegram_chat_member VALUES (?, ?)", tgGroup, u)
 	}
 	members := func() []string {
 		return db.Strs(a.Tx(), "SELECT ad.value FROM conversation_member cm JOIN conversation c ON c.id = cm.conversation_id "+
@@ -165,11 +168,12 @@ func TestTelegramMembers(t *testing.T) {
 func TestTelegramNotices(t *testing.T) {
 	t.Cleanup(config.Load)
 	t.Setenv("EVERYSAID_CACHE", t.TempDir())
+	t.Setenv("EVERYSAID_DATA", t.TempDir())
 	config.Load()
 	a, _ := newArchive(t)
 	d := telegramDB(t, telegramstore.DB())
 	add := func(id int64, m M) {
-		db.Exec(d, "INSERT INTO message (chat_id, id, date, json) VALUES (?, ?, ?, ?)", tgGroup, id, 1_790_000_100+id, js(m))
+		db.Exec(d, "INSERT INTO telegram_message (chat_id, id, date, json) VALUES (?, ?, ?, ?)", tgGroup, id, 1_790_000_100+id, js(m))
 	}
 	svc := func(id, from int64, action M) {
 		add(id, M{"_": "MessageService", "id": id, "from_id": M{"user_id": from}, "action": action})
@@ -236,6 +240,7 @@ func TestTelegramNotices(t *testing.T) {
 func TestTelegramWhatTheAppsShow(t *testing.T) {
 	t.Cleanup(config.Load)
 	t.Setenv("EVERYSAID_CACHE", t.TempDir())
+	t.Setenv("EVERYSAID_DATA", t.TempDir())
 	config.Load()
 	a, _ := newArchive(t)
 	d := telegramDB(t, telegramstore.DB())
@@ -244,7 +249,7 @@ func TestTelegramWhatTheAppsShow(t *testing.T) {
 		if m["from_id"] == nil && m["out"] == nil {
 			m["from_id"] = M{"user_id": tgMaria}
 		}
-		db.Exec(d, "INSERT INTO message (chat_id, id, date, json) VALUES (?, ?, ?, ?)", tgMaria, id, 1_790_000_100+id, js(m))
+		db.Exec(d, "INSERT INTO telegram_message (chat_id, id, date, json) VALUES (?, ?, ?, ?)", tgMaria, id, 1_790_000_100+id, js(m))
 	}
 	add(40, M{"_": "MessageService", "action": M{"_": "MessageActionConferenceCall", "call_id": 9001, "missed": true}})
 	add(41, M{"_": "Message", "message": "this", "reply_to": M{"reply_to_msg_id": 5, "reply_to_peer_id": M{"channel_id": 1},
@@ -284,7 +289,7 @@ func TestTelegramWhatTheAppsShow(t *testing.T) {
 	eq(t, "notices", []string{code("46"), code("47"), code("48")}, []string{"story", "story_reply", "unsupported"})
 
 	// the location moves (an edit Telegram hides): the new place, not marked edited
-	db.Exec(d, "UPDATE message SET json = ? WHERE chat_id = ? AND id = 49", js(M{"_": "Message", "id": 49,
+	db.Exec(d, "UPDATE telegram_message SET json = ? WHERE chat_id = ? AND id = 49", js(M{"_": "Message", "id": 49,
 		"from_id": M{"user_id": tgMaria}, "media": M{"_": "MessageMediaGeoLive", "geo": M{"lat": 3.0, "long": 4.0}, "period": 900},
 		"edit_date": 1_790_000_900, "edit_hide": true}), tgMaria)
 	must(t, Telegram(a, nil, TelegramOptions{Only: map[[2]int64]bool{{tgMaria, 49}: true}}))
@@ -293,7 +298,7 @@ func TestTelegramWhatTheAppsShow(t *testing.T) {
 	// a conference call recorded while it went on: how it went once it ended
 	add(50, M{"_": "MessageService", "action": M{"_": "MessageActionConferenceCall", "call_id": 9002}})
 	must(t, Telegram(a, nil, TelegramOptions{}))
-	db.Exec(d, "UPDATE message SET json = ? WHERE chat_id = ? AND id = 50", js(M{"_": "MessageService", "id": 50,
+	db.Exec(d, "UPDATE telegram_message SET json = ? WHERE chat_id = ? AND id = 50", js(M{"_": "MessageService", "id": 50,
 		"from_id": M{"user_id": tgMaria}, "action": M{"_": "MessageActionConferenceCall", "call_id": 9002, "duration": 120},
 		"edit_date": 1_790_001_000}), tgMaria)
 	must(t, Telegram(a, nil, TelegramOptions{Only: map[[2]int64]bool{{tgMaria, 50}: true}}))

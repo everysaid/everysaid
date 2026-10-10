@@ -14,7 +14,7 @@
 // (`telegram-session-go`; made from Telethon's `telegram-session` when that is there, see
 // session.go). The survey lists every chat with its kind, size and dates, no content.
 //
-// With no option, every chat but channels and bots is read into `<cache>/telegram/telegram.db`,
+// With no option, every chat but channels and bots is read into the store (keys.db's tables telegram_*),
 // each message whole (Telethon's own fields, as JSON, without the binary ones: file references and
 // inline thumbnails), with the chats and the people seen. A later run brings only what came after
 // the last message read in each chat; edits and deletions of older messages are not followed.
@@ -431,12 +431,12 @@ func syncRun(ctx context.Context, c *conn, out *printer) (err error) {
 		if k == "channel" || k == "bot" {
 			continue
 		}
-		db.Exec(b.q(), "INSERT INTO chat (id, kind, title, archived, json) VALUES (?, ?, ?, ?, ?) "+
+		db.Exec(b.q(), "INSERT INTO telegram_chat (id, kind, title, archived, json) VALUES (?, ?, ?, ?, ?) "+
 			"ON CONFLICT (id) DO UPDATE SET kind = excluded.kind, title = excluded.title, "+
 			"archived = excluded.archived, json = excluded.json",
 			d.ID, k, d.Name, boolInt(d.Archived), Dump(d.Entity.(tdp.Object)))
 		noteRead(b.q(), d.ID, intp(d.Dialog.ReadInboxMaxID), intp(d.Dialog.ReadOutboxMaxID), false)
-		last := db.Int(b.q(), "SELECT coalesce(max(id), 0) FROM read_through WHERE chat_id = ?", d.ID)
+		last := db.Int(b.q(), "SELECT coalesce(max(id), 0) FROM telegram_read_through WHERE chat_id = ?", d.ID)
 		label := d.Name
 		if label == "" {
 			label = strconv.FormatInt(d.ID, 10)
@@ -451,10 +451,10 @@ func syncRun(ctx context.Context, c *conn, out *printer) (err error) {
 		if err == nil {
 			err = c.history(ctx, peer, int(last), func(chunk []sent) error {
 				for _, s := range chunk {
-					db.Exec(b.q(), "INSERT OR IGNORE INTO message (chat_id, id, date, json) VALUES (?, ?, ?, ?)",
+					db.Exec(b.q(), "INSERT OR IGNORE INTO telegram_message (chat_id, id, date, json) VALUES (?, ?, ?, ?)",
 						d.ID, s.Message.GetID(), messageDate(s.Message), Dump(s.Message.(tdp.Object)))
 					if isEntity(s.Sender) {
-						db.Exec(b.q(), "INSERT OR REPLACE INTO entity VALUES (?, ?)", EntityID(s.Sender), Dump(s.Sender.(tdp.Object)))
+						db.Exec(b.q(), "INSERT OR REPLACE INTO telegram_entity VALUES (?, ?)", EntityID(s.Sender), Dump(s.Sender.(tdp.Object)))
 					}
 					n++
 					if n%1000 == 0 {
@@ -472,11 +472,11 @@ func syncRun(ctx context.Context, c *conn, out *printer) (err error) {
 			fmt.Fprintf(out, "\n%s\n", out.say("{chat}: not caught up ({e})", map[string]any{"chat": label, "e": err.Error()}))
 			continue
 		}
-		db.Exec(b.q(), "UPDATE chat SET synced_at = ? WHERE id = ?", time.Now().Unix(), d.ID)
+		db.Exec(b.q(), "UPDATE telegram_chat SET synced_at = ? WHERE id = ?", time.Now().Unix(), d.ID)
 		if d.Message != nil {
 			last = max(last, int64(d.Message.GetID()))
 		}
-		db.Exec(b.q(), "INSERT INTO read_through VALUES (?, ?) ON CONFLICT (chat_id) DO UPDATE SET id = max(id, excluded.id)",
+		db.Exec(b.q(), "INSERT INTO telegram_read_through VALUES (?, ?) ON CONFLICT (chat_id) DO UPDATE SET id = max(id, excluded.id)",
 			d.ID, last)
 		if err := b.commit(); err != nil {
 			return err

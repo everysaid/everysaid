@@ -1,4 +1,4 @@
-// Ports everysaid/telegram.py: Telegram from <cache>/telegram/telegram.db, which the sync fills
+// Ports everysaid/telegram.py: Telegram from the Telegram store (keys.db's tables telegram_*), which the sync fills
 // through the Telegram API (each message whole, as JSON).
 //
 // Every chat is imported but channels and bots, which the sync does not read. Message ids are
@@ -42,6 +42,15 @@ var telegramActions = map[string]string{"MessageActionPinMessage": "pin", "Messa
 var telegramCallDetail = map[string]string{"PhoneCallDiscardReasonBusy": "busy", "PhoneCallDiscardReasonDisconnect": "failed"}
 
 // parseJSON is a JSON text as Python's json.loads gives it (numbers kept as written).
+// tgStore is the Telegram store (in keys.db) at dbPath.
+func tgStore(dbPath string) *sql.DB {
+	d, err := telegramstore.Open(dbPath)
+	if err != nil {
+		panic(err)
+	}
+	return d
+}
+
 func parseJSON(s string) (map[string]any, error) {
 	d := json.NewDecoder(strings.NewReader(s))
 	d.UseNumber()
@@ -223,7 +232,7 @@ type tgPeople struct {
 
 func newTGPeople(d *sql.DB) *tgPeople {
 	p := &tgPeople{entity: map[int64]map[string]any{}, username: map[string]int64{}}
-	db.Each(d, "SELECT id, json FROM entity UNION ALL SELECT id, json FROM chat", nil, func(scan func(...any)) {
+	db.Each(d, "SELECT id, json FROM telegram_entity UNION ALL SELECT id, json FROM telegram_chat", nil, func(scan func(...any)) {
 		var id int64
 		var js string
 		scan(&id, &js)
@@ -402,7 +411,7 @@ func tgMentions(m map[string]any, person *tgPeople) []tgMention {
 	return out
 }
 
-// TelegramReads: how far each chat was read (telegram.db's chat_read): the owner's reading as the
+// TelegramReads: how far each chat was read (the store's telegram_chat_read): the owner's reading as the
 // chat's read_until; the other's, in a chat with one person, as receipts of the owner's messages
 // (when, where the live connection saw it happen; else 0, known but not when). chats: only these
 // (nil: all).
@@ -419,15 +428,15 @@ func telegramReads(a *archive.Archive, dbPath string, chats map[int64]bool) {
 	if !exists(dbPath) {
 		return
 	}
-	d := ro(dbPath)
+	d := tgStore(dbPath)
 	defer d.Close()
-	if !db.Exists(d, "SELECT 1 FROM sqlite_master WHERE name = 'chat_read'") {
+	if !db.Exists(d, "SELECT 1 FROM sqlite_master WHERE name = 'telegram_chat_read'") {
 		return
 	}
 	person := newTGPeople(d)
 	src := a.Source(telegramSource, dbPath, "telegram", telegramstore.Media())
-	for _, r := range maps(d, "SELECT r.chat_id, c.kind, r.inbox, r.outbox, r.outbox_at, r.observed_at FROM chat_read r "+
-		"JOIN chat c ON c.id = r.chat_id") {
+	for _, r := range maps(d, "SELECT r.chat_id, c.kind, r.inbox, r.outbox, r.outbox_at, r.observed_at FROM telegram_chat_read r "+
+		"JOIN telegram_chat c ON c.id = r.chat_id") {
 		chatID := toInt(r["chat_id"])
 		if chats != nil && !chats[chatID] {
 			continue
@@ -448,8 +457,8 @@ func telegramReads(a *archive.Archive, dbPath string, chats map[int64]bool) {
 			}
 		}
 		// in a group: who read each of the owner's messages, as Telegram said when asked
-		if k := str(r["kind"]); (k == "group" || k == "supergroup") && db.Exists(d, "SELECT 1 FROM sqlite_master WHERE name = 'read_by'") {
-			for _, b := range maps(d, "SELECT id, user_id, at FROM read_by WHERE chat_id = ? ORDER BY id, user_id", chatID) {
+		if k := str(r["kind"]); (k == "group" || k == "supergroup") && db.Exists(d, "SELECT 1 FROM sqlite_master WHERE name = 'telegram_read_by'") {
+			for _, b := range maps(d, "SELECT id, user_id, at FROM telegram_read_by WHERE chat_id = ? ORDER BY id, user_id", chatID) {
 				mid, ok := a.MessageByKey("telegram", pyStr(b["id"]), conv)
 				if !ok || mid == 0 {
 					continue
@@ -537,7 +546,7 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 		say(out, "no source: {db} (telegram-sync)", map[string]any{"db": dbPath})
 		return nil
 	}
-	d := ro(dbPath)
+	d := tgStore(dbPath)
 	defer d.Close()
 	var chatsWanted map[int64]bool
 	if opt.Only != nil {
@@ -566,11 +575,11 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 		kind, title any
 	}
 	var chats []chat
-	for _, r := range maps(d, "SELECT id, kind, title FROM chat ORDER BY id") {
+	for _, r := range maps(d, "SELECT id, kind, title FROM telegram_chat ORDER BY id") {
 		chats = append(chats, chat{toInt(r["id"]), r["kind"], r["title"]})
 	}
-	hasDeleted := db.Exists(d, "SELECT 1 FROM sqlite_master WHERE name = 'deleted'") // not in a store the Python made
-	hasMembers := db.Exists(d, "SELECT 1 FROM sqlite_master WHERE name = 'chat_member'")
+	hasDeleted := db.Exists(d, "SELECT 1 FROM sqlite_master WHERE name = 'telegram_deleted'") // not in a store the Python made
+	hasMembers := db.Exists(d, "SELECT 1 FROM sqlite_master WHERE name = 'telegram_chat_member'")
 	for _, c := range chats {
 		if (chatsWanted != nil && !chatsWanted[c.id]) || opt.Skip[c.id] {
 			continue
@@ -584,7 +593,7 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 			conv = titled(a, "telegram", nil, key, c.title)
 			a.Exec("UPDATE conversation SET is_group = 1 WHERE id = ?", conv)
 		}
-		query, args := "SELECT id, date, json FROM message WHERE chat_id = ? ORDER BY id", []any{c.id}
+		query, args := "SELECT id, date, json FROM telegram_message WHERE chat_id = ? ORDER BY id", []any{c.id}
 		if opt.Only != nil {
 			var ids []int64
 			for k := range opt.Only {
@@ -593,12 +602,12 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 				}
 			}
 			sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-			query = "SELECT id, date, json FROM message WHERE chat_id = ? AND id IN (" + db.Marks(len(ids)) + ") ORDER BY id"
+			query = "SELECT id, date, json FROM telegram_message WHERE chat_id = ? AND id IN (" + db.Marks(len(ids)) + ") ORDER BY id"
 			args = append(args, db.Args(ids)...)
 		}
 		deleted := map[int64]bool{} // deleted on Telegram since (the live connection's record)
 		if hasDeleted {
-			db.Each(d, "SELECT id FROM deleted WHERE chat_id = ?", []any{c.id}, func(scan func(...any)) {
+			db.Each(d, "SELECT id FROM telegram_deleted WHERE chat_id = ?", []any{c.id}, func(scan func(...any)) {
 				var id int64
 				scan(&id)
 				deleted[id] = true
@@ -738,7 +747,7 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 		}
 	}
 	// archived chats, as the last sync saw them (only the start of ours: see Archive.InitArchived)
-	for _, r := range maps(d, "SELECT id, archived, synced_at FROM chat WHERE synced_at IS NOT NULL") {
+	for _, r := range maps(d, "SELECT id, archived, synced_at FROM telegram_chat WHERE synced_at IS NOT NULL") {
 		conv, _ := a.FindConversation("telegram", pyStr(r["id"]))
 		a.ReportState(src, conv, "archived", int64(archive.B2I(truthy(r["archived"]))), toInt(r["synced_at"])*1000, 0)
 	}
@@ -772,7 +781,7 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 // stays, as in the other services' groups (a member once, and the author of what they wrote).
 func telegramMembers(a *archive.Archive, d *sql.DB, person *tgPeople, own map[archive.Handle]bool, chatID, conv int64) []int64 {
 	var out []int64
-	for _, uid := range db.Ints(d, "SELECT user_id FROM chat_member WHERE chat_id = ? ORDER BY user_id", chatID) {
+	for _, uid := range db.Ints(d, "SELECT user_id FROM telegram_chat_member WHERE chat_id = ? ORDER BY user_id", chatID) {
 		e := person.entity[uid]
 		if truthy(e["bot"]) || truthy(e["deleted"]) || truthy(e["is_self"]) || (person.hasMe && uid == person.me) {
 			continue
@@ -787,7 +796,7 @@ func telegramMembers(a *archive.Archive, d *sql.DB, person *tgPeople, own map[ar
 	return out
 }
 
-// TelegramMembers: the members kept for those groups (telegram.db's chat_member, as the live
+// TelegramMembers: the members kept for those groups (the store's telegram_chat_member, as the live
 // connection asked them) into their conversations, with the members' other handles and profile
 // names, as the import gives them. A group with no conversation yet waits for the next import.
 func TelegramMembers(a *archive.Archive, out func(string), dbPath string, chats map[int64]bool) (err error) {
@@ -798,9 +807,9 @@ func TelegramMembers(a *archive.Archive, out func(string), dbPath string, chats 
 	if !exists(dbPath) {
 		return nil
 	}
-	d := ro(dbPath)
+	d := tgStore(dbPath)
 	defer d.Close()
-	if !db.Exists(d, "SELECT 1 FROM sqlite_master WHERE name = 'chat_member'") {
+	if !db.Exists(d, "SELECT 1 FROM sqlite_master WHERE name = 'telegram_chat_member'") {
 		return nil
 	}
 	person := newTGPeople(d)
@@ -808,7 +817,7 @@ func TelegramMembers(a *archive.Archive, out func(string), dbPath string, chats 
 	if person.hasMe {
 		own[archive.H("id", fmt.Sprint(person.me), "telegram")] = true
 	}
-	for _, r := range maps(d, "SELECT id, kind FROM chat WHERE kind NOT IN ('user', 'saved') ORDER BY id") {
+	for _, r := range maps(d, "SELECT id, kind FROM telegram_chat WHERE kind NOT IN ('user', 'saved') ORDER BY id") {
 		chatID := toInt(r["id"])
 		if !chats[chatID] {
 			continue
@@ -919,13 +928,13 @@ func TelegramMedia(a *archive.Archive, s *Store) {
 		scan(&k, &id)
 		origins[k] = id
 	})
-	d := ro(dbPath)
+	d := tgStore(dbPath)
 	defer d.Close()
 	// the name it was sent with (a document's)
 	for _, r := range maps(d, "SELECT chat_id, id, file, (SELECT json_extract(a.value, '$.file_name') "+
 		"FROM json_each(json, '$.media.document.attributes') a "+
 		"WHERE json_extract(a.value, '$._') = 'DocumentAttributeFilename') AS name "+
-		"FROM message WHERE file IS NOT NULL ORDER BY chat_id, id") {
+		"FROM telegram_message WHERE file IS NOT NULL ORDER BY chat_id, id") {
 		rel := str(r["file"])
 		s.LinkNamed(telegramSource, src, filepath.Join(media, rel), rel, origins[fmt.Sprintf("%v/%v", r["chat_id"], r["id"])],
 			strOrEmpty(r["name"]))

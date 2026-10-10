@@ -1,5 +1,5 @@
 // Spam and the people the user blocked: someone removed as spam in the app is reported to Telegram,
-// blocked and their chat deleted there (ReportSpam), and their chat dropped from telegram.db
+// blocked and their chat deleted there (ReportSpam), and their chat dropped from the store
 // (Forget); the people blocked on Telegram, from any device, are written to the archive (`blocked`),
 // where the app suggests removing them.
 package telegram
@@ -63,7 +63,7 @@ func (Plugin) ReportSpam(ctx context.Context, c *plugins.Context, conv plugins.C
 	})
 }
 
-// spamPeer is the user's input peer: from the dialogs, else from telegram.db (a chat the user
+// spamPeer is the user's input peer: from the dialogs, else from the store (a chat the user
 // already deleted on Telegram is no longer among the dialogs).
 func spamPeer(ctx context.Context, cn *conn, user int64) (tg.InputPeerClass, error) {
 	if p, err := cn.peer(ctx, user); err == nil {
@@ -74,7 +74,7 @@ func spamPeer(ctx context.Context, cn *conn, user int64) (tg.InputPeerClass, err
 		return nil, err
 	}
 	defer store.Close()
-	for _, q := range []string{"SELECT json FROM chat WHERE id = ?", "SELECT json FROM entity WHERE id = ?"} {
+	for _, q := range []string{"SELECT json FROM telegram_chat WHERE id = ?", "SELECT json FROM telegram_entity WHERE id = ?"} {
 		var e struct {
 			Type       string `json:"_"`
 			AccessHash *int64 `json:"access_hash"`
@@ -87,7 +87,7 @@ func spamPeer(ctx context.Context, cn *conn, user int64) (tg.InputPeerClass, err
 	return nil, pluginErr(peerUnknown)
 }
 
-// Forget drops the chat from telegram.db, with the files downloaded of it.
+// Forget drops the chat from the store, with the files downloaded of it.
 func (Plugin) Forget(c *plugins.Context, conv plugins.Conversation) (err error) {
 	defer db.Recover(&err)
 	chat, err := strconv.ParseInt(conv.Key, 10, 64)
@@ -107,11 +107,11 @@ func (Plugin) Forget(c *plugins.Context, conv plugins.Conversation) (err error) 
 		return err
 	}
 	defer tx.Rollback()
-	files := db.Strs(tx, "SELECT file FROM message WHERE chat_id = ? AND file IS NOT NULL AND file != ''", chat)
-	for _, t := range []string{"message", "deleted", "chat_read", "chat_member", "chat_member_list"} {
+	files := db.Strs(tx, "SELECT file FROM telegram_message WHERE chat_id = ? AND file IS NOT NULL AND file != ''", chat)
+	for _, t := range []string{"telegram_message", "telegram_deleted", "telegram_chat_read", "telegram_chat_member", "telegram_chat_member_list", "telegram_read_by", "telegram_read_through"} {
 		db.Exec(tx, "DELETE FROM "+t+" WHERE chat_id = ?", chat)
 	}
-	db.Exec(tx, "DELETE FROM chat WHERE id = ?", chat)
+	db.Exec(tx, "DELETE FROM telegram_chat WHERE id = ?", chat)
 	if err := tx.Commit(); err != nil {
 		return err
 	}

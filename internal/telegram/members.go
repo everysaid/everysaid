@@ -134,7 +134,7 @@ func participant(x tg.ChannelParticipantClass) int64 {
 // storeMembers writes what members gave into the store, with the members' entities.
 func storeMembers(q db.Querier, chatID int64, list memberList) {
 	for _, u := range list.users {
-		db.Exec(q, "INSERT OR REPLACE INTO entity VALUES (?, ?)", u.ID, Dump(u))
+		db.Exec(q, "INSERT OR REPLACE INTO telegram_entity VALUES (?, ?)", u.ID, Dump(u))
 	}
 	if err := telegramstore.NoteMembers(q, chatID, list.ids, list.complete, list.count); err != nil {
 		panic(err)
@@ -209,7 +209,7 @@ func staleMembers(dialogs []dialog) (out []int64, err error) {
 	}
 	defer store.Close()
 	asked := map[int64]int64{}
-	db.Each(store, "SELECT chat_id, fetched_at FROM chat_member_list", nil, func(scan func(...any)) {
+	db.Each(store, "SELECT chat_id, fetched_at FROM telegram_chat_member_list", nil, func(scan func(...any)) {
 		var id, at int64
 		scan(&id, &at)
 		asked[id] = at
@@ -223,7 +223,7 @@ func staleMembers(dialogs []dialog) (out []int64, err error) {
 	return out, nil
 }
 
-// refreshMembers asks Telegram for those groups' members, keeps them in telegram.db and puts them
+// refreshMembers asks Telegram for those groups' members, keeps them in the store and puts them
 // into the archive (the chats the user left out are kept, not imported).
 func refreshMembers(ctx context.Context, c *plugins.Context, cn *conn, chats []int64) error {
 	if len(chats) == 0 {

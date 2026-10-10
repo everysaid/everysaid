@@ -11,7 +11,7 @@ import (
 // withMigrated adds to the dialogs the basic groups the supergroups among them were before Telegram
 // made them supergroups: the dialogs no longer list them, and their history (up to the change) is
 // read as their own chat, as Telegram Desktop shows it above the supergroup's. Telegram is asked once
-// for each supergroup (telegram.db's migrated keeps the answer, also that there was none).
+// for each supergroup (the store's telegram_migrated keeps the answer, also that there was none).
 func withMigrated(ctx context.Context, cn *conn, dialogs []dialog) (out []dialog, err error) {
 	defer db.Recover(&err)
 	store, err := openStore(DBPath())
@@ -26,7 +26,7 @@ func withMigrated(ctx context.Context, cn *conn, dialogs []dialog) (out []dialog
 			continue
 		}
 		var chatID, maxID int64
-		if !db.Row(store, "SELECT chat_id, max_id FROM migrated WHERE channel_id = ?", []any{d.ID}, &chatID, &maxID) {
+		if !db.Row(store, "SELECT chat_id, max_id FROM telegram_migrated WHERE channel_id = ?", []any{d.ID}, &chatID, &maxID) {
 			full, err := cn.api.ChannelsGetFullChannel(ctx, &tg.InputChannel{ChannelID: ch.ID, AccessHash: ch.AccessHash})
 			if err != nil {
 				if stopsAll(ctx, err) {
@@ -41,7 +41,7 @@ func withMigrated(ctx context.Context, cn *conn, dialogs []dialog) (out []dialog
 					maxID = int64(f.MigratedFromMaxID)
 				}
 			}
-			db.Exec(store, "INSERT OR REPLACE INTO migrated VALUES (?, ?, ?)", d.ID, chatID, maxID)
+			db.Exec(store, "INSERT OR REPLACE INTO telegram_migrated VALUES (?, ?, ?)", d.ID, chatID, maxID)
 		}
 		if chatID == 0 {
 			continue

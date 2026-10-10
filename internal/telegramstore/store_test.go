@@ -22,13 +22,13 @@ func TestAReadSeenLateIsKnownButNotWhen(t *testing.T) {
 	if moved, err := NoteRead(d, maria, nil, p(10), true); err != nil || !moved {
 		t.Fatal("first read not moved", err)
 	}
-	if db.Int(d, "SELECT outbox_at FROM chat_read") == 0 {
+	if db.Int(d, "SELECT outbox_at FROM telegram_chat_read") == 0 {
 		t.Fatal("outbox_at not set")
 	}
 	if moved, _ := NoteRead(d, maria, nil, p(10), false); moved { // the same: nothing moved
 		t.Fatal("moved again")
 	}
-	if db.Int(d, "SELECT outbox_at FROM chat_read") == 0 {
+	if db.Int(d, "SELECT outbox_at FROM telegram_chat_read") == 0 {
 		t.Fatal("outbox_at lost")
 	}
 	if moved, _ := NoteRead(d, maria, nil, p(20), false); !moved {
@@ -36,7 +36,7 @@ func TestAReadSeenLateIsKnownButNotWhen(t *testing.T) {
 	}
 	var outbox int64
 	var at sql.NullInt64
-	db.Row(d, "SELECT outbox, outbox_at FROM chat_read", nil, &outbox, &at)
+	db.Row(d, "SELECT outbox, outbox_at FROM telegram_chat_read", nil, &outbox, &at)
 	if outbox != 20 || at.Valid {
 		t.Fatalf("got %d %v", outbox, at)
 	}
