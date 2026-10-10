@@ -110,6 +110,8 @@ func (Plugin) RunImport(c *plugins.Context) error {
 	skip := idSet(c.Settings["skip_chats"])
 	steps := []sourcekit.Step{{Label: "Telegram", Run: func(a *archive.Archive, out func(string)) error {
 		return importTelegram(a, out, nil, skip)
+	}}, {Label: "Telegram store", Run: func(a *archive.Archive, out func(string)) error {
+		return importers.TelegramPrune(a) // what the archive has, a week old, out of the store
 	}}}
 	// the files: of the recent messages, as the live connection brings them, and the whole history
 	// of the chats chosen for it

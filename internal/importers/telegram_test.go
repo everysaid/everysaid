@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"everysaid/internal/archive"
 	"everysaid/internal/config"
@@ -35,9 +36,9 @@ func TestTelegramKindsCallsAndFiles(t *testing.T) {
 	add(23, M{"_": "MessageService", "id": 23, "out": true, "action": M{"_": "MessageActionPhoneCall", "call_id": 777,
 		"reason": M{"_": "PhoneCallDiscardReasonMissed"}, "video": false}})
 	add(24, M{"_": "Message", "id": 24, "out": true, "message": "look", "media": M{"_": "MessageMediaPhoto"}})
-	db.Exec(d, "UPDATE telegram_message SET file = 'maria/24.jpg' WHERE id = 24")
-	must(t, os.MkdirAll(filepath.Join(telegramstore.Media(), "maria"), 0o700))
-	must(t, os.WriteFile(filepath.Join(telegramstore.Media(), "maria", "24.jpg"), []byte("jpeg"), 0o600))
+	chat := fmt.Sprint(tgMaria)
+	must(t, os.MkdirAll(filepath.Join(telegramstore.Media(), chat), 0o700))
+	must(t, os.WriteFile(filepath.Join(telegramstore.Media(), chat, "24.jpg"), []byte("jpeg"), 0o600))
 
 	must(t, Telegram(a, nil, TelegramOptions{}))
 	eq(t, "poll", msgRow(a, "20", "text, subtype"), []any{"When?\n- Mon\n- Tue", "poll"})
@@ -52,8 +53,21 @@ func TestTelegramKindsCallsAndFiles(t *testing.T) {
 	s.Root = t.TempDir()
 	TelegramMedia(a, s)
 	a.Commit()
+	s.Release()
 	eq(t, "linked", a.Int("SELECT count(*) FROM attachment t JOIN message m ON m.id = t.message_id WHERE m.key = '24'"), int64(1))
 	eq(t, "type", msgType(a), "image/jpeg")
+	// taken into the store: the download folder keeps nothing of it; linked again, nothing changes
+	if _, err := os.Stat(filepath.Join(telegramstore.Media(), chat, "24.jpg")); !os.IsNotExist(err) {
+		t.Fatalf("the downloaded file is still there: %v", err)
+	}
+	stored := db.Str(a.Tx(), "SELECT md.path FROM media md JOIN attachment t ON t.sha256 = md.sha256")
+	if b, err := os.ReadFile(filepath.Join(s.Root, stored)); err != nil || string(b) != "jpeg" {
+		t.Fatalf("stored %q %v", b, err)
+	}
+	TelegramMedia(a, s)
+	a.Commit()
+	s.Release()
+	eq(t, "linked once", a.Int("SELECT count(*) FROM attachment"), int64(1))
 }
 
 func msgType(a interface {
@@ -305,4 +319,32 @@ func TestTelegramWhatTheAppsShow(t *testing.T) {
 	var answered, duration int64
 	a.Row("SELECT answered, duration FROM call WHERE key = '9002'", nil, &answered, &duration)
 	eq(t, "ended", []any{answered, duration}, []any{int64(1), int64(120)})
+}
+
+// Once in the archive and a week old, a message leaves the store (TelegramPrune); those of the last
+// week, and those of a chat left out of the import, stay. A deletion seen later still reaches the
+// archive's copy of a message the store no longer has.
+func TestTelegramPruneAndLaterDeletion(t *testing.T) {
+	t.Cleanup(config.Load)
+	t.Setenv("EVERYSAID_CACHE", t.TempDir())
+	t.Setenv("EVERYSAID_DATA", t.TempDir())
+	config.Load()
+	a, _ := newArchive(t)
+	d := telegramDB(t, telegramstore.DB())
+	old, recent := time.Now().Add(-30*24*time.Hour).Unix(), time.Now().Add(-time.Hour).Unix()
+	add := func(chat, id, date int64) {
+		db.Exec(d, "INSERT INTO telegram_message (chat_id, id, date, json) VALUES (?, ?, ?, ?)", chat, id, date,
+			js(M{"_": "Message", "id": id, "message": fmt.Sprint("m", id), "from_id": M{"user_id": tgMaria}}))
+	}
+	add(tgMaria, 501, old)
+	add(tgMaria, 502, recent)
+	add(tgGroup, 503, old)
+	must(t, Telegram(a, nil, TelegramOptions{Skip: map[int64]bool{tgGroup: true}}))
+	must(t, TelegramPrune(a))
+	left := db.Ints(d, "SELECT id FROM telegram_message WHERE id > 500 ORDER BY id")
+	eq(t, "kept", fmt.Sprint(left), "[502 503]") // the recent one, and the one of the chat left out
+
+	db.Exec(d, "INSERT INTO telegram_deleted (chat_id, id, at) VALUES (?, 501, ?)", tgMaria, recent)
+	must(t, Telegram(a, nil, TelegramOptions{Only: map[[2]int64]bool{{tgMaria, 501}: true}}))
+	eq(t, "deleted", a.Int("SELECT deleted FROM message WHERE key = '501'"), int64(1))
 }

@@ -33,8 +33,8 @@ CREATE TABLE IF NOT EXISTS telegram_message (
     date INTEGER NOT NULL,              -- Unix seconds
     json TEXT NOT NULL,
     file TEXT,                          -- the downloaded media, relative to media/
-    PRIMARY KEY (chat_id, id)
-) WITHOUT ROWID;
+    PRIMARY KEY (chat_id, id)           -- (not WITHOUT ROWID: its rows, a message's JSON, are larger
+);                                      -- than such a table keeps in a page, and left most of each empty)
 CREATE TABLE IF NOT EXISTS telegram_chat_read (     -- how far each chat was read, as Telegram says
     chat_id INTEGER PRIMARY KEY,
     inbox INTEGER,                      -- the owner read up to this message (on any device)

@@ -18,9 +18,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf16"
 
 	"everysaid/internal/archive"
@@ -741,6 +743,24 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 		}
 		a.Commit()
 	}
+	// deleted on Telegram, of messages the store no longer keeps (taken out once imported: TelegramPrune)
+	if hasDeleted {
+		db.Each(d, "SELECT dl.chat_id, dl.id FROM telegram_deleted dl WHERE NOT EXISTS "+
+			"(SELECT 1 FROM telegram_message m WHERE m.chat_id = dl.chat_id AND m.id = dl.id)", nil, func(scan func(...any)) {
+			var chat, id int64
+			scan(&chat, &id)
+			if (chatsWanted != nil && !chatsWanted[chat]) || opt.Skip[chat] {
+				return
+			}
+			if mid, ok := a.IntOK("SELECT message_id FROM message_origin WHERE source_id = ? AND row_key = ?",
+				src, fmt.Sprintf("%d/%d", chat, id)); ok {
+				for _, c := range ApplyChange(a, mid, Change{Deleted: true}) {
+					updated[c]++
+				}
+			}
+		})
+		a.Commit()
+	}
 	for _, pid := range person.order { // profile names, for the people the archive has
 		if (!person.hasMe || pid != person.me) && person.name(pid) != "" {
 			a.HandleName(person.of(pid, true), "telegram", person.name(pid), "profile", 0)
@@ -914,13 +934,69 @@ func telegramMeta(m map[string]any, person *tgPeople) Meta {
 }
 
 // TelegramMedia: the downloaded files (telegram-sync --media), each to its message (a media step).
+// TelegramKeep is how long the store keeps a message once it is in the archive: the files of the
+// last week are downloaded from it at each connection; an update to an older one (a reaction, a pin,
+// a vote) has the message fetched from Telegram again (internal/telegram's refetch).
+const TelegramKeep = 7 * 24 * time.Hour
+
+// TelegramPrune takes out of the store the messages the archive has (their import committed) that
+// are older than TelegramKeep; those of the chats left out of the import stay, not being in it.
+func TelegramPrune(a *archive.Archive) (err error) {
+	defer archive.Recover(&err)
+	if !exists(telegramstore.DB()) {
+		return nil
+	}
+	d := tgStore("")
+	defer d.Close()
+	telegramPrune(a, d, a.Source(telegramSource, telegramstore.DB(), "telegram", telegramstore.Media()))
+	return nil
+}
+
+func telegramPrune(a *archive.Archive, d *sql.DB, src int64) {
+	imported := map[string]bool{}
+	a.Each("SELECT row_key FROM message_origin WHERE source_id = ?", []any{src}, func(scan func(...any)) {
+		var k string
+		scan(&k)
+		imported[k] = true
+	})
+	cutoff := time.Now().Add(-TelegramKeep).Unix()
+	var gone [][2]int64
+	db.Each(d, "SELECT chat_id, id FROM telegram_message WHERE date < ?", []any{cutoff}, func(scan func(...any)) {
+		var k [2]int64
+		scan(&k[0], &k[1])
+		if imported[fmt.Sprintf("%d/%d", k[0], k[1])] {
+			gone = append(gone, k)
+		}
+	})
+	tx, err := d.Begin()
+	if err != nil {
+		panic(err)
+	}
+	defer tx.Rollback()
+	for _, k := range gone {
+		db.Exec(tx, "DELETE FROM telegram_message WHERE chat_id = ? AND id = ?", k[0], k[1])
+	}
+	if err := tx.Commit(); err != nil {
+		panic(err)
+	}
+}
+
 func TelegramMedia(a *archive.Archive, s *Store) {
-	dbPath := telegramstore.DB()
-	if !exists(dbPath) {
+	media := telegramstore.Media()
+	var files []string // <chat>/<message><ext>, or <chat>/<message>-<file id><ext>
+	filepath.WalkDir(media, func(p string, e fs.DirEntry, err error) error {
+		if err == nil && e.Type().IsRegular() && !strings.HasPrefix(e.Name(), ".") {
+			if rel, err := filepath.Rel(media, p); err == nil {
+				files = append(files, filepath.ToSlash(rel))
+			}
+		}
+		return nil
+	})
+	if len(files) == 0 {
 		return
 	}
-	media := telegramstore.Media()
-	src := a.Source(telegramSource, dbPath, "telegram", media)
+	s.Move = true // downloaded into the store: kept there only
+	src := a.Source(telegramSource, telegramstore.DB(), "telegram", media)
 	origins := map[string]int64{}
 	a.Each("SELECT row_key, message_id FROM message_origin WHERE source_id = ?", []any{src}, func(scan func(...any)) {
 		var k string
@@ -928,16 +1004,28 @@ func TelegramMedia(a *archive.Archive, s *Store) {
 		scan(&k, &id)
 		origins[k] = id
 	})
-	d := tgStore(dbPath)
-	defer d.Close()
-	// the name it was sent with (a document's)
-	for _, r := range maps(d, "SELECT chat_id, id, file, (SELECT json_extract(a.value, '$.file_name') "+
-		"FROM json_each(json, '$.media.document.attributes') a "+
-		"WHERE json_extract(a.value, '$._') = 'DocumentAttributeFilename') AS name "+
-		"FROM telegram_message WHERE file IS NOT NULL ORDER BY chat_id, id") {
-		rel := str(r["file"])
-		s.LinkNamed(telegramSource, src, filepath.Join(media, rel), rel, origins[fmt.Sprintf("%v/%v", r["chat_id"], r["id"])],
-			strOrEmpty(r["name"]))
+	var d *sql.DB
+	if exists(telegramstore.DB()) {
+		d = tgStore("")
+		defer d.Close()
+	}
+	sort.Strings(files)
+	for _, rel := range files {
+		chat, rest, ok := strings.Cut(rel, "/")
+		if !ok {
+			continue
+		}
+		id := rest
+		if i := strings.IndexAny(id, "-."); i >= 0 {
+			id = id[:i]
+		}
+		var name sql.NullString // the name it was sent with (a document's), while the store has the message
+		if d != nil {
+			db.Row(d, "SELECT (SELECT json_extract(a.value, '$.file_name') FROM json_each(json, '$.media.document.attributes') a "+
+				"WHERE json_extract(a.value, '$._') = 'DocumentAttributeFilename') FROM telegram_message WHERE chat_id = ? AND id = ?",
+				[]any{chat, id}, &name)
+		}
+		s.LinkNamed(telegramSource, src, filepath.Join(media, filepath.FromSlash(rel)), rel, origins[chat+"/"+id], name.String)
 	}
 }
 

@@ -37,6 +37,7 @@ import (
 
 	"everysaid/internal/archive"
 	"everysaid/internal/db"
+	"everysaid/internal/importers"
 	"everysaid/internal/plugins"
 	"everysaid/internal/plugins/sourcekit"
 )
@@ -318,6 +319,89 @@ func noteReactions(c *plugins.Context, u *tg.UpdateMessageReactions) (err error)
 		return importTelegram(a, out, keys, nil)
 	}}})
 	return err
+}
+
+// refetch brings into the store, from Telegram, those of a chat's messages it no longer keeps (taken
+// out once imported and a week old: importers.TelegramPrune), as they are now, and imports them: an
+// update to one of them (a reaction, a pin, a vote) then has its message to change. A chat left out
+// of the import, a channel's, or one Telegram no longer gives: nothing.
+func refetch(ctx context.Context, c *plugins.Context, cn *conn, chatID int64, ids []int) (err error) {
+	defer db.Recover(&err)
+	if len(ids) == 0 || idSet(currentSettings(c)["skip_chats"])[chatID] {
+		return nil
+	}
+	store, err := openStore(DBPath())
+	if err != nil {
+		return err
+	}
+	var missing []int
+	func() {
+		defer store.Close()
+		for _, id := range ids {
+			if !db.Exists(store, "SELECT 1 FROM telegram_message WHERE chat_id = ? AND id = ?", chatID, id) {
+				missing = append(missing, id)
+			}
+		}
+	}()
+	if len(missing) == 0 {
+		return nil
+	}
+	chat := cn.entity(chatID)
+	if chat == nil {
+		return nil // not among the dialogs: a chat left, or a channel's
+	}
+	peer, err := cn.peer(ctx, chatID)
+	if err != nil {
+		return err
+	}
+	msgs, err := cn.byIDs(ctx, peer, missing)
+	if err != nil {
+		return err
+	}
+	var got []sent
+	for _, m := range msgs {
+		if m == nil {
+			continue
+		}
+		if _, empty := m.(*tg.MessageEmpty); empty {
+			continue
+		}
+		var sender any
+		if id := senderID(m); id != 0 {
+			sender = cn.entity(id)
+		}
+		got = append(got, sent{m, sender})
+	}
+	if len(got) == 0 {
+		return nil
+	}
+	_, err = storeMessages(c, chat, got)
+	return err
+}
+
+// refetchPoll is refetch for the messages of a poll, as the store's telegram_poll names them.
+func refetchPoll(ctx context.Context, c *plugins.Context, cn *conn, pollID int64) (err error) {
+	defer db.Recover(&err)
+	store, err := openStore(DBPath())
+	if err != nil {
+		return err
+	}
+	byChat := map[int64][]int{}
+	func() {
+		defer store.Close()
+		db.Each(store, "SELECT chat_id, id FROM telegram_poll WHERE poll_id = ?", []any{pollID}, func(scan func(...any)) {
+			var chat int64
+			var id int
+			scan(&chat, &id)
+			byChat[chat] = append(byChat[chat], id)
+		})
+	}()
+	for chat, ids := range byChat {
+		if err := refetch(ctx, c, cn, chat, ids); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // notePinned: messages pinned or unpinned in a chat; the stored messages take it, and the archive's
@@ -728,6 +812,11 @@ func settle(ctx context.Context, c *plugins.Context, cn *conn, dialogs []dialog,
 	if err != nil {
 		return err
 	}
+	// what the archive has, a week old, out of the store
+	if _, _, err := sourcekit.RunImporters(c, []sourcekit.Step{{Label: "Telegram store",
+		Run: func(a *archive.Archive, out func(string)) error { return importers.TelegramPrune(a) }}}); err != nil {
+		return err
+	}
 	if err := files.recent(c); err != nil {
 		return err
 	}
@@ -832,19 +921,32 @@ func handlers(c *plugins.Context, cn *conn, d tg.UpdateDispatcher, members func(
 	// a poll's results changed (someone voted): its stored message takes them, and the archive's
 	// notice of the poll follows
 	d.OnMessagePoll(func(ctx context.Context, e tg.Entities, u *tg.UpdateMessagePoll) error {
+		if err := refetchPoll(ctx, c, cn, u.PollID); err != nil {
+			return logged(err)
+		}
 		return logged(notePoll(c, u))
 	})
 	// someone reacted to a message (or changed, or took theirs back): the archive's follow
 	d.OnMessageReactions(func(ctx context.Context, e tg.Entities, u *tg.UpdateMessageReactions) error {
+		if err := refetch(ctx, c, cn, PeerID(u.Peer), []int{u.MsgID}); err != nil {
+			return logged(err)
+		}
 		return logged(noteReactions(c, u))
 	})
 
 	// pinned or unpinned on any device, by anyone
 	d.OnPinnedMessages(func(ctx context.Context, e tg.Entities, u *tg.UpdatePinnedMessages) error {
+		if err := refetch(ctx, c, cn, PeerID(u.Peer), u.Messages); err != nil {
+			return logged(err)
+		}
 		return logged(notePinned(c, PeerID(u.Peer), u.Pinned, u.Messages))
 	})
 	d.OnPinnedChannelMessages(func(ctx context.Context, e tg.Entities, u *tg.UpdatePinnedChannelMessages) error {
-		return logged(notePinned(c, PeerID(&tg.PeerChannel{ChannelID: u.ChannelID}), u.Pinned, u.Messages))
+		chat := PeerID(&tg.PeerChannel{ChannelID: u.ChannelID})
+		if err := refetch(ctx, c, cn, chat, u.Messages); err != nil {
+			return logged(err)
+		}
+		return logged(notePinned(c, chat, u.Pinned, u.Messages))
 	})
 
 	// deleted on any device, by the user or (for everyone) by the others: kept, said deleted
