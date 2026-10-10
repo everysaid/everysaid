@@ -184,6 +184,7 @@ export interface ChatDetail {
   person_id?: number | null;
   conversation_id?: number | null;
   conversations: number[];
+  accounts?: { conversation_id: number; service: string; address_id: number; last_ts: number | null }[];   // a person's: each conversation with their handle on it, the last active first
   last_ts: number;
   pinned: boolean;
   muted: boolean;

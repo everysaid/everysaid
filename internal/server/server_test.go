@@ -326,6 +326,34 @@ func TestSendSaysWhatWent(t *testing.T) {
 	must(t, len(went) == 0, "messages where the plugin cannot say: %v", went)
 }
 
+// A person with two handles on one service: each conversation with its handle, the last active first
+// and taken by default; a message goes to the one asked for.
+func TestSendToOneOfTheirHandles(t *testing.T) {
+	c := newServer(t)
+	c.login()
+	drain()
+	q := c.s.Store.Read()
+	personOf := func(number string) int64 {
+		return db.Int(q, "SELECT pa.person_id FROM person_address pa JOIN address a ON a.id = pa.address_id WHERE a.value = ?", number)
+	}
+	first, second := personOf("+15556660001"), personOf("+15556660002")
+	r := c.post(fmt.Sprintf("/api/people/%d/merge", first), M{"other": second})
+	must(t, r.status == 200, "merge: %d %s", r.status, r.body)
+	chat := fmt.Sprintf("p%d", first)
+	accounts, _ := c.getJSON("/api/chats/" + chat)["accounts"].([]any)
+	must(t, len(accounts) == 2, "accounts: %v", accounts)
+	newer, older := accounts[0].(map[string]any), accounts[1].(map[string]any)
+	must(t, newer["service"] == "whatsapp" && older["service"] == "whatsapp" && num(newer["last_ts"]) > num(older["last_ts"]) &&
+		num(newer["address_id"]) == db.Int(q, "SELECT id FROM address WHERE value = '+15556660002'"), "accounts: %v", accounts)
+
+	r = c.post("/api/chats/"+chat+"/send", M{"text": "unsaid", "service": "whatsapp"})
+	next(t)
+	must(t, r.status == 200 && num(r.json()["conversation_id"]) == num(newer["conversation_id"]), "by default: %d %s", r.status, r.body)
+	r = c.post("/api/chats/"+chat+"/send", M{"text": "unsaid", "service": "whatsapp", "conversation_id": num(older["conversation_id"])})
+	next(t)
+	must(t, r.status == 200 && num(r.json()["conversation_id"]) == num(older["conversation_id"]), "the one asked for: %d %s", r.status, r.body)
+}
+
 // A person looked for on the services their chat has none of: each answer as it comes, then a first
 // message there, which brings the service into the chat; only a person's chat, with a number.
 func TestFindAndFirstMessage(t *testing.T) {

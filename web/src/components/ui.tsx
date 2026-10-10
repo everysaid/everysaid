@@ -186,12 +186,13 @@ export function MenuContent({ children, align = "end", className }: { children: 
   );
 }
 
-export function MenuItem({ children, onSelect, danger, icon }: {
+export function MenuItem({ children, onSelect, danger, icon, title }: {
   children: React.ReactNode; onSelect?: (e: Event) => void; danger?: boolean; icon?: React.ReactNode;   // e.preventDefault(): the menu stays open
+  title?: string;
 }) {
   return (
     <DropdownPrimitive.Item
-      onSelect={onSelect}
+      onSelect={onSelect} title={title}
       className={cn(
         "flex cursor-default select-none items-center gap-2.5 rounded-xl px-3 py-2 text-sm outline-none data-[highlighted]:bg-panel-2",
         danger && "text-danger",
@@ -200,6 +201,29 @@ export function MenuItem({ children, onSelect, danger, icon }: {
       {icon && <span className="text-muted [&_svg]:size-4">{icon}</span>}
       {children}
     </DropdownPrimitive.Item>
+  );
+}
+
+export const MenuSub = DropdownPrimitive.Sub;
+
+/** An item that opens a menu of its own (on hover, a tap or →). */
+export function MenuSubTrigger({ children, title }: { children: React.ReactNode; title?: string }) {
+  return (
+    <DropdownPrimitive.SubTrigger title={title}
+      className="flex cursor-default select-none items-center gap-2.5 rounded-xl px-3 py-2 text-sm outline-none data-[highlighted]:bg-panel-2 data-[state=open]:bg-panel-2">
+      {children}
+    </DropdownPrimitive.SubTrigger>
+  );
+}
+
+export function MenuSubContent({ children, className }: { children: React.ReactNode; className?: string }) {
+  return (
+    <DropdownPrimitive.Portal>
+      <DropdownPrimitive.SubContent sideOffset={4} collisionPadding={8}
+        className={cn("z-50 min-w-48 overflow-hidden rounded-2xl border border-line bg-panel p-1 shadow-xl", className)}>
+        {children}
+      </DropdownPrimitive.SubContent>
+    </DropdownPrimitive.Portal>
   );
 }
 

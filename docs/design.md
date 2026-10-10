@@ -263,7 +263,9 @@ UI (planned); on an iPhone that is not possible at all, and the backup stays.
 - **Nothing per service is fixed in the core or the interface**: each plugin declares it.
   - How a service looks (name, colour, short name, icon as an SVG path, whether it has messages or
     only calls). A chat answers by default through the service it was last active on; one nothing
-    can send to now still shows, with a lock for Send.
+    can send to now still shows, with a lock for Send. Where a person has more than one handle on a
+    service (people merged), the service opens a menu of their handles (a chat's `accounts`), the
+    last active picked; the one picked shows in the field, and the message goes to its conversation.
   - How much the names it brings are trusted (`name_weights`, by kind: its copy of the user's
     address book, a chat's name, a name people chose); an address book declares `contacts`, the
     highest by default.
