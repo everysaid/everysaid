@@ -33,6 +33,7 @@ import (
 	"strings"
 
 	"everysaid/internal/archive"
+	"everysaid/internal/db"
 	"everysaid/internal/i18n"
 )
 
@@ -205,6 +206,18 @@ func (s *Store) LinkNamed(source string, sourceID int64, path, rel string, messa
 	s.held(path, digest)
 }
 
+// StoredFile is a message's file in the archive's store, the first linked ("" for none there).
+func StoredFile(q db.Querier, messageID int64) string {
+	var rel string
+	if db.Row(q, "SELECT md.path FROM attachment a JOIN media md ON md.sha256 = a.sha256 "+
+		"WHERE a.message_id = ? ORDER BY a.rowid LIMIT 1", []any{messageID}, &rel) {
+		if p := filepath.Join(archive.MediaRoot(), filepath.FromSlash(rel)); isFile(p) {
+			return p
+		}
+	}
+	return ""
+}
+
 func byKey(a *archive.Archive, service string) map[string]int64 {
 	out := map[string]int64{}
 	a.Each("SELECT key, id FROM message WHERE service_id = ? AND key IS NOT NULL", []any{a.Service.ID(service)},
@@ -297,6 +310,7 @@ func MediaWhatsAppBridge(database string) MediaStep {
 			return // a bridge from before it downloaded files
 		}
 		folder := filepath.Dir(database)
+		s.Move = true // the bridge's downloads: kept in the store only
 		src := a.Source("whatsapp-bridge", database, "whatsapp-bridge", folder)
 		origins, messages := byOrigin(a, "whatsapp-bridge"), byKey(a, "whatsapp")
 		absFolder, _ := filepath.Abs(folder)

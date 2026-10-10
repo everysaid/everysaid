@@ -248,6 +248,10 @@ func TestTheFilesTheBridgeDownloadedGoToTheirMessages(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(root, rows[0]["path"].(string)))
 	must(t, err)
 	eq(t, "file", string(b), "a picture")
+	// taken into the store: the bridge's folder keeps nothing of it
+	if _, err := os.Stat(filepath.Join(dir, rel)); !os.IsNotExist(err) {
+		t.Fatalf("still in the bridge's folder: %v", err)
+	}
 }
 
 func TestABridgeFromBeforeHasNoFilesToGive(t *testing.T) {

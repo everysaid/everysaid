@@ -20,6 +20,7 @@ import (
 	"everysaid/internal/db"
 	"everysaid/internal/errs"
 	"everysaid/internal/i18n"
+	"everysaid/internal/importers"
 	"everysaid/internal/keys"
 	"everysaid/internal/plugins"
 	"everysaid/internal/plugins/sourcekit"
@@ -454,6 +455,9 @@ func (p Plugin) FetchMedia(ctx context.Context, c *plugins.Context, messageID in
 		"WHERE m.id = ? AND s.name = 'whatsapp'", []any{messageID}, &key) || key.String == "" {
 		return "", nil
 	}
+	if p := importers.StoredFile(c.Store().Read(), messageID); p != "" {
+		return p, nil
+	}
 	path, _ := paths(c)
 	if _, err := os.Stat(path); err != nil {
 		return "", nil
@@ -468,6 +472,13 @@ func (p Plugin) FetchMedia(ctx context.Context, c *plugins.Context, messageID in
 	for _, jid := range chats {
 		got, err := b.Download(key.String, jid)
 		if err == nil && got != "" {
+			// into the archive's store at once, where it stays the only copy
+			if err := runImport(c); err != nil {
+				return "", err
+			}
+			if p := importers.StoredFile(c.Store().Read(), messageID); p != "" {
+				return p, nil
+			}
 			return got, nil
 		}
 		last = err
