@@ -146,7 +146,7 @@ func TestSameArchiveAsPython(t *testing.T) {
 		rows.Close()
 		w := want.Tables[table]
 		if got := hex.EncodeToString(h.Sum(nil)); n != w.Rows || got != w.SHA256 {
-			t.Errorf("table %s: %d rows (%s), want %d (%s)", table, n, got[:12], w.Rows, w.SHA256[:12])
+			t.Errorf("table %s: %d rows (%s), want %d (%s)", table, n, got, w.Rows, w.SHA256[:12])
 		}
 	}
 	var settings string
