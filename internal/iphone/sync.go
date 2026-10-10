@@ -12,6 +12,7 @@ import (
 
 	"everysaid/internal/config"
 	"everysaid/internal/db"
+	"everysaid/internal/importers"
 	"everysaid/internal/phones"
 )
 
@@ -36,9 +37,12 @@ var media = []struct {
 	{"viber-media", "AppDomain-com.viber",
 		[]string{"Documents/Attachments/", "Documents/FileMessages/", "Documents/VoiceMessages/"}, "Documents/"},
 	{"whatsapp-media", "AppDomainGroup-group.net.whatsapp.WhatsApp.shared", []string{"Message/Media/"}, "Message/Media/"},
+	// the files of SMS, MMS and iMessage
+	{"sms-media", "MediaDomain", []string{"Library/SMS/Attachments/"}, "Library/SMS/Attachments/"},
 }
 
-var archiveSources = map[string]string{"whatsapp-media": "iphone/whatsapp", "viber-media": "iphone/viber"}
+var archiveSources = map[string]string{"whatsapp-media": "iphone/whatsapp", "viber-media": "iphone/viber",
+	"sms-media": "iphone/sms"}
 
 // SyncOptions are what the app gives a sync (iphone-sync.py --password-stdin).
 type SyncOptions struct {
@@ -290,7 +294,19 @@ func messageFiles(out string) (wanted map[string]map[string]bool, err error) {
 	}
 	defer vb.Close()
 	names := db.Strs(vb, "SELECT ZNAME FROM ZATTACHMENT WHERE ZNAME IS NOT NULL")
-	wanted = map[string]map[string]bool{"whatsapp-media": {}, "viber-media": {}}
+	wanted = map[string]map[string]bool{"whatsapp-media": {}, "viber-media": {}, "sms-media": {}}
+	if sms, err := db.ReadOnly(filepath.Join(out, "sms.db")); err == nil {
+		func() {
+			defer sms.Close()
+			defer func() { recover() }() // an sms.db without attachments' tables: none of them
+			for _, f := range db.Strs(sms, "SELECT a.filename FROM attachment a JOIN message_attachment_join j "+
+				"ON j.attachment_id = a.ROWID WHERE a.filename IS NOT NULL") {
+				if rel := importers.SMSAttachment(f); rel != "" {
+					wanted["sms-media"][rel] = true
+				}
+			}
+		}()
+	}
 	for _, p := range db.Strs(wa, "SELECT ZMEDIALOCALPATH FROM ZWAMEDIAITEM WHERE ZMEDIALOCALPATH IS NOT NULL") {
 		wanted["whatsapp-media"][strings.TrimPrefix(p, "Media/")] = true
 	}

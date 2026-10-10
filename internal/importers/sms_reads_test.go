@@ -1,10 +1,12 @@
 package importers
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
 	"everysaid/internal/archive"
+	"everysaid/internal/config"
 	"everysaid/internal/db"
 )
 
@@ -82,4 +84,49 @@ func TestAndroidMMSOwnPlaceholder(t *testing.T) {
 	if n := a.Int("SELECT count(*) FROM address WHERE value = 'insert-address-token'"); n != 0 {
 		t.Errorf("the placeholder is an address")
 	}
+}
+
+// An iMessage's picture, extracted from the backup's SMS attachments, is linked to its message by its
+// guid, under the name it was sent with; a link's preview is not a file of the message.
+func TestSMSAttachmentsLinked(t *testing.T) {
+	t.Cleanup(config.Load)
+	t.Setenv("EVERYSAID_CACHE", t.TempDir())
+	t.Setenv("EVERYSAID_DATA", t.TempDir())
+	config.Load()
+	a, _ := newArchive(t)
+	data := archive.IphoneData()
+	must(t, os.MkdirAll(data, 0o700))
+	path := filepath.Join(data, "sms.db")
+	d := sqliteAt(t, path, `
+CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, style INTEGER, display_name TEXT);
+CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
+CREATE TABLE attachment (ROWID INTEGER PRIMARY KEY, mime_type TEXT, filename TEXT, transfer_name TEXT);
+CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
+CREATE TABLE message (ROWID INTEGER PRIMARY KEY, guid TEXT, date INTEGER, is_from_me INTEGER, service TEXT,
+    text TEXT, attributedBody BLOB, handle_id INTEGER, cache_has_attachments INTEGER,
+    associated_message_type INTEGER, associated_message_guid TEXT, associated_message_emoji TEXT, item_type INTEGER,
+    is_read INTEGER, date_read INTEGER, is_delivered INTEGER, date_delivered INTEGER);`)
+	db.Exec(d, "INSERT INTO handle VALUES (1, '+15557770001')")
+	db.Exec(d, "INSERT INTO chat VALUES (1, 'iMessage;-;+15557770001', 45, NULL)")
+	db.Exec(d, "INSERT INTO chat_handle_join VALUES (1, 1)")
+	db.Exec(d, "INSERT INTO chat_message_join VALUES (1, 1)")
+	db.Exec(d, "INSERT INTO message VALUES (1, 'PIC1', ?, 0, 'iMessage', NULL, NULL, 1, 1, 0, NULL, NULL, 0, 1, 0, 0, 0)",
+		(int64(1_790_000_000)-archive.AppleEpoch)*1_000_000_000)
+	rel := "ab/11/PIC1-GUID/IMG_0001.jpg"
+	db.Exec(d, "INSERT INTO attachment VALUES (1, 'image/jpeg', ?, 'IMG_0001.jpg'), (2, 'text/plain', ?, 'x')",
+		"~/Library/SMS/Attachments/"+rel, "~/Library/SMS/Attachments/ab/11/PIC1-GUID/x.pluginPayloadAttachment")
+	db.Exec(d, "INSERT INTO message_attachment_join VALUES (1, 1), (1, 2)")
+	file := filepath.Join(data, "sms-media", filepath.FromSlash(rel))
+	must(t, os.MkdirAll(filepath.Dir(file), 0o700))
+	must(t, os.WriteFile(file, []byte("jpeg"), 0o600))
+
+	must(t, SMS(a, nil, SMSOptions{IphoneDB: path, Exports: []archive.AndroidExport{}}))
+	root := t.TempDir()
+	must(t, Media(a, nil, func(a *archive.Archive, s *Store) { s.Root = root; MediaSMSIphone(a, s) }))
+	eq(t, "linked", db.Strs(a.Tx(), "SELECT t.name FROM attachment t JOIN message m ON m.id = t.message_id WHERE m.key = 'PIC1'"),
+		[]string{"IMG_0001.jpg"})
+	eq(t, "preview", SMSAttachment("~/Library/SMS/Attachments/ab/11/PIC1-GUID/x.pluginPayloadAttachment"), "")
+	eq(t, "outside", SMSAttachment("~/Library/SMS/Attachments/../sms.db"), "")
 }
