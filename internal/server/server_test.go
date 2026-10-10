@@ -129,6 +129,22 @@ func TestLibraryFolder(t *testing.T) {
 	must(t, r.json()["already"] == true, "already there: %s", r.body)
 	r = c.post("/api/media/0000/library", M{"instance_id": iid})
 	must(t, r.status == 409 && r.code() == "file_gone", "a file the archive does not have: %d %s", r.status, r.body)
+
+	// the copy here removed, the library having it: the file is then shown from there
+	for _, m := range items(c.getJSON("/api/media")) {
+		if other := m["sha256"].(string); other != sha && m["available"] == "local" {
+			r = c.post("/api/media/"+other+"/release", nil)
+			must(t, r.status == 409 && r.code() == "media.only_copy", "not in a library: kept: %d %s", r.status, r.body)
+			break
+		}
+	}
+	r = c.post("/api/media/"+sha+"/release", nil)
+	must(t, r.status == 200, "released: %d %s", r.status, r.body)
+	must(t, c.s.Host.LocalFile(sha) == "", "the copy here is gone")
+	orig := c.get("/api/media/" + sha + "/original")
+	must(t, orig.status == 200, "shown from the library: %d", orig.status)
+	r = c.post("/api/media/"+sha+"/release", nil)
+	must(t, r.status == 409 && r.code() == "file_gone", "again: %d %s", r.status, r.body)
 }
 
 func dialEvents(c *client) (*websocket.Conn, *http.Response, error) {

@@ -59,6 +59,19 @@ export function Lightbox({ items, index, onClose, onIndex, onOpenChat }: {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  // the copy here removed once the library has it: asked, then asked again ("sure?"), each time
+  const [sure, setSure] = useState(false);
+  useEffect(() => setSure(false), [item?.sha256]);
+  const release = useMutation({
+    mutationFn: () => api.post(`/api/media/${item!.sha256}/release`, {}),
+    onSuccess: () => {
+      setSure(false);
+      toast.success(t("media.released"));
+      qc.invalidateQueries({ queryKey: ["media"] });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   if (!item) return null;
   const video = item.mime?.startsWith("video/");
   return (
@@ -94,6 +107,11 @@ export function Lightbox({ items, index, onClose, onIndex, onOpenChat }: {
             <Choice active={decision === "keep"} onClick={() => decide.mutate(decision === "keep" ? null : "keep")} icon={<Check className="size-4" />}>{t("media.keep")}</Choice>
             <Choice active={decision === "library"} onClick={() => library.mutate()} icon={<Archive className="size-4" />} busy={library.isPending}>{t("media.toLibrary")}</Choice>
             <Choice active={decision === "remove"} onClick={() => decide.mutate(decision === "remove" ? null : "remove")} icon={<Trash2 className="size-4" />} danger>{t("media.remove")}</Choice>
+            {decision === "library" && item.available === "local" && (
+              <Choice active={sure} onClick={() => (sure ? release.mutate() : setSure(true))} icon={<Trash2 className="size-4" />} danger busy={release.isPending}>
+                {t(sure ? "media.releaseSure" : "media.release")}
+              </Choice>
+            )}
           </div>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>

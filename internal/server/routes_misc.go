@@ -137,6 +137,16 @@ func (s *Server) miscRoutes() {
 		return out, nil
 	})
 
+	// the archive's own copy of a file the library holds, removed on the user's word (asked each time)
+	h("POST /api/media/{sha}/release", bodyNone, func(q *req) (any, error) {
+		sha := q.r.PathValue("sha")
+		if err := s.Host.ReleaseLocal(sha); err != nil {
+			return nil, passUser(err, func(e error) error { return failed(409, e.Error()) })
+		}
+		s.Auth.Log(&q.uid, "local copy removed, in the library", pyCut(sha, 12))
+		return M{"released": true}, nil
+	})
+
 	h("GET /api/media/{sha}/{size}", bodyNone, func(q *req) (any, error) {
 		sha, size := q.r.PathValue("sha"), q.r.PathValue("size")
 		if (size != "thumb" && size != "preview" && size != "original") || !isAlnum(sha) {
