@@ -163,3 +163,49 @@ test("a sender's name in a group opens their chat", async ({ page }, info) => {
   await expect(page).toHaveURL(/\/chat\/p\d+/);
   await expect(page.locator("[data-via], [data-find-first]")).toBeVisible();
 });
+
+// Someone with two numbers on one service (the demo's Νίκος Γεωργίου, merged here and split again
+// afterwards): the service opens a menu of their handles, the last active ticked; another picked says
+// itself in the field, and the message goes to that conversation.
+test("a service where they have two handles: a menu of them, and the one picked is the one written to", async ({ page }, info) => {
+  await signedIn(page, info.project.name);
+  const h = { "X-Everysaid": "1", "Content-Type": "application/json" };
+  const chat = await page.evaluate(async (h) => {
+    const people = (await (await fetch(`/api/people?q=${encodeURIComponent("Γεωργίου")}`, { headers: h })).json()).items
+      .filter((p: any) => p.name === "Νίκος Γεωργίου");
+    if (people.length < 2) return null;
+    const r = await fetch(`/api/people/${people[0].id}/merge`, { method: "POST", headers: h, body: JSON.stringify({ other: people[1].id }) });
+    if (r.status !== 200) return null;
+    const d = await (await fetch(`/api/chats/p${people[0].id}`, { headers: h })).json();
+    const label = (a: any) => d.person.handles.find((x: any) => x.address_id === a.address_id).label;
+    const wa = d.accounts.filter((a: any) => a.service === "whatsapp");
+    return { id: d.id as string, newer: label(wa[0]), older: label(wa[1]), olderConv: wa[1].conversation_id as number };
+  }, h);
+  test.skip(!chat, "no two people to merge");
+  try {
+    await page.goto(`/chat/${chat!.id}`);
+    const via = page.locator("[data-via]");
+    await via.click();
+    await page.getByRole("menuitem", { name: "WhatsApp" }).click();             // opens their handles
+    const handles = page.getByRole("menu").last().getByRole("menuitem");
+    await expect(handles).toHaveCount(2);
+    await expect(handles.filter({ hasText: chat!.newer }).locator("svg")).toHaveCount(1);   // the last active, ticked
+    await handles.filter({ hasText: chat!.older }).click();
+    const field = page.locator("[data-composer-body] textarea");
+    await expect(field).toHaveAttribute("placeholder", new RegExp(chat!.older.replace(/[+]/g, "\\+")));
+    await expect(via).toHaveAttribute("title", new RegExp(chat!.older.replace(/[+]/g, "\\+")));
+    const text = `quiet: to the older number ${info.project.name} ${Date.now()}`;
+    await field.fill(text);
+    const went = page.waitForResponse((r) => r.url().endsWith("/send") && r.request().method() === "POST");
+    await page.locator("[data-send]").click();
+    expect((await (await went).json()).conversation_id).toBe(chat!.olderConv);
+  } finally {
+    const split = await page.evaluate(async (h) => {
+      const found = (await (await fetch("/api/people?q=15550100020", { headers: h })).json()).items[0];
+      const p = await (await fetch(`/api/people/${found.id}`, { headers: h })).json();
+      const second = p.handles.find((x: any) => x.value === "+15550100020");
+      return (await fetch(`/api/addresses/${second.address_id}/split`, { method: "POST", headers: h })).status;
+    }, h);
+    expect(split).toBe(200);
+  }
+});

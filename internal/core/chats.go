@@ -1103,12 +1103,28 @@ func GetChat(s *Store, chatID string) M {
 			}
 		}
 	}
-	if c.Type == "person" {
-		out["person"] = Person(s, c.PersonID)
-		return out
-	}
 	q := s.Read()
 	ppl := PeopleOf(s)
+	if c.Type == "person" {
+		out["person"] = Person(s, c.PersonID)
+		// each conversation with their handle on it, the last active first: where a message may go
+		// when they have more than one handle on a service
+		accounts := []M{}
+		if len(convs) > 0 {
+			db.Each(q, "SELECT c.id, c.service_id, cm.address_id, (SELECT max(ts) FROM message WHERE conversation_id = c.id) "+
+				"FROM conversation c JOIN conversation_member cm ON cm.conversation_id = c.id "+
+				"WHERE c.id IN ("+db.Marks(len(convs))+") ORDER BY 4 DESC, c.id", db.Args(convs), func(scan func(...any)) {
+				var id, sid, a int64
+				var last sql.NullInt64
+				scan(&id, &sid, &a, &last)
+				if !ppl.OwnAddresses[a] {
+					accounts = append(accounts, M{"conversation_id": id, "service": lk.Service[sid], "address_id": a, "last_ts": nullInt(last)})
+				}
+			})
+		}
+		out["accounts"] = accounts
+		return out
+	}
 	members := []M{}
 	db.Each(q, "SELECT cm.address_id, group_concat(c.service_id) FROM conversation_member cm "+
 		"JOIN conversation c ON c.id = cm.conversation_id WHERE cm.conversation_id IN ("+db.Marks(len(convs))+") "+

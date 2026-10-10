@@ -4,9 +4,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import * as Popover from "@radix-ui/react-popover";
-import { ArrowDown, ArrowLeft, BellOff, CalendarDays, Check, ChevronDown, CornerUpLeft, Archive, ArchiveRestore, FileText, Info, Lock, MoreVertical, Paperclip, Pencil, Pin, PinOff, Search, SendHorizontal, Smile, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, BellOff, CalendarDays, Check, ChevronDown, ChevronRight, CornerUpLeft, Archive, ArchiveRestore, FileText, Info, Lock, MoreVertical, Paperclip, Pencil, Pin, PinOff, Search, SendHorizontal, Smile, X } from "lucide-react";
 import { toast } from "sonner";
-import { api, qs, type Attachment, type ChatDetail, type Member, type MessageItem, type StreamItem, type StreamPage } from "@/lib/api";
+import { api, qs, type Attachment, type ChatDetail, type Handle, type Member, type MessageItem, type StreamItem, type StreamPage } from "@/lib/api";
 import { useBack } from "@/lib/back";
 import { bytes, dateOnly, dayLabel, isoDay, sameDay } from "@/lib/format";
 import { onEvent } from "@/lib/events";
@@ -15,7 +15,7 @@ import { draft, keepDraft, keepLastChat, keepPlace, place } from "@/lib/memory";
 import { service } from "@/lib/services";
 import { cn } from "@/lib/utils";
 import { chatRoute } from "@/router";
-import { Avatar, Button, Center, Dialog, IconButton, Menu, MenuContent, MenuItem, MenuTrigger, ServiceBadge, ServiceIcon, Spinner, Textarea } from "@/components/ui";
+import { Avatar, Button, Center, Dialog, IconButton, Menu, MenuContent, MenuItem, MenuSub, MenuSubContent, MenuSubTrigger, MenuTrigger, ServiceBadge, ServiceIcon, Spinner, Textarea } from "@/components/ui";
 import { Bubble, CallLine, SystemLine } from "@/components/Message";
 import { Lightbox, type LightboxItem } from "@/components/Lightbox";
 import { ChatInfo } from "@/components/ChatInfo";
@@ -266,7 +266,8 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   // sending: the message shows at once, at the end, as being sent (the field is free for the next
   // one); it is replaced by itself when it arrives, or by what the answer says went, or marked as
   // not sent
-  const send = useCallback(async (body: string, service: string | null, answered: MessageItem | null, mentions: Mentioned[], file: File | null) => {
+  const send = useCallback(async (body: string, service: string | null, answered: MessageItem | null, mentions: Mentioned[], file: File | null,
+    conversationId: number | null) => {
     if (hasNewer) navigate({ to: "/chat/$chatId", params: { chatId }, search: { hide } });
     const id = -Date.now() - Math.random();
     const mark = (status: string, conversation_id = 0) => setItems((prev) => prev.map((i) => (i.type === "message" && i.id === id
@@ -282,7 +283,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
     }]);
     // kept on this device until the server has it: if it cannot be reached, it waits there (Pending)
     const unsent: Unsent = { id: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`, chatId, text: body,
-      service: answered ? answered.service : service, replyTo: answered?.id ?? null,
+      service: answered ? answered.service : service, conversationId: answered ? null : conversationId, replyTo: answered?.id ?? null,
       mentions: mentions.map((m) => ({ start: m.start, length: m.length, address_id: m.address_id })),
       file, fileName: file?.name ?? null, createdAt: Date.now(), state: "waiting", error: null };
     const gone = () => setItems((prev) => prev.filter((i) => !(i.type === "message" && i.id === id)));
@@ -573,6 +574,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
         {detail.data && (
           <Composer services={[...detail.data.services.filter((s) => service(s).messages), ...found]} sendable={sendable}
             findable={!!detail.data.findable} reach={detail.data.reach ?? {}} replyable={detail.data.replyable} missing={detail.data.unsendable}
+            accounts={detail.data.accounts ?? []} handles={detail.data.person?.handles ?? []}
             mentionable={isGroup ? detail.data.mentionable ?? [] : []} fileable={detail.data.fileable ?? []} members={detail.data.members ?? []}
             chatId={chatId} onSend={send} replyTo={replyTo} onCancelReply={() => setReplyTo(null)}
             editing={editing} onEdit={edit} onCancelEdit={() => setEditing(null)}
@@ -726,13 +728,16 @@ export function placeMentions(text: string, members: { label: string; address_id
  * (or answer a given message in); mentionable / fileable: those where people of the group can be named
  * with @ / a file sent; missing: why a source cannot send to one now. preferred: where the chat was last
  * active, the way to answer until the user picks another. One it cannot send through still shows,
- * closed, with a lock for Send. */
-function Composer({ chatId, services, sendable, replyable, mentionable, fileable, members, missing, preferred, findable, reach, onSend, replyTo, onCancelReply, editing, onEdit, onCancelEdit }: {
+ * closed, with a lock for Send. accounts: a person's conversations with their handle on each (handles:
+ * how each is written); a service where they have more than one opens a menu of them, the last active
+ * picked until the user picks another. */
+function Composer({ chatId, services, sendable, replyable, mentionable, fileable, members, missing, preferred, findable, reach, accounts, handles, onSend, replyTo, onCancelReply, editing, onEdit, onCancelEdit }: {
   chatId: string; services: string[]; sendable: string[]; replyable: string[]; mentionable: string[]; fileable: string[];
   findable: boolean; reach: Record<string, string>;
+  accounts: NonNullable<ChatDetail["accounts"]>; handles: Handle[];
   members: Member[]; missing: Record<string, string>;
   preferred?: string | null;
-  onSend: (text: string, service: string | null, replyTo: MessageItem | null, mentions: Mentioned[], file: File | null) => void;
+  onSend: (text: string, service: string | null, replyTo: MessageItem | null, mentions: Mentioned[], file: File | null, conversationId: number | null) => void;
   replyTo: MessageItem | null; onCancelReply: () => void;
   editing: MessageItem | null; onEdit: (m: MessageItem, text: string) => void; onCancelEdit: () => void;
 }) {
@@ -744,6 +749,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   const [text, setText] = useState(() => draft(chatId));       // what was left unsent here, kept
   useEffect(() => { if (!editing) keepDraft(chatId, text); }, [chatId, text, editing]);
   const [svc, setSvc] = useState<string | null>(null);
+  const [conv, setConv] = useState<number | null>(null);      // the handle picked, where the service has more than one
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -782,6 +788,14 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
     el.style.height = `${Math.min(el.scrollHeight, 180)}px`;
   }, [text]);
   const via = editing?.service ?? replyTo?.service ?? svc ?? "";          // an answer goes where the message came from
+  const accountsOf = (s: string) => accounts.filter((a) => a.service === s);
+  const handleOf = (a: { address_id: number }) => handles.find((h) => h.address_id === a.address_id)?.label ?? "";
+  // their handle it goes to, where they have more than one on the service: an answer's own, else the one picked
+  const fixed = editing ?? replyTo;
+  const several = accountsOf(via);
+  const account = several.length < 2 ? null
+    : several.find((a) => a.conversation_id === (fixed ? fixed.conversation_id : conv)) ?? (fixed ? null : several[0]);
+  const viaName = account ? `${service(via).name} · ${handleOf(account)}` : service(via).name;
   // "@" and what follows it, up to the caret: whom to name
   const asked = useMemo(() => {
     if (!mentionable.includes(via) || noList) return null;
@@ -857,7 +871,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
     setText("");                        // free for the next one at once
     setFile(null);
     const named = members.filter((m) => m.name && m.services.includes(via)).map((m) => ({ label: `@${m.name}`, address_id: m.address_id }));
-    onSend(body, svc, replyTo, mentionable.includes(via) ? placeMentions(body, named) : [], file);
+    onSend(body, svc, replyTo, mentionable.includes(via) ? placeMentions(body, named) : [], file, account?.conversation_id ?? null);
     onCancelReply();
     ref.current?.focus();
   };
@@ -912,7 +926,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
         <div data-composer-body className="flex min-w-0 flex-1 items-end rounded-3xl bg-panel-2 pr-1">
           <Menu>
             <MenuTrigger asChild disabled={!!replyTo || !!editing}>
-              <button data-via={via} aria-label={t("chat.sendVia")} title={`${t("chat.sendVia")} ${service(via).name}`}
+              <button data-via={via} aria-label={t("chat.sendVia")} title={`${t("chat.sendVia")} ${viaName}`}
                 className="mb-1 ml-1 flex h-9 shrink-0 items-center gap-0.5 rounded-full pl-2 pr-1 hover:bg-panel disabled:hover:bg-transparent data-[state=open]:bg-panel">
                 <ServiceIcon id={via} className="size-5" />
                 {!replyTo && !editing && (services.length > 1 || findable) && <ChevronDown className="size-3.5 text-muted" />}
@@ -920,15 +934,34 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
             </MenuTrigger>
             <MenuContent align="start" className="w-60">
               <div className="px-3 pb-1 pt-1.5 text-xs font-medium text-muted">{t("chat.sendVia")}</div>
-              {services.map((s) => (
-                <MenuItem key={s} onSelect={() => { picked.current = true; setSvc(s); ref.current?.focus(); }}>
-                  <ServiceIcon id={s} className="size-5" />
-                  <span className="flex-1">{service(s).name}</span>
-                  {/* each in its own place, there or not, so neither moves */}
-                  <span className="grid size-4 place-items-center">{!sendable.includes(s) && <Lock className="size-3.5 text-muted" aria-label={t("chat.locked")} />}</span>
-                  <span className="grid size-4 place-items-center">{s === svc && <Check className="size-4 text-accent" />}</span>
-                </MenuItem>
-              ))}
+              {services.map((s) => {
+                const row = (
+                  <>
+                    <ServiceIcon id={s} className="size-5" />
+                    <span className="flex-1">{service(s).name}</span>
+                    {/* each in its own place, there or not, so neither moves */}
+                    <span className="grid size-4 place-items-center">{!sendable.includes(s) && <Lock className="size-3.5 text-muted" aria-label={t("chat.locked")} />}</span>
+                    <span className="grid size-4 place-items-center">{s === svc && <Check className="size-4 text-accent" />}</span>
+                  </>
+                );
+                const pick = (c: number | null) => { picked.current = true; setSvc(s); setConv(c); ref.current?.focus(); };
+                const theirs = accountsOf(s);
+                if (theirs.length < 2) return <MenuItem key={s} onSelect={() => pick(null)}>{row}</MenuItem>;
+                return (
+                  <MenuSub key={s}>
+                    <MenuSubTrigger>{row}<ChevronRight className="size-4 text-muted" /></MenuSubTrigger>
+                    <MenuSubContent className="max-w-80">
+                      {theirs.map((a) => (
+                        <MenuItem key={a.conversation_id} title={`${service(s).name} · ${handleOf(a)}`} onSelect={() => pick(a.conversation_id)}>
+                          <span data-account={a.conversation_id} className="min-w-0 flex-1 truncate">{handleOf(a)}</span>
+                          {!!a.last_ts && <span className="text-xs text-muted">{dateOnly(a.last_ts)}</span>}
+                          <span className="grid size-4 place-items-center">{s === svc && a === account && <Check className="size-4 text-accent" />}</span>
+                        </MenuItem>
+                      ))}
+                    </MenuSubContent>
+                  </MenuSub>
+                );
+              })}
               {Object.entries(reach).filter(([s, v]) => v !== "found" && !services.includes(s)).map(([s, v]) => (
                 <div key={s} data-reach={s} className="flex items-center gap-2 px-3 py-1.5 text-sm text-muted">
                   <ServiceIcon id={s} className="size-5 opacity-60" />
@@ -976,7 +1009,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
                 go();
               }
             }}
-            placeholder={!can ? t("chat.cannotSend", { service: service(via).name }) : file ? t("chat.caption") : t("chat.messageVia", { service: service(via).name })}
+            placeholder={!can ? t("chat.cannotSend", { service: service(via).name }) : file ? t("chat.caption") : t("chat.messageVia", { service: viaName })}
             className="max-h-44 border-0 bg-transparent py-2.5 pl-2 focus:ring-0 focus-visible:outline-none disabled:cursor-not-allowed"
           />
           {can && (

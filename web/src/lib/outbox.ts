@@ -11,6 +11,7 @@ export interface Unsent {
   chatId: string;
   text: string;
   service: string | null;
+  conversationId?: number | null;   // through this conversation of the chat (their handle, where they have more than one on the service)
   replyTo: number | null;
   mentions: { start: number; length: number; address_id: number }[];
   file: Blob | null;
@@ -95,12 +96,13 @@ export function sendUnsent(u: Unsent): Promise<Went> {
     form.append("text", u.text);
     form.append("client_id", u.id);
     if (u.service) form.append("service", u.service);
+    if (u.conversationId) form.append("conversation_id", String(u.conversationId));
     if (u.replyTo) form.append("reply_to", String(u.replyTo));
     if (u.mentions.length) form.append("mentions", JSON.stringify(u.mentions));
     form.append("file", u.file, u.fileName ?? "file");
     return api.form(`/api/chats/${u.chatId}/send`, form);
   }
-  return api.post(`/api/chats/${u.chatId}/send`, { text: u.text, client_id: u.id, service: u.service, reply_to: u.replyTo ?? undefined,
+  return api.post(`/api/chats/${u.chatId}/send`, { text: u.text, client_id: u.id, service: u.service, conversation_id: u.conversationId ?? undefined, reply_to: u.replyTo ?? undefined,
     mentions: u.mentions.length ? u.mentions : undefined });
 }
 
