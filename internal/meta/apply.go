@@ -25,11 +25,21 @@ func writer(a *archive.Archive, c *plugins.Context, service string) *importers.M
 	return w
 }
 
-// applied is what writing ops found: of each history page, whether all of it was new; the files
-// to download, of the messages new to the archive (or still without them).
+// applied is what writing ops found: which messages were new to the archive; the files to
+// download, of the messages new to it (or still without them).
 type applied struct {
-	allNew []bool
-	files  []pendingFile
+	isNew map[string]bool
+	files []pendingFile
+}
+
+// allNew says whether all of a page's messages were new (none: not so).
+func (a applied) allNew(ids []string) bool {
+	for _, id := range ids {
+		if !a.isNew[id] {
+			return false
+		}
+	}
+	return len(ids) > 0
 }
 
 // apply writes ops into the archive.
@@ -43,6 +53,21 @@ func (s *liveSession) apply(o *ops) (out applied, err error) {
 	for _, t := range o.threads {
 		if t.Type != table.UNKNOWN_THREAD_TYPE {
 			s.noteThread(t.Key, threadInfo{Type: int64(t.Type)})
+		}
+	}
+	for _, t := range o.igThreads {
+		s.noteThread(t.Key, threadInfo{IGID: t.IGID, IGThread: t.IGThread})
+	}
+	for _, r := range o.igReactions {
+		if err := noteReaction(s.c.ID, r.LogID, r.Thread, r.Message, r.Sender); err != nil {
+			s.c.Logf("keys.db: %v", err)
+		}
+	}
+	for _, u := range o.igUnreacts { // a reaction taken away, by its id alone where it names no one
+		if u.Sender != 0 {
+			o.reactions = append(o.reactions, s.tr.reaction(u.Thread, u.Message, u.Sender, ""))
+		} else if thread, message, sender := reactionOf(s.c.ID, u.LogID); message != "" {
+			o.reactions = append(o.reactions, s.tr.reaction(thread, message, fbid(sender), ""))
 		}
 	}
 	_, _, err = sourcekit.RunImporters(s.c, []sourcekit.Step{{Label: liveLabel(s.service), Run: func(a *archive.Archive, _ func(string)) error {
@@ -71,6 +96,7 @@ func (s *liveSession) apply(o *ops) (out applied, err error) {
 			w.Member(m.Thread, m.Who)
 		}
 		isNew := map[string]bool{}
+		out.isNew = isNew
 		for _, m := range o.messages {
 			mid, added := w.Add(m)
 			isNew[m.ID] = added
@@ -82,13 +108,6 @@ func (s *liveSession) apply(o *ops) (out applied, err error) {
 			if isNew[f.Message+"\x00file"] {
 				out.files = append(out.files, f)
 			}
-		}
-		for _, r := range o.ranges {
-			all := len(r.IDs) > 0
-			for _, id := range r.IDs {
-				all = all && isNew[id]
-			}
-			out.allNew = append(out.allNew, all)
 		}
 		for _, r := range o.reactions {
 			w.React(r.Thread, r.Message, r.By, r.Mine, r.Emoji)
@@ -137,5 +156,6 @@ func hasFile(a *archive.Archive, mid int64) bool {
 
 func (o *ops) empty() bool {
 	return len(o.contacts)+len(o.threads)+len(o.messages)+len(o.reactions)+len(o.edits)+len(o.deletes)+len(o.reads)+
-		len(o.ownReads)+len(o.mutes)+len(o.titles)+len(o.members)+len(o.hybrid)+len(o.readKeys)+len(o.ownReadKeys) == 0
+		len(o.ownReads)+len(o.mutes)+len(o.titles)+len(o.members)+len(o.hybrid)+len(o.readKeys)+len(o.ownReadKeys)+
+		len(o.igThreads)+len(o.igReactions)+len(o.igUnreacts) == 0
 }

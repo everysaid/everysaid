@@ -41,6 +41,10 @@ type ops struct {
 	hybrid      []hybridOp // an encrypted thread's Facebook key and its own
 	ownReadKeys []keysOp
 	readKeys    []readKeysOp
+	igThreads   []igThreadOp
+	igHistory   []igHistoryOp
+	igReactions []igReactionOp
+	igUnreacts  []igUnreactOp
 }
 
 type threadOp struct {
@@ -98,6 +102,7 @@ type hybridOp struct {
 type translator struct {
 	self   string            // the owner's id
 	fbToWA map[string]string // an encrypted group's Facebook thread key to its own
+	igKeys map[string]string // an Instagram thread's short id to its key
 }
 
 func (t *translator) key(fb int64) string {
@@ -303,8 +308,10 @@ func (t *translator) message(o *ops, m *table.WrappedMessage) (importers.MetaMes
 		msg.Reactions = append(msg.Reactions, importers.MetaReaction{Emoji: r.Reaction, By: t.user(r.ActorId),
 			Mine: strconv.FormatInt(r.ActorId, 10) == t.self})
 	}
-	msg.Mentions = mentions(m.Text, &socket.MentionData{MentionIDs: m.MentionIds, MentionOffsets: m.MentionOffsets,
-		MentionLengths: m.MentionLengths, MentionTypes: m.MentionTypes}, t)
+	if ms, err := (&socket.MentionData{MentionIDs: m.MentionIds, MentionOffsets: m.MentionOffsets,
+		MentionLengths: m.MentionLengths, MentionTypes: m.MentionTypes}).Parse(); err == nil {
+		msg.Mentions = mentions(m.Text, ms, t)
+	}
 	n := 0
 	file := func(kind, u, name, mime string) {
 		if msg.Kind == "text" {
@@ -477,9 +484,8 @@ func latLon(s string) (float64, float64, bool) {
 }
 
 // mentions are the people a text names (Meta gives where, in UTF-16 units).
-func mentions(text string, md *socket.MentionData, t *translator) []importers.MetaMention {
-	ms, err := md.Parse()
-	if err != nil || len(ms) == 0 {
+func mentions(text string, ms socket.Mentions, t *translator) []importers.MetaMention {
+	if len(ms) == 0 {
 		return nil
 	}
 	u := utf16.Encode([]rune(text))

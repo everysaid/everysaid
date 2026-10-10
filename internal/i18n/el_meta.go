@@ -15,10 +15,8 @@ func init() {
 
 		// the sources: their manifests
 		"Facebook Messenger with the user's own account, logged in with the browser's cookies: every chat as it changes, the encrypted ones too, with each chat's earlier history; and Meta's export (Download your information) for what is older. Unofficial: Meta may ask to check the account.": "Το Facebook Messenger με τον δικό σου λογαριασμό, συνδεδεμένο με τα cookies του φυλλομετρητή: κάθε συνομιλία καθώς αλλάζει, και οι κρυπτογραφημένες, με το παλαιότερο ιστορικό κάθε συνομιλίας· και η εξαγωγή της Meta (Λήψη των πληροφοριών σου) για τα παλαιότερα. Ανεπίσημο: η Meta μπορεί να ζητήσει έλεγχο του λογαριασμού.",
-		"Instagram's direct messages from Meta's export (Download your information), with their files.": "Τα προσωπικά μηνύματα του Instagram από την εξαγωγή της Meta (Λήψη των πληροφοριών σου), με τα αρχεία τους.",
-		"the cookies of facebook.com or messenger.com, where you are logged in":                         "τα cookies του facebook.com ή του messenger.com, όπου είσαι συνδεδεμένος",
+		"the cookies of facebook.com or messenger.com, where you are logged in": "τα cookies του facebook.com ή του messenger.com, όπου είσαι συνδεδεμένος",
 		"or Meta's export": "ή την εξαγωγή της Meta",
-		"Meta's export":    "την εξαγωγή της Meta",
 		"The export (Download your information), unpacked":                                  "Η εξαγωγή (Λήψη των πληροφοριών σου), αποσυμπιεσμένη",
 		"Its JSON form, one folder or a folder of its parts; imported when the source runs": "Σε μορφή JSON, ένας φάκελος ή ένας φάκελος με τα μέρη της· εισάγεται όταν τρέχει η πηγή",
 		"Your name as the export writes it":                                                 "Το όνομά σου όπως το γράφει η εξαγωγή",
@@ -33,16 +31,21 @@ func init() {
 		"Log out": "Αποσύνδεση",
 		"The source forgets the account's cookies and its encrypted chats' device; the archive keeps everything": "Η πηγή ξεχνά τα cookies του λογαριασμού και τη συσκευή των κρυπτογραφημένων συνομιλιών του· το αρχείο τα κρατά όλα",
 
+		"Instagram's direct messages with the user's own account, logged in with the browser's cookies: every chat as it changes, with each chat's earlier history; and Meta's export (Download your information) for what is older. Unofficial: Meta may ask to check the account.": "Τα προσωπικά μηνύματα του Instagram με τον δικό σου λογαριασμό, συνδεδεμένο με τα cookies του φυλλομετρητή: κάθε συνομιλία καθώς αλλάζει, με το παλαιότερο ιστορικό κάθε συνομιλίας· και η εξαγωγή της Meta (Λήψη των πληροφοριών σου) για τα παλαιότερα. Ανεπίσημο: η Meta μπορεί να ζητήσει έλεγχο του λογαριασμού.",
+		"the cookies of instagram.com, where you are logged in": "τα cookies του instagram.com, όπου είσαι συνδεδεμένος",
+		"Cookies of instagram.com":                              "Cookies του instagram.com",
+		"From the browser where you are logged in: a JSON object of them, a request copied as cURL from the developer tools, or the Cookie header (sessionid, csrftoken and ds_user_id are needed). Checked with Meta and kept in keys.db; give them again when Meta logs the source out": "Από τον φυλλομετρητή όπου είσαι συνδεδεμένος: ένα αντικείμενο JSON με αυτά, ένα αίτημα αντιγραμμένο ως cURL από τα εργαλεία προγραμματιστή, ή η κεφαλίδα Cookie (χρειάζονται τα sessionid, csrftoken και ds_user_id). Ελέγχονται με τη Meta και φυλάσσονται στο keys.db· δώσε τα ξανά όταν η Meta αποσυνδέσει την πηγή",
+		"Logged out of Instagram: log in again (paste the cookies)": "Έγινε αποσύνδεση από το Instagram: συνδέσου ξανά (επικόλλησε τα cookies)",
+		"Instagram did not say the account's id":                    "Το Instagram δεν είπε το αναγνωριστικό του λογαριασμού",
+
 		// their state
 		"the cookies or the export":      "τα cookies ή η εξαγωγή",
-		"the export":                     "η εξαγωγή",
 		"Account":                        "Λογαριασμός",
 		"not logged in":                  "χωρίς σύνδεση",
 		"connected":                      "συνδεδεμένο",
 		"not connected":                  "χωρίς σύνδεση",
 		"Encrypted chats":                "Κρυπτογραφημένες συνομιλίες",
 		"Files to download":              "Αρχεία για λήψη",
-		"only the export":                "μόνο η εξαγωγή",
 		"Messenger live":                 "Messenger ζωντανά",
 		"Instagram live":                 "Instagram ζωντανά",
 		"Messenger export":               "Εξαγωγή του Messenger",

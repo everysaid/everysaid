@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS meta_session (     -- an instance's account: what log
     cookies TEXT NOT NULL,                     -- the browser's cookies (JSON), as they are now
     state TEXT,                                -- messagix's state, to connect again without loading the page
     wa_device INTEGER,                         -- its encryption device (whatsmeow_device <user_id>.<n>@msgr)
+    seq INTEGER,                               -- Instagram: the last change the archive has (its sequence number)
+    seq_at INTEGER,                            -- and when it was had, Unix ms
     saved_at INTEGER NOT NULL                  -- Unix s
 );
 CREATE TABLE IF NOT EXISTS meta_thread (      -- what the source learned of a thread
@@ -35,7 +37,17 @@ CREATE TABLE IF NOT EXISTS meta_thread (      -- what the source learned of a th
     key TEXT NOT NULL,                         -- the archive's conversation key
     type INTEGER NOT NULL,                     -- Meta's thread type (15, 16: end-to-end encrypted)
     fb_key TEXT,                               -- an encrypted group's Facebook thread key
+    ig_id TEXT,                                -- Instagram: the thread's short id (its changes name it so)
+    ig_thread TEXT,                            -- and its long one
     PRIMARY KEY (instance, key)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS meta_ig_reaction (  -- Instagram: whose reaction on which message an id is
+    instance INTEGER NOT NULL,                 -- (a reaction taken away names only its id)
+    log_id TEXT NOT NULL,
+    thread TEXT NOT NULL,
+    message TEXT NOT NULL,
+    sender TEXT NOT NULL,
+    PRIMARY KEY (instance, log_id)
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS meta_file (        -- a message's file still to download
     instance INTEGER NOT NULL,
@@ -84,6 +96,8 @@ type session struct {
 	Cookies  json.RawMessage
 	State    json.RawMessage
 	WADevice uint16
+	Seq      int64 // Instagram's sequence number of the last change had, and when (Unix ms)
+	SeqAt    int64
 }
 
 // loadSession is an instance's session (nil: not logged in).
@@ -95,15 +109,16 @@ func loadSession(iid int64) (*session, error) {
 	var s session
 	var name, state sql.NullString
 	var cookies string
-	var dev sql.NullInt64
-	err = d.QueryRow("SELECT platform, user_id, name, cookies, state, wa_device FROM meta_session WHERE instance = ?", iid).
-		Scan(&s.Platform, &s.UserID, &name, &cookies, &state, &dev)
+	var dev, seq, seqAt sql.NullInt64
+	err = d.QueryRow("SELECT platform, user_id, name, cookies, state, wa_device, seq, seq_at FROM meta_session WHERE instance = ?", iid).
+		Scan(&s.Platform, &s.UserID, &name, &cookies, &state, &dev, &seq, &seqAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	} else if err != nil {
 		return nil, err
 	}
 	s.Name, s.Cookies, s.WADevice = name.String, json.RawMessage(cookies), uint16(dev.Int64)
+	s.Seq, s.SeqAt = seq.Int64, seqAt.Int64
 	if state.Valid && state.String != "" {
 		s.State = json.RawMessage(state.String)
 	}
@@ -124,11 +139,15 @@ func saveSession(iid int64, s *session) error {
 	if s.WADevice != 0 {
 		dev = int64(s.WADevice)
 	}
-	_, err = d.Exec("INSERT INTO meta_session (instance, platform, user_id, name, cookies, state, wa_device, saved_at) "+
-		"VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (instance) DO UPDATE SET platform = excluded.platform, "+
+	var seq, seqAt any
+	if s.Seq != 0 {
+		seq, seqAt = s.Seq, s.SeqAt
+	}
+	_, err = d.Exec("INSERT INTO meta_session (instance, platform, user_id, name, cookies, state, wa_device, seq, seq_at, saved_at) "+
+		"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (instance) DO UPDATE SET platform = excluded.platform, "+
 		"user_id = excluded.user_id, name = excluded.name, cookies = excluded.cookies, state = excluded.state, "+
-		"wa_device = excluded.wa_device, saved_at = excluded.saved_at",
-		iid, s.Platform, s.UserID, s.Name, string(s.Cookies), state, dev, time.Now().Unix())
+		"wa_device = excluded.wa_device, seq = excluded.seq, seq_at = excluded.seq_at, saved_at = excluded.saved_at",
+		iid, s.Platform, s.UserID, s.Name, string(s.Cookies), state, dev, seq, seqAt, time.Now().Unix())
 	return err
 }
 
@@ -139,7 +158,7 @@ func forgetSession(iid int64) error {
 	if err != nil {
 		return err
 	}
-	for _, t := range []string{"meta_session", "meta_thread", "meta_file"} {
+	for _, t := range []string{"meta_session", "meta_thread", "meta_file", "meta_ig_reaction"} {
 		if _, err := d.Exec("DELETE FROM "+t+" WHERE instance = ?", iid); err != nil {
 			return err
 		}
@@ -149,8 +168,9 @@ func forgetSession(iid int64) error {
 
 // threadInfo is what the source learned of a thread.
 type threadInfo struct {
-	Type  int64
-	FBKey string
+	Type           int64
+	FBKey          string
+	IGID, IGThread string // Instagram's short and long ids of the thread
 }
 
 func loadThreads(iid int64) (map[string]threadInfo, error) {
@@ -161,11 +181,12 @@ func loadThreads(iid int64) (map[string]threadInfo, error) {
 	out := map[string]threadInfo{}
 	err = func() (err error) {
 		defer db.Recover(&err)
-		db.Each(d, "SELECT key, type, coalesce(fb_key, '') FROM meta_thread WHERE instance = ?", []any{iid},
+		db.Each(d, "SELECT key, type, coalesce(fb_key, ''), coalesce(ig_id, ''), coalesce(ig_thread, '') FROM meta_thread "+
+			"WHERE instance = ?", []any{iid},
 			func(scan func(...any)) {
 				var k string
 				var t threadInfo
-				scan(&k, &t.Type, &t.FBKey)
+				scan(&k, &t.Type, &t.FBKey, &t.IGID, &t.IGThread)
 				out[k] = t
 			})
 		return nil
@@ -178,12 +199,10 @@ func saveThread(iid int64, key string, t threadInfo) error {
 	if err != nil {
 		return err
 	}
-	var fb any
-	if t.FBKey != "" {
-		fb = t.FBKey
-	}
-	_, err = d.Exec("INSERT INTO meta_thread (instance, key, type, fb_key) VALUES (?, ?, ?, ?) ON CONFLICT DO UPDATE SET "+
-		"type = excluded.type, fb_key = coalesce(excluded.fb_key, meta_thread.fb_key)", iid, key, t.Type, fb)
+	_, err = d.Exec("INSERT INTO meta_thread (instance, key, type, fb_key, ig_id, ig_thread) VALUES (?, ?, ?, ?, ?, ?) "+
+		"ON CONFLICT DO UPDATE SET type = excluded.type, fb_key = coalesce(excluded.fb_key, meta_thread.fb_key), "+
+		"ig_id = coalesce(excluded.ig_id, meta_thread.ig_id), ig_thread = coalesce(excluded.ig_thread, meta_thread.ig_thread)",
+		iid, key, t.Type, nullStr(t.FBKey), nullStr(t.IGID), nullStr(t.IGThread))
 	return err
 }
 
@@ -265,4 +284,41 @@ func nullStr(s string) any {
 		return nil
 	}
 	return s
+}
+
+// noteReaction keeps whose an Instagram reaction is, for when it is taken away by its id alone.
+func noteReaction(iid int64, logID, thread, message, sender string) error {
+	if logID == "" {
+		return nil
+	}
+	d, err := keysDB()
+	if err != nil {
+		return err
+	}
+	_, err = d.Exec("INSERT OR REPLACE INTO meta_ig_reaction (instance, log_id, thread, message, sender) VALUES (?, ?, ?, ?, ?)",
+		iid, logID, thread, message, sender)
+	return err
+}
+
+// reactionOf is whose a reaction is, and on which message ("" when not known); the record goes.
+func reactionOf(iid int64, logID string) (thread, message, sender string) {
+	d, err := keysDB()
+	if err != nil || logID == "" {
+		return "", "", ""
+	}
+	if d.QueryRow("SELECT thread, message, sender FROM meta_ig_reaction WHERE instance = ? AND log_id = ?", iid, logID).
+		Scan(&thread, &message, &sender) == nil {
+		d.Exec("DELETE FROM meta_ig_reaction WHERE instance = ? AND log_id = ?", iid, logID)
+	}
+	return
+}
+
+// saveSeq keeps how far Instagram's changes were had.
+func saveSeq(iid, seq, at int64) error {
+	d, err := keysDB()
+	if err != nil {
+		return err
+	}
+	_, err = d.Exec("UPDATE meta_session SET seq = ?, seq_at = ? WHERE instance = ?", seq, at, iid)
+	return err
 }
