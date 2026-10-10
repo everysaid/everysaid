@@ -420,10 +420,10 @@ func TestViberDesktop(t *testing.T) {
 	must(t, (Plugin{}).Delete(ctx, c, group, ref("9002")))
 	n, err := (Plugin{}).MarkRead(ctx, c, group, 0)
 	must(t, err)
-	eq(t, "not without the user's yes", n, 0)
+	eq(t, "read, as opening it in Viber", n, 1)
 	eq(t, "marked deleted here", db.Int(q, "SELECT deleted FROM message WHERE key = '9002'"), int64(1))
 	eq(t, "actions", b.take(), []string{"react 10 1", "react 10 1", "react 10 🙏", "unreact 10",
-		`compose {"chat":2,"edit":11,"parts":[{"text":"mine, fixed"}]}`, "delete 11"})
+		`compose {"chat":2,"edit":11,"parts":[{"text":"mine, fixed"}]}`, "delete 11", "read 2"})
 
 	// what the bridge refuses, said
 	b.fail = "send-disabled"
@@ -509,7 +509,7 @@ func TestLiveWaitsForViber(t *testing.T) {
 // an action it can no longer do refused with what is missing.
 func TestViberDesktopCheck(t *testing.T) {
 	b := newBridge(t)
-	c := instance(t, M{"socket": b.sock, "send": true, "read_receipts": true})
+	c := instance(t, M{"socket": b.sock, "send": true})
 	ok, why := (Plugin{}).Check(c)
 	eq(t, "all there", []any{ok, why}, []any{true, "ready"})
 	eq(t, "facts", (Plugin{}).InfoFacts(c), []plugins.Fact{{Label: "Viber Desktop", Value: "running"},

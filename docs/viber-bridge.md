@@ -177,7 +177,7 @@ Desktop"), and try a send, a reply and a reaction in My Notes. The most fragile 
 be put back from the package cache (Arch: `/var/cache/pacman/pkg/`, or the AUR helper's cache).
 
 Viber allows one linked Desktop client per account, so the bridge's Viber Desktop is that client.
-Sending is real. It is allowed by the source's "Sending messages" (and, for read receipts, "Send
-read receipts"); the bridge it starts may act, its socket private to the user (mode 600, in the
+Sending is real. It is allowed by the source's "Sending messages" (marking chats read too, as
+opening them in Viber does); the bridge it starts may act, its socket private to the user (mode 600, in the
 user's runtime folder). Viber Desktop started by hand is gated twice: its bridge also needs
 `VIBER_ALLOW_SEND=1`.

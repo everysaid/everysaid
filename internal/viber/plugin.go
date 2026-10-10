@@ -64,8 +64,6 @@ func (Plugin) Info() *plugins.Info {
 			{Key: "socket", Label: "The bridge's socket", Type: "path", Default: DefaultSocket()},
 			{Key: "send", Label: "Sending messages", Type: "bool", Default: false,
 				Help: "Viber Desktop started by hand also needs the bridge started with VIBER_ALLOW_SEND=1"},
-			{Key: "read_receipts", Label: "Send read receipts", Type: "bool", Default: false,
-				Help: "When a chat is opened here, the others see it read, and it is read on the phone too"},
 			{Key: "interval", Label: "Check every (seconds)", Type: "number", Default: 60},
 		},
 		CanSend: true, CanReply: true, CanMention: true, CanMarkRead: true, CanSendFiles: true,
@@ -1047,9 +1045,11 @@ func markDeleted(c *plugins.Context, messageID int64) (err error) {
 	return nil
 }
 
-// MarkRead tells Viber the chat was read, where the user turned read receipts on.
+// MarkRead tells Viber the chat was read, as opening it in Viber does: read on the user's other
+// devices too, and whether the others see it is Viber's own privacy setting ("seen" status). Only
+// where the bridge may act ("Sending messages").
 func (Plugin) MarkRead(ctx context.Context, c *plugins.Context, conv plugins.Conversation, until int64) (int, error) {
-	if !c.Bool("read_receipts") || !c.Bool("send") {
+	if !c.Bool("send") {
 		return 0, nil
 	}
 	if err := able(c, "read-receipts"); err != nil {

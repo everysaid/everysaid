@@ -135,9 +135,12 @@ two days to edit).
 A message deleted for everyone (by the user or its sender) is kept in the archive but shows as the
 service shows it, "deleted", what it was on a tap; search and the media pages leave it out.
 
-**Read receipts** go out only where the source's "Send read receipts" is on (off by default), when
-a chat with something new from the others is read in the app while it is in view (a page in the
-background reads nothing). The user's messages show ✓ sent, ✓✓ delivered to all, coloured when read
+**Reading** a chat in the app (something new from the others, while it is in view: a page in the
+background reads nothing) marks it read on the user's other devices too, where the service can
+without telling the sender: WhatsApp (read-self) and Signal always, Viber always (whether the others
+see it is Viber's own "seen" setting). The others are told only where the source's "Send read
+receipts" is on (off by default); on Telegram, which cannot tell one without the other, nothing
+goes out without it. The user's messages show ✓ sent, ✓✓ delivered to all, coloured when read
 by all ("all" in a group: whoever the service said got the user's messages there about then), where
 the service tells (WhatsApp, Signal; Telegram in a person's chat, read but not when; Viber from the
 iPhone, where the other lets it be seen); a tap on them says who got and read the message, and when.
