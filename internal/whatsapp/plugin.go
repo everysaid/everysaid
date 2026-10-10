@@ -59,7 +59,7 @@ func (Plugin) Info() *plugins.Info {
 				Help: "A risk for the account; needs [whatsapp] send = true in config.toml. Turned off by itself " +
 					"when WhatsApp warns the account"},
 			{Key: "read_receipts", Label: "Send read receipts", Type: "bool", Default: false,
-				Help: "When a chat is opened here, the others see it read, and it is read on the phone too"},
+				Help: "When a chat is opened here, the others see it read (it is marked read on the phone in any case)"},
 			{Key: "interval", Label: "Check every (seconds)", Type: "number", Default: 10},
 			{Key: "send_per_minute", Label: "Messages sent at most a minute", Type: "number", Default: 15,
 				Help: "Bulk sending is what WhatsApp blocks accounts for; 0 in any of these, no limit"},
@@ -423,17 +423,16 @@ func recipient(key string) string {
 	return key
 }
 
-// MarkRead sends read receipts for the chat's messages up to `until` (Unix ms), where the user
-// turned them on; nothing otherwise. It returns how many messages were marked.
+// MarkRead marks the chat's messages up to `until` (Unix ms) read: on the account's own devices
+// always, and for the others too where the user turned read receipts on. It returns how many
+// messages were marked.
 func (p Plugin) MarkRead(ctx context.Context, c *plugins.Context, conv plugins.Conversation, until int64) (int, error) {
-	if !c.Bool("read_receipts") {
-		return 0, nil
-	}
 	b := Running(storeDir(c))
 	if b == nil {
 		return 0, nil // not connected: nothing marked (the bridge answered so)
 	}
-	code, answer := b.MarkRead(ReadRequest{Recipient: strings.TrimPrefix(conv.Key, "+"), Until: floorDiv(until, 1000)})
+	code, answer := b.MarkRead(ReadRequest{Recipient: strings.TrimPrefix(conv.Key, "+"), Until: floorDiv(until, 1000),
+		Self: !c.Bool("read_receipts")})
 	if code != http.StatusOK {
 		return 0, nil // a chat the bridge does not know (nothing of it to mark)
 	}
