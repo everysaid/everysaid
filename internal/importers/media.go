@@ -163,6 +163,7 @@ func (s *Store) LinkNamed(source string, sourceID int64, path, rel string, messa
 	if a.Row("SELECT sha256 FROM attachment WHERE source_id = ? AND source_path = ? AND message_id = ?",
 		[]any{sourceID, rel, messageID}, &linked) {
 		if isFile(path) {
+			s.restore(path, linked)
 			s.held(path, linked)
 		}
 		return
@@ -186,6 +187,7 @@ func (s *Store) LinkNamed(source string, sourceID int64, path, rel string, messa
 	// the same file once on a message (an edited Signal message comes with its files again, under
 	// other names)
 	if a.Exists("SELECT 1 FROM attachment WHERE message_id = ? AND sha256 = ?", messageID, digest) {
+		s.restore(path, digest)
 		s.held(path, digest)
 		return
 	}
@@ -194,6 +196,27 @@ func (s *Store) LinkNamed(source string, sourceID int64, path, rel string, messa
 		messageID, digest, sourceID, rel, archive.NullStr(name))
 	s.Added[source]++
 	s.held(path, digest)
+}
+
+// restore puts a file back in the store where the archive records it but its copy was removed (the
+// owner's clearing of pictures): it came again, with a message that shows it. Not where a library
+// holds it (shown from there).
+func (s *Store) restore(path, digest string) {
+	var stored string
+	if !s.a.Row("SELECT path FROM media WHERE sha256 = ?", []any{digest}, &stored) ||
+		s.a.Exists("SELECT 1 FROM library_link WHERE sha256 = ?", digest) {
+		return
+	}
+	target := filepath.Join(s.Root, filepath.FromSlash(stored))
+	if exists(target) || sha256File(path) != digest { // another file at that source path now: not it
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		panic(err)
+	}
+	if err := linkOrCopy(path, target); err != nil {
+		panic(err)
+	}
 }
 
 // put stores the file at path (of that digest) once: linked (or copied) into the store and recorded
@@ -206,6 +229,7 @@ func (s *Store) put(path, digest string) {
 // putAs is put with the stored file's extension and type given.
 func (s *Store) putAs(path, digest, ext, mime string) {
 	if s.a.Exists("SELECT 1 FROM media WHERE sha256 = ?", digest) {
+		s.restore(path, digest)
 		return
 	}
 	stored := "media/" + digest[:2] + "/" + digest + strings.ToLower(ext)

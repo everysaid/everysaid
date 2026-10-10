@@ -4,6 +4,7 @@ package importers
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -100,4 +101,37 @@ func TestMediaSameSizeAnotherFile(t *testing.T) {
 		t.Fatalf("two files of the same size at one path: hashes %v", hashes)
 	}
 	eq(t, "the second's", hashes[1], sha256File(path))
+}
+
+// A file whose stored copy was removed (the owner's clearing of pictures), come again with a new
+// message: put back in the store, and taken from the source (Move); not where a library holds it.
+func TestMediaComeAgainAfterItsCopyWasRemoved(t *testing.T) {
+	a, _ := newArchive(t)
+	s := NewStore(a)
+	s.Root = t.TempDir()
+	dir := t.TempDir()
+	src := a.Source("test/mms", "test.db", "", dir)
+	conv := a.Conversation("sms", []archive.Handle{archive.H("phone", "+15557770001")}, "", "")
+	m1 := a.AddMessage(src, "1", archive.Message{Service: "sms", ConversationID: conv, TS: 1, Kind: "image"})
+	m2 := a.AddMessage(src, "2", archive.Message{Service: "sms", ConversationID: conv, TS: 2, Kind: "image"})
+	must(t, os.WriteFile(dir+"/a.webp", []byte("a sticker"), 0o600))
+	s.Link("test/mms", src, dir+"/a.webp", "a.webp", m1)
+	stored := filepath.Join(s.Root, db.Str(a.Tx(), "SELECT path FROM media"))
+	must(t, os.Remove(stored)) // cleared
+	s.Move = true
+	must(t, os.WriteFile(dir+"/b.webp", []byte("a sticker"), 0o600))
+	s.Link("test/mms", src, dir+"/b.webp", "b.webp", m2)
+	s.Release()
+	if !isFile(stored) || isFile(dir+"/b.webp") {
+		t.Fatalf("not put back (%v), or the source kept (%v)", isFile(stored), isFile(dir+"/b.webp"))
+	}
+	// held in a library: not put back
+	must(t, os.Remove(stored))
+	a.Exec("INSERT INTO library_link (sha256, library, asset_id, method, linked_at) SELECT sha256, 'immich', 'x', 'upload', 0 FROM media")
+	must(t, os.WriteFile(dir+"/b.webp", []byte("a sticker"), 0o600))
+	s.Link("test/mms", src, dir+"/b.webp", "b.webp", m2)
+	s.Release()
+	if isFile(stored) || !isFile(dir+"/b.webp") {
+		t.Fatalf("put back though in a library (%v), or its source taken (%v)", isFile(stored), !isFile(dir+"/b.webp"))
+	}
 }
