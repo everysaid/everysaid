@@ -31,9 +31,9 @@ func TestTheJail(t *testing.T) {
 	}
 	for path, want := range map[string]string{
 		filepath.Join(h, "Documents", "ViberDownloads"): Downloads(c),
-		filepath.Join(account, "Avatars"):              filepath.Join(scratch(c), "306900000000", "Avatars"),
-		filepath.Join(account, "Thumbnails"):           filepath.Join(scratch(c), "306900000000", "Thumbnails"),
-		filepath.Join(h, ".ViberPC", "data"):           filepath.Join(scratch(c), "data"),
+		filepath.Join(account, "Avatars"):               filepath.Join(scratch(c), "306900000000", "Avatars"),
+		filepath.Join(account, "Thumbnails"):            filepath.Join(scratch(c), "306900000000", "Thumbnails"),
+		filepath.Join(h, ".ViberPC", "data"):            filepath.Join(scratch(c), "data"),
 	} {
 		if got, err := os.Readlink(path); err != nil || got != want {
 			t.Errorf("%s: %q %v", path, got, err)
