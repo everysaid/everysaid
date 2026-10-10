@@ -64,7 +64,7 @@ require (
 	github.com/vektah/gqlparser/v2 v2.5.27 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
-	github.com/yuin/goldmark v1.8.5 // indirect
+	github.com/yuin/goldmark v1.8.6 // indirect
 	go.mau.fi/libsignal v0.2.2 // indirect
 	go.mau.fi/mautrix-signal v0.2609.0
 	go.mau.fi/util v0.10.1 // indirect

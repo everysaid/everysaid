@@ -481,10 +481,16 @@ func (cli *Client) handleDecryptedResult(
 		if envelope.GetUrgent() &&
 			result.ContentHint != libsignalgo.UnidentifiedSenderMessageContentHintImplicit &&
 			!strings.Contains(result.Err.Error(), "message with old counter") {
+			senderDevice, _ := result.SenderAddress.DeviceID()
 			handlerSuccess = cli.handleEvent(&events.DecryptionError{
 				Sender:    theirServiceID.UUID,
 				Err:       result.Err,
 				Timestamp: envelope.GetClientTimestamp(),
+
+				SenderDevice: senderDevice,
+				GroupID:      result.GroupID,
+				ContentHint:  result.ContentHint,
+				Retried:      result.Retriable,
 			})
 		}
 		if result.Retriable {
@@ -525,6 +531,22 @@ func (cli *Client) handleDecryptedResult(
 		logEvt = logEvt.Hex("ciphertext_hash", result.CiphertextHash[:])
 	}
 	logEvt.Bool("unencrypted", result.Unencrypted).Msg("Decrypted message")
+
+	// everysaid: the content whole, before the handling below; a failure of the handler leaves the
+	// envelope unacknowledged (a retry request's failure is not one: it is answered anyway)
+	if !result.Unencrypted || rawContent.GetDecryptionErrorMessage() != nil {
+		ok := cli.handleEvent(&events.Content{
+			Envelope:     envelope,
+			Content:      rawContent,
+			Sender:       theirServiceID,
+			SenderDevice: deviceID,
+			Destination:  destinationServiceID,
+		})
+		if !ok && rawContent.GetDecryptionErrorMessage() == nil {
+			handlerSuccess = false
+			return nil
+		}
+	}
 
 	// Handle unencrypted types early and refuse any other unencrypted message
 	if rawContent.GetDecryptionErrorMessage() != nil {

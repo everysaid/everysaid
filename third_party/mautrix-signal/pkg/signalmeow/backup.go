@@ -206,7 +206,8 @@ func (acp *archiveChunkProcessor) processFrame(frame *backuppb.Frame) error {
 		return acp.cli.Store.BackupStore.AddBackupChat(acp.ctx, item.Chat)
 	case *backuppb.Frame_ChatItem:
 		switch item.ChatItem.Item.(type) {
-		case *backuppb.ChatItem_DirectStoryReplyMessage, *backuppb.ChatItem_UpdateMessage, nil:
+		// everysaid: an UpdateMessage (a call, a group's change, a timer) and a reply to a story are kept
+		case nil:
 			zerolog.Ctx(acp.ctx).Debug().
 				Uint64("chat_id", item.ChatItem.ChatId).
 				Uint64("message_id", item.ChatItem.DateSent).
