@@ -34,6 +34,14 @@ const PAGE = 80;
 /** Placeholders of messages being sent, gone for the messages themselves among `real`: the one of the
  * same text, else (its text written otherwise by the service: mentions, a file) the oldest of the
  * conversation it went to; `since`: only those sent from then on (ms before the placeholder's time). */
+// the items in the order of their time (stable: those of one time stay as they were): messages come
+// in by more than one way (the answer to a sending, the server's events, the next page), and two
+// sendings may be answered in the other order
+function inOrder(items: StreamItem[]): StreamItem[] {
+  for (let i = 1; i < items.length; i++) if (items[i].ts < items[i - 1].ts) return [...items].sort((a, b) => a.ts - b.ts);
+  return items;
+}
+
 function withoutSent(items: StreamItem[], real: StreamItem[], since = Infinity): StreamItem[] {
   const sent = items.filter((i): i is MessageItem => i.type === "message" && i.id < 0);
   if (!sent.length) return items;
@@ -262,7 +270,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
         const seen = new Set(prev.map((i) => i.cursor));
         const fresh = page.items.filter((i) => !seen.has(i.cursor));
         // a placeholder goes once the message itself is here, also before the answer to its sending
-        return [...withoutSent(prev, fresh), ...fresh];
+        return inOrder([...withoutSent(prev, fresh), ...fresh]);
       });
       if (!force) setHasNewer(page.has_newer);
     } finally {
@@ -337,7 +345,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       setItems((prev) => {
         const seen = new Set(prev.map((i) => i.cursor));
         const real = messages.filter((m) => !seen.has(m.cursor));
-        if (messages.length) return prev.flatMap((i) => (i.type === "message" && i.id === id ? real : [i]));
+        if (messages.length) return inOrder(prev.flatMap((i) => (i.type === "message" && i.id === id ? real : [i])));
         // where the service cannot say what went: the message itself, if it came before the answer
         return withoutSent(prev, prev, 10_000);
       });
