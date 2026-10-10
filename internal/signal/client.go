@@ -627,6 +627,16 @@ func (c *client) content(cli *signalmeow.Client, e *events.Content) bool {
 	m := meta{sender: e.Sender.String(), destination: e.Destination.String(), device: uint32(e.SenderDevice),
 		ts: e.Envelope.GetClientTimestamp(), serverTS: e.Envelope.GetServerTimestamp()}
 	own := c.own(cli)
+	// someone could not read a message: one sent from here only is said (signalmeow sends it again)
+	if b := e.Content.GetDecryptionErrorMessage(); b != nil {
+		dem, err := libsignalgo.DeserializeDecryptionErrorMessage(b)
+		if err != nil {
+			return true
+		}
+		if device, err := dem.GetDeviceID(); err != nil || int(device) != cli.Store.DeviceID {
+			return true
+		}
+	}
 	// a group seen first in this message: its key kept, so that the group can be read
 	if k := masterKey(dataOf(e.Content).GetGroupV2()); k != nil {
 		cli.StoreMasterKey(c.ctx, serializedKey(k))
