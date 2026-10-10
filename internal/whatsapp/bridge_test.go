@@ -439,7 +439,7 @@ func TestUnreadIsRecentMessagesFromOthersBySender(t *testing.T) {
 		m.ChatJID, m.Kind = group.String(), "text"
 		s.storeMessage(m)
 	}
-	s.markedRead([]string{"READ"}, now)
+	s.markedRead(group.String(), []string{"READ"}, now)
 	got, err := sender.unread(group, now)
 	if err != nil || len(got) != 2 || strings.Join(got["a@s.whatsapp.net"], ",") != "1,3" || strings.Join(got["b@s.whatsapp.net"], ",") != "2" {
 		t.Fatalf("%v %v", got, err)

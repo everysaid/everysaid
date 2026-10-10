@@ -125,7 +125,10 @@ func (s *Sender) chatsFor(recipient string) ([]types.JID, error) {
 	var chats []types.JID
 	for _, c := range candidates {
 		var n int
-		s.store.db.QueryRow("SELECT (SELECT count(*) FROM messages WHERE chat_jid = ?1 AND NOT is_from_me) + "+
+		// someone wrote there (incoming_chats, kept when their messages have left the store), or the
+		// chat was started from here
+		s.store.db.QueryRow("SELECT (SELECT count(*) FROM incoming_chats WHERE jid = ?1) + "+
+			"(SELECT count(*) FROM messages WHERE chat_jid = ?1 AND NOT is_from_me) + "+
 			"(SELECT count(*) FROM started WHERE chat_jid = ?1)", c.String()).Scan(&n)
 		if n > 0 {
 			chats = append(chats, c)

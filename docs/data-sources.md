@@ -603,6 +603,11 @@ any device; its `Events.IsRead` stays 0).
   store only when that key is set (otherwise only the iPhone). `bridges/whatsapp/` is the same
   client as a separate program with a REST API, writing the same store; the two must never run on
   the same store at once.
+  - `messages.db` keeps a row only until the archive has it: `importers.WhatsAppPrune`, the
+    import's last step, takes out what the archive has and was last written more than a week ago
+    (`stored`, kept by triggers), files once the archive has them, polls never; what the bridge
+    needs of older messages stays (`incoming_chats`: someone wrote there; `pending_reads`: a read
+    on the phone of a message gone, for the archive's read state).
   - `messages.db` has the tables `messages` (`id`, `chat_jid`, `sender`, `content`, `timestamp`
     ISO, `is_from_me`, `media_type`) and `chats` (`jid`, `name`), the format of whatsapp-mcp's
     bridge, which still imports. Everysaid's client adds, with nothing removed:

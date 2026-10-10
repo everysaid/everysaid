@@ -518,3 +518,64 @@ func TestFirstMessageOnlyToContacts(t *testing.T) {
 		t.Fatalf("in a group with the owner: on to the bridge: %v", err)
 	}
 }
+
+// Once the archive has a row and it was last written a week ago, it leaves messages.db; what the
+// bridge needs of the chat stays (someone wrote there: it sends there still), a file not in the
+// archive yet and a poll stay, and a read on the phone of a message gone reaches the archive.
+func TestTheStoreKeepsOnlyWhatTheArchiveLacks(t *testing.T) {
+	f := bridgeInstance(t)
+	at := time.Now().Add(-30 * 24 * time.Hour)
+	for _, m := range []StoredMessage{
+		{ID: "OLD", Content: "old"},
+		{ID: "PIC", Kind: "image", MediaType: "image", Content: ""},
+		{ID: "POLL", Kind: "poll", Content: "When?"},
+	} {
+		m.ChatJID, m.Sender, m.Timestamp = peer, peer, at
+		if m.Kind == "" {
+			m.Kind = "text"
+		}
+		f.ms.storeMessage(m)
+	}
+	f.ms.db.Exec("UPDATE messages SET poll = ? WHERE id = 'POLL'", `{"name":"When?","options":["Mon"]}`) // as processMessage does
+	f.ms.storeMessage(StoredMessage{ID: "NEW", ChatJID: peer, Sender: peer, Content: "new", Timestamp: time.Now(), Kind: "text"})
+	if err := (Plugin{}).RunImport(f.ctx()); err != nil {
+		t.Fatal(err)
+	}
+	ids := func() string {
+		var out []string
+		rows, _ := f.ms.db.Query("SELECT id FROM messages ORDER BY id")
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			rows.Scan(&id)
+			out = append(out, id)
+		}
+		return strings.Join(out, ",")
+	}
+	if got := ids(); got != "NEW,OLD,PIC,POLL" {
+		t.Fatalf("written now: all kept, %s", got)
+	}
+	f.ms.db.Exec("UPDATE stored SET at = ?", time.Now().Add(-8*24*time.Hour).Unix()) // a week has gone
+	if err := (Plugin{}).RunImport(f.ctx()); err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(); got != "PIC,POLL" {
+		t.Fatalf("after a week: %s", got)
+	}
+	var incoming int
+	f.ms.db.QueryRow("SELECT count(*) FROM incoming_chats WHERE jid = ?", peer).Scan(&incoming)
+	if incoming != 1 { // what chatsFor goes by, the messages gone
+		t.Fatal("no longer sends there")
+	}
+	// read on the phone, the message no longer in the store
+	readAt := time.Now()
+	f.ms.markedRead(peer, []string{"OLD"}, readAt)
+	if err := (Plugin{}).RunImport(f.ctx()); err != nil {
+		t.Fatal(err)
+	}
+	var until int64
+	f.h.store.Read().QueryRow("SELECT value FROM state_report WHERE field = 'read_until'").Scan(&until)
+	if until != at.UnixMilli() {
+		t.Fatalf("read until %d, want %d", until, at.UnixMilli())
+	}
+}
