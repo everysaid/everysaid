@@ -37,7 +37,7 @@ func (p *pushRecorder) count() int {
 }
 
 // New messages in an archived chat are shown as they come, but the chat stays archived and sends no
-// notification; the other chat's do.
+// notification; the other chat's do, unless already read (on another device: a phone's backup).
 func TestAnArchivedChatStaysArchivedAndSaysNothingOfNewMessages(t *testing.T) {
 	defer config.DeleteSecret("vapid-private")
 	c := newServer(t)
@@ -96,4 +96,24 @@ func TestAnArchivedChatStaysArchivedAndSaysNothingOfNewMessages(t *testing.T) {
 	}
 	time.Sleep(200 * time.Millisecond) // a second one, were it sent, would be here by now
 	must(t, rec.count() == 1, "only the other chat notifies: %d sent", rec.count())
+
+	// one that comes late (a phone's backup), already read there: shown, but no notification
+	early := time.Now().Add(-time.Hour).UnixMilli()
+	must(t, core.SetChatState(s, other, false, map[string]core.StateValue{"read_until": float64(time.Now().UnixMilli())}) == nil, "read")
+	before := db.Int(s.Read(), "SELECT max(id) FROM message")
+	s.MustWrite(func(tx *sql.Tx) {
+		db.Exec(tx, "INSERT INTO message (service_id, conversation_id, ts, outgoing, sender_id, kind_id, text) "+
+			"SELECT service_id, conversation_id, ?, 0, sender_id, kind_id, 'read already' FROM message "+
+			"WHERE conversation_id = ? AND NOT outgoing LIMIT 1", early, byChat[other])
+	})
+	c.s.Host.Emit(M{"type": "new", "messages": []int64{before, db.Int(s.Read(), "SELECT max(id) FROM message")}})
+	select {
+	case event = <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no event")
+	}
+	must(t, event["chats"].(map[string]int64)[other] == 1, "shown: %v", event["chats"])
+	must(t, event["notify"] == nil, "no notification of what was read: %v", event["notify"])
+	time.Sleep(200 * time.Millisecond)
+	must(t, rec.count() == 1, "no push of what was read: %d sent", rec.count())
 }

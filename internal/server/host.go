@@ -159,9 +159,10 @@ func (h *Host) dispatch(ctx context.Context) {
 }
 
 // describeNew: which chats got what, so that the apps refresh those; notifications (push, and in the
-// event for the apps that show their own) for incoming ones, except
-// in archived chats (which stay archived: it is decided once, when the chat is first seen, then only
-// by the user).
+// event for the apps that show their own) for incoming ones still unread, as the chats count them
+// (newer than the chat was read, on any device, and than `unread_since`: a message that comes late,
+// with a phone's backup, notifies only if it was not read there), except in archived chats (which
+// stay archived: it is decided once, when the chat is first seen, then only by the user).
 func (h *Host) describeNew(event M) (out M, err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -178,19 +179,20 @@ func (h *Host) describeNew(event M) (out M, err error) {
 	for _, a := range db.Ints(q, "SELECT address_id FROM account") {
 		mine[a] = true
 	}
+	since := core.UnreadSince(h.store)
 	type row struct {
-		id, conv int64
-		outgoing bool
-		text     sql.NullString
-		kind     string
-		sender   sql.NullInt64
+		id, conv, ts int64
+		outgoing     bool
+		text         sql.NullString
+		kind         string
+		sender       sql.NullInt64
 	}
 	var rows []row
-	db.Each(q, "SELECT m.id, m.conversation_id, m.outgoing, m.text, k.name, m.sender_id FROM message m "+
+	db.Each(q, "SELECT m.id, m.conversation_id, m.ts, m.outgoing, m.text, k.name, m.sender_id FROM message m "+
 		"JOIN message_kind k ON k.id = m.kind_id WHERE m.id > ? AND m.id <= ? ORDER BY m.id", []any{m0, m1},
 		func(scan func(...any)) {
 			var r row
-			scan(&r.id, &r.conv, &r.outgoing, &r.text, &r.kind, &r.sender)
+			scan(&r.id, &r.conv, &r.ts, &r.outgoing, &r.text, &r.kind, &r.sender)
 			rows = append(rows, r)
 		})
 	for _, r := range rows {
@@ -200,8 +202,12 @@ func (h *Host) describeNew(event M) (out M, err error) {
 		}
 		chats[cid]++
 		// no push for the owner's own, written on another device (a source may give it as received)
-		if !r.outgoing && !(r.sender.Valid && mine[r.sender.Int64]) && r.kind != "system" && !states[cid].Archived {
-			incoming = append(incoming, Incoming{cid, r.id, r.text.String, r.kind})
+		read := since
+		if st := states[cid]; st.ReadUntil != nil {
+			read = max(read, *st.ReadUntil)
+		}
+		if !r.outgoing && !(r.sender.Valid && mine[r.sender.Int64]) && r.kind != "system" && !states[cid].Archived && r.ts > read {
+			incoming = append(incoming, Incoming{cid, r.id, r.ts, r.text.String, r.kind})
 		}
 	}
 	out = M{"type": "new", "chats": chats, "calls": c1 - c0}
