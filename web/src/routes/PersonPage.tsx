@@ -9,10 +9,12 @@ import { dateOnly, number } from "@/lib/format";
 import { useDebounced } from "@/lib/hooks";
 import { personRoute } from "@/router";
 import { Avatar, Button, Card, Center, Dialog, Field, Input, ServiceBadge, Spinner, Textarea } from "@/components/ui";
+import { personAvatarUrl } from "@/lib/avatar";
 import { PageHeader } from "@/components/PageHeader";
 import { GuessLine, PersonLabels } from "@/components/Labels";
 import { usePeek } from "@/components/PersonPeek";
 import { SpamCard } from "@/components/Spam";
+import { PhotoHistory } from "@/components/Photos";
 
 export function PersonPage() {
   const { t } = useTranslation();
@@ -56,7 +58,7 @@ export function PersonPage() {
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-2xl space-y-5 p-4 md:p-6">
           <Card className="flex items-center gap-4 p-5">
-            <Avatar name={p.name} src={p.avatar ? `/api/avatar/${p.id}` : null} size={72} />
+            <Avatar name={p.name} src={personAvatarUrl(p)} size={72} />
             <div className="grid flex-1 grid-cols-2 gap-3 text-sm">
               <div><div className="text-xl font-semibold tabular-nums">{number(p.stats.messages)}</div><div className="text-muted">{t("people.messages")}</div></div>
               <div><div className="text-xl font-semibold tabular-nums">{number(p.stats.calls)}</div><div className="text-muted">{t("people.calls")}</div></div>
@@ -76,6 +78,7 @@ export function PersonPage() {
               <Textarea rows={4} value={note} onChange={(e) => setNote(e.target.value)} onBlur={() => note !== (p.note ?? "") && save.mutate({ note })} />
             </Field>
           </Card>
+          {p.photo_history.length > 0 && <Card className="p-5"><PhotoHistory p={p} /></Card>}
           <PersonLabels p={p} onChanged={refresh} />
           <Card>
             <div className="flex items-center justify-between px-5 pt-4">

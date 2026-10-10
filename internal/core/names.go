@@ -173,9 +173,12 @@ type People struct {
 	Contacts     map[int64][]ContactRef
 	SeenNames    map[int64][]Seen
 	Order        []string
+	PhotoPinned  map[int64]string     // person -> photo_source
+	HandlePhotos map[int64][]photoRow // person -> their handles' photos, the latest first
 
-	mu   sync.Mutex
-	info map[int64][2]string
+	mu    sync.Mutex
+	info  map[int64][2]string
+	photo map[int64]*Photo
 }
 
 // NewPeople reads the snapshot.
@@ -183,7 +186,7 @@ func NewPeople(q db.Querier) *People {
 	p := &People{Handles: map[int64][]Handle{}, PersonOf: map[int64]int64{}, OwnAddresses: map[int64]bool{},
 		Me: map[int64]bool{}, Given: map[int64]string{}, Pinned: map[int64]string{}, Notes: map[int64]string{},
 		AccountLabel: map[int64]string{}, Contacts: map[int64][]ContactRef{}, SeenNames: map[int64][]Seen{},
-		info: map[int64][2]string{}}
+		info: map[int64][2]string{}, PhotoPinned: map[int64]string{}, photo: map[int64]*Photo{}}
 	db.Each(q, "SELECT a.id, pa.person_id, k.name, a.value, s.name FROM address a "+
 		"JOIN person_address pa ON pa.address_id = a.id JOIN address_kind k ON k.id = a.kind_id "+
 		"LEFT JOIN service s ON s.id = a.service_id", nil, func(scan func(...any)) {
@@ -203,21 +206,24 @@ func NewPeople(q db.Querier) *People {
 			p.Me[pid] = true
 		}
 	}
-	db.Each(q, "SELECT id, name, name_source, note FROM person WHERE name != '' OR name_source IS NOT NULL OR note IS NOT NULL",
-		nil, func(scan func(...any)) {
-			var pid int64
-			var name, source, note sql.NullString
-			scan(&pid, &name, &source, &note)
-			if name.String != "" {
-				p.Given[pid] = name.String
-			}
-			if source.String != "" {
-				p.Pinned[pid] = source.String
-			}
-			if note.Valid {
-				p.Notes[pid] = note.String
-			}
-		})
+	db.Each(q, "SELECT id, name, name_source, note, photo_source FROM person WHERE name != '' OR name_source IS NOT NULL "+
+		"OR note IS NOT NULL OR photo_source IS NOT NULL", nil, func(scan func(...any)) {
+		var pid int64
+		var name, source, note, photo sql.NullString
+		scan(&pid, &name, &source, &note, &photo)
+		if photo.String != "" {
+			p.PhotoPinned[pid] = photo.String
+		}
+		if name.String != "" {
+			p.Given[pid] = name.String
+		}
+		if source.String != "" {
+			p.Pinned[pid] = source.String
+		}
+		if note.Valid {
+			p.Notes[pid] = note.String
+		}
+	})
 	db.Each(q, "SELECT address_id, label FROM account_label", nil, func(scan func(...any)) {
 		var aid int64
 		var label string
@@ -251,6 +257,7 @@ func NewPeople(q db.Querier) *People {
 		s.Source = service + "/" + kind
 		p.SeenNames[pid] = append(p.SeenNames[pid], s)
 	})
+	p.HandlePhotos = loadPhotoRows(q, "handle_photo", "address_id", "pa.person_id")
 	p.Order = NameOrder(q)
 	return p
 }
@@ -477,14 +484,6 @@ func (p *People) Contact(pid int64) *ContactRef {
 		}
 	}
 	return &best
-}
-
-// Avatar is the contact photo's file name in the cache, if the person has one.
-func (p *People) Avatar(pid int64) string {
-	if c := p.Contact(pid); c != nil && c.Photo != nil {
-		return *c.Photo
-	}
-	return ""
 }
 
 // Addresses are the person's address ids.
