@@ -49,7 +49,7 @@ Contents:
                ──adb pull Android/data/com.viber.voip/files ──► a folder of Viber media
  Viber Desktop (linked to a phone) ── LD_PRELOAD bridge, snapshot ──► <cache>/viber/<instance>/desktop.db
  WhatsApp source (internal/whatsapp, live) ──────► <data>/whatsapp-bridge/messages.db, media/ (keys: <data>/keys.db)
- Telegram API ── everysaid telegram-sync ────────► <cache>/telegram/telegram.db, media/
+ Telegram API ── everysaid telegram-sync ────────► <data>/keys.db (telegram_*), <cache>/telegram/media/
 
                      everysaid import sms calls viber whatsapp telegram voip media   (or the sources in the app)
                                                           ▼
@@ -1250,7 +1250,7 @@ their own.) The photo-library work is done in the app's media view, or with the 
 | `<export>/<device>/` | Android exports (`<data>/android` by default) | 700/600 | yes, while they are not all in the archive |
 | `<data>/whatsapp-bridge/` | the WhatsApp store: `messages.db`, `media/` (the session's keys are in `<data>/keys.db`) | the folder's | yes |
 | `<cache>/viber/<instance>/desktop.db` | Viber Desktop snapshot | 700/600 | no: made again by the bridge |
-| `<cache>/telegram/` | `telegram.db`, `media/` (`telegram-sync`) | 700/600 | no: read again from the API |
+| `<cache>/telegram/` | `media/` (`telegram-sync`); its store is in `<data>/keys.db` (`telegram_*`) | 700/600 | no: read again from the API |
 | `<data>/media/` | the archive's media until they go to the photo library (`[media] store`) | 700/600 | yes, with the data folder: some exist nowhere else |
 | `<data>/archive.db` | the archive | 600 | yes, with the data folder |
 | `<config>/config.toml` | settings (README, "Folders and configuration") | the user's | yes |

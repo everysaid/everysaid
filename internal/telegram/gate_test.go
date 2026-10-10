@@ -146,9 +146,9 @@ func TestFollow(t *testing.T) {
 	if _, ok := mgr.got[0].(*tg.UpdatesTooLong); !ok {
 		t.Fatalf("%T", mgr.got[0])
 	}
-	d, _ := db.ReadOnly(DBPath())
+	d, _ := readStore()
 	defer d.Close()
-	if n := db.Int(d, "SELECT count(*) FROM message"); n != 256 {
+	if n := db.Int(d, "SELECT count(*) FROM telegram_message"); n != 256 {
 		t.Fatalf("%d messages", n)
 	}
 }
@@ -175,9 +175,9 @@ func TestMediaOneFails(t *testing.T) {
 	if !strings.Contains(out.String(), "2/300.mp4: not downloaded") || !strings.Contains(out.String(), "2 downloaded") {
 		t.Fatalf("%q", out.String())
 	}
-	d, _ := db.ReadOnly(DBPath())
+	d, _ := readStore()
 	defer d.Close()
-	if files := db.Strs(d, "SELECT file FROM message WHERE file IS NOT NULL ORDER BY id"); !reflect.DeepEqual(files, []string{"2/301.mp4", "2/302"}) {
+	if files := db.Strs(d, "SELECT file FROM telegram_message WHERE file IS NOT NULL ORDER BY id"); !reflect.DeepEqual(files, []string{"2/301.mp4", "2/302"}) {
 		t.Fatalf("%v", files)
 	}
 	if _, err := os.Stat(filepath.Join(MediaPath(), "2", "300.mp4.part")); !os.IsNotExist(err) {
@@ -233,17 +233,19 @@ func TestSyncLeavesStoreFree(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.Close()
-	other, err := db.Open(DBPath(), "busy_timeout(0)")
+	other, err := readStore()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer other.Close()
+	other.SetMaxOpenConns(1)
+	other.Exec("PRAGMA busy_timeout = 0")
 	var locked []string
 	f.asked = func(input bin.Encoder) {
 		if _, history := input.(*tg.MessagesGetHistoryRequest); !history {
 			return
 		}
-		if _, err := other.Exec("UPDATE chat SET synced_at = synced_at WHERE id = 0"); err != nil {
+		if _, err := other.Exec("UPDATE telegram_chat SET synced_at = synced_at WHERE id = 0"); err != nil {
 			locked = append(locked, err.Error())
 		}
 	}
@@ -413,9 +415,9 @@ func TestFetchMedia(t *testing.T) {
 	if b, _ := os.ReadFile(got); string(b) != "video bytes" {
 		t.Fatalf("%q", b)
 	}
-	d, _ := db.ReadOnly(DBPath())
+	d, _ := readStore()
 	defer d.Close()
-	if files := db.Strs(d, "SELECT file FROM message WHERE file IS NOT NULL"); !reflect.DeepEqual(files, []string{"2/300.mp4"}) {
+	if files := db.Strs(d, "SELECT file FROM telegram_message WHERE file IS NOT NULL"); !reflect.DeepEqual(files, []string{"2/300.mp4"}) {
 		t.Fatalf("%v", files)
 	}
 	n := len(f.calls)
@@ -424,7 +426,7 @@ func TestFetchMedia(t *testing.T) {
 	}
 }
 
-// A message deleted on Telegram: the live update reaches telegram.db, the import marks the
+// A message deleted on Telegram: the live update reaches the store, the import marks the
 // archive's message deleted and keeps its text. Private chats' ids are the account's, found in the
 // stored rows; a supergroup's come with its channel.
 func TestDeletedEndToEnd(t *testing.T) {
@@ -463,9 +465,9 @@ func TestDeletedEndToEnd(t *testing.T) {
 	if !reflect.DeepEqual(got, map[string]int64{"hello": 1, "stays": 0, "in the club": 1}) {
 		t.Fatalf("%v", got)
 	}
-	s, _ := db.ReadOnly(DBPath())
+	s, _ := readStore()
 	defer s.Close()
-	if n := db.Int(s, "SELECT count(*) FROM deleted"); n != 2 {
+	if n := db.Int(s, "SELECT count(*) FROM telegram_deleted"); n != 2 {
 		t.Fatalf("%d recorded", n)
 	}
 	if lines := strings.Join(c.LastLines(50), "\n"); strings.Contains(lines, "error") {

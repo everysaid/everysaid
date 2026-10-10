@@ -3,7 +3,7 @@
 // On connecting it brings what arrived while it was not connected, and each chat's state
 // (archived, pinned, muted; then live, as it changes on any of the user's devices); then new
 // messages (incoming, and outgoing from any of the user's devices) and edits, pushed by Telegram as
-// they happen, are written to telegram.db as the sync writes them, then imported into the archive
+// they happen, are written to the store as the sync writes them, then imported into the archive
 // at once. Messages sent from the app go through the same client and the same path. Channels and
 // bots stay out.
 package telegram
@@ -116,7 +116,7 @@ func currentSettings(c *plugins.Context) M {
 	return c.Settings
 }
 
-// storeMessages writes messages of one chat to telegram.db and imports them; it returns how many.
+// storeMessages writes messages of one chat to the store and imports them; it returns how many.
 func storeMessages(c *plugins.Context, chat any, msgs []sent) (n int, err error) {
 	defer db.Recover(&err)
 	kind := EntityKind(chat)
@@ -136,30 +136,30 @@ func storeMessages(c *plugins.Context, chat any, msgs []sent) (n int, err error)
 			return err
 		}
 		defer tx.Rollback()
-		db.Exec(tx, "INSERT INTO chat (id, kind, title, archived, json) VALUES (?, ?, ?, 0, ?) "+
+		db.Exec(tx, "INSERT INTO telegram_chat (id, kind, title, archived, json) VALUES (?, ?, ?, 0, ?) "+
 			"ON CONFLICT (id) DO UPDATE SET kind = excluded.kind, title = excluded.title, json = excluded.json",
 			chatID, kind, DisplayName(chat), Dump(chat.(tdp.Object)))
 		for _, s := range msgs {
 			// an edit that replaced the file has it downloaded again (the one before stays in the archive)
-			db.Exec(tx, "INSERT INTO message (chat_id, id, date, json) VALUES (?, ?, ?, ?) "+
+			db.Exec(tx, "INSERT INTO telegram_message (chat_id, id, date, json) VALUES (?, ?, ?, ?) "+
 				"ON CONFLICT (chat_id, id) DO UPDATE SET json = excluded.json, file = CASE WHEN "+
 				"coalesce(json_extract(json, '$.media.photo.id'), json_extract(json, '$.media.document.id')) IS "+
 				"coalesce(json_extract(excluded.json, '$.media.photo.id'), json_extract(excluded.json, '$.media.document.id')) "+
 				"THEN file END",
 				chatID, s.Message.GetID(), messageDate(s.Message), Dump(s.Message.(tdp.Object)))
 			if o, ok := s.Sender.(tdp.Object); ok && s.Sender != nil {
-				db.Exec(tx, "INSERT OR REPLACE INTO entity VALUES (?, ?)", EntityID(s.Sender), Dump(o))
+				db.Exec(tx, "INSERT OR REPLACE INTO telegram_entity VALUES (?, ?)", EntityID(s.Sender), Dump(o))
 			}
 			keys[[2]int64{chatID, int64(s.Message.GetID())}] = true
 		}
-		db.Exec(tx, "UPDATE chat SET synced_at = ? WHERE id = ?", time.Now().Unix(), chatID)
+		db.Exec(tx, "UPDATE telegram_chat SET synced_at = ? WHERE id = ?", time.Now().Unix(), chatID)
 		return tx.Commit()
 	}()
 	if err != nil {
 		return 0, err
 	}
 	if idSet(currentSettings(c)["skip_chats"])[chatID] {
-		return 0, nil // kept in telegram.db, not imported: the user left this chat out
+		return 0, nil // kept in the store, not imported: the user left this chat out
 	}
 	_, _, err = sourcekit.RunImporters(c, []sourcekit.Step{{Label: "Telegram live", Run: func(a *archive.Archive, out func(string)) error {
 		return importTelegram(a, out, keys, nil)
@@ -167,7 +167,7 @@ func storeMessages(c *plugins.Context, chat any, msgs []sent) (n int, err error)
 	return len(keys), err
 }
 
-// noteDeleted records messages deleted on Telegram in telegram.db and has the archive mark them.
+// noteDeleted records messages deleted on Telegram in the store and has the archive mark them.
 // chat 0: ids of the account's common box (private chats and small groups), unique across them, so
 // each one's chat is the stored row's. Messages never stored (a channel's, a bot's) are passed by.
 func noteDeleted(c *plugins.Context, chat int64, ids []int) (err error) {
@@ -187,10 +187,10 @@ func noteDeleted(c *plugins.Context, chat int64, ids []int) (err error) {
 			return err
 		}
 		defer tx.Rollback()
-		query, args := "SELECT chat_id, id FROM message WHERE chat_id > ? AND id IN ("+db.Marks(len(ids))+")",
+		query, args := "SELECT chat_id, id FROM telegram_message WHERE chat_id > ? AND id IN ("+db.Marks(len(ids))+")",
 			append([]any{-channelMark}, db.Args(ids)...)
 		if chat != 0 {
-			query, args = "SELECT chat_id, id FROM message WHERE chat_id = ? AND id IN ("+db.Marks(len(ids))+")",
+			query, args = "SELECT chat_id, id FROM telegram_message WHERE chat_id = ? AND id IN ("+db.Marks(len(ids))+")",
 				append([]any{chat}, db.Args(ids)...)
 		}
 		db.Each(tx, query, args, func(scan func(...any)) {
@@ -200,14 +200,14 @@ func noteDeleted(c *plugins.Context, chat int64, ids []int) (err error) {
 		})
 		now := time.Now().Unix()
 		for k := range keys {
-			db.Exec(tx, "INSERT OR IGNORE INTO deleted (chat_id, id, at) VALUES (?, ?, ?)", k[0], k[1], now)
+			db.Exec(tx, "INSERT OR IGNORE INTO telegram_deleted (chat_id, id, at) VALUES (?, ?, ?)", k[0], k[1], now)
 		}
 		return tx.Commit()
 	}()
 	skip := idSet(currentSettings(c)["skip_chats"])
 	for k := range keys {
 		if skip[k[0]] {
-			delete(keys, k) // kept in telegram.db, not imported: the user left this chat out
+			delete(keys, k) // kept in the store, not imported: the user left this chat out
 		}
 	}
 	if err != nil || len(keys) == 0 {
@@ -235,7 +235,7 @@ func notePoll(c *plugins.Context, u *tg.UpdateMessagePoll) (err error) {
 			return err
 		}
 		defer tx.Rollback()
-		db.Each(tx, "SELECT chat_id, id FROM poll WHERE poll_id = ?", []any{u.PollID},
+		db.Each(tx, "SELECT chat_id, id FROM telegram_poll WHERE poll_id = ?", []any{u.PollID},
 			func(scan func(...any)) {
 				var k [2]int64
 				scan(&k[0], &k[1])
@@ -244,14 +244,14 @@ func notePoll(c *plugins.Context, u *tg.UpdateMessagePoll) (err error) {
 		for k := range keys {
 			// results without each answer's count (hidden until one votes) leave the counts known
 			if len(u.Results.Results) > 0 {
-				db.Exec(tx, "UPDATE message SET json = json_set(json, '$.media.results', json(?)) WHERE chat_id = ? AND id = ?",
+				db.Exec(tx, "UPDATE telegram_message SET json = json_set(json, '$.media.results', json(?)) WHERE chat_id = ? AND id = ?",
 					Dump(&u.Results), k[0], k[1])
 			} else if n, ok := u.Results.GetTotalVoters(); ok { // how many voted, at least
-				db.Exec(tx, "UPDATE message SET json = json_set(json, '$.media.results.total_voters', ?) WHERE chat_id = ? AND id = ?",
+				db.Exec(tx, "UPDATE telegram_message SET json = json_set(json, '$.media.results.total_voters', ?) WHERE chat_id = ? AND id = ?",
 					n, k[0], k[1])
 			}
 			if poll, ok := u.GetPoll(); ok {
-				db.Exec(tx, "UPDATE message SET json = json_set(json, '$.media.poll', json(?)) WHERE chat_id = ? AND id = ?",
+				db.Exec(tx, "UPDATE telegram_message SET json = json_set(json, '$.media.poll', json(?)) WHERE chat_id = ? AND id = ?",
 					Dump(&poll), k[0], k[1])
 			}
 		}
@@ -289,7 +289,7 @@ func noteReactions(c *plugins.Context, u *tg.UpdateMessageReactions) (err error)
 		if u.Reactions.Min { // without the owner's choice: theirs as it was stored
 			chosen := map[string]int{}
 			db.Each(store, "SELECT json_extract(r.value, '$.reaction'), json_extract(r.value, '$.chosen_order') "+
-				"FROM message m, json_each(m.json, '$.reactions.results') r WHERE m.chat_id = ? AND m.id = ? "+
+				"FROM telegram_message m, json_each(m.json, '$.reactions.results') r WHERE m.chat_id = ? AND m.id = ? "+
 				"AND json_extract(r.value, '$.chosen_order') IS NOT NULL", []any{chatID, u.MsgID}, func(scan func(...any)) {
 				var reaction string
 				var order int
@@ -304,7 +304,7 @@ func noteReactions(c *plugins.Context, u *tg.UpdateMessageReactions) (err error)
 				}
 			}
 		}
-		return store.Exec("UPDATE message SET json = json_set(json, '$.reactions', json(?)) WHERE chat_id = ? AND id = ?",
+		return store.Exec("UPDATE telegram_message SET json = json_set(json, '$.reactions', json(?)) WHERE chat_id = ? AND id = ?",
 			Dump(&u.Reactions), chatID, u.MsgID)
 	}()
 	if err != nil {
@@ -335,7 +335,7 @@ func notePinned(c *plugins.Context, chatID int64, pinned bool, ids []int) (err e
 	func() {
 		defer store.Close()
 		for _, id := range ids {
-			res := db.Exec(store, "UPDATE message SET json = json_set(json, '$.pinned', json(?)) WHERE chat_id = ? AND id = ?",
+			res := db.Exec(store, "UPDATE telegram_message SET json = json_set(json, '$.pinned', json(?)) WHERE chat_id = ? AND id = ?",
 				fmt.Sprint(pinned), chatID, id)
 			if n, _ := res.RowsAffected(); n > 0 {
 				keys[[2]int64{chatID, int64(id)}] = true
@@ -396,7 +396,7 @@ type readItem struct {
 	inbox, outbox *int64 // nil: not said
 }
 
-// noteReads records how far chats were read into telegram.db, then, for the chats where either
+// noteReads records how far chats were read into the store, then, for the chats where either
 // moved on, into the archive (their read_until, and receipts of the owner's messages).
 func noteReads(c *plugins.Context, items []readItem, seenNow bool) (err error) {
 	defer db.Recover(&err)
@@ -413,7 +413,7 @@ func noteReads(c *plugins.Context, items []readItem, seenNow bool) (err error) {
 		}
 		defer tx.Rollback()
 		known := map[int64]bool{} // channels and bots are not
-		for _, id := range db.Ints(tx, "SELECT id FROM chat") {
+		for _, id := range db.Ints(tx, "SELECT id FROM telegram_chat") {
 			known[id] = true
 		}
 		for _, it := range items {
@@ -459,7 +459,7 @@ func dialogStates(dialogs []dialog) []stateItem {
 }
 
 // catchUp brings what arrived while the app was not connected: each chat's messages after the
-// newest that telegram.db has (a chat new since then, all of it). It gives the groups whose members
+// newest that the store has (a chat new since then, all of it). It gives the groups whose members
 // changed meanwhile, as their service messages say.
 func catchUp(ctx context.Context, c *plugins.Context, cn *conn, dialogs []dialog) (changed []int64, err error) {
 	if dialogs, err = withMigrated(ctx, cn, dialogs); err != nil {
@@ -473,7 +473,7 @@ func catchUp(ctx context.Context, c *plugins.Context, cn *conn, dialogs []dialog
 			return err
 		}
 		defer store.Close()
-		db.Each(store, "SELECT chat_id, id FROM read_through", nil, func(scan func(...any)) {
+		db.Each(store, "SELECT chat_id, id FROM telegram_read_through", nil, func(scan func(...any)) {
 			var chat, id int64
 			scan(&chat, &id)
 			have[chat] = id
@@ -541,15 +541,15 @@ func compactJSON(s string) string {
 	return b.String()
 }
 
-// keptChat says whether telegram.db keeps a chat (by marked id).
+// keptChat says whether the store keeps a chat (by marked id).
 func keptChat(id int64) (kept bool) {
 	defer func() { recover() }()
-	store, err := db.ReadOnly(DBPath())
+	store, err := readStore()
 	if err != nil {
 		return false
 	}
 	defer store.Close()
-	return db.Exists(store, "SELECT 1 FROM chat WHERE id = ?", id)
+	return db.Exists(store, "SELECT 1 FROM telegram_chat WHERE id = ?", id)
 }
 
 // stopsAll says whether an error stops everything (a flood wait, the end) rather than one chat.
@@ -574,7 +574,7 @@ func noteReadThrough(chat, id int64) (err error) {
 		return err
 	}
 	defer store.Close()
-	db.Exec(store, "INSERT INTO read_through VALUES (?, ?) ON CONFLICT (chat_id) DO UPDATE SET id = max(id, excluded.id)",
+	db.Exec(store, "INSERT INTO telegram_read_through VALUES (?, ?) ON CONFLICT (chat_id) DO UPDATE SET id = max(id, excluded.id)",
 		chat, id)
 	return nil
 }
@@ -958,7 +958,7 @@ func telegramUser(c *plugins.Context, addressID, conversationID int64) (int64, e
 	return strconv.ParseInt(strings.TrimSpace(value), 10, 64)
 }
 
-// inputUser is the user as Telegram takes them: from those seen, else from telegram.db (a member
+// inputUser is the user as Telegram takes them: from those seen, else from the store (a member
 // who never came up in the dialogs this connection read).
 func inputUser(cn *conn, uid int64) (tg.InputUserClass, error) {
 	if p, err := cn.inputPeer(uid); err == nil {
@@ -975,7 +975,7 @@ func inputUser(cn *conn, uid int64) (tg.InputUserClass, error) {
 		}
 		defer store.Close()
 		var js string
-		if !db.Row(store, "SELECT json FROM entity WHERE id = ?", []any{uid}, &js) {
+		if !db.Row(store, "SELECT json FROM telegram_entity WHERE id = ?", []any{uid}, &js) {
 			return nil
 		}
 		dec := json.NewDecoder(strings.NewReader(js))
@@ -1132,7 +1132,7 @@ func sentMessage(r tg.UpdatesClass, randomID int64, peer tg.PeerClass, text stri
 	return nil, users, chats
 }
 
-// find is Find: each number asked of Telegram, those found kept in telegram.db (with that number, as
+// find is Find: each number asked of Telegram, those found kept in the store (with that number, as
 // Telegram gives it only to their contacts).
 func find(ctx context.Context, phones []string) ([]plugins.Found, error) {
 	var out []plugins.Found
@@ -1177,7 +1177,7 @@ func find(ctx context.Context, phones []string) ([]plugins.Found, error) {
 		if err := func() (err error) {
 			defer db.Recover(&err)
 			for _, u := range found {
-				db.Exec(tx, "INSERT OR REPLACE INTO entity VALUES (?, ?)", u.ID, Dump(u))
+				db.Exec(tx, "INSERT OR REPLACE INTO telegram_entity VALUES (?, ?)", u.ID, Dump(u))
 			}
 			return nil
 		}(); err != nil {

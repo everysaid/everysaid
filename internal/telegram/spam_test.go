@@ -20,8 +20,8 @@ func blockedIDs(t *testing.T, in *instance) []string {
 }
 
 // Someone removed as spam: reported, blocked and their whole chat deleted on Telegram, also when the
-// user already deleted the chat there (its access hash then from telegram.db); and their chat
-// dropped from telegram.db.
+// user already deleted the chat there (its access hash then from the store); and their chat
+// dropped from the store.
 func TestReportSpamAndForget(t *testing.T) {
 	in := newInstance(t, M{})
 	c := in.ctx()
@@ -60,7 +60,7 @@ func TestReportSpamAndForget(t *testing.T) {
 	}
 	store, _ := openStore(DBPath())
 	defer store.Close()
-	if n := db.Int(store, "SELECT count(*) FROM message WHERE chat_id = 2") + db.Int(store, "SELECT count(*) FROM chat WHERE id = 2"); n != 0 {
+	if n := db.Int(store, "SELECT count(*) FROM telegram_message WHERE chat_id = 2") + db.Int(store, "SELECT count(*) FROM telegram_chat WHERE id = 2"); n != 0 {
 		t.Fatalf("%d rows of the chat left in telegram.db", n)
 	}
 }

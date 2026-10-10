@@ -21,7 +21,7 @@ import (
 
 type M = plugins.M
 
-// Source is the archive's source name of telegram.db.
+// Source is the archive's source name of the store.
 const Source = "telegram"
 
 // The importers this plugin runs (variables, so that a test can watch them).
@@ -154,15 +154,15 @@ func (Plugin) Chats(c *plugins.Context) ([]M, error) {
 	}
 	skip := idSet(c.Settings["skip_chats"])
 	media := idSet(c.Settings["media_chats"])
-	d, err := db.ReadOnly(DBPath())
+	d, err := readStore()
 	if err != nil {
 		return nil, err
 	}
 	defer d.Close()
 	err = func() (err error) {
 		defer db.Recover(&err)
-		db.Each(d, "SELECT c.id, c.kind, c.title, c.archived, count(m.id), min(m.date), max(m.date) FROM chat c "+
-			"LEFT JOIN message m ON m.chat_id = c.id GROUP BY c.id ORDER BY max(m.date) DESC", nil, func(scan func(...any)) {
+		db.Each(d, "SELECT c.id, c.kind, c.title, c.archived, count(m.id), min(m.date), max(m.date) FROM telegram_chat c "+
+			"LEFT JOIN telegram_message m ON m.chat_id = c.id GROUP BY c.id ORDER BY max(m.date) DESC", nil, func(scan func(...any)) {
 			var id, archived, n int64
 			var kind string
 			var title *string
@@ -192,7 +192,7 @@ func (Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Convers
 
 // Find asks Telegram who has each number (contacts.resolvePhone: nothing changes in the account; one
 // who does not let others find them by their number is not found). Who is found is kept in
-// telegram.db with the number asked, so that a first message reaches them from any connection and
+// the store with the number asked, so that a first message reaches them from any connection and
 // their chat goes to the person of that number.
 func (Plugin) Find(ctx context.Context, c *plugins.Context, phones []string) ([]plugins.Found, error) {
 	return find(ctx, phones)
@@ -226,7 +226,7 @@ func withArchive(c *plugins.Context, fn func(a *archive.Archive) error) (err err
 	return nil
 }
 
-// source is telegram.db's source in the archive, tied to this instance where it is no one's yet.
+// source is the store's source in the archive, tied to this instance where it is no one's yet.
 func source(a *archive.Archive, iid int64) int64 {
 	src := a.Source(Source, DBPath(), "telegram", MediaPath())
 	a.Exec("UPDATE source SET instance_id = ? WHERE id = ? AND instance_id IS NULL", iid, src)

@@ -17,7 +17,7 @@ import (
 )
 
 // The user's reaction put, changed and taken back, their message edited, then deleted for
-// everyone: each reaches Telegram, then telegram.db, then the archive through the importer, as the
+// everyone: each reaches Telegram, then the store, then the archive through the importer, as the
 // same change made on a phone would.
 func TestActionsEndToEnd(t *testing.T) {
 	in := newInstance(t, M{})
@@ -212,7 +212,7 @@ func TestFindAndFirstMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if raw := db.Str(store, "SELECT json FROM entity WHERE id = 9"); !strings.Contains(raw, "306900000009") {
+	if raw := db.Str(store, "SELECT json FROM telegram_entity WHERE id = 9"); !strings.Contains(raw, "306900000009") {
 		t.Fatalf("kept without the number: %s", raw)
 	}
 	store.Close()

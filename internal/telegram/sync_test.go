@@ -16,7 +16,20 @@ import (
 
 func freshCache(t *testing.T) {
 	os.RemoveAll(Folder())
-	t.Cleanup(func() { os.RemoveAll(Folder()) })
+	emptyStore(t)
+	t.Cleanup(func() { os.RemoveAll(Folder()); emptyStore(t) })
+}
+
+// emptyStore empties the store's tables in keys.db (what removing the store did).
+func emptyStore(t *testing.T) {
+	d, err := readStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	for _, table := range db.Strs(d, "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'telegram\\_%' ESCAPE '\\'") {
+		db.Exec(d, "DELETE FROM "+table)
+	}
 }
 
 func en(out *bytes.Buffer) *printer { return &printer{out, "en"} }
@@ -81,10 +94,10 @@ func TestSyncRun(t *testing.T) {
 	if err := syncRun(newTestCtx(), f.conn(), en(&out)); err != nil {
 		t.Fatal(err)
 	}
-	d, _ := db.ReadOnly(DBPath())
+	d, _ := readStore()
 	defer d.Close()
 	kinds := map[int64]string{}
-	db.Each(d, "SELECT id, kind FROM chat", nil, func(scan func(...any)) {
+	db.Each(d, "SELECT id, kind FROM telegram_chat", nil, func(scan func(...any)) {
 		var id int64
 		var k string
 		scan(&id, &k)
@@ -93,23 +106,23 @@ func TestSyncRun(t *testing.T) {
 	if !reflect.DeepEqual(kinds, map[int64]string{2: "user", -10: "group", 1: "saved"}) {
 		t.Fatalf("%v", kinds)
 	}
-	if n := db.Int(d, "SELECT count(*) FROM message WHERE chat_id = 2"); n != 250 {
+	if n := db.Int(d, "SELECT count(*) FROM telegram_message WHERE chat_id = 2"); n != 250 {
 		t.Fatalf("%d", n)
 	}
-	if n := db.Int(d, "SELECT archived FROM chat WHERE id = -10"); n != 1 {
+	if n := db.Int(d, "SELECT archived FROM telegram_chat WHERE id = -10"); n != 1 {
 		t.Fatal("archived")
 	}
 	// the group's sender is kept; the private chat's messages carry no sender of their own
-	if ids := db.Ints(d, "SELECT id FROM entity ORDER BY id"); !reflect.DeepEqual(ids, []int64{1, 2}) {
+	if ids := db.Ints(d, "SELECT id FROM telegram_entity ORDER BY id"); !reflect.DeepEqual(ids, []int64{1, 2}) {
 		t.Fatalf("entities %v", ids)
 	}
 	var in, outbox int64
-	db.Row(d, "SELECT inbox, outbox FROM chat_read WHERE chat_id = 2", nil, &in, &outbox)
+	db.Row(d, "SELECT inbox, outbox FROM telegram_chat_read WHERE chat_id = 2", nil, &in, &outbox)
 	if in != 240 || outbox != 245 {
 		t.Fatal("reads")
 	}
 	var js string
-	db.Row(d, "SELECT json FROM message WHERE chat_id = 2 AND id = 2", nil, &js)
+	db.Row(d, "SELECT json FROM telegram_message WHERE chat_id = 2 AND id = 2", nil, &js)
 	var m map[string]any
 	json.Unmarshal([]byte(js), &m)
 	if m["_"] != "Message" || m["out"] != true || m["message"] != "m2" || m["entities"] == nil {
@@ -132,12 +145,12 @@ func TestSyncRun(t *testing.T) {
 	bob.messages = append(bob.messages, text(252, &tg.PeerUser{UserID: 2}, 0, 1700000001, "missed", false),
 		text(253, &tg.PeerUser{UserID: 2}, 0, 1700000002, "live", false))
 	w, _ := openStore(DBPath())
-	db.Exec(w, "INSERT INTO message (chat_id, id, date, json) VALUES (2, 253, 1700000002, '{}')")
+	db.Exec(w, "INSERT INTO telegram_message (chat_id, id, date, json) VALUES (2, 253, 1700000002, '{}')")
 	w.Close()
 	if err := syncRun(newTestCtx(), f.conn(), en(&out)); err != nil {
 		t.Fatal(err)
 	}
-	if n := db.Int(d, "SELECT count(*) FROM message WHERE chat_id = 2 AND id = 252"); n != 1 {
+	if n := db.Int(d, "SELECT count(*) FROM telegram_message WHERE chat_id = 2 AND id = 252"); n != 1 {
 		t.Fatal("the message missed below a live one was not fetched")
 	}
 }
@@ -215,9 +228,9 @@ func TestMigratedGroup(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	d, _ := db.ReadOnly(DBPath())
+	d, _ := readStore()
 	defer d.Close()
-	if n := db.Int(d, "SELECT count(*) FROM message WHERE chat_id = -30"); n != 3 {
+	if n := db.Int(d, "SELECT count(*) FROM telegram_message WHERE chat_id = -30"); n != 3 {
 		t.Fatalf("the basic group's messages: %d", n)
 	}
 	if n := strings.Count(strings.Join(f.calls, ","), "getFullChannel"); n != 1 {

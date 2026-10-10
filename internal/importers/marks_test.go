@@ -55,10 +55,10 @@ func telegramDB(t *testing.T, path string) *sql.DB {
 		{tgMaria, M{"_": "User", "id": tgMaria, "first_name": "Maria", "username": "Maria_K", "phone": "15557770001"}},
 		{tgBob, M{"_": "User", "id": tgBob, "first_name": "Bob"}},
 	} {
-		db.Exec(d, "INSERT INTO entity VALUES (?, ?)", e.id, js(e.user))
+		db.Exec(d, "INSERT INTO telegram_entity VALUES (?, ?)", e.id, js(e.user))
 	}
-	db.Exec(d, "INSERT INTO chat VALUES (?, 'group', 'Friends', 0, '{}', 1)", tgGroup)
-	db.Exec(d, "INSERT INTO chat VALUES (?, 'user', 'Maria', 0, ?, 1)", tgMaria,
+	db.Exec(d, "INSERT INTO telegram_chat VALUES (?, 'group', 'Friends', 0, '{}', 1)", tgGroup)
+	db.Exec(d, "INSERT INTO telegram_chat VALUES (?, 'user', 'Maria', 0, ?, 1)", tgMaria,
 		js(M{"_": "User", "id": tgMaria, "username": "Maria_K", "phone": "15557770001"}))
 	text := "hi 😀 @maria_k and Bob" // the emoji is two UTF-16 units: the offsets count them so
 	msgs := []struct {
@@ -77,7 +77,7 @@ func telegramDB(t *testing.T, path string) *sql.DB {
 		{tgMaria, 13, M{"_": "Message", "id": 13, "message": "mine 3", "out": true}},
 	}
 	for _, m := range msgs {
-		db.Exec(d, "INSERT INTO message (chat_id, id, date, json) VALUES (?, ?, ?, ?)", m.chat, m.id, 1_790_000_000+m.id, js(m.m))
+		db.Exec(d, "INSERT INTO telegram_message (chat_id, id, date, json) VALUES (?, ?, ?, ?)", m.chat, m.id, 1_790_000_000+m.id, js(m.m))
 	}
 	return d
 }

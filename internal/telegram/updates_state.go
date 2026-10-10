@@ -3,7 +3,7 @@
 // reads, new chats, as well as new messages) rather than starting again from now.
 //
 // The account's common sequence is kept (private chats and small groups), and the sequences of the
-// supergroups telegram.db keeps: each is asked for on every start (one request each), for what
+// supergroups the store keeps: each is asked for on every start (one request each), for what
 // changed there meanwhile (edits, deletions, reactions), as Telegram Desktop does. Broadcast
 // channels' stay in memory (they are not kept).
 package telegram
@@ -36,7 +36,7 @@ type fileState struct {
 	mu       sync.Mutex
 	state    *savedState
 	channels map[int64]int
-	kept     map[int64]bool // channels telegram.db keeps (asked once each)
+	kept     map[int64]bool // channels the store keeps (asked once each)
 }
 
 var _ updates.StateStorage = (*fileState)(nil)
@@ -155,7 +155,7 @@ func (s *fileState) SetChannelPts(_ context.Context, user, channel int64, pts in
 	kept, known := s.kept[channel]
 	s.mu.Unlock()
 	if !known {
-		kept = keptChat(-channelMark - channel) // asked once, outside the lock: it reads telegram.db
+		kept = keptChat(-channelMark - channel) // asked once, outside the lock: it reads the store
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -187,7 +187,7 @@ func (s *fileState) ForEachChannels(ctx context.Context, user int64, f func(cont
 	return nil
 }
 
-// storedHashes are the channels' access hashes as telegram.db keeps them (gotd's own are in memory:
+// storedHashes are the channels' access hashes as the store keeps them (gotd's own are in memory:
 // after a start, a kept supergroup's sequence could not be asked for without one).
 type storedHashes struct {
 	mu     sync.Mutex

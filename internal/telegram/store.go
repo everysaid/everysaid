@@ -1,4 +1,4 @@
-// The store, `<cache>/telegram/telegram.db` (internal/telegramstore), as the sync and the live
+// The store, the store (keys.db's tables telegram_*) (internal/telegramstore), as the sync and the live
 // connection write it.
 package telegram
 
@@ -11,9 +11,12 @@ import (
 )
 
 // Folder is where the Telegram store and its media are.
-func Folder() string    { return filepath.Dir(telegramstore.DB()) }
+func Folder() string    { return filepath.Dir(telegramstore.Media()) }
 func DBPath() string    { return telegramstore.DB() }
 func MediaPath() string { return telegramstore.Media() }
+
+// readStore is the store for reading: a pool of its own on keys.db, closed by the caller.
+func readStore() (*sql.DB, error) { return telegramstore.Open(DBPath()) }
 
 // openStore opens (making it if new) the store at path; one connection, so that its writes are
 // in one transaction at a time as Python's sqlite3 connection makes them.

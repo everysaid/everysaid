@@ -239,7 +239,7 @@ func (c *conn) inputPeer(id int64) (tg.InputPeerClass, error) {
 	return nil, fmt.Errorf("could not find the input entity for %d", id)
 }
 
-// peer is inputPeer, else as telegram.db keeps the chat (a chat left or deleted is no longer among
+// peer is inputPeer, else as the store keeps the chat (a chat left or deleted is no longer among
 // the dialogs), else reading the dialogs again for a chat not met yet (new since they were read, or a
 // connection shared before it read them): once for each id, as reading them all is many requests.
 func (c *conn) peer(ctx context.Context, id int64) (tg.InputPeerClass, error) {
@@ -263,12 +263,12 @@ func (c *conn) peer(ctx context.Context, id int64) (tg.InputPeerClass, error) {
 	return c.inputPeer(id)
 }
 
-// storedPeer is a chat or user as telegram.db keeps it, as an input peer.
+// storedPeer is a chat or user as the store keeps it, as an input peer.
 func storedPeer(id int64) (p tg.InputPeerClass, ok bool) {
 	if _, err := os.Stat(DBPath()); err != nil {
 		return nil, false // no store yet
 	}
-	store, err := db.ReadOnly(DBPath())
+	store, err := readStore()
 	if err != nil {
 		return nil, false
 	}
@@ -278,7 +278,7 @@ func storedPeer(id int64) (p tg.InputPeerClass, ok bool) {
 		}
 	}()
 	defer store.Close()
-	for _, q := range []string{"SELECT json FROM chat WHERE id = ?", "SELECT json FROM entity WHERE id = ?"} {
+	for _, q := range []string{"SELECT json FROM telegram_chat WHERE id = ?", "SELECT json FROM telegram_entity WHERE id = ?"} {
 		raw := db.Str(store, q, id)
 		if raw == "" {
 			continue

@@ -1,5 +1,5 @@
 // Ports everysaid/telegram_store.py (plain, dump): gotd's objects written as the JSON that Telethon's
-// to_dict() gave, so that telegram.db reads the same whichever wrote it.
+// to_dict() gave, so that the store reads the same whichever wrote it.
 //
 // Telethon's dict of an object is {"_": its class name, then its fields}: the class name is the TL
 // name without its namespace, camel-cased ("messageMediaPhoto" -> "MessageMediaPhoto"); the fields
@@ -99,7 +99,7 @@ func meta(t reflect.Type) *typeMeta {
 	return m
 }
 
-// Dump is an object as telegram.db keeps it: Telethon's to_dict() made JSON by plain(), written as
+// Dump is an object as the store keeps it: Telethon's to_dict() made JSON by plain(), written as
 // Python's json.dumps(ensure_ascii=False, separators=(",", ":")) writes it.
 func Dump(obj tdp.Object) string {
 	var b bytes.Buffer
@@ -341,7 +341,7 @@ func classes() map[string][]reflect.Type {
 	return byName
 }
 
-// Load is an object of telegram.db's JSON as gotd's: the reverse of Dump. Binary values (left out
+// Load is an object of the store's JSON as gotd's: the reverse of Dump. Binary values (left out
 // by plain()) come back empty but set, so that Dump leaves them out again.
 func Load(data []byte) (tdp.Object, error) {
 	d := json.NewDecoder(bytes.NewReader(data))

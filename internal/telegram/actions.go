@@ -1,7 +1,7 @@
 // What the user does to a message from the app (no Python counterpart): a reaction put, changed or
 // taken back, an edit of their own message, a deletion of it for everyone. Each goes through the
 // connection open in this process, as sending does, and what Telegram says of the message afterwards
-// is written to telegram.db and imported, the way the live connection brings the same change made on
+// is written to the store and imported, the way the live connection brings the same change made on
 // a phone.
 package telegram
 
@@ -113,7 +113,7 @@ func onMessage(ctx context.Context, c *plugins.Context, conv plugins.Conversatio
 	})
 }
 
-// restore writes the message as Telegram has it now to telegram.db and imports it: the message the
+// restore writes the message as Telegram has it now to the store and imports it: the message the
 // answer carries (an edit's), else the message asked for again (a reaction's answer says only the
 // reactions).
 func restore(ctx context.Context, c *plugins.Context, cn *conn, peer tg.InputPeerClass, chat int64, id int, r tg.UpdatesClass) error {

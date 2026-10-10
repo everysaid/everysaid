@@ -78,7 +78,7 @@ own (users, passkeys, sessions, push subscriptions, audit; mode 600).
 <cache>/iphone/whatsapp-calls.sqlite      WhatsApp's call log (`CallHistory.sqlite`)
 <cache>/iphone/viber-media/, whatsapp-media/   new media of messages, copied by each sync
 <data>/media/<ab>/<sha256><ext>           the archive's media (config [media] store), until they go to the library
-<cache>/telegram/telegram.db              Telegram's messages, as read by telegram-sync
+<data>/keys.db (telegram_*)              Telegram's messages until imported, as read by telegram-sync
 <cache>/telegram/media/                   their files (telegram-sync --media)
 <data>/whatsapp-bridge/                   the WhatsApp source's store (default; [whatsapp] bridge)
 ```
@@ -280,7 +280,7 @@ each time, the API works for any user and brings only what is new.
 - `--login`: the code arrives inside Telegram, not by SMS; the session, full access to the account,
   is kept as a secret (`telegram-session-go`).
 - `--survey`: every chat with its kind, size and dates, no content, in `<cache>/telegram/survey.tsv`.
-- With no option: every chat but channels and bots into `<cache>/telegram/telegram.db`, each message
+- With no option: every chat but channels and bots into the Telegram store (`keys.db`, tables `telegram_*`), each message
   whole (as JSON); later runs bring only what is new, from where each chat's history was last read
   with no gap (`read_through`: a message the live source stored does not hide one missed below it).
   A supergroup that was a basic group brings the basic group's history too, as a chat of its own.

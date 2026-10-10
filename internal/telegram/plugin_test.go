@@ -65,9 +65,9 @@ func TestMedia(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	d, _ := db.ReadOnly(DBPath())
+	d, _ := readStore()
 	defer d.Close()
-	if files := db.Strs(d, "SELECT file FROM message WHERE file IS NOT NULL ORDER BY id"); !reflect.DeepEqual(files, []string{"2/300.mp4", "2/301", "2/302.ogg"}) {
+	if files := db.Strs(d, "SELECT file FROM telegram_message WHERE file IS NOT NULL ORDER BY id"); !reflect.DeepEqual(files, []string{"2/300.mp4", "2/301", "2/302.ogg"}) {
 		t.Fatalf("%v", files)
 	}
 	if !strings.HasSuffix(out.String(), "3 downloaded into "+MediaPath()+"\n") {
@@ -182,7 +182,7 @@ func TestStoreMessages(t *testing.T) {
 	if !reflect.DeepEqual(in.keys, []map[[2]int64]bool{{{2, 5}: true}}) {
 		t.Fatalf("%v", in.keys)
 	}
-	// a chat the user left out: kept in telegram.db, not imported
+	// a chat the user left out: kept in the store, not imported
 	group := &tg.Chat{ID: 10, Title: "Friends", Photo: &tg.ChatPhotoEmpty{}}
 	if n, _ := storeMessages(c, group, []sent{{text(1, &tg.PeerChat{ChatID: 10}, 2, 1600000000, "g", false), nil}}); n != 0 || in.imports != 1 {
 		t.Fatal("skip_chats")
@@ -193,12 +193,12 @@ func TestStoreMessages(t *testing.T) {
 	if n, _ := storeMessages(c, ch, []sent{{text(1, &tg.PeerChannel{ChannelID: 20}, 0, 1600000000, "n", false), nil}}); n != 0 {
 		t.Fatal("channel")
 	}
-	d, _ := db.ReadOnly(DBPath())
+	d, _ := readStore()
 	defer d.Close()
-	if ids := db.Ints(d, "SELECT id FROM chat ORDER BY id"); !reflect.DeepEqual(ids, []int64{-10, 2}) {
+	if ids := db.Ints(d, "SELECT id FROM telegram_chat ORDER BY id"); !reflect.DeepEqual(ids, []int64{-10, 2}) {
 		t.Fatalf("%v", ids)
 	}
-	// reads: only chats telegram.db knows, only when they move on
+	// reads: only chats the store knows, only when they move on
 	if err := noteReads(c, []readItem{{2, intp(5), nil}, {99, intp(1), nil}}, false); err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestStoreMessages(t *testing.T) {
 	}
 	var outboxAt *int64
 	noteReads(c, []readItem{{2, nil, intp(5)}}, true)
-	db.Row(d, "SELECT outbox_at FROM chat_read WHERE chat_id = 2", nil, &outboxAt)
+	db.Row(d, "SELECT outbox_at FROM telegram_chat_read WHERE chat_id = 2", nil, &outboxAt)
 	if outboxAt == nil {
 		t.Fatal("seen now: its time")
 	}
@@ -284,9 +284,9 @@ func TestSendAndRead(t *testing.T) {
 	if r, ok := req.ReplyTo.(*tg.InputReplyToMessage); !ok || r.ReplyToMsgID != 7 {
 		t.Fatal("reply")
 	}
-	d, _ := db.ReadOnly(DBPath())
+	d, _ := readStore()
 	var js string
-	db.Row(d, "SELECT json FROM message WHERE chat_id = 2 AND id = 1001", nil, &js)
+	db.Row(d, "SELECT json FROM telegram_message WHERE chat_id = 2 AND id = 1001", nil, &js)
 	d.Close()
 	var m map[string]any
 	json.Unmarshal([]byte(js), &m)
@@ -447,8 +447,8 @@ func TestLiveFiles(t *testing.T) {
 		t.Fatal(err1, err2)
 	}
 	store, _ := openStore(DBPath())
-	db.Exec(store, "UPDATE message SET date = ? WHERE id IN (400, 402)", now-86400)
-	db.Exec(store, "UPDATE message SET date = ? WHERE id = 401", now-8*86400)
+	db.Exec(store, "UPDATE telegram_message SET date = ? WHERE id IN (400, 402)", now-86400)
+	db.Exec(store, "UPDATE telegram_message SET date = ? WHERE id = 401", now-8*86400)
 	store.Close()
 	files = newFileQueue()
 	if err := files.recent(c); err != nil {
@@ -482,10 +482,10 @@ func TestPollResults(t *testing.T) {
 	if err := notePoll(c, u); err != nil {
 		t.Fatal(err)
 	}
-	d, _ := db.ReadOnly(DBPath())
+	d, _ := readStore()
 	defer d.Close()
 	var voters int64
-	db.Row(d, "SELECT coalesce(json_extract(json, '$.media.results.total_voters'), 0) FROM message WHERE id = 7", nil, &voters)
+	db.Row(d, "SELECT coalesce(json_extract(json, '$.media.results.total_voters'), 0) FROM telegram_message WHERE id = 7", nil, &voters)
 	if voters != 4 || len(in.keys) != 2 {
 		t.Fatalf("voters %d, imports %v", voters, in.keys)
 	}
@@ -504,10 +504,10 @@ func TestReactionsLater(t *testing.T) {
 	if err := noteReactions(c, u); err != nil {
 		t.Fatal(err)
 	}
-	d, _ := db.ReadOnly(DBPath())
+	d, _ := readStore()
 	defer d.Close()
 	var emoji string
-	db.Row(d, "SELECT coalesce(json_extract(json, '$.reactions.results[0].reaction.emoticon'), '') FROM message WHERE id = 9",
+	db.Row(d, "SELECT coalesce(json_extract(json, '$.reactions.results[0].reaction.emoticon'), '') FROM telegram_message WHERE id = 9",
 		nil, &emoji)
 	if emoji != "👍" || len(in.keys) != 2 {
 		t.Fatalf("emoji %q, imports %v", emoji, in.keys)

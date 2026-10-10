@@ -19,7 +19,7 @@ func TestChannelStateKept(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db.Exec(w, "INSERT INTO chat (id, kind, title, archived, json) VALUES (?, 'supergroup', 'G', 0, '{}')", -channelMark-40)
+	db.Exec(w, "INSERT INTO telegram_chat (id, kind, title, archived, json) VALUES (?, 'supergroup', 'G', 0, '{}')", -channelMark-40)
 	w.Close()
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "state.json")
@@ -63,11 +63,11 @@ func TestMinReactionsKeepOwn(t *testing.T) {
 	if err := noteReactions(c, u); err != nil {
 		t.Fatal(err)
 	}
-	d, _ := db.ReadOnly(DBPath())
+	d, _ := readStore()
 	defer d.Close()
 	var order, count int64 = -1, 0
 	db.Row(d, "SELECT coalesce(json_extract(json, '$.reactions.results[0].chosen_order'), -1), "+
-		"json_extract(json, '$.reactions.results[0].count') FROM message WHERE id = 9", nil, &order, &count)
+		"json_extract(json, '$.reactions.results[0].count') FROM telegram_message WHERE id = 9", nil, &order, &count)
 	if order != 0 || count != 2 {
 		t.Fatalf("chosen %d, count %d", order, count)
 	}
