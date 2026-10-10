@@ -59,6 +59,7 @@ func init() {
 		"{service}: the list of chats not brought ({e})":         "{service}: δεν ήρθε ο κατάλογος των συνομιλιών ({e})",
 		"{service}: the encrypted chats are not connected ({e})": "{service}: οι κρυπτογραφημένες συνομιλίες δεν συνδέθηκαν ({e})",
 		"{service}: the encrypted chats' device was logged out":  "{service}: η συσκευή των κρυπτογραφημένων συνομιλιών αποσυνδέθηκε",
+		"{service}: a chat not brought ({e})":                    "{service}: δεν ήρθε μια συνομιλία ({e})",
 
 		// their errors
 		"not connected to Messenger":                                                          "δεν υπάρχει σύνδεση με το Messenger",

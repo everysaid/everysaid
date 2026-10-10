@@ -80,7 +80,11 @@ func (f *fakeIG) GetThread(ctx context.Context, req *slidetypes.GetThreadInfoReq
 func (f *fakeIG) PaginateMessages(ctx context.Context, req *slidetypes.PaginateMessagesRequest) (*slidetypes.PaginateMessagesResponse, error) {
 	f.record(req)
 	out := &slidetypes.PaginateMessagesResponse{}
-	out.ThreadInfo.AsIGDirectThread = &slidetypes.MessagesOnlyThread{ID: req.ThreadID, Messages: f.pages[*req.AfterCursor]}
+	cursor := ""
+	if req.AfterCursor != nil {
+		cursor = *req.AfterCursor
+	}
+	out.ThreadInfo.AsIGDirectThread = &slidetypes.MessagesOnlyThread{ID: req.ThreadID, Messages: f.pages[cursor]}
 	return out, nil
 }
 func (f *fakeIG) PaginateMailbox(ctx context.Context, req *slidetypes.PaginateMailboxRequest) (*slidetypes.PaginateMailboxResponse, error) {
@@ -154,10 +158,10 @@ func TestLiveInstagram(t *testing.T) {
 			PageInfo: slidetypes.PageInfo{EndCursor: "c1", HasNextPage: true}}}
 	f := &fakeIG{mailbox: &slidetypes.Mailbox{UQSeqID: 50, ThreadsByFolder: slidetypes.Edged[slidetypes.Node[slidetypes.WrappedThreadInfo]]{
 		Edges: []slidetypes.Node[slidetypes.WrappedThreadInfo]{{Node: slidetypes.WrappedThreadInfo{AsIGDirectThread: thread}}}}},
-		pages: map[string]*slidetypes.SlideMessages{"c1": {Edges: []slidetypes.Node[*slidetypes.Message]{
+		pages: map[string]*slidetypes.SlideMessages{"": thread.SlideMessages, "c1": {Edges: []slidetypes.Node[*slidetypes.Message]{
 			{Node: igText("ig.0", me, 1599999999000, "older")}}}},
 		threads: map[string]*slidetypes.ThreadInfo{"short2": {ID: "short2", ThreadID: "long2", ThreadKey: 5000, IsGroup: true,
-			ThreadTitle: "IG group", Users: []*slidetypes.User{{InteropMessagingUserFBID: ann, FullName: "Ann Roe"}}}}}
+			ThreadTitle: "IG group", SlideMessages: &slidetypes.SlideMessages{}, Users: []*slidetypes.User{{InteropMessagingUserFBID: ann, FullName: "Ann Roe"}}}}}
 	defer useFakeIG(f)()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -234,12 +238,16 @@ func TestLiveInstagram(t *testing.T) {
 		case *slidetypes.UnsendMessageRequest:
 			seen = append(seen, "unsend:"+x.SendData.ThreadID)
 		case *slidetypes.PaginateMessagesRequest:
-			seen = append(seen, "history:"+*x.AfterCursor)
+			c := ""
+			if x.AfterCursor != nil {
+				c = *x.AfterCursor
+			}
+			seen = append(seen, "history:"+c)
 		case *slidetypes.GetThreadInfoRequest:
 			seen = append(seen, "thread:"+x.ThreadFBID)
 		}
 	}
-	want := []string{"history:c1", "thread:short2", "text", "created:👍", "deleted:👍", "edit:hey!", "unsend:long1"}
+	want := []string{"history:", "history:c1", "thread:short2", "text", "created:👍", "deleted:👍", "edit:hey!", "unsend:long1"}
 	if !reflect.DeepEqual(seen, want) {
 		t.Errorf("requests: %v", seen)
 	}

@@ -75,6 +75,8 @@ type liveSession struct {
 	igHistory chan igHistoryOp
 	saved     time.Time
 	connected atomic.Bool
+	stale     atomic.Bool // Messenger: a table Meta has as had was not written (its state is not kept)
+	linking   atomic.Bool // the encrypted chats being connected
 }
 
 // item is something to write, in order: a table, an encrypted chat's event or an Instagram change,
@@ -85,6 +87,7 @@ type item struct {
 	initial bool
 	wa      any
 	ops     *ops
+	read    func(o *ops) // what to read in the loop
 	done    chan error
 }
 
@@ -175,6 +178,8 @@ func (s *liveSession) thread(key string) threadInfo {
 // noteThread keeps what was learned of a thread (in keys.db, where it changed).
 func (s *liveSession) noteThread(key string, t threadInfo) {
 	s.mu.Lock()
+	s.tr.Lock()
+	defer s.tr.Unlock()
 	old, ok := s.threads[key]
 	if t.FBKey == "" {
 		t.FBKey = old.FBKey
@@ -292,6 +297,7 @@ func live(ctx context.Context, c *plugins.Context, service string) error {
 	}
 	register(s)
 	defer func() {
+		cancel()
 		unregister(s)
 		s.cli.SetEventHandler(nil)
 		s.cli.Disconnect()
@@ -301,7 +307,10 @@ func live(ctx context.Context, c *plugins.Context, service string) error {
 		s.save(true)
 	}()
 	if initial != nil {
-		s.handle(ctx, item{tbl: initial, initial: true})
+		if err := s.handle(ctx, item{tbl: initial, initial: true}); err != nil {
+			s.stale.Store(true)
+			return err
+		}
 	}
 	if err := s.cli.Connect(ctx); err != nil {
 		s.sessMu.Lock()
@@ -356,14 +365,24 @@ func (s *liveSession) handle(ctx context.Context, it item) error {
 	switch {
 	case it.ops != nil:
 		o = it.ops
+	case it.read != nil:
+		s.tr.Lock()
+		it.read(o)
+		s.tr.Unlock()
 	case it.tbl != nil:
+		s.tr.Lock()
 		o = s.tr.translate(it.tbl)
+		s.tr.Unlock()
 	case it.wa != nil:
 		switch e := it.wa.(type) {
 		case *events.FBMessage:
+			s.tr.Lock()
 			s.tr.waMessage(o, e)
+			s.tr.Unlock()
 		case *events.Receipt:
+			s.tr.Lock()
 			s.tr.waReceipt(o, e)
+			s.tr.Unlock()
 		default:
 			var err error
 			if o, err = s.handleIG(ctx, e); err != nil {
@@ -374,6 +393,10 @@ func (s *liveSession) handle(ctx context.Context, it item) error {
 	res, err := s.apply(o)
 	if err != nil {
 		s.c.Log("{service}: not written into the archive ({e})", map[string]any{"service": s.label(), "e": err.Error()})
+		if it.tbl != nil && it.done == nil {
+			s.stale.Store(true) // Meta has it as had: the page again at the next connection
+			s.fail(err)
+		}
 		return err
 	}
 	if len(res.files) > 0 && s.c.Bool("media") {
@@ -392,11 +415,19 @@ func (s *liveSession) handle(ctx context.Context, it item) error {
 			}
 		}
 		for _, h := range o.igHistory {
-			if h.HasMore && h.IGID != "" && h.Cursor != "" && res.allNew(h.IDs) {
+			if !h.First && h.HasMore && h.IGID != "" && h.Cursor != "" && res.allNew(h.IDs) {
 				select {
 				case s.igHistory <- h:
 				default:
 				}
+			}
+		}
+	}
+	for _, h := range o.igHistory {
+		if h.First { // a thread's newest messages: always
+			select {
+			case s.igHistory <- h:
+			default:
 			}
 		}
 	}
@@ -414,12 +445,15 @@ func (s *liveSession) save(now bool) {
 	if s.loggedOut || !now && time.Since(s.saved) < time.Minute {
 		return
 	}
+	stale := s.stale.Load() || s.ig == nil && len(s.events) > 0 // tables Meta has as had, not written
 	s.saved = time.Now()
 	jar, dump := s.cookieJar, s.dumpState
 	if ck, err := json.Marshal(jar()); err == nil && cookiesOf(&session{Platform: s.sess.Platform, Cookies: ck}).IsLoggedIn() {
 		s.sess.Cookies = ck
 	}
-	if st, err := dump(); err == nil && len(st) > 0 {
+	if stale {
+		s.sess.State = nil
+	} else if st, err := dump(); err == nil && len(st) > 0 {
 		s.sess.State = st
 	}
 	s.sess.Name = s.selfName
@@ -531,9 +565,10 @@ func (s *liveSession) threadBackfill(ctx context.Context) {
 
 // connectE2EE connects the encrypted chats, with the account's device (registered once).
 func (s *liveSession) connectE2EE(ctx context.Context) {
-	if s.waClient() != nil {
+	if s.waClient() != nil || !s.linking.CompareAndSwap(false, true) {
 		return
 	}
+	defer s.linking.Store(false)
 	if err := s.e2eeConnect(ctx); err != nil && ctx.Err() == nil {
 		s.c.Log("{service}: the encrypted chats are not connected ({e})", map[string]any{"service": s.label(), "e": err.Error()})
 	}
@@ -570,10 +605,13 @@ func (s *liveSession) e2eeConnect(ctx context.Context) error {
 	e.SynchronousAck = true
 	e.EnableDecryptedEventBuffer = true
 	e.AddEventHandlerWithSuccessStatus(func(evt any) bool { return s.onWA(ctx, evt) })
+	if err := e.Connect(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	s.e2ee = e
 	s.mu.Unlock()
-	return e.Connect()
+	return nil
 }
 
 // onWA is what the encrypted chats say; a message is acknowledged once it is written.
