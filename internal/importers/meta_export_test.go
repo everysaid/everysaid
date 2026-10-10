@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"everysaid/internal/archive"
 )
 
 // moji is a text as Meta's JSON writes it: each UTF-8 byte a Latin-1 character.
@@ -199,5 +201,20 @@ func TestMetaExportOfTheEncryptedChats(t *testing.T) {
 	a.Row("SELECT k.name FROM message m JOIN message_kind k ON k.id = m.kind_id WHERE m.ts = ?", []any{metaTS2}, &kind)
 	if kind != "video" || a.Int("SELECT count(*) FROM attachment") != 1 {
 		t.Errorf("the video: %q, %d files", kind, a.Int("SELECT count(*) FROM attachment"))
+	}
+}
+
+func TestMetaExportKeepsOnceWhatAnAdiumLogHas(t *testing.T) {
+	a, _ := newArchive(t)
+	src := a.Source("adium", "", "", "")
+	john := a.Address(archive.H("id", "123", "messenger"))
+	conv := a.Conversation("messenger", []archive.Handle{archive.H("id", "123", "messenger")}, "", "")
+	// a log keeps seconds only
+	a.AddMessage(src, "", archive.Message{Service: "messenger", ConversationID: conv, TS: metaTS1 / 1000 * 1000,
+		SenderID: john, Kind: "text", Text: "look"})
+	a.Commit()
+	must(t, MetaExport(a, nil, MetaExportOptions{Dir: metaExport(t), Service: "messenger"}))
+	if n := a.Int("SELECT count(*) FROM message WHERE text = 'look'"); n != 1 {
+		t.Errorf("the same message twice: %d", n)
 	}
 }
