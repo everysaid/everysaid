@@ -299,8 +299,9 @@ func PhotosViberIphone(a *archive.Archive, s *Store) {
 
 // ViberDesktopPhotos: the photos in Viber Desktop's Avatars folders (avatars: each account's),
 // matched to its contacts by Contact.DownloadID and to its group chats by ChatInfo.IconID (a file
-// named by the id, or by its MD5): from the file's time to the snapshot's. Viber's own files are
-// left where they are (it makes them again).
+// named by the id, or by its MD5): from the file's time to the snapshot's. The file's time is when
+// Viber Desktop downloaded it, not when the photo was set: the first sighting known, nothing more.
+// Viber's own files are left where they are (it makes them again).
 func ViberDesktopPhotos(database string, avatars ...string) MediaStep {
 	return func(a *archive.Archive, s *Store) {
 		files := newPhotoFiles(avatars...)

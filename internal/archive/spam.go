@@ -63,6 +63,9 @@ func PurgeSpam(q db.Querier, only []int64) (out Purged) {
 		db.Exec(q, "DELETE FROM call WHERE id IN "+marks, ids...)
 	})
 	chunked(convs, func(marks string, ids []any) {
+		for _, s := range db.Strs(q, "SELECT DISTINCT sha256 FROM chat_photo WHERE sha256 IS NOT NULL AND conversation_id IN "+marks, ids...) {
+			shas[s] = true
+		}
 		for _, t := range []string{"state_report", "conversation_member", "chat_photo"} {
 			db.Exec(q, "DELETE FROM "+t+" WHERE conversation_id IN "+marks, ids...)
 		}

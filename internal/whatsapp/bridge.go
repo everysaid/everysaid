@@ -63,6 +63,7 @@ type Bridge struct {
 	client    *whatsmeow.Client
 	sender    *Sender
 	downloads *Downloads
+	photos    *Photos
 	pairing   chan chan error // a request to link a device, answered when it is done
 
 	// While an event, a send or a read is handled the stores stay open: ending takes this for
@@ -193,6 +194,8 @@ func (b *Bridge) Run(ctx context.Context) error {
 
 	client.AddEventHandlerWithSuccessStatus(func(evt any) bool { return b.handle(client, store, evt) })
 	hctx, stopHistory := context.WithCancel(context.Background())
+	pctx, stopPhotos := context.WithCancel(ctx)
+	defer stopPhotos()
 	b.historyWake = make(chan struct{}, 1)
 	go fetchHistory(hctx, client, store, b.historyWake, func(path string, h *events.HistorySync) bool {
 		if h == nil {
@@ -208,7 +211,7 @@ func (b *Bridge) Run(ctx context.Context) error {
 		if b.downloads != nil {
 			b.downloads.stop()
 		}
-		b.store, b.client, b.sender, b.downloads = nil, nil, nil, nil
+		b.store, b.client, b.sender, b.downloads, b.photos = nil, nil, nil, nil, nil
 		b.mu.Unlock()
 	}()
 
@@ -231,6 +234,14 @@ func (b *Bridge) Run(ctx context.Context) error {
 		if sender.enabled {
 			store.setState("send_enabled", "1")
 		}
+		own := ""
+		if client.Store.ID != nil {
+			own = client.Store.ID.ToNonAD().String()
+		}
+		p := startPhotos(pctx, client, store, own, b.log)
+		b.mu.Lock()
+		b.photos = p
+		b.mu.Unlock()
 		if b.opts.Download {
 			d := startDownloads(client, store, b.log)
 			b.mu.Lock()
@@ -333,6 +344,10 @@ func (b *Bridge) handle(client *whatsmeow.Client, store *MessageStore, evt any) 
 		handleGroupEvent(client, store, v, b.log)
 	case *events.Picture:
 		store.storeGroupPicture(v, b.log)
+		b.mu.Lock()
+		p := b.photos
+		b.mu.Unlock()
+		p.changed(store, v)
 	case *events.Blocklist:
 		handleBlocklist(client, store, v, b.log)
 	case *events.Connected, *events.Disconnected, *events.LoggedOut, *events.TemporaryBan,

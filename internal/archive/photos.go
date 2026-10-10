@@ -33,6 +33,7 @@ func (a *Archive) ChatPhoto(conversationID int64, service, sha string, seenAt in
 type photoRow struct {
 	id      int64
 	sha     sql.NullString
+	last    int64
 	removed sql.NullInt64
 }
 
@@ -43,20 +44,30 @@ func (a *Archive) photo(table, column string, id int64, service, sha string, t i
 	sid := a.Service.ID(service)
 	where := " FROM " + table + " WHERE " + column + " = ? AND service_id = ? "
 	var prev, next photoRow
-	hasPrev := a.Row("SELECT id, sha256, removed_at"+where+"AND first_seen <= ? ORDER BY first_seen DESC, id DESC LIMIT 1",
-		[]any{id, sid, t}, &prev.id, &prev.sha, &prev.removed)
-	hasNext := a.Row("SELECT id, sha256, removed_at"+where+"AND first_seen > ? ORDER BY first_seen, id LIMIT 1",
-		[]any{id, sid, t}, &next.id, &next.sha, &next.removed)
+	hasPrev := a.Row("SELECT id, sha256, last_seen, removed_at"+where+"AND first_seen <= ? ORDER BY first_seen DESC, id DESC LIMIT 1",
+		[]any{id, sid, t}, &prev.id, &prev.sha, &prev.last, &prev.removed)
+	hasNext := a.Row("SELECT id, sha256, last_seen, removed_at"+where+"AND first_seen > ? ORDER BY first_seen, id LIMIT 1",
+		[]any{id, sid, t}, &next.id, &next.sha, &next.last, &next.removed)
 	same := func(r photoRow) bool { return r.sha.Valid == (sha != "") && r.sha.String == sha }
-	switch {
-	case hasPrev && same(prev) && !(prev.removed.Valid && prev.removed.Int64 <= t):
+	if hasPrev && same(prev) && !(prev.removed.Valid && prev.removed.Int64 <= t) {
 		a.Exec("UPDATE "+table+" SET last_seen = max(last_seen, ?) WHERE id = ?", t, prev.id)
 		return
-	case hasNext && same(next):
-		a.Exec("UPDATE "+table+" SET first_seen = ? WHERE id = ?", t, next.id)
-	case sha == "" && !hasPrev && !hasNext:
+	}
+	if sha == "" && !hasPrev && !hasNext {
 		return // never seen with a photo: nothing to say
-	default:
+	}
+	// another photo seen within the one before's sightings (a history read late, two sources'
+	// times): that one is split around it, its last sighting a row of its own after this one
+	if hasPrev && prev.last > t {
+		a.Exec("UPDATE "+table+" SET last_seen = first_seen, removed_at = NULL WHERE id = ?", prev.id)
+		a.Exec("INSERT INTO "+table+" ("+column+", service_id, sha256, first_seen, last_seen, removed_at) VALUES (?, ?, ?, ?, ?, ?)",
+			id, sid, prev.sha, prev.last, prev.last, prev.removed)
+		prev.removed = sql.NullInt64{}
+		hasNext, next = true, photoRow{sha: prev.sha}
+	}
+	if hasNext && same(next) && next.id != 0 {
+		a.Exec("UPDATE "+table+" SET first_seen = ? WHERE id = ?", t, next.id)
+	} else {
 		a.Exec("INSERT INTO "+table+" ("+column+", service_id, sha256, first_seen, last_seen) VALUES (?, ?, ?, ?, ?)",
 			id, sid, NullStr(sha), t, t)
 	}
