@@ -21,12 +21,9 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	if os.Getenv("EVERYSAID_FAKE_SIGNAL") == "1" {
-		fakeHelper()
-		os.Exit(0)
-	}
-	os.Setenv("EVERYSAID_FAKE_SIGNAL", "1") // for the helpers the tests start: this binary, as the fake
-	keyring.MockInit()                      // secrets in memory, never the user's keyring
+	newClient, forgetDevice, available = startFake, dropFake, true // the fake, in place of Signal
+	keepFor = 100 * 365 * 24 * time.Hour                           // the store keeps everything, but in TestPrune
+	keyring.MockInit()                                             // secrets in memory, never the user's keyring
 	os.Exit(m.Run())
 }
 
@@ -120,7 +117,7 @@ func TestImport(t *testing.T) {
 	media := filepath.Join(dir, "cache", "signal", "1", "media")
 	os.MkdirAll(media, 0o700)
 	os.WriteFile(filepath.Join(media, "3000-33333333-0.jpg"), []byte("a picture"), 0o600)
-	s, err := OpenStore(filepath.Join(dir, "cache", "signal", "1", "signal.db"))
+	s, err := OpenStore("", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +130,7 @@ func TestImport(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	n, err := Import(a, s.Path, media, 0, nil)
+	n, err := Import(a, s, media, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +226,7 @@ func TestImport(t *testing.T) {
 			"emoji": "👍", "target_author": fakeOwn, "target_ts": 2000},
 		map[string]any{"event": "delete", "chat": map[string]any{"kind": "group", "id": group}, "sender": bob,
 			"ts": 3100, "target_author": bob, "target_ts": 3000})
-	n, err = Import(a, s.Path, media, 0, nil)
+	n, err = Import(a, s, media, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +236,7 @@ func TestImport(t *testing.T) {
 	if num("SELECT count(*) FROM reaction") != 0 || num("SELECT deleted FROM message WHERE key = ?", bob+":3000") != 1 {
 		t.Fatal("changes")
 	}
-	if n, _ = Import(a, s.Path, media, 0, nil); n != (Counts{}) {
+	if n, _ = Import(a, s, media, 0, nil); n != (Counts{}) {
 		t.Fatalf("third import %+v", n)
 	}
 	if num("SELECT count(*) FROM message") != 6 || num("SELECT count(*) FROM call") != 2 || num("SELECT count(*) FROM attachment") != 1 {
@@ -304,7 +301,7 @@ func newPlugin(t *testing.T, settings M) (*plugins.Context, *host, string) {
 	}
 	t.Cleanup(store.Close)
 	h := &host{store: store}
-	all := M{"helper": os.Args[0]}
+	all := M{}
 	for k, v := range settings {
 		all[k] = v
 	}
@@ -389,9 +386,6 @@ func TestPlugin(t *testing.T) {
 	}
 	if err := p.Action(c, "link"); err == nil || !strings.Contains(err.Error(), "Already linked") {
 		t.Fatalf("second link: %v", err)
-	}
-	if c.Secret("passphrase") == "" {
-		t.Fatal("the store's passphrase is kept")
 	}
 
 	// an import brings what waited on the server
@@ -501,13 +495,16 @@ func TestPlugin(t *testing.T) {
 	}
 }
 
-func TestNoHelper(t *testing.T) {
-	c, _, _ := newPlugin(t, M{"helper": filepath.Join(t.TempDir(), "nothing")})
-	if ok, _ := (Plugin{}).Check(c); ok {
-		t.Fatal("ready without a helper")
+// Built without Signal: the source says so, and runs nothing.
+func TestNotBuiltIn(t *testing.T) {
+	c, _, _ := newPlugin(t, nil)
+	available = false
+	defer func() { available = true }()
+	if ok, why := (Plugin{}).Check(c); ok || !strings.Contains(why, "built with Signal") {
+		t.Fatalf("ready without Signal: %s", why)
 	}
-	if err := (Plugin{}).RunImport(c); err == nil {
-		t.Fatal("ran without a helper")
+	if err := (Plugin{}).RunImport(c); err == nil || !strings.Contains(err.Error(), "built without Signal") {
+		t.Fatalf("ran without Signal: %v", err)
 	}
 }
 
@@ -516,7 +513,7 @@ func TestNoHelper(t *testing.T) {
 func TestEditChain(t *testing.T) {
 	dir := folders(t)
 	path := newArchive(t, dir)
-	s, err := OpenStore(filepath.Join(dir, "cache", "signal", "1", "signal.db"))
+	s, err := OpenStore("", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -541,7 +538,7 @@ func TestEditChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	if _, err := Import(a, s.Path, filepath.Join(dir, "media"), 0, nil); err != nil {
+	if _, err := Import(a, s, filepath.Join(dir, "media"), 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	str := func(q string, args ...any) string { return db.Str(a.DB, q, args...) }
@@ -567,27 +564,11 @@ func TestEditChain(t *testing.T) {
 	}
 }
 
-// A store made with a passphrase the keyring no longer gives (it is locked, or was cleared) is not
-// given a new one: that would leave it unreadable, the device's keys with it.
-func TestNoNewPassphraseForAStore(t *testing.T) {
-	c, _, _ := newPlugin(t, nil)
-	c.DeleteSecret("passphrase") // an earlier test's instance of the same id
-	os.MkdirAll(StoreDir(c), 0o700)
-	os.WriteFile(filepath.Join(StoreDir(c), "presage.db"), []byte("encrypted"), 0o600)
-	err := Plugin{}.RunImport(c)
-	if err == nil || !strings.Contains(err.Error(), "passphrase") {
-		t.Fatalf("opened: %v", err)
-	}
-	if c.Secret("passphrase") != "" {
-		t.Fatal("a new passphrase was made for the store")
-	}
-}
-
-// Someone seen in a message, described by the helper once their profile came: their own name, the
+// Someone seen in a message, described by the client once their profile came: their own name, the
 // address book's name and number kept.
 func TestContactSeen(t *testing.T) {
-	dir := folders(t)
-	s, err := OpenStore(filepath.Join(dir, "signal.db"))
+	folders(t)
+	s, err := OpenStore("", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -597,7 +578,7 @@ func TestContactSeen(t *testing.T) {
 			map[string]any{"aci": anna, "phone": "+306900000001", "name": "Anna Rita", "profile_name": nil}}},
 		map[string]any{"event": "contact", "aci": anna, "phone": nil, "name": nil, "profile_name": "Anna P"},
 		map[string]any{"event": "contact", "aci": bob, "phone": nil, "name": nil, "profile_name": "Bob"})
-	got := db.Strs(s.DB, "SELECT aci || '|' || coalesce(phone, '') || '|' || coalesce(name, '') || '|' || coalesce(profile_name, '') FROM contact ORDER BY aci")
+	got := db.Strs(s.DB, "SELECT aci || '|' || coalesce(phone, '') || '|' || coalesce(name, '') || '|' || coalesce(profile_name, '') FROM signal_contact ORDER BY aci")
 	if strings.Join(got, ",") != anna+"|+306900000001|Anna Rita|Anna P,"+bob+"|||Bob" {
 		t.Fatalf("contacts %v", got)
 	}
@@ -661,7 +642,6 @@ func TestLinkOnce(t *testing.T) {
 // linked: a plugin linked through the fake, its script the given events.
 func linked(t *testing.T, settings M, events []map[string]any) (*plugins.Context, *host) {
 	c, h, _ := newPlugin(t, settings)
-	c.DeleteSecret("passphrase")
 	os.RemoveAll(StoreDir(c))
 	instanceOf(c.ID).status = Status{}
 	if err := (Plugin{}).Action(c, "link"); err != nil {
@@ -679,8 +659,8 @@ func waitFor(t *testing.T, what string, ok func() bool) {
 	}
 }
 
-// "Unlink this computer": what signal.db has goes into the archive, then the helper's store and
-// signal.db go (with the live connection stopped first), and a new link works.
+// "Unlink this computer": what the store has goes into the archive, then the device and the store
+// go (with the live connection stopped first), and a new link works.
 func TestUnlink(t *testing.T) {
 	c, _ := linked(t, nil, scriptEvents("none.jpg")[:3])
 	p := Plugin{}
@@ -704,10 +684,14 @@ func TestUnlink(t *testing.T) {
 	case <-time.After(20 * time.Second):
 		t.Fatal("live did not stop")
 	}
-	for _, gone := range []string{StoreDir(c), dbPath(c)} {
-		if _, err := os.Stat(gone); !os.IsNotExist(err) {
-			t.Fatalf("%s is still there", gone)
-		}
+	if _, err := os.Stat(StoreDir(c)); !os.IsNotExist(err) {
+		t.Fatal("the device is still there")
+	}
+	if st, _ := OpenStore("", c.ID); db.Int(st.DB, "SELECT count(*) FROM signal_message WHERE instance = ?", c.ID)+
+		db.Int(st.DB, "SELECT count(*) FROM signal_account WHERE instance = ?", c.ID) != 0 {
+		t.Fatal("the store is still there")
+	} else {
+		st.Close()
 	}
 	if c.State["aci"] != "" || num("SELECT count(*) FROM message") != 1 {
 		t.Fatalf("state %v, or the archive lost what it had", c.State)
@@ -757,8 +741,8 @@ func TestFetchAgain(t *testing.T) {
 	num := func(q string) int64 { return db.Int(c.Store().Read(), q) }
 	asked := func() int { return len(lines(t, filepath.Join(StoreDir(c), "fetch.jsonl"))) }
 	later := func() { // the hours between tries pass
-		st, _ := OpenStore(dbPath(c))
-		db.Exec(st.DB, "UPDATE fetch_at SET at = at - 7 * 3600")
+		st, _ := OpenStore("", c.ID)
+		db.Exec(st.DB, "UPDATE signal_fetch_at SET at = at - 7 * 3600")
 		st.Close()
 	}
 	for range 2 {
@@ -783,9 +767,9 @@ func TestFetchAgain(t *testing.T) {
 	}
 	// it comes at last
 	os.Remove(filepath.Join(StoreDir(c), "fetch-fails"))
-	st, _ := OpenStore(dbPath(c))
-	db.Exec(st.DB, "DELETE FROM fetch_try")
-	db.Exec(st.DB, "DELETE FROM fetch_at")
+	st, _ := OpenStore("", c.ID)
+	db.Exec(st.DB, "DELETE FROM signal_fetch_try")
+	db.Exec(st.DB, "DELETE FROM signal_fetch_at")
 	st.Close()
 	if err := p.RunImport(c); err != nil {
 		t.Fatal(err)
@@ -818,7 +802,6 @@ func TestReadOnThePhone(t *testing.T) {
 // A link that fails is said in the user's words (Signal's own in the log).
 func TestLinkFails(t *testing.T) {
 	c, _, _ := newPlugin(t, nil)
-	c.DeleteSecret("passphrase")
 	os.RemoveAll(StoreDir(c))
 	instanceOf(c.ID).status = Status{}
 	os.MkdirAll(StoreDir(c), 0o700)
@@ -837,7 +820,7 @@ func TestLinkFails(t *testing.T) {
 func TestEditOfAnImportedMessage(t *testing.T) {
 	dir := folders(t)
 	path := newArchive(t, dir)
-	s, err := OpenStore(filepath.Join(dir, "signal.db"))
+	s, err := OpenStore("", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -851,7 +834,7 @@ func TestEditOfAnImportedMessage(t *testing.T) {
 	}
 	defer a.Close()
 	run := func() Counts {
-		n, err := Import(a, s.Path, filepath.Join(dir, "media"), 0, nil)
+		n, err := Import(a, s, filepath.Join(dir, "media"), 0, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -988,11 +971,11 @@ func TestReactEditDelete(t *testing.T) {
 	if err := p.Delete(ctx, c, conv(anna), mine); err != nil {
 		t.Fatal(err)
 	}
-	sdb, err := db.ReadOnly(dbPath(c))
+	sdb, err := OpenStore("", c.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	newest := db.Int(sdb, "SELECT max(ts) FROM edit WHERE author = ?", fakeOwn) // the second edit's
+	newest := db.Int(sdb.DB, "SELECT max(ts) FROM signal_edit WHERE instance = ? AND author = ?", c.ID, fakeOwn) // the second edit's
 	sdb.Close()
 	a = acted()
 	if last := a[len(a)-1]; int64(last["target_ts"].(float64)) != newest || newest < 9_000_000 {
@@ -1012,7 +995,7 @@ func TestReactEditDelete(t *testing.T) {
 	}
 
 	// as many edits as Signal allows, then no more
-	s, err := OpenStore(dbPath(c))
+	s, err := OpenStore("", c.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1035,7 +1018,7 @@ func TestReactEditDelete(t *testing.T) {
 func TestReactionsAcrossEdits(t *testing.T) {
 	dir := folders(t)
 	path := newArchive(t, dir)
-	s, err := OpenStore(filepath.Join(dir, "signal.db"))
+	s, err := OpenStore("", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1052,7 +1035,7 @@ func TestReactionsAcrossEdits(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	if _, err := Import(a, s.Path, filepath.Join(dir, "media"), 0, nil); err != nil {
+	if _, err := Import(a, s, filepath.Join(dir, "media"), 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if n := db.Int(a.DB, "SELECT count(*) FROM reaction"); n != 0 {
@@ -1211,34 +1194,28 @@ func TestFind(t *testing.T) {
 	}
 }
 
-// What signal.db keeps of ids: a PNI's number and ACI, each kept when the other comes; an ACI's
-// number; and the PNIs the helper's history is to read.
+// What the store keeps of ids: a PNI's number and ACI, each kept when the other comes; an ACI's
+// number.
 func TestIDs(t *testing.T) {
-	dir := folders(t)
-	s, err := OpenStore(filepath.Join(dir, "signal.db"))
+	folders(t)
+	s, err := OpenStore("", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
 	const pni = "PNI:55555555-5555-5555-5555-555555555555"
-	if got := s.PNIs(); got == nil || len(got) != 0 {
-		t.Fatalf("no PNIs: %#v", got)
-	}
 	apply(t, s,
 		map[string]any{"event": "ids", "aci": nil, "pni": pni, "phone": "+306900000002"},
 		map[string]any{"event": "ids", "aci": anna, "pni": pni, "phone": nil},
 		map[string]any{"event": "ids", "aci": bob, "pni": nil, "phone": "+306900000003"},
 		map[string]any{"event": "message", "chat": contact("PNI:77777777-7777-7777-7777-777777777777"),
 			"sender": fakeOwn, "outgoing": true, "ts": 1, "text": "x"})
-	got := db.Strs(s.DB, "SELECT pni || '|' || coalesce(phone, '') || '|' || coalesce(aci, '') FROM pni")
+	got := db.Strs(s.DB, "SELECT pni || '|' || coalesce(phone, '') || '|' || coalesce(aci, '') FROM signal_pni")
 	if strings.Join(got, ",") != pni+"|+306900000002|"+anna {
 		t.Fatalf("pni %v", got)
 	}
-	if db.Str(s.DB, "SELECT phone FROM contact WHERE aci = ?", bob) != "+306900000003" {
+	if db.Str(s.DB, "SELECT phone FROM signal_contact WHERE aci = ?", bob) != "+306900000003" {
 		t.Fatal("an ACI's number")
-	}
-	if strings.Join(s.PNIs(), ",") != pni+",PNI:77777777-7777-7777-7777-777777777777" {
-		t.Fatalf("PNIs %v", s.PNIs())
 	}
 }
 
@@ -1247,7 +1224,7 @@ func TestIDs(t *testing.T) {
 func TestUnreadable(t *testing.T) {
 	dir := folders(t)
 	path := newArchive(t, dir)
-	s, err := OpenStore(filepath.Join(dir, "cache", "signal", "1", "signal.db"))
+	s, err := OpenStore("", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1273,14 +1250,14 @@ func TestUnreadable(t *testing.T) {
 	notes := func() int64 {
 		return db.Int(a.DB, "SELECT count(*) FROM message WHERE subtype_code = 'signal:unreadable'")
 	}
-	if _, err := Import(a, s.Path, "", 0, nil); err != nil {
+	if _, err := Import(a, s, "", 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if notes() != 0 { // not before a day has passed
 		t.Fatal("a note too early")
 	}
-	db.Exec(s.DB, "UPDATE unreadable SET at = at - 2 * 86400")
-	if _, err := Import(a, s.Path, "", 0, nil); err != nil {
+	db.Exec(s.DB, "UPDATE signal_unreadable SET at = at - 2 * 86400")
+	if _, err := Import(a, s, "", 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if notes() != 1 {
@@ -1292,7 +1269,7 @@ func TestUnreadable(t *testing.T) {
 	if chat != anna {
 		t.Fatalf("the note is in %q", chat)
 	}
-	if _, err := Import(a, s.Path, "", 0, nil); err != nil || notes() != 1 {
+	if _, err := Import(a, s, "", 0, nil); err != nil || notes() != 1 {
 		t.Fatalf("again: %v, %d notes", err, notes())
 	}
 }
@@ -1301,7 +1278,7 @@ func TestUnreadable(t *testing.T) {
 func TestLongText(t *testing.T) {
 	dir := folders(t)
 	path := newArchive(t, dir)
-	s, err := OpenStore(filepath.Join(dir, "cache", "signal", "1", "signal.db"))
+	s, err := OpenStore("", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1316,7 +1293,7 @@ func TestLongText(t *testing.T) {
 	}
 	defer a.Close()
 	text := func() string { return db.Str(a.DB, "SELECT text FROM message WHERE key = ?", Key(anna, 1000)) }
-	if _, err := Import(a, s.Path, "", 0, nil); err != nil || text() != "the beginning" {
+	if _, err := Import(a, s, "", 0, nil); err != nil || text() != "the beginning" {
 		t.Fatalf("%v %q", err, text())
 	}
 	kind := db.Str(a.DB, "SELECT mk.name FROM message m JOIN message_kind mk ON mk.id = m.kind_id WHERE m.key = ?", Key(anna, 1000))
@@ -1325,7 +1302,7 @@ func TestLongText(t *testing.T) {
 	}
 	apply(t, s, map[string]any{"event": "message", "chat": contact(anna), "sender": anna, "ts": 1000,
 		"text": "the beginning and all the rest", "long_text": true, "attachments": []any{}})
-	if _, err := Import(a, s.Path, "", 0, nil); err != nil || text() != "the beginning and all the rest" {
+	if _, err := Import(a, s, "", 0, nil); err != nil || text() != "the beginning and all the rest" {
 		t.Fatalf("%v %q", err, text())
 	}
 }
@@ -1333,8 +1310,8 @@ func TestLongText(t *testing.T) {
 // A call taken off the phone's call log is no call: deleting the entry of one from before this
 // computer was linked does not make a missed call of it.
 func TestCallLogDeletion(t *testing.T) {
-	dir := folders(t)
-	s, err := OpenStore(filepath.Join(dir, "cache", "signal", "1", "signal.db"))
+	folders(t)
+	s, err := OpenStore("", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1344,7 +1321,7 @@ func TestCallLogDeletion(t *testing.T) {
 		// a group call only seen on the call log, never joined: no call either
 		map[string]any{"event": "call", "source": "sync", "id": "78", "chat": map[string]any{"kind": "group", "id": group},
 			"ts": 2000, "type": "audio", "direction": "incoming", "result": "observed"})
-	if n := db.Int(s.DB, "SELECT count(*) FROM call"); n != 0 {
+	if n := db.Int(s.DB, "SELECT count(*) FROM signal_call"); n != 0 {
 		t.Fatalf("%d calls", n)
 	}
 }
@@ -1357,7 +1334,7 @@ func TestEditKeepsFilesOnce(t *testing.T) {
 	os.MkdirAll(media, 0o700)
 	os.WriteFile(filepath.Join(media, "1000-a.jpg"), []byte("a picture"), 0o600)
 	os.WriteFile(filepath.Join(media, "1500-a.jpg"), []byte("a picture"), 0o600)
-	s, err := OpenStore(filepath.Join(dir, "cache", "signal", "1", "signal.db"))
+	s, err := OpenStore("", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1371,12 +1348,12 @@ func TestEditKeepsFilesOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	if _, err := Import(a, s.Path, media, 0, nil); err != nil {
+	if _, err := Import(a, s, media, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	apply(t, s, map[string]any{"event": "edit", "chat": contact(anna), "sender": anna, "ts": 1500, "target_ts": 1000,
 		"text": "look at this", "attachments": pic("1500-a.jpg")})
-	if _, err := Import(a, s.Path, media, 0, nil); err != nil {
+	if _, err := Import(a, s, media, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if n := db.Int(a.DB, "SELECT count(*) FROM attachment"); n != 1 {
@@ -1389,7 +1366,7 @@ func TestEditKeepsFilesOnce(t *testing.T) {
 func TestNotices(t *testing.T) {
 	dir := folders(t)
 	path := newArchive(t, dir)
-	s, err := OpenStore(filepath.Join(dir, "cache", "signal", "1", "signal.db"))
+	s, err := OpenStore("", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1423,7 +1400,7 @@ func TestNotices(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	if _, err := Import(a, s.Path, "", 0, nil); err != nil {
+	if _, err := Import(a, s, "", 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	notice := func(author string, ts int64) (string, map[string]any) {
@@ -1495,5 +1472,77 @@ func TestDescribeWithoutWords(t *testing.T) {
 		Attachments: []attachmentEv{{ContentType: str("image/jpeg"), Filename: str("sea.jpg")}}}})
 	if x.ReplyText != "📎 sea.jpg" || x.SubtypeCode != "signal:view_once" {
 		t.Fatalf("%q %q", x.ReplyText, x.SubtypeCode)
+	}
+}
+
+// The store keeps what the archive has only for a while (its files may still be asked again): then
+// a message goes, with what was about it alone; one not imported (a chat the user left out) stays.
+func TestPrune(t *testing.T) {
+	keepFor = fetchDays * 24 * time.Hour
+	defer func() { keepFor = 100 * 365 * 24 * time.Hour }()
+	dir := folders(t)
+	path := newArchive(t, dir)
+	s, err := OpenStore("", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.Account(Status{Linked: true, ACI: fakeOwn, Phone: fakePhone})
+	recent := time.Now().UnixMilli()
+	apply(t, s,
+		map[string]any{"event": "message", "chat": contact(anna), "sender": anna, "ts": 1000, "text": "old"},
+		map[string]any{"event": "edit", "chat": contact(anna), "sender": anna, "ts": 1500, "target_ts": 1000, "text": "old!"},
+		map[string]any{"event": "reaction", "chat": contact(anna), "sender": fakeOwn, "ts": 1600, "emoji": "👍",
+			"target_author": anna, "target_ts": 1000},
+		map[string]any{"event": "message", "chat": contact(anna), "sender": anna, "ts": recent, "text": "new"},
+		map[string]any{"event": "message", "chat": contact(bob), "sender": bob, "ts": 2000, "text": "left out"})
+	a, err := archive.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if n, err := Import(a, s, "", 0, map[string]bool{bob: true}); err != nil || n.Messages != 2 {
+		t.Fatalf("%+v %v", n, err)
+	}
+	left := db.Strs(s.DB, "SELECT author || ':' || ts FROM signal_message ORDER BY ts")
+	if strings.Join(left, ",") != bob+":2000,"+Key(anna, recent) {
+		t.Fatalf("left %v", left)
+	}
+	if db.Int(s.DB, "SELECT count(*) FROM signal_edit")+db.Int(s.DB, "SELECT count(*) FROM signal_reaction") != 0 {
+		t.Fatal("what was about the old message stayed")
+	}
+	// the archive keeps it all, and an import again changes nothing
+	if db.Str(a.DB, "SELECT text FROM message WHERE key = ?", Key(anna, 1000)) != "old!" ||
+		db.Int(a.DB, "SELECT count(*) FROM reaction") != 1 {
+		t.Fatal("the archive lost something")
+	}
+	if n, err := Import(a, s, "", 0, map[string]bool{bob: true}); err != nil || n != (Counts{}) {
+		t.Fatalf("again: %+v %v", n, err)
+	}
+	if db.Str(a.DB, "SELECT text FROM message WHERE key = ?", Key(anna, 1000)) != "old!" || db.Int(a.DB, "SELECT count(*) FROM reaction") != 1 {
+		t.Fatal("an import after the pruning undid something")
+	}
+}
+
+// A chat's state on the phone (the storage service, the transfer): into the archive as the
+// instance's report.
+func TestChatState(t *testing.T) {
+	c, _, _ := newPlugin(t, nil)
+	s, err := OpenStore("", c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Account(Status{Linked: true, ACI: fakeOwn, Phone: fakePhone})
+	apply(t, s,
+		map[string]any{"event": "message", "chat": contact(anna), "sender": anna, "ts": 1000, "text": "hi"},
+		map[string]any{"event": "chat_state", "chat": contact(anna), "ts": 5000, "state": map[string]any{"archived": 1, "pinned": 0, "muted": -1}},
+		map[string]any{"event": "chat_state", "chat": contact(anna), "ts": 4000, "state": map[string]any{"archived": 0}}) // older news
+	s.Close()
+	if err := importNow(c); err != nil {
+		t.Fatal(err)
+	}
+	got := db.Strs(c.Store().Read(), "SELECT field || '=' || value FROM state_report WHERE field != 'read_until' ORDER BY field")
+	if strings.Join(got, ",") != "archived=1,muted=-1,pinned=0" {
+		t.Fatalf("%v", got)
 	}
 }
