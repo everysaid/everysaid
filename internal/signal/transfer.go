@@ -92,15 +92,14 @@ func (c *client) applyBackup(cli *signalmeow.Client) (int, error) {
 	c.mu.Lock()
 	download := c.download
 	c.mu.Unlock()
-	evs, n, err := c.backupEvents(c.ctx, cli)
-	if err != nil || len(evs) == 0 {
-		return 0, err
-	}
-	for _, x := range evs {
+	some := false
+	n, err := c.backupEach(c.ctx, cli, func(x converted) error {
+		some = true
 		c.files(x, download)
-		if err := c.ev.sayAndWait(x.name, x.ev); err != nil {
-			return 0, err // kept: done again at the next connection
-		}
+		return c.ev.sayAndWait(x.name, x.ev)
+	})
+	if err != nil || !some {
+		return 0, err // kept: done again at the next connection
 	}
 	return n, cli.Store.BackupStore.ClearBackup(c.ctx)
 }
@@ -111,12 +110,8 @@ func (c *client) history(ctx context.Context, since uint64) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	evs, _, err := c.backupEvents(ctx, cli)
-	if err != nil {
-		return nil, err
-	}
 	out := []M{}
-	for _, x := range evs {
+	_, err = c.backupEach(ctx, cli, func(x converted) error {
 		if ts := toU64(x.ev["ts"]); ts == 0 || ts > since {
 			ev := M{"event": x.name}
 			for k, v := range x.ev {
@@ -124,6 +119,10 @@ func (c *client) history(ctx context.Context, since uint64) (any, error) {
 			}
 			out = append(out, ev)
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return M{"events": out}, nil
 }
@@ -172,13 +171,13 @@ func aciOfBytes(b []byte) any {
 	return nil
 }
 
-// backupEvents are the events of the archive signalmeow holds (none: it holds none), and how many
-// messages they bring.
-func (c *client) backupEvents(ctx context.Context, cli *signalmeow.Client) ([]converted, int, error) {
+// backupEach hands each event of the archive signalmeow holds (none: it holds none) to each, a chat
+// read at a time, and says how many messages they brought; each's error ends it.
+func (c *client) backupEach(ctx context.Context, cli *signalmeow.Client, each func(converted) error) (int, error) {
 	a := &transferArchive{own: c.own(cli), recipients: map[uint64]*backuppb.Recipient{}, groups: map[uint64]string{}}
 	rows, err := c.pool.QueryContext(ctx, "SELECT data FROM signalmeow_backup_recipient WHERE account_id = ?", cli.Store.ACI.String())
 	if err != nil {
-		return nil, 0, err
+		return 0, err
 	}
 	for rows.Next() {
 		var data []byte
@@ -189,10 +188,9 @@ func (c *client) backupEvents(ctx context.Context, cli *signalmeow.Client) ([]co
 	}
 	rows.Close()
 	if len(a.recipients) == 0 {
-		return nil, 0, nil
+		return 0, nil
 	}
 	now := time.Now().UnixMilli()
-	var out []converted
 	ids := make([]uint64, 0, len(a.recipients))
 	for id := range a.recipients {
 		ids = append(ids, id)
@@ -214,8 +212,11 @@ func (c *client) backupEvents(ctx context.Context, cli *signalmeow.Client) ([]co
 					members = append(members, uuid.UUID(m.GetUserId()).String())
 				}
 			}
-			out = append(out, plain("group", M{"id": gid, "title": s.GetTitle().GetTitle(),
-				"description": s.GetDescription().GetDescriptionText(), "revision": s.GetVersion(), "members": members, "pending": []string{}}))
+			if err := each(plain("group", M{"id": gid, "title": s.GetTitle().GetTitle(),
+				"description": s.GetDescription().GetDescriptionText(), "revision": s.GetVersion(), "members": members,
+				"pending": []string{}})); err != nil {
+				return 0, err
+			}
 		}
 		x := r.GetContact()
 		if x == nil {
@@ -229,7 +230,9 @@ func (c *client) backupEvents(ctx context.Context, cli *signalmeow.Client) ([]co
 			phone = "+" + strconv.FormatUint(x.GetE164(), 10)
 		}
 		if aci != nil && (pni != nil || phone != nil) || pni != nil && phone != nil {
-			out = append(out, idsEvent(aci, pni, phone))
+			if err := each(idsEvent(aci, pni, phone)); err != nil {
+				return 0, err
+			}
 		}
 		if aci != nil {
 			name := joinNonEmpty(x.GetSystemGivenName(), x.GetSystemFamilyName())
@@ -243,12 +246,14 @@ func (c *client) backupEvents(ctx context.Context, cli *signalmeow.Client) ([]co
 			if p := joinNonEmpty(x.GetProfileGivenName(), x.GetProfileFamilyName()); p != "" {
 				ev["profile_name"] = p
 			}
-			out = append(out, plain("contact", ev))
+			if err := each(plain("contact", ev)); err != nil {
+				return 0, err
+			}
 		}
 	}
 	chats, err := cli.Store.BackupStore.GetBackupChats(ctx)
 	if err != nil {
-		return nil, 0, err
+		return 0, err
 	}
 	messages := 0
 	for _, ch := range chats {
@@ -260,24 +265,27 @@ func (c *client) backupEvents(ctx context.Context, cli *signalmeow.Client) ([]co
 		if ch.GetMuteUntilMs() >= math.MaxInt64 {
 			muted = -1
 		}
-		out = append(out, plain("chat_state", M{"chat": chat, "ts": now, "state": M{"archived": b2i(ch.GetArchived()),
-			"pinned": b2i(ch.PinnedOrder != nil), "muted": muted}}))
+		if err := each(plain("chat_state", M{"chat": chat, "ts": now, "state": M{"archived": b2i(ch.GetArchived()),
+			"pinned": b2i(ch.PinnedOrder != nil), "muted": muted}})); err != nil {
+			return 0, err
+		}
 		items, err := cli.Store.BackupStore.GetBackupChatItems(ctx, ch.GetId(), time.Time{}, false, ch.TotalMessages+1000)
 		if err != nil {
-			return nil, 0, err
+			return 0, err
 		}
 		slices.Reverse(items) // oldest first
 		for _, it := range items {
-			evs := a.item(chat, it)
-			for _, x := range evs {
+			for _, x := range a.item(chat, it) {
 				if x.name == "message" {
 					messages++
 				}
+				if err := each(x); err != nil {
+					return 0, err
+				}
 			}
-			out = append(out, evs...)
 		}
 	}
-	return out, messages, nil
+	return messages, nil
 }
 
 // pointer is a transfer archive's file as Signal's AttachmentPointer (to fetch it from the transit
