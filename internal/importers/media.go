@@ -8,6 +8,8 @@
 //
 //   - iPhone WhatsApp: ZWAMEDIAITEM.ZMEDIALOCALPATH, message by stanza id;
 //   - iPhone Viber: ZATTACHMENT.ZNAME, message by token;
+//   - iPhone SMS, MMS and iMessage: attachment.filename, message by guid (the iPhone's files, copies
+//     out of the backup, are taken into the store: Move);
 //   - Android MMS (android-export.py): mms-parts/<part _id>, message by MMS id, or by time and
 //     direction where the iPhone's copy of the message was the one kept;
 //   - Telegram (telegram-sync --media, the live connection): the files in its download folder,
@@ -302,6 +304,7 @@ func MediaWhatsApp(a *archive.Archive, s *Store) {
 		return
 	}
 	data := archive.IphoneData()
+	s.Move = true // copies out of the backup: the store keeps them, the next sync does not bring them again
 	src := a.Source(archive.Iphone()+"/whatsapp", path, archive.Iphone(), data+"/whatsapp-media")
 	messages := byKey(a, "whatsapp")
 	d := ro(path)
@@ -369,6 +372,7 @@ func MediaViberIphone(a *archive.Archive, s *Store) {
 	if !exists(database) {
 		return
 	}
+	s.Move = true // copies out of the backup: the store keeps them, the next sync does not bring them again
 	src := a.Source(archive.Iphone()+"/viber", database, archive.Iphone(), data+"/viber-media")
 	messages, origins := byKey(a, "viber"), byOrigin(a, archive.Iphone()+"/viber")
 	files := map[string]string{}
@@ -435,8 +439,47 @@ func MediaMMSExport(a *archive.Archive, s *Store, device, database, folder strin
 	}
 }
 
+// MediaSMSIphone: the files of the iPhone's SMS, MMS and iMessage (sms.db's attachment.filename,
+// within <iPhone data>/sms-media), message by its guid.
+func MediaSMSIphone(a *archive.Archive, s *Store) {
+	data := archive.IphoneData()
+	path := filepath.Join(data, "sms.db")
+	if !exists(path) {
+		return
+	}
+	name := archive.Iphone() + "/sms"
+	s.Move = true // copies out of the backup: the store keeps them, the next sync does not bring them again
+	src := a.Source(name, path, archive.Iphone(), data+"/sms-media")
+	origins := byOrigin(a, name)
+	d := ro(path)
+	defer d.Close()
+	for _, r := range maps(d, "SELECT m.guid, a.filename, a.transfer_name FROM message m "+
+		"JOIN message_attachment_join j ON j.message_id = m.ROWID JOIN attachment a ON a.ROWID = j.attachment_id "+
+		"WHERE a.filename IS NOT NULL ORDER BY m.ROWID, a.ROWID") {
+		rel := SMSAttachment(str(r["filename"]))
+		if rel == "" {
+			continue
+		}
+		s.LinkNamed(name, src, filepath.Join(data, "sms-media", filepath.FromSlash(rel)), rel, origins[str(r["guid"])],
+			strOrEmpty(r["transfer_name"]))
+	}
+}
+
+// SMSAttachment is an SMS attachment's path (sms.db's attachment.filename,
+// "~/Library/SMS/Attachments/<ab>/<nn>/<guid>/<name>") within the attachments' folder, "" for one
+// elsewhere or a link's preview (not a file of the message).
+func SMSAttachment(filename string) string {
+	for _, root := range []string{"~/Library/SMS/Attachments/", "/var/mobile/Library/SMS/Attachments/"} {
+		if rel, ok := strings.CutPrefix(filename, root); ok && !strings.HasSuffix(rel, ".pluginPayloadAttachment") &&
+			!strings.Contains("/"+rel+"/", "/../") {
+			return rel
+		}
+	}
+	return ""
+}
+
 // Phones are what a phone's sources bring.
-var Phones = []MediaStep{MediaWhatsApp, MediaViberIphone, MediaMMSAndroid}
+var Phones = []MediaStep{MediaWhatsApp, MediaViberIphone, MediaSMSIphone, MediaMMSAndroid}
 
 // Media links the files of the steps given (all of them when none is).
 func Media(a *archive.Archive, out func(string), steps ...MediaStep) (err error) {

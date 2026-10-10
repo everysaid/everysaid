@@ -44,7 +44,7 @@ Contents:
                                                    viber.sqlite, whatsapp.sqlite,
                                                    whatsapp-contacts.sqlite,
                                                    whatsapp-calls.sqlite,
-                                                   viber-media/, whatsapp-media/
+                                                   viber-media/, whatsapp-media/, sms-media/
  Android phone ──adb── content query/read ─────► <export>/<device>/android.db (+ *.txt.gz, mms-parts/)
                ──adb pull Android/data/com.viber.voip/files ──► a folder of Viber media
  Viber Desktop (linked to a phone) ── LD_PRELOAD bridge, snapshot ──► <cache>/viber/<instance>/desktop.db
@@ -247,6 +247,7 @@ The media `iphone-sync` copies:
 |---|---|---|---|
 | `viber-media/` | `AppDomain-com.viber` | `Documents/Attachments/`, `Documents/FileMessages/`, `Documents/VoiceMessages/` | `Documents/` |
 | `whatsapp-media/` | `AppDomainGroup-group.net.whatsapp.WhatsApp.shared` | `Message/Media/` | `Message/Media/` |
+| `sms-media/` | `MediaDomain` | `Library/SMS/Attachments/` (the files of SMS, MMS and iMessage) | `Library/SMS/Attachments/` |
 
 How a refresh works:
 
@@ -1114,6 +1115,7 @@ source is gone).
 |---|---|---|
 | `MediaWhatsApp` | `whatsapp-media/<ZMEDIALOCALPATH minus "Media/">` | stanza id → `message.key` |
 | `MediaViberIphone` | `viber-media/{Attachments,FileMessages,VoiceMessages}/<ZATTACHMENT.ZNAME>` | token → `message.key`, else `Z_PK` → `message_origin` |
+| `MediaSMSIphone` | `sms-media/<attachment.filename minus "~/Library/SMS/Attachments/">` (not `*.pluginPayloadAttachment`, a link's preview) | `message.guid` → `message_origin` (`iphone/sms`) |
 | `MediaMMSAndroid` | `<export folder>/mms-parts/<part _id>` (empty ones skipped) | MMS `_id` → `message_origin`; if the iPhone's copy was kept instead, the single SMS/MMS message with the same direction within ±2 s |
 | `TelegramMedia` | `<cache>/telegram/media/<chat>/<message><ext>` | `<chat>/<id>` → `message_origin` |
 | `MediaWhatsAppBridge` | `<store>/<messages.media_path>` (only files within the store) | `<chat_jid>/<id>` → `message_origin`, else the id → `message.key` (the iPhone's copy) |

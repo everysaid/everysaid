@@ -76,7 +76,7 @@ own (users, passkeys, sessions, push subscriptions, audit; mode 600).
 <cache>/iphone/whatsapp.sqlite            decrypted WhatsApp database (`ChatStorage.sqlite`)
 <cache>/iphone/whatsapp-contacts.sqlite   WhatsApp's contacts (`ContactsV2.sqlite`)
 <cache>/iphone/whatsapp-calls.sqlite      WhatsApp's call log (`CallHistory.sqlite`)
-<cache>/iphone/viber-media/, whatsapp-media/   new media of messages, copied by each sync
+<cache>/iphone/viber-media/, whatsapp-media/, sms-media/   new media of messages, copied by each sync, then taken into the store
 <data>/media/<ab>/<sha256><ext>           the archive's media (config [media] store), until they go to the library
 <data>/keys.db (telegram_*)              Telegram's messages until imported, as read by telegram-sync
 <cache>/telegram/media/                   their files (telegram-sync --media)
