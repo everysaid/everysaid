@@ -3,7 +3,8 @@ import { signedIn } from "./demo";
 
 // In a group: "@" opens a list of its members, the one chosen goes in as "@Name" and is sent as a
 // mention; what is sent gets its ticks as the others get and read it, and its info says who and when.
-// A file goes with its caption. Mentions in what arrived show as the person's name, a link to them.
+// A file goes with its caption, or is dropped or pasted, or copied from a message to another chat.
+// Mentions in what arrived show as the person's name, a link to them.
 
 async function whatsappGroup(page: Page) {
   return page.evaluate(async () => {
@@ -67,6 +68,71 @@ test("Esc closes the @ list, and a file goes with its caption", async ({ page },
   await expect(page.locator("[data-file]")).toHaveCount(0);
   const sent = page.locator("[id^=m]", { hasText: "a dot" }).last();
   await expect(sent.locator("img")).toBeVisible({ timeout: 15000 });
+});
+
+test("a file dropped on the chat or pasted goes to the composer; one copied from a message, to another chat", async ({ page, context }, info) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await signedIn(page, info.project.name);
+  const group = await whatsappGroup(page);
+  test.skip(!group, "no WhatsApp group the demo can send to");
+  await page.goto(`/chat/${group.id}`);
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
+  const files = (name: string) => page.evaluateHandle(([b64, name]) => {
+    const d = new DataTransfer();
+    d.items.add(new File([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], name, { type: "image/png" }));
+    return d;
+  }, [png, name]);
+
+  // dropped on the messages (once the composer can take a file)
+  await expect(page.locator("[data-attach]")).toBeVisible();
+  const drop = await files("dropped.png");
+  await page.locator("[data-stream]").dispatchEvent("dragover", { dataTransfer: drop });
+  await expect(page.locator("[data-drop]")).toBeVisible();
+  await page.locator("[data-stream]").dispatchEvent("drop", { dataTransfer: drop });
+  await expect(page.locator("[data-drop]")).toHaveCount(0);
+  await expect(page.locator("[data-file]")).toContainText("dropped.png");
+  await page.getByRole("button", { name: /Αφαίρεση αρχείου|Remove the file/ }).click();
+
+  // pasted in the field
+  const box = page.locator("[data-composer-body] textarea");
+  await box.evaluate((el, d) => el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: d, bubbles: true, cancelable: true })), await files("pasted.png"));
+  await expect(page.locator("[data-file]")).toContainText("pasted.png");
+  await box.fill("quiet: a pasted dot");
+  await page.locator("[data-send]").click();
+  const sent = page.locator("[id^=m]", { hasText: "a pasted dot" }).last();
+  await expect(sent.locator("img")).toBeVisible({ timeout: 15000 });
+  await expect.poll(async () => Number((await sent.getAttribute("id"))!.slice(1)), { timeout: 10000 }).toBeGreaterThan(0);
+
+  // copied from the message, pasted in a chat of another service, as the file it is
+  await sent.locator("[data-actions]").click();
+  await page.getByRole("menuitem", { name: /Αντιγραφή αρχείου|Copy the file/ }).click();
+  await expect(page.getByText(/^(Αντιγράφηκε|Copied)$/)).toBeVisible();
+  const link = await page.evaluate(() => navigator.clipboard.readText());
+  expect(link).toMatch(/\/api\/media\/[0-9a-f]{64}\/original(#name=pasted\.png)?$/);       // the name, where the archive kept it
+  const other = await page.evaluate(async () => {
+    const h = { "X-Everysaid": "1" };
+    for (const c of (await (await fetch("/api/chats", { headers: h })).json()).items) {
+      const d = await (await fetch(`/api/chats/${c.id}`, { headers: h })).json();
+      const s = d.fileable?.find((x: string) => x !== "whatsapp" && d.sendable.includes(x));
+      if (s) return { id: c.id, service: s };
+    }
+    return null;
+  });
+  test.skip(!other, "no chat of another service the demo can send a file to");
+  await page.goto(`/chat/${other!.id}`);
+  const via = page.locator("[data-via]");
+  if ((await via.getAttribute("data-via")) !== other!.service) {
+    await via.click();
+    await page.getByRole("menuitem").filter({ has: page.locator(`[data-icon="${other!.service}"]`) }).click();
+  }
+  const field = page.locator("[data-composer-body] textarea");
+  await field.evaluate((el, text) => {
+    const d = new DataTransfer();
+    d.setData("text/plain", text);
+    el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: d, bubbles: true, cancelable: true }));
+  }, link);
+  await expect(page.locator("[data-file]")).toContainText(".png");
+  await expect(field).toHaveValue("");
 });
 
 test("a mention in what arrived shows the person's name, a link to them", async ({ page }, info) => {
