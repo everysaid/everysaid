@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -36,6 +37,7 @@ func ServeMain(argv []string, out io.Writer) error {
 		return err
 	}
 	umask()
+	memoryLimit()
 	s, err := New(Options{Archive: *arch, Host: *host, Port: *port, WebDir: *web, Out: out})
 	if err != nil {
 		return err
@@ -45,6 +47,15 @@ func ServeMain(argv []string, out io.Writer) error {
 	defer stop()
 	fmt.Fprintln(out, i18n.Say("Everysaid: {origin} (listening on {host}:{port})", M{"origin": s.Origin(), "host": *host, "port": *port}))
 	return s.Run(ctx)
+}
+
+// memoryLimit gives the server a soft memory limit of 256 MB (unless GOMEMLIMIT names another): the
+// garbage collector then works harder as the heap nears it and gives memory back, rather than
+// letting a long-running server sit at twice its live heap after a busy moment.
+func memoryLimit() {
+	if os.Getenv("GOMEMLIMIT") == "" {
+		debug.SetMemoryLimit(256 << 20)
+	}
 }
 
 // UserMain is `everysaid user list|link|mcp-token|sessions [--user ID] [--minutes N]`: what is done
