@@ -325,7 +325,8 @@ func importUnless(ctx context.Context, c *plugins.Context, done func() bool) err
 				DesktopSource: sourceName})
 		}},
 		{Label: "files", Run: func(a *archive.Archive, out func(string)) error {
-			return importers.Media(a, out, importers.MediaViberDesktop(snapshotPath(c), sourceName))
+			sent := filepath.Join(dir(c), "sent")
+			return importers.Media(a, out, importers.MediaViberDesktop(snapshotPath(c), sourceName, Downloads(c), sent))
 		}},
 	})
 	return err

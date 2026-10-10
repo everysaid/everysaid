@@ -6,6 +6,7 @@ package importers
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -201,4 +202,37 @@ func TestViberDesktopReads(t *testing.T) {
 		a.Int("SELECT ts FROM message WHERE key = '7004'"))
 	eq(t, "seen: both", db.Strs(a.Tx(), "SELECT m.key FROM receipt r JOIN message m ON m.id = r.message_id "+
 		"WHERE r.read_at IS NOT NULL ORDER BY m.key"), []string{"7002", "7003"})
+}
+
+// A file Viber downloaded (in the folders it owns) is taken into the store; one the user sent from
+// elsewhere is linked and left where it is.
+func TestViberDesktopFilesOwnedAndNot(t *testing.T) {
+	a, _ := newArchive(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "desktop.db")
+	f := newDesktop(t, path)
+	owned, elsewhere := filepath.Join(dir, "downloads"), filepath.Join(dir, "Pictures")
+	must(t, os.MkdirAll(owned, 0o700))
+	must(t, os.MkdirAll(elsewhere, 0o700))
+	got, mine := filepath.Join(owned, "got.jpg"), filepath.Join(elsewhere, "mine.jpg")
+	must(t, os.WriteFile(got, []byte("theirs"), 0o600))
+	must(t, os.WriteFile(mine, []byte("the user's"), 0o600))
+	for _, m := range []struct {
+		token int64
+		file  string
+	}{{7001, got}, {7002, mine}} {
+		id := f.message(dtGroup, dtMaria, m.token == 7001, m.token, 1, "", "{}")
+		db.Exec(f.d, "UPDATE Messages SET PayloadPath = ? WHERE EventID = ?", m.file, id)
+	}
+	must(t, Viber(a, nil, ViberOptions{DesktopDB: path, NoIphone: true, DesktopSource: "viber-desktop/viber"}))
+	root := filepath.Join(dir, "store")
+	step := MediaViberDesktop(path, "viber-desktop/viber", owned)
+	must(t, Media(a, nil, func(a *archive.Archive, s *Store) { s.Root = root; step(a, s) }))
+	eq(t, "linked", a.Int("SELECT count(*) FROM attachment"), int64(2))
+	if _, err := os.Stat(got); !os.IsNotExist(err) {
+		t.Fatalf("Viber's download still there: %v", err)
+	}
+	if b, err := os.ReadFile(mine); err != nil || string(b) != "the user's" {
+		t.Fatalf("the user's own file was touched: %v", err)
+	}
 }

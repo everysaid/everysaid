@@ -244,7 +244,11 @@ func byOrigin(a *archive.Archive, sourceName string) map[string]int64 {
 
 // MediaViberDesktop: the files of a copy of Viber Desktop's database (source the plugin's own),
 // those Viber downloaded or sent (Messages.PayloadPath) and still has; a message by its token.
-func MediaViberDesktop(database, source string) MediaStep {
+// MediaViberDesktop: the files of Viber Desktop's messages (its snapshot database), by their paths.
+// Those within owned (the folders Viber downloads into, and the copies of what was sent from here)
+// are Viber's own: taken into the store (Move). Any other file a message names (one the user sent
+// from wherever it was) is linked, never moved.
+func MediaViberDesktop(database, source string, owned ...string) MediaStep {
 	return func(a *archive.Archive, s *Store) {
 		if !exists(database) {
 			return
@@ -259,9 +263,28 @@ func MediaViberDesktop(database, source string) MediaStep {
 			if !filepath.IsAbs(path) {
 				continue
 			}
+			s.Move = within(path, owned)
 			s.LinkNamed(source, src, path, path, messages[pyStr(r["Token"])], viberFileName(r["Info"]))
 		}
 	}
+}
+
+// within says whether a path is inside one of the folders (their links followed).
+func within(path string, folders []string) bool {
+	real := func(p string) string {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return r
+		}
+		abs, _ := filepath.Abs(p)
+		return abs
+	}
+	p := real(path)
+	for _, f := range folders {
+		if f = real(f); f != "" && strings.HasPrefix(p, strings.TrimSuffix(f, string(filepath.Separator))+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 // viberFileName is the name a file was sent with (a message's fileInfo), "" for none.

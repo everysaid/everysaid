@@ -88,6 +88,15 @@ dbus-run-session -- env --default-signal=INT LD_PRELOAD=<the bridge> /opt/viber/
     DISPLAY=:99  QT_QPA_PLATFORM=xcb  VIBER_BRIDGE_SOCK=<the socket>  VIBER_ALLOW_SEND=1
 ```
 
+**In a home of its own** (`internal/viber/jail.go`). Viber runs with `HOME` and the XDG folders in
+`<data>/viber/<instance>/home`, so that nothing of it is left in the user's home. That folder keeps
+only Viber's state (its account, `config.db` and the account's databases), what lets it start again
+without the phone, and it is in the backups. What Viber makes again by itself (thumbnails, caches,
+stickers, avatars) and the files it downloads are links from there into `<cache>/viber/<instance>/`
+(`scratch/`, `downloads/`), out of the backups. The downloaded files are taken into the archive's
+store as they are linked to their messages; a file a message names elsewhere (one the user sent from
+wherever it was) is linked and never moved. The temporary caches are emptied before each start.
+
 - A **virtual display** (Xvfb): composing (replies, edits, mentions) drives Viber's real input, which
   needs a window; nothing shows on the desktop. Xvfb is left running when Viber stops, for the next
   start (in a scope of its own too, `everysaid-xvfb-<display>`, for the same reason as Viber's).

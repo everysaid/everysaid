@@ -166,6 +166,9 @@ func waitRunning(ctx context.Context, c *plugins.Context) error {
 
 // launch starts Viber Desktop with the bridge, on its display (Xvfb, started if none is there).
 func launch(c *plugins.Context) error {
+	if err := prepareJail(c); err != nil {
+		return err
+	}
 	cmd, err := viberCommand(c)
 	if err != nil {
 		return err
@@ -218,10 +221,12 @@ func viberCommand(c *plugins.Context) (*exec.Cmd, error) {
 	var env []string
 	for _, e := range os.Environ() {
 		if k, _, _ := strings.Cut(e, "="); k != "DISPLAY" && k != "WAYLAND_DISPLAY" && k != "DBUS_SESSION_BUS_ADDRESS" &&
-			k != "LD_PRELOAD" && !strings.HasPrefix(k, "VIBER_") && k != "QT_QPA_PLATFORM" {
+			k != "LD_PRELOAD" && !strings.HasPrefix(k, "VIBER_") && k != "QT_QPA_PLATFORM" && k != "HOME" &&
+			!strings.HasPrefix(k, "XDG_") || k == "XDG_RUNTIME_DIR" {
 			env = append(env, e)
 		}
 	}
+	env = append(env, jailEnv(c)...) // in a home of its own (jail.go)
 	cmd.Env = append(env, "DISPLAY="+display(c), "QT_QPA_PLATFORM=xcb", "VIBER_BRIDGE_SOCK="+socket(c), "VIBER_ALLOW_SEND=1")
 	cmd.Dir = filepath.Dir(so)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
