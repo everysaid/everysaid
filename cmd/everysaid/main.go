@@ -5,6 +5,7 @@
 //	everysaid mcp [--db PATH]                    the MCP server for an assistant (stdio)
 //	everysaid demo [--dir DIR] [--serve]         a demo archive of invented people, for trying the app
 //	everysaid user ...                           users, passkeys, recovery
+//	everysaid ferdium install|zip                Everysaid as a service of Ferdium (or Franz)
 //	everysaid iphone-sync | iphone-ls | iphone-verify | android-export | telegram-sync
 //	                                             the extraction the sources run, by hand
 //
@@ -24,6 +25,7 @@ import (
 	"everysaid/internal/android"
 	"everysaid/internal/archive"
 	"everysaid/internal/demo"
+	"everysaid/internal/ferdium"
 	"everysaid/internal/i18n"
 	"everysaid/internal/importers"
 	"everysaid/internal/iphone"
@@ -47,6 +49,7 @@ var commands = map[string]func(args []string) error{
 	"android-export": func(a []string) error { return android.ExportMain(a, os.Stdout) },
 	"telegram-sync":  func(a []string) error { return telegram.SyncMain(a, os.Stdout) },
 	"viber":          func(a []string) error { return viber.Main(a, os.Stdout) },
+	"ferdium":        func(a []string) error { return ferdium.Main(a, os.Stdout) },
 }
 
 const usage = `everysaid: a personal archive of messages and calls.
@@ -57,6 +60,7 @@ const usage = `everysaid: a personal archive of messages and calls.
   everysaid demo [--dir DIR] [--serve]         a demo archive of invented people, for trying the app
   everysaid user ...                           users, passkeys, recovery (everysaid user -h)
   everysaid viber start|stop|restart|status    Viber Desktop, as the Viber Desktop source keeps it
+  everysaid ferdium install|zip                Everysaid as a service of Ferdium (or Franz)
   everysaid iphone-sync | iphone-ls | iphone-verify | android-export | telegram-sync
                                                the extraction the sources run, by hand
 `

@@ -5,7 +5,7 @@ WhatsApp, Telegram, Signal, the logs of older messengers, with their media, in o
 It is built from local phone backups (iPhone), Android phones over adb, and the services' own APIs
 and exports. Over it: a core, an app for a person (a messenger for the whole history, on desktop
 and phone, `everysaid serve`) and an MCP server for an assistant (`everysaid mcp`). `docs/app.md`
-tells how to run them, `docs/design.md` how they are built.
+tells how to run them, `docs/design.md` how they are built, `docs/ferdium.md` how to add it to Ferdium.
 
 The goal is a complete, permanent history that does not depend on what the phones keep: a message
 stays in the archive after the phone that held it is gone, deleted or replaced. Nothing goes

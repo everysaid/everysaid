@@ -16,6 +16,7 @@ import (
 	"everysaid/internal/core"
 	"everysaid/internal/db"
 	"everysaid/internal/errs"
+	"everysaid/internal/ferdium"
 	"everysaid/internal/i18n"
 	"everysaid/internal/mcp"
 	"everysaid/internal/plugins"
@@ -361,6 +362,13 @@ func (s *Server) miscRoutes() {
 			return nil, errs.New("push.bad_subscription", 404, nil)
 		}
 		return M{"ok": true}, nil
+	})
+
+	// Everysaid as a service of Ferdium (or Franz), at this server's address: a zip of its recipe
+	h("GET /api/ferdium/recipe.zip", bodyNone, func(q *req) (any, error) {
+		q.w.Header().Set("Content-Type", "application/zip")
+		q.w.Header().Set("Content-Disposition", `attachment; filename="everysaid-ferdium.zip"`)
+		return done, ferdium.Zip(q.w, s.Origin())
 	})
 
 	h("POST /api/push/test", bodyNone, func(q *req) (any, error) {

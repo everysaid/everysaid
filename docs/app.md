@@ -110,7 +110,8 @@ and accounts; a chat read here or elsewhere closes its notifications while the a
 device with push can leave out services whose own app notifies there already (Settings →
 Notifications). A browser without a push service (Ferdium and other Electron apps, Chromium
 without Google's) is notified by the open page itself, plugins' warnings too; the unread chats
-are also in the page's title, `(N) Everysaid`, which such apps show on their icon.
+are also in the page's title, `(N) Everysaid`, which Everysaid's recipe for Ferdium (and Franz)
+shows on its icon (`docs/ferdium.md`).
 
 ## Sources, libraries, contacts
 
