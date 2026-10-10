@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { markNav } from "@/lib/back";
 import { useTranslation } from "react-i18next";
@@ -127,8 +127,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const wide = useWide();
   // the unread chats in the title too: Ferdium (and the tabs) show the number from it; and on the
   // installed app's icon (a push puts a dot there, this the number, or nothing)
-  const unread = useUnread();
+  const real = useUnread();
   useCloseRead();
+  // the test notification's number, for a while (lib/push testBadge)
+  const [test, setTest] = useState(0);
+  useEffect(() => {
+    const f = (e: Event) => setTest((e as CustomEvent<number>).detail);
+    window.addEventListener("everysaid:badge", f);
+    return () => window.removeEventListener("everysaid:badge", f);
+  }, []);
+  const unread = test || real;
   useEffect(() => {
     document.title = unread > 0 ? `(${unread}) Everysaid` : "Everysaid";
     const nav = navigator as unknown as { setAppBadge?: (n: number) => Promise<void>; clearAppBadge?: () => Promise<void> };

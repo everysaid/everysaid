@@ -42,6 +42,13 @@ export async function closeRead(chats: ChatSummary[]) {
   }
 }
 
+/** A number on the icon for a while (the test notification's), whatever is unread: to see it shows. */
+export function testBadge() {
+  const say = (n: number) => window.dispatchEvent(new CustomEvent("everysaid:badge", { detail: n }));
+  say(1);
+  setTimeout(() => say(0), 10_000);
+}
+
 export const isIos = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
 export const isStandalone = () =>
   matchMedia("(display-mode: standalone)").matches || (navigator as any).standalone === true;

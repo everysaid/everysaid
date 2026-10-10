@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { api, type Account, type NameSources } from "@/lib/api";
 import { fullDate, number, relative } from "@/lib/format";
 import { setLanguage } from "@/lib/i18n";
-import { currentSubscription, disablePush, enablePush, isIos, isStandalone, localNotify, notifySupported } from "@/lib/push";
+import { currentSubscription, disablePush, enablePush, isIos, isStandalone, localNotify, notifySupported, testBadge } from "@/lib/push";
 import { register } from "@/lib/passkeys";
 import { applyTheme, getTheme, type Theme } from "@/lib/theme";
 import { useSettings } from "@/lib/hooks";
@@ -253,11 +253,17 @@ export function SettingsPage() {
               </Line>
               {(push || local) && (
                 <Line label={t("settings.pushTest")}>
-                  <Button size="sm" onClick={() => local ? new Notification("Everysaid", { body: t("settings.pushTest"), icon: "/icon-192.png" })
-                    : api.post("/api/push/test").then(() => toast.success("✓"), (e) => toast.error(e.message))}>{t("common.run")}</Button>
+                  <Button size="sm" onClick={() => {
+                    testBadge();
+                    if (local) new Notification("Everysaid", { body: t("settings.pushTest"), icon: "/icon-192.png" });
+                    else api.post("/api/push/test").then(() => toast.success("✓"), (e) => toast.error(e.message));
+                  }}>{t("common.run")}</Button>
                 </Line>
               )}
               {push && <PushServices />}
+              <Line label={t("settings.ferdium")} hint={t("settings.ferdiumHint")}>
+                <Button size="sm" onClick={() => location.assign("/api/ferdium/recipe.zip")}>{t("common.download")}</Button>
+              </Line>
             </Card>
           </Section>
           )}
