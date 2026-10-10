@@ -16,8 +16,5 @@ web/playwright-report/
 bridges/whatsapp/whatsapp-bridge
 bridges/whatsapp/store/
 
-# The Signal helper's build
-bridges/signal/target/
-
 # TypeScript's incremental build cache
 *.tsbuildinfo

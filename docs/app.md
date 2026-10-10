@@ -14,7 +14,7 @@ CGO_ENABLED=0 go build -o everysaid ./cmd/everysaid
 ./everysaid serve                                # http://localhost:8520
 ```
 
-`docs/go.md` has the rest of the building (other systems, Signal's helper) and the other commands.
+`docs/go.md` has the rest of the building (other systems, Signal built in) and the other commands.
 
 The first start prints a one-time setup link (`.../setup#...`, valid for an hour). Open it, give a
 name, and choose how you will sign in:
@@ -125,8 +125,8 @@ live connection. Each instance shows whether it is ready, what it needs, and its
 - **Local analysis:** Ollama.
 
 The live services: Telegram and WhatsApp run inside `everysaid serve` (WhatsApp as a device linked
-from the phone with a QR code: the source's "Link a device"); Signal through its helper
-(`bridges/signal/`, `docs/go.md`); Viber Desktop through Everysaid's bridge (`bridges/viber/`,
+from the phone with a QR code: the source's "Link a device"); Signal too, linked the same way, where
+Everysaid was built with it (`docs/go.md`); Viber Desktop through Everysaid's bridge (`bridges/viber/`,
 Linux), a library loaded into Viber Desktop, which the source starts headless and keeps running
 (`docs/viber-bridge.md`, "How Viber Desktop runs"; `everysaid viber start|stop|restart|status`).
 

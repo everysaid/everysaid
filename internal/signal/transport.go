@@ -2,8 +2,8 @@ package signal
 
 // How the plugin speaks to Signal: a client (client.go, built with the tag `signal`: signalmeow in
 // this process) answering commands and saying events, in the words of the protocol Everysaid's
-// earlier helper spoke over a pipe (bridges/signal/README.md, kept in docs/data-sources.md): a
-// command with its fields, an answer as JSON; an event, a JSON object with its name in `event`.
+// earlier helper spoke over a pipe (docs/data-sources.md, section 15): a command with its fields, an
+// answer as JSON; an event, a JSON object with its name in `event`.
 // The events are handed, one at a time and in order, to the handler the client was made with; an
 // event Signal waits for (a message, before its acknowledgement) is answered only once the handler
 // kept it.
