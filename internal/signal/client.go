@@ -384,13 +384,38 @@ func (c *client) link(ctx context.Context, name string) (any, error) {
 	return nil, refuse("failed", "linking ended")
 }
 
-func (c *client) sync(ctx context.Context) (any, error) {
+// online is the linked client, connected to Signal: what sends needs the connection (signalmeow
+// sends on its websockets), so a client not receiving yet starts to (what then arrives is kept as
+// at any other time), and the call waits for the connection (until ctx).
+func (c *client) online(ctx context.Context) (*signalmeow.Client, error) {
 	cli, err := c.linked()
 	if err != nil {
 		return nil, err
 	}
-	if cli.AuthedWS == nil || !cli.AuthedWS.IsConnected() {
-		return nil, refuse("failed", "not connected to Signal")
+	c.mu.Lock()
+	receiving := c.receiving
+	c.mu.Unlock()
+	if !receiving {
+		if _, err := c.receive(c.cfg.Download); err != nil {
+			return nil, err
+		}
+	}
+	for !cli.IsConnected() {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-c.ctx.Done():
+			return nil, ErrStopped
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return cli, nil
+}
+
+func (c *client) sync(ctx context.Context) (any, error) {
+	cli, err := c.online(ctx)
+	if err != nil {
+		return nil, err
 	}
 	if err := cli.SendContactSyncRequest(ctx); err != nil {
 		return nil, err
@@ -447,7 +472,7 @@ func groupJSON(g *signalmeow.Group) M {
 }
 
 func (c *client) groups(ctx context.Context) (any, error) {
-	cli, err := c.linked()
+	cli, err := c.online(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1234,7 +1259,7 @@ func (c *client) sendTo(ctx context.Context, cli *signalmeow.Client, chat chatRe
 func chatJSON(chat chatRef) M { return M{"kind": chat.Kind, "id": chat.ID} }
 
 func (c *client) send(ctx context.Context, req sendRequest) (any, error) {
-	cli, err := c.linked()
+	cli, err := c.online(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1305,7 +1330,7 @@ func (c *client) react(ctx context.Context, chat chatRef, target ref, emoji stri
 	if emoji == "" {
 		return nil, refuse("bad_request", "no emoji")
 	}
-	cli, err := c.linked()
+	cli, err := c.online(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1346,7 +1371,7 @@ func (c *client) sayBack(cli *signalmeow.Client, chat chatRef, content *signalpb
 // from the one the store holds (its files and quote kept): the version edited (target), else the
 // first.
 func (c *client) edit(ctx context.Context, chat chatRef, target, original uint64, text string) (any, error) {
-	cli, err := c.linked()
+	cli, err := c.online(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1377,7 +1402,7 @@ func (c *client) edit(ctx context.Context, chat chatRef, target, original uint64
 }
 
 func (c *client) delete(ctx context.Context, chat chatRef, target uint64) (any, error) {
-	cli, err := c.linked()
+	cli, err := c.online(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1395,7 +1420,7 @@ func (c *client) delete(ctx context.Context, chat chatRef, target uint64) (any, 
 // Signal Desktop does, and to each author with a read receipt where receipts (the user's choice;
 // signalmeow sends the read sync with each receipt).
 func (c *client) markRead(ctx context.Context, messages []ref, receipts bool) (any, error) {
-	cli, err := c.linked()
+	cli, err := c.online(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1488,7 +1513,7 @@ func (c *client) fetchAgain(ctx context.Context, refs []ref) (any, error) {
 // aci, pni}]}` (one of the ids; the ACI where Signal gives it), each also an `ids` event, which
 // ties the account to the number.
 func (c *client) discover(ctx context.Context, numbers []string) (any, error) {
-	cli, err := c.linked()
+	cli, err := c.online(ctx)
 	if err != nil {
 		return nil, err
 	}

@@ -31,11 +31,12 @@ type transport interface {
 }
 
 // clientConfig is what a client is made with: the plugin instance, the folder its downloaded files go
-// to, the store (the messages a fetch again or an edit reads), the handler of its events, and a sink
-// for its log.
+// to (and whether to fetch them where it receives without being asked to), the store (the messages
+// a fetch again or an edit reads), the handler of its events, and a sink for its log.
 type clientConfig struct {
 	Instance int64
 	Media    string
+	Download bool
 	Store    *Store
 	Handle   func(name string, raw []byte) error
 	Logs     func(line string)

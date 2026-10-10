@@ -214,7 +214,7 @@ func open(c *plugins.Context, k *instance) (*conn, error) {
 	n := &conn{c: c, k: k, store: st, dirty: make(chan struct{}, 1), queueEmpty: make(chan struct{}, 1),
 		ended: make(chan string, 1)}
 	n.synced, _ = c.State["contacts_synced"].(bool)
-	n.h, err = newClient(clientConfig{Instance: c.ID, Media: mediaDir(c), Store: st, Handle: n.event,
+	n.h, err = newClient(clientConfig{Instance: c.ID, Media: mediaDir(c), Download: c.Bool("media"), Store: st, Handle: n.event,
 		Logs: func(line string) { c.Logf("[signal] %s", line) }})
 	if err != nil {
 		st.Close()
