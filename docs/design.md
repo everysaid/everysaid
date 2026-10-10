@@ -406,11 +406,17 @@ Online, for one owner, with the strongest protection that does not get in the wa
   (only the server's own scripts), no framing, no referrer, HSTS over HTTPS; changes need the header
   `X-Everysaid: 1` and this server's Origin (with SameSite cookies, no CSRF); login attempts limited
   per address; an audit log of logins, changes to the ways in and removals.
-- **Secrets** (backup passwords, service sessions, API keys) in the system keyring, or in files of
-  mode 600 under the config folder where there is none; never in the archive, never sent to the
-  browser.
-- **Data at rest**: the archive stays plain SQLite; encryption at rest is the disk's (LUKS,
-  FileVault, BitLocker), as SQLCipher would cost speed and tooling.
+- **Secrets**: the live services' (devices' keys, sessions, cookies, API keys) in one file of their
+  own, `<data>/keys.db`, a SQLite database encrypted whole (`internal/keys`), whose key is kept in the
+  system keyring; the iPhone backup's password and the photo library's key in the keyring itself, or
+  in files of mode 600 under the config folder where there is none; never in the archive, never sent
+  to the browser.
+- **Data at rest**: the archive stays plain SQLite, open to any tool; encryption at rest is the
+  disk's (LUKS, FileVault, BitLocker) and the backups', as SQLCipher would cost speed and tooling.
+  Only keys.db is encrypted by the app. The data folder holds the archive, keys.db, server.db and
+  the media store, and nothing kept between a source and the archive beyond what is not imported yet
+  (the live sources' queues are pruned once the archive has their rows); the cache only what can be
+  made again.
 - **The MCP server** over HTTP needs its own token (`Authorization: Bearer`); reading is free, and
   the few changes it can make are listed (10).
 - **Deletion** only on the user's explicit confirmation, with the exact list; the archive's records
