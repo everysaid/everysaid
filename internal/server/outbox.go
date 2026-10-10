@@ -149,6 +149,7 @@ func (h *Host) SendKept(ctx context.Context, chatID, id string, r SendRequest) (
 	case err == nil:
 		b, _ := json.Marshal(out)
 		db.Exec(o, "UPDATE outbox SET state = 'sent', file = NULL, result = ? WHERE id = ?", string(b), id)
+		h.outboxChanged(chatID) // an app that asked again meanwhile was told it was being sent
 		return out, nil
 	case transient(err):
 		db.Exec(o, "UPDATE outbox SET state = 'queued', next_at = ?, error = ? WHERE id = ?",

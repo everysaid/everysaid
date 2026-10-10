@@ -3,7 +3,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { flushUnsent } from "./outbox";
 
 export type LiveEvent =
-  | { type: "hello" | "ping" | "changed" }
+  | { type: "hello" | "ping" | "changed" | "reconnected" }
   | { type: "new"; chats: Record<string, number>; calls: number; notify?: LiveNotification[] }
   | { type: "plugin"; instance: number; running?: string | null; live?: boolean }
   | { type: "plugin_log"; instance: number; line: string }
@@ -26,12 +26,15 @@ const statusListeners = new Set<(c: boolean) => void>();
 export function connectEvents(qc: QueryClient) {
   let pause = 1000;
   let stopped = false;
+  let opened = false;
   const open = () => {
     if (stopped) return;
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     socket = new WebSocket(`${proto}//${location.host}/api/events`);
     socket.onopen = () => {
       pause = 1000;
+      if (opened) listeners.forEach((f) => f({ type: "reconnected" }));    // what came meanwhile was not said
+      opened = true;
       flushUnsent();                    // what this device kept while the server could not be reached
       connected = true;
       statusListeners.forEach((f) => f(true));
