@@ -5,6 +5,10 @@
    "rows": 1,
    "sha256": "1044df6c7d936e462182dfeb380dbba7040b081e4a7729743c6631a24e4c1ef4"
   },
+  "account_label": {
+   "rows": 0,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
   "address": {
    "rows": 36,
    "sha256": "1bbfa0078f3df4d409880e8f4dcbef3758c9fb108bd9914bf4c3327df8765484"

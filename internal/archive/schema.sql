@@ -63,6 +63,10 @@ CREATE TABLE IF NOT EXISTS person_address (
     how TEXT NOT NULL DEFAULT 'auto'    -- auto: one person per new address; manual: merged by the owner
 );
 CREATE INDEX IF NOT EXISTS person_address_person ON person_address (person_id);
+CREATE TABLE IF NOT EXISTS account_label (  -- the user's own name for one of a person's handles: two accounts
+    address_id INTEGER PRIMARY KEY REFERENCES address,  -- of theirs on one service told apart ("the work one")
+    label TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS handle_name (    -- every name a service has shown for a handle; many may share one
     address_id INTEGER NOT NULL REFERENCES address,
     service_id INTEGER NOT NULL REFERENCES service,

@@ -13,6 +13,7 @@ import { onEvent } from "@/lib/events";
 import { useSettings, useWide } from "@/lib/hooks";
 import { draft, keepDraft, keepLastChat, keepPlace, place } from "@/lib/memory";
 import { service } from "@/lib/services";
+import { accountShort } from "@/lib/accounts";
 import { cn } from "@/lib/utils";
 import { chatRoute } from "@/router";
 import { Avatar, Button, Center, Dialog, IconButton, Menu, MenuContent, MenuItem, MenuSub, MenuSubContent, MenuSubTrigger, MenuTrigger, ServiceBadge, ServiceIcon, Spinner, Textarea } from "@/components/ui";
@@ -518,8 +519,13 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
         a.sender_id === item.sender_id && Math.abs(a.ts - item.ts) < 5 * 60_000 && sameDay(a.ts, item.ts);
       const firstOfRun = !same(prev);
       const lastOfRun = !same(next);
-      const showService = !prev || prev.type !== "message" || prev.service !== item.service || newDay;
+      // which of the person's accounts on the service, where they have more than one: said where it changes
+      const ofService = (detail.data?.accounts ?? []).filter((a) => a.service === item.service);
+      const acct = ofService.length > 1 ? ofService.find((a) => a.conversation_id === item.conversation_id) : undefined;
+      const switched = !!acct && !!prev && prev.type === "message" && prev.service === item.service && prev.conversation_id !== item.conversation_id;
+      const showService = !prev || prev.type !== "message" || prev.service !== item.service || newDay || switched;
       body = <Bubble m={item} group={isGroup} first={firstOfRun} last={lastOfRun} showService={showService}
+        account={acct ? accountShort(acct) : undefined}
         highlight={highlight === item.id} onOpen={openMedia} onJump={jump}
         onReply={item.keyed && replyable.includes(item.service) ? answer : undefined}
         onInfo={item.outgoing && item.receipts ? setInfoOf : undefined}
@@ -844,8 +850,9 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   type Account = (typeof accounts)[number];
   // how one is said: by its name, and the handle where there is one (the name alone where no other of
   // the service has it, the handle where it says nothing more)
-  const full = (a: Account) => (a.name && a.handle ? `${a.name} (${a.handle})` : a.name ?? a.handle ?? "");
-  const short = (a: Account) => (a.name && accountsOf(a.service).filter((x) => x.name === a.name).length === 1 ? a.name : a.handle ?? a.name ?? "");
+  const named = (a: Account) => a.label ?? a.name;
+  const full = (a: Account) => (named(a) && a.handle ? `${named(a)} (${a.handle})` : named(a) ?? a.handle ?? accountShort(a));
+  const short = (a: Account) => (a.label ?? (a.name && accountsOf(a.service).filter((x) => x.name === a.name).length === 1 ? a.name : accountShort(a)));
   // where it goes, where the service has more than one: an answer's own, else the one picked
   const fixed = editing ?? replyTo;
   const several = accountsOf(via);
@@ -1013,9 +1020,9 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
                       {theirs.map((a) => (
                         <MenuItem key={a.conversation_id} title={`${service(s).name} · ${full(a)}`} onSelect={() => pick(a.conversation_id)}>
                           <span data-account={a.conversation_id} className="min-w-0 flex-1">
-                            <span className="block truncate">{a.name ?? a.handle}</span>
+                            <span className="block truncate">{named(a) ?? a.handle ?? accountShort(a)}</span>
                             <span className="block truncate text-xs text-muted">
-                              {[a.name && a.handle, a.last_ts && dateOnly(a.last_ts)].filter(Boolean).join(" · ")}
+                              {[named(a) && a.handle, a.label && a.name, a.last_ts && dateOnly(a.last_ts)].filter(Boolean).join(" · ")}
                             </span>
                           </span>
                           <span className="grid size-4 place-items-center">{s === svc && a === account && <Check className="size-4 text-accent" />}</span>

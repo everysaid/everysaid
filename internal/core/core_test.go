@@ -1480,3 +1480,39 @@ func TestPeopleWithoutANameLast(t *testing.T) {
 		t.Fatal("the demo should have both", seen, len(list))
 	}
 }
+
+// A person's accounts on one service are never said by a service's bare id: an id says their number
+// or username where that is theirs alone, else nothing; the user's own name for one tells it apart.
+func TestAccountsSaidReadably(t *testing.T) {
+	p := &core.People{Handles: map[int64][]core.Handle{
+		1: {{Kind: "id", Value: "a3ce7744-af59", Service: "signal", AddressID: 10}, {Kind: "phone", Value: "+306900000001", AddressID: 11}},
+		2: {{Kind: "id", Value: "a3ce", Service: "signal", AddressID: 20}, {Kind: "id", Value: "5051", Service: "signal", AddressID: 21},
+			{Kind: "phone", Value: "+306900000002", AddressID: 22}},
+		3: {{Kind: "id", Value: "777", Service: "telegram", AddressID: 30}, {Kind: "username", Value: "maria_k", Service: "telegram", AddressID: 31}},
+	}}
+	for _, c := range []struct {
+		pid, aid int64
+		want     string
+	}{{1, 10, "+30 690 000 0001"}, {1, 11, "+30 690 000 0001"}, {2, 20, ""}, {2, 21, ""}, {3, 30, "@maria_k"}} {
+		if got := p.Readable(c.pid, c.aid); got != c.want {
+			t.Errorf("person %d, address %d: %q, want %q", c.pid, c.aid, got, c.want)
+		}
+	}
+	s := store(t)
+	var pid, aid, other int64
+	s.Read().QueryRow("SELECT person_id, address_id FROM person_address LIMIT 1").Scan(&pid, &aid)
+	s.Read().QueryRow("SELECT address_id FROM person_address WHERE person_id != ? LIMIT 1", pid).Scan(&other)
+	label := "  the work one "
+	if err := core.SetAccountLabel(s, pid, aid, &label); err != nil {
+		t.Fatal(err)
+	}
+	if got := core.PeopleOf(s).AccountLabel[aid]; got != "the work one" {
+		t.Fatalf("label %q", got)
+	}
+	if err := core.SetAccountLabel(s, pid, other, &label); err == nil {
+		t.Fatal("named another's handle")
+	}
+	if err := core.SetAccountLabel(s, pid, aid, nil); err != nil || core.PeopleOf(s).AccountLabel[aid] != "" {
+		t.Fatalf("not taken away: %v", err)
+	}
+}

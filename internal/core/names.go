@@ -169,6 +169,7 @@ type People struct {
 	Given        map[int64]string
 	Pinned       map[int64]string
 	Notes        map[int64]string
+	AccountLabel map[int64]string // address -> the user's own name for it (account_label)
 	Contacts     map[int64][]ContactRef
 	SeenNames    map[int64][]Seen
 	Order        []string
@@ -181,7 +182,8 @@ type People struct {
 func NewPeople(q db.Querier) *People {
 	p := &People{Handles: map[int64][]Handle{}, PersonOf: map[int64]int64{}, OwnAddresses: map[int64]bool{},
 		Me: map[int64]bool{}, Given: map[int64]string{}, Pinned: map[int64]string{}, Notes: map[int64]string{},
-		Contacts: map[int64][]ContactRef{}, SeenNames: map[int64][]Seen{}, info: map[int64][2]string{}}
+		AccountLabel: map[int64]string{}, Contacts: map[int64][]ContactRef{}, SeenNames: map[int64][]Seen{},
+		info: map[int64][2]string{}}
 	db.Each(q, "SELECT a.id, pa.person_id, k.name, a.value, s.name FROM address a "+
 		"JOIN person_address pa ON pa.address_id = a.id JOIN address_kind k ON k.id = a.kind_id "+
 		"LEFT JOIN service s ON s.id = a.service_id", nil, func(scan func(...any)) {
@@ -216,6 +218,12 @@ func NewPeople(q db.Querier) *People {
 				p.Notes[pid] = note.String
 			}
 		})
+	db.Each(q, "SELECT address_id, label FROM account_label", nil, func(scan func(...any)) {
+		var aid int64
+		var label string
+		scan(&aid, &label)
+		p.AccountLabel[aid] = label
+	})
 	db.Each(q, "SELECT pa.person_id, c.id, c.name, c.photo, c.organization, ca.address_id, c.updated_at "+
 		"FROM contact_address ca JOIN contact c ON c.id = ca.contact_id "+
 		"JOIN person_address pa ON pa.address_id = ca.address_id "+
@@ -495,9 +503,48 @@ func (p *People) Describe(pid int64) []M {
 	out := []M{}
 	for _, h := range hs {
 		out = append(out, M{"kind": h.Kind, "value": h.Value, "service": nullable(h.Service),
-			"label": Pretty(h.Kind, h.Value), "address_id": h.AddressID})
+			"label": Pretty(h.Kind, h.Value), "address_id": h.AddressID, "account_label": nullable(p.AccountLabel[h.AddressID])})
 	}
 	return out
+}
+
+// Readable is how one of a person's handles is said where a service's own id would say nothing (a
+// UUID, a number of its own): the handle itself where it is a number, an address or a username;
+// for an id, the person's username on that service, or their number, where they have only one id
+// there and only one such (else "", nothing to tell it by).
+func (p *People) Readable(pid, addressID int64) string {
+	var h *Handle
+	for i := range p.Handles[pid] {
+		if p.Handles[pid][i].AddressID == addressID {
+			h = &p.Handles[pid][i]
+		}
+	}
+	if h == nil {
+		return ""
+	}
+	if h.Kind != "id" {
+		return Pretty(h.Kind, h.Value)
+	}
+	var ids, usernames, phones []Handle
+	for _, o := range p.Handles[pid] {
+		switch {
+		case o.Kind == "id" && o.Service == h.Service:
+			ids = append(ids, o)
+		case o.Kind == "username" && o.Service == h.Service:
+			usernames = append(usernames, o)
+		case o.Kind == "phone":
+			phones = append(phones, o)
+		}
+	}
+	switch {
+	case len(ids) != 1:
+		return ""
+	case len(usernames) == 1:
+		return Pretty("username", usernames[0].Value)
+	case len(phones) == 1:
+		return Pretty("phone", phones[0].Value)
+	}
+	return ""
 }
 
 func nullable(s string) any {

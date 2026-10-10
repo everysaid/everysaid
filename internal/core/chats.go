@@ -1120,8 +1120,10 @@ func GetChat(s *Store, chatID string) M {
 				var last sql.NullInt64
 				scan(&id, &sid, &a, &kind, &value, &last)
 				if !ppl.OwnAddresses[a] {
+					// never a service's bare id (Readable); the user's own name for it, where given
 					accounts = append(accounts, M{"conversation_id": id, "service": lk.Service[sid], "address_id": a,
-						"name": nullable(ppl.NameOfHandle(a)), "handle": Pretty(kind, value), "last_ts": nullInt(last)})
+						"name": nullable(ppl.NameOfHandle(a)), "handle": nullable(ppl.Readable(c.PersonID, a)),
+						"label": nullable(ppl.AccountLabel[a]), "last_ts": nullInt(last)})
 				}
 			})
 		}
