@@ -358,6 +358,10 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
 
   // new messages of this chat, as they arrive (when the latest are shown)
   useEffect(() => onEvent((e) => {
+    if (e.type === "reconnected" && !hasNewer) {           // the connection was lost: what came meanwhile
+      loadNewer(true);
+      return;
+    }
     if (e.type === "new" && e.chats[chatId] && !hasNewer) {
       if (atBottomRef.current) toEnd.current = true;        // at the end: stay there as they come
       loadNewer(true);

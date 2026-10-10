@@ -89,8 +89,22 @@ export function unreached(e: unknown) {
 
 export interface Went { conversation_id?: number; messages?: unknown[]; queued?: boolean; id?: string }
 
-/** Sends a message with its id: what the server said (queued: it keeps it, to send when it can). */
+/** Sends a message with its id: what the server said (queued: it keeps it, to send when it can).
+ *  An answer that does not come (lost on the way) is asked for again with the same id, every 15
+ *  seconds: the server sends a message once, and says again what became of it. Not one with a file:
+ *  its first sending may still be under way, and the file would go up again each time. */
 export function sendUnsent(u: Unsent): Promise<Went> {
+  if (u.file) return postUnsent(u);
+  return new Promise((ok, fail) => {
+    let over = false;
+    const end = (f: () => void) => { if (!over) { over = true; clearInterval(again); f(); } };
+    const ask = () => postUnsent(u).then((w) => end(() => ok(w)), (e) => end(() => fail(e)));
+    const again = setInterval(ask, 15_000);
+    ask();
+  });
+}
+
+function postUnsent(u: Unsent): Promise<Went> {
   if (u.file) {
     const form = new FormData();
     form.append("text", u.text);
