@@ -15,7 +15,7 @@ self.addEventListener("message", (e) => {
 });
 
 self.addEventListener("push", (event) => {
-  let data: { title?: string; body?: string; chat?: string | null; tag?: string } = {};
+  let data: { title?: string; body?: string; chat?: string | null; ts?: number; tag?: string } = {};
   try {
     data = event.data?.json() ?? {};
   } catch {
@@ -31,7 +31,7 @@ self.addEventListener("push", (event) => {
         tag: data.tag || data.chat || undefined,
         icon: "/icon-192.png",
         badge: "/badge-72.png",
-        data: { chat: data.chat },
+        data: { chat: data.chat, ts: data.ts },
       });
       const nav = self.navigator as unknown as { setAppBadge?: (n?: number) => Promise<void> };
       if (nav.setAppBadge) await nav.setAppBadge().catch(() => {});

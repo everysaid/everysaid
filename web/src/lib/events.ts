@@ -14,7 +14,7 @@ export type LiveEvent =
   | { type: "outbox"; chat: string };                                   // what of a chat waits to be sent changed
 
 /** What a push would say, for the browsers without push (lib/push localNotify). */
-export type LiveNotification = { title: string; body: string; chat: string; tag: string };
+export type LiveNotification = { title: string; body: string; chat: string; ts: number; tag: string };
 
 type Listener = (e: LiveEvent) => void;
 const listeners = new Set<Listener>();

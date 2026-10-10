@@ -5,7 +5,7 @@ import { loadServices } from "@/lib/services";
 import { Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { api } from "@/lib/api";
 import { connectEvents, onEvent } from "@/lib/events";
-import { localNotify } from "@/lib/push";
+import { localNotify, showLocal } from "@/lib/push";
 import { toast } from "sonner";
 import { Center, Spinner } from "@/components/ui";
 import { AppShell } from "@/components/AppShell";
@@ -41,12 +41,7 @@ export function Root() {
     if (e.type !== "new" || !e.notify || !localNotify()) return;
     for (const n of e.notify) {
       if (document.visibilityState === "visible" && document.hasFocus() && location.pathname === `/chat/${n.chat}`) continue;
-      const shown = new Notification(n.title, { body: n.body, tag: n.tag, icon: "/icon-192.png" });
-      shown.onclick = () => {
-        window.focus();
-        navigate({ to: "/chat/$chatId", params: { chatId: n.chat } });
-        shown.close();
-      };
+      showLocal(n, (chat) => navigate({ to: "/chat/$chatId", params: { chatId: chat } }));
     }
   }), [navigate]);
   // the server says some things without being asked (logs, notifications): in the language last chosen

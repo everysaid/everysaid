@@ -6,6 +6,7 @@ import { BarChart3, Images, MessagesSquare, MoreHorizontal, Phone, Plug, Search,
 import { cn } from "@/lib/utils";
 import { useChats, useWide } from "@/lib/hooks";
 import { useConnected } from "@/lib/events";
+import { closeRead } from "@/lib/push";
 import { lastChat } from "@/lib/memory";
 import { Logo } from "./Logo";
 import { Menu, MenuContent, MenuItem, MenuTrigger, Tip } from "./ui";
@@ -32,6 +33,14 @@ function useSection() {
 function useUnread() {
   const chats = useChats();
   return (chats.data?.items ?? []).filter((c) => c.unread && !c.muted).length;
+}
+
+// a chat read (here or on another device): its notifications go
+function useCloseRead() {
+  const chats = useChats();
+  useEffect(() => {
+    if (chats.data) closeRead(chats.data.items);
+  }, [chats.data]);
 }
 
 function Rail() {
@@ -119,6 +128,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // the unread chats in the title too: Ferdium (and the tabs) show the number from it; and on the
   // installed app's icon (a push puts a dot there, this the number, or nothing)
   const unread = useUnread();
+  useCloseRead();
   useEffect(() => {
     document.title = unread > 0 ? `(${unread}) Everysaid` : "Everysaid";
     const nav = navigator as unknown as { setAppBadge?: (n: number) => Promise<void>; clearAppBadge?: () => Promise<void> };

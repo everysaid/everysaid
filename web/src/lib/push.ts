@@ -1,4 +1,5 @@
-import { api } from "./api";
+import { api, type ChatSummary } from "./api";
+import type { LiveNotification } from "./events";
 
 export const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
 /** The switch is there wherever notifications are: without push (Ferdium, Chromium) the page shows them itself. */
@@ -7,6 +8,39 @@ export const notifySupported = () => "Notification" in window;
 // A browser without a push service: this device is notified by the open page (the "new" event), not by push.
 const LOCAL = "notify-local";
 export const localNotify = () => localStorage.getItem(LOCAL) === "1" && "Notification" in window && Notification.permission === "granted";
+
+// The notifications this page showed itself, by chat: closed once the chat is read.
+const shown = new Map<string, { note: Notification; ts: number }>();
+
+/** A notification the page shows itself (no push): a click opens its chat. */
+export function showLocal(n: LiveNotification, open: (chat: string) => void) {
+  const note = new Notification(n.title, { body: n.body, tag: n.tag, icon: "/icon-192.png" });
+  note.onclick = () => {
+    window.focus();
+    open(n.chat);
+    note.close();
+  };
+  shown.set(n.chat, { note, ts: n.ts });
+}
+
+/** The notifications of chats read since (here or on another device) closed: the page's own and the
+ *  pushes', while the app is open. Only where the list has the message notified of (ts), read. */
+export async function closeRead(chats: ChatSummary[]) {
+  const read = new Map(chats.filter((c) => !c.unread).map((c) => [c.id, c.last_ts]));
+  const isRead = (chat: unknown, ts: unknown) => typeof chat === "string" && typeof ts === "number" && (read.get(chat) ?? -1) >= ts;
+  for (const [chat, s] of shown) {
+    if (isRead(chat, s.ts)) {
+      s.note.close();
+      shown.delete(chat);
+    }
+  }
+  if (!("serviceWorker" in navigator)) return;
+  const reg = await navigator.serviceWorker.getRegistration();
+  for (const n of (await reg?.getNotifications().catch(() => [])) ?? []) {
+    const d = n.data as { chat?: string; ts?: number } | null;
+    if (isRead(d?.chat, d?.ts)) n.close();
+  }
+}
 
 export const isIos = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
 export const isStandalone = () =>

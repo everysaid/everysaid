@@ -4,7 +4,8 @@
 // closed. The payload is end-to-end encrypted for each subscription (RFC 8291), so the browser's
 // push service (Apple's, Google's, Mozilla's) carries it without reading it. The server's VAPID key
 // is a secret (`vapid-private`, in the keyring, a PEM as the Python made it: the same key, so the
-// subscriptions made with it keep working). Muted chats send nothing; the setting `push_preview`
+// subscriptions made with it keep working). Muted chats send nothing, nor what was read already
+// (host.go, describeNew); the setting `push_preview`
 // (default on) decides whether the text is shown or only who wrote.
 package server
 
@@ -220,6 +221,7 @@ func (p *Push) Alert(store *core.Store, title, body string) {
 type Incoming struct {
 	Chat    string
 	Message int64
+	TS      int64
 	Text    string
 	Kind    string
 }
@@ -274,7 +276,7 @@ func Notifications(store *core.Store, incoming []Incoming) []map[string]any {
 			body = fmt.Sprintf("(%d) %s", len(msgs), body)
 		}
 		payloads = append(payloads, map[string]any{"title": core.ChatTitle(store, chat), "body": core.Cut(body, 240),
-			"chat": cid, "message": last.Message, "tag": cid})
+			"chat": cid, "message": last.Message, "ts": last.TS, "tag": cid})
 	}
 	return payloads
 }
