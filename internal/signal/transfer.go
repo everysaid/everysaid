@@ -95,7 +95,7 @@ func (c *client) applyBackup(cli *signalmeow.Client) (int, error) {
 	some := false
 	n, err := c.backupEach(c.ctx, cli, func(x converted) error {
 		some = true
-		c.files(x, download)
+		c.files(c.ctx, x, download)
 		return c.ev.sayAndWait(x.name, x.ev)
 	})
 	if err != nil || !some {
@@ -450,6 +450,9 @@ func (a *transferArchive) message(chat M, author string, outgoing bool, it *back
 	attach := func(f *backuppb.FilePointer, flags uint32, sticker bool) M {
 		p, hash := pointer(f, flags)
 		j := attachmentJSON(p, sticker)
+		if len(hash) > 0 {
+			j["hash"] = base64Std(hash)
+		}
 		x.atts = append(x.atts, p)
 		x.hashes = append(x.hashes, hash)
 		return j

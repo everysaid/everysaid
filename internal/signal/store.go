@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS signal_message (
     outgoing INTEGER NOT NULL,
     server_ts INTEGER,
     json TEXT NOT NULL,                 -- the client's event, whole
+    stored_at INTEGER NOT NULL,         -- when it came, Unix ms (the history transferred at link time comes old)
     PRIMARY KEY (instance, author, ts)
 );                                      -- (not WITHOUT ROWID: a message's JSON is larger than such a table keeps in a page)
 CREATE INDEX IF NOT EXISTS signal_message_chat ON signal_message (instance, chat, ts);
@@ -251,6 +252,8 @@ type attachmentEv struct {
 	// where Signal keeps the file and its key (Signal's AttachmentPointer, base64): what fetches it
 	// again, and keeps it in an edit of the message
 	Pointer string `json:"pointer"`
+	// the hash of the file's content, where that is its check (the transfer archive's files)
+	Hash string `json:"hash"`
 }
 
 type contactEv struct {
@@ -415,9 +418,9 @@ func (s *Store) Apply(raw []byte) (kept bool, err error) {
 			in, e.Sender, e.TS) {
 			db.Exec(s.DB, "INSERT OR IGNORE INTO signal_late_file VALUES (?, ?, ?)", in, e.Sender, e.TS)
 		}
-		db.Exec(s.DB, "INSERT INTO signal_message (instance, author, ts, chat_kind, chat, outgoing, server_ts, json) "+
-			"VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (instance, author, ts) DO UPDATE SET json = excluded.json",
-			in, e.Sender, e.TS, e.Chat.Kind, e.Chat.ID, db.B(e.Outgoing), e.ServerTS, string(raw))
+		db.Exec(s.DB, "INSERT INTO signal_message (instance, author, ts, chat_kind, chat, outgoing, server_ts, json, stored_at) "+
+			"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (instance, author, ts) DO UPDATE SET json = excluded.json",
+			in, e.Sender, e.TS, e.Chat.Kind, e.Chat.ID, db.B(e.Outgoing), e.ServerTS, string(raw), time.Now().UnixMilli())
 	case "edit":
 		if e.TargetTS == nil {
 			return false, nil
@@ -604,14 +607,20 @@ const (
 	fetchDays  = 30
 )
 
-// keepFor is how long the store keeps what the archive has: until its files can no longer be asked
+// keepFor is how long the store keeps what the archive has, from when it came: while its files may be asked
 // again.
 var keepFor = fetchDays * 24 * time.Hour
 
-// FailedFiles are the messages (sent after since, Unix ms) with a file that failed to come and is
+// FailedFiles are the messages (that came after since, Unix ms) with a file that failed to come and is
 // still to be asked again; each is counted as asked once more.
-func (s *Store) FailedFiles(since int64) []ref {
-	var out []ref
+func (s *Store) FailedFiles(since int64) (out []ref) {
+	var err error
+	defer func() {
+		if err != nil { // the store closed meanwhile (its connection ended): none now
+			out = nil
+		}
+	}()
+	defer db.Recover(&err)
 	in := s.Instance
 	// the tries spaced out (at once, an hour on, six hours on), so that a fault of a while does not
 	// use them all
@@ -619,7 +628,7 @@ func (s *Store) FailedFiles(since int64) []ref {
 	db.Each(s.DB, "SELECT m.author, m.ts, m.json FROM signal_message m "+
 		"LEFT JOIN signal_fetch_try f ON f.instance = m.instance AND f.author = m.author AND f.ts = m.ts "+
 		"LEFT JOIN signal_fetch_at w ON w.instance = m.instance AND w.author = m.author AND w.ts = m.ts "+
-		"WHERE m.instance = ? AND m.ts >= ? AND m.json LIKE '%\"error\":%' AND coalesce(f.tries, 0) < ? "+
+		"WHERE m.instance = ? AND m.stored_at >= ? AND m.json LIKE '%\"error\":%' AND coalesce(f.tries, 0) < ? "+
 		"AND coalesce(w.at, 0) <= ? - CASE coalesce(f.tries, 0) WHEN 0 THEN 0 WHEN 1 THEN 3600 ELSE 21600 END ORDER BY m.ts",
 		[]any{in, since, fetchTries, now}, func(scan func(...any)) {
 			var r ref
@@ -725,11 +734,13 @@ func (s *Store) Deleted(author string, times []int64) bool {
 		append([]any{s.Instance, author}, db.Args(times)...)...)
 }
 
-// Prune takes out of the store the messages the archive has (by key, author and sent time) that are
-// keepFor old, with what was about them alone: their files' tries, an edit, a deletion, the votes of
-// a poll; and the receipts, reads, reactions, calls and unreadable notes as old, which the archive
-// has taken in at each import since.
-func (s *Store) Prune(imported []ref) (err error) {
+// Prune takes out of the store the messages the archive has (by key, author and sent time) that
+// came keepFor ago (the time they came, not when they were sent: the history transferred at link
+// time is old when it comes), with what was about them alone: their files' tries, a deletion, the
+// votes of a poll, an edit's content (its times stay: what is aimed at an edit's time still finds
+// its message). Then the reactions, receipts and reads as old whose message left too, the calls as
+// old (but a chat's left out: skip), and the unreadable notes as old.
+func (s *Store) Prune(imported []ref, skip map[string]bool) (err error) {
 	defer db.Recover(&err)
 	cutoff := time.Now().Add(-keepFor)
 	ms, in := cutoff.UnixMilli(), s.Instance
@@ -739,19 +750,28 @@ func (s *Store) Prune(imported []ref) (err error) {
 	}
 	defer tx.Rollback()
 	for _, r := range imported {
-		if r.TS >= ms {
+		if n, _ := db.Exec(tx, "DELETE FROM signal_message WHERE instance = ? AND author = ? AND ts = ? AND stored_at < ?",
+			in, r.Author, r.TS, ms).RowsAffected(); n == 0 {
 			continue
 		}
-		for _, t := range []string{"signal_message", "signal_late_file", "signal_fetch_try", "signal_fetch_at", "signal_deletion"} {
+		for _, t := range []string{"signal_late_file", "signal_fetch_try", "signal_fetch_at", "signal_deletion"} {
 			db.Exec(tx, "DELETE FROM "+t+" WHERE instance = ? AND author = ? AND ts = ?", in, r.Author, r.TS)
 		}
-		db.Exec(tx, "DELETE FROM signal_edit WHERE instance = ? AND author = ? AND target_ts = ?", in, r.Author, r.TS)
+		db.Exec(tx, "UPDATE signal_edit SET json = '' WHERE instance = ? AND author = ? AND target_ts = ?", in, r.Author, r.TS)
 		db.Exec(tx, "DELETE FROM signal_poll_vote WHERE instance = ? AND target_author = ? AND target_ts = ?", in, r.Author, r.TS)
 	}
-	db.Exec(tx, "DELETE FROM signal_reaction WHERE instance = ? AND ts < ?", in, ms)
-	db.Exec(tx, "DELETE FROM signal_receipt WHERE instance = ? AND at < ?", in, ms)
-	db.Exec(tx, "DELETE FROM signal_read WHERE instance = ? AND at < ?", in, ms)
-	db.Exec(tx, "DELETE FROM signal_call WHERE instance = ? AND coalesce(ended_at, ts) < ?", in, ms)
+	db.Exec(tx, "DELETE FROM signal_reaction WHERE instance = ? AND ts < ? AND NOT EXISTS (SELECT 1 FROM signal_message m "+
+		"WHERE m.instance = signal_reaction.instance AND m.author = target_author AND m.ts = target_ts)", in, ms)
+	db.Exec(tx, "DELETE FROM signal_receipt WHERE instance = ? AND at < ? AND NOT EXISTS (SELECT 1 FROM signal_message m "+
+		"WHERE m.instance = signal_receipt.instance AND m.outgoing AND m.ts = signal_receipt.ts)", in, ms)
+	db.Exec(tx, "DELETE FROM signal_read WHERE instance = ? AND at < ? AND NOT EXISTS (SELECT 1 FROM signal_message m "+
+		"WHERE m.instance = signal_read.instance AND m.author = signal_read.author AND m.ts = signal_read.ts)", in, ms)
+	var kept []string
+	for chat := range skip {
+		kept = append(kept, chat)
+	}
+	db.Exec(tx, "DELETE FROM signal_call WHERE instance = ? AND coalesce(ended_at, ts) < ? AND coalesce(chat, '') NOT IN ("+
+		db.Marks(len(kept)+1)+")", append([]any{in, ms, "\x00"}, db.Args(kept)...)...) // (one never a chat: the list is never empty)
 	db.Exec(tx, "DELETE FROM signal_unreadable WHERE instance = ? AND at < ?", in, cutoff.Unix())
 	return tx.Commit()
 }

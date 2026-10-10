@@ -537,6 +537,11 @@ func Import(a *archive.Archive, s *Store, mediaDir string, iid int64, skip map[s
 	for _, r := range editRows {
 		edits[root(Key(r.author, r.target))] = r.js
 	}
+	for k, js := range edits {
+		if js == "" { // its message left the store, the archive having had it for a while: nothing to do
+			delete(edits, k)
+		}
+	}
 	deleted := map[string]bool{}
 	for _, k := range db.Strs(d, "SELECT author || ':' || ts FROM signal_deletion WHERE instance = ?", in) {
 		deleted[root(k)] = true
@@ -694,7 +699,7 @@ func Import(a *archive.Archive, s *Store, mediaDir string, iid int64, skip map[s
 	n.Changes += changes(a, s, p, own, ownSet, edits, deleted, root, linkFiles)
 	n.Files = files.Added[SourceName(own)]
 	receipts(a, s, p, own, ownSet, root)
-	reads(a, s, src)
+	reads(a, s, src, root)
 	chatStates(a, s, src, skip)
 	n.Calls += calls(a, s, p, src, conv, skip)
 
@@ -717,7 +722,7 @@ func Import(a *archive.Archive, s *Store, mediaDir string, iid int64, skip map[s
 	a.Imported(src)
 	a.Commit()
 	files.Release()
-	if err := s.Prune(imported); err != nil {
+	if err := s.Prune(imported, skip); err != nil {
 		return n, err
 	}
 	return n, nil
@@ -859,17 +864,35 @@ func receipts(a *archive.Archive, s *Store, p *people, own string, ownSet map[ar
 }
 
 // reads: how far the owner read each chat, on any device (the newest message read there, and when).
-func reads(a *archive.Archive, s *Store, src int64) {
-	db.Each(s.DB, "SELECT m.chat, max(m.ts), max(r.at) FROM signal_read r JOIN signal_message m ON m.instance = r.instance AND "+
-		"m.author = r.author AND m.ts = r.ts WHERE r.instance = ? GROUP BY m.chat ORDER BY m.chat", []any{s.Instance},
+// The messages are the archive's (one read late may have left the store already).
+func reads(a *archive.Archive, s *Store, src int64, root func(string) string) {
+	type mark struct{ newest, when int64 }
+	marks := map[int64]*mark{}
+	var convs []int64
+	db.Each(s.DB, "SELECT author, ts, at FROM signal_read WHERE instance = ? ORDER BY author, ts", []any{s.Instance},
 		func(scan func(...any)) {
-			var chat string
-			var newest, when int64
-			scan(&chat, &newest, &when)
-			if cid, ok := a.FindConversation(Service, chat); ok {
-				a.ReportState(src, cid, "read_until", newest, when, when)
+			var author string
+			var ts, at int64
+			scan(&author, &ts, &at)
+			mid, ok := a.MessageByKey(Service, root(Key(author, ts)), 0)
+			if !ok {
+				return
 			}
+			var cid, mts int64
+			if !a.Row("SELECT conversation_id, ts FROM message WHERE id = ?", []any{mid}, &cid, &mts) {
+				return
+			}
+			m := marks[cid]
+			if m == nil {
+				m = &mark{}
+				marks[cid] = m
+				convs = append(convs, cid)
+			}
+			m.newest, m.when = max(m.newest, mts), max(m.when, at)
 		})
+	for _, cid := range convs {
+		a.ReportState(src, cid, "read_until", marks[cid].newest, marks[cid].when, marks[cid].when)
+	}
 }
 
 // chatStates: each chat's state on the phone (archived, pinned, muted), as Signal last said it.

@@ -13,6 +13,7 @@ package signal
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -400,16 +401,28 @@ func (c *client) online(ctx context.Context) (*signalmeow.Client, error) {
 			return nil, err
 		}
 	}
-	for !cli.IsConnected() {
+	c.mu.Lock()
+	ended := c.ended
+	c.mu.Unlock()
+	for {
+		select { // the receiving ended (refused, stopped): its connections are going
+		case <-ended:
+			return nil, refuse("failed", "not connected to Signal")
+		default:
+		}
+		// (signalmeow sets its websockets to nil when its loops stop)
+		if a, u := cli.AuthedWS, cli.UnauthedWS; a != nil && u != nil && a.IsConnected() && u.IsConnected() {
+			return cli, nil
+		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-c.ctx.Done():
 			return nil, ErrStopped
+		case <-ended:
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	return cli, nil
 }
 
 func (c *client) sync(ctx context.Context) (any, error) {
@@ -508,10 +521,14 @@ func (c *client) receive(download bool) (any, error) {
 		c.mu.Unlock()
 		return M{"started": false}, nil
 	}
+	prev := c.stopLoops
 	c.receiving, c.download, c.checked, c.ended = true, download, false, make(chan struct{})
 	c.stopLoops = sync.OnceFunc(func() { cli.StopReceiveLoops() })
 	ended := c.ended
 	c.mu.Unlock()
+	if prev != nil {
+		prev() // the connections of a receiving that ended are closed first (or waited for)
+	}
 	cli.SyncContactsOnConnect = false // asked for by the plugin, once
 	status, err := cli.StartReceiveLoops(c.ctx)
 	if err != nil {
@@ -663,7 +680,7 @@ func (c *client) content(cli *signalmeow.Client, e *events.Content) bool {
 		}
 	}
 	// a group seen first in this message: its key kept, so that the group can be read
-	if k := masterKey(dataOf(e.Content).GetGroupV2()); k != nil {
+	if k := masterKey(dataOf(e.Content).GetGroupV2()); k != nil && (e.Content.GetSyncMessage() == nil || m.sender == own) {
 		cli.StoreMasterKey(c.ctx, serializedKey(k))
 	}
 	c.mu.Lock()
@@ -674,7 +691,7 @@ func (c *client) content(cli *signalmeow.Client, e *events.Content) bool {
 			c.log.Warn().Str("sender", m.sender).Msg("a group message from someone not in the group: dropped")
 			continue
 		}
-		if err := c.deliver(cli, x, download, true); err != nil {
+		if err := c.deliver(c.ctx, cli, x, download, true); err != nil {
 			return false
 		}
 	}
@@ -699,7 +716,17 @@ func dataOf(content *signalpb.Content) *signalpb.DataMessage {
 	if dm := content.GetDataMessage(); dm != nil {
 		return dm
 	}
-	return content.GetEditMessage().GetDataMessage()
+	if dm := content.GetEditMessage().GetDataMessage(); dm != nil {
+		return dm
+	}
+	// the phone's copy of what it sent (a group's first message seen here may be one)
+	if sent := content.GetSyncMessage().GetSent(); sent != nil {
+		if dm := sent.GetMessage(); dm != nil {
+			return dm
+		}
+		return sent.GetEditMessage().GetDataMessage()
+	}
+	return nil
 }
 
 func serializedKey(k []byte) types.SerializedGroupMasterKey {
@@ -792,7 +819,7 @@ func (c *client) deletionAllowed(cli *signalmeow.Client, x converted) bool {
 
 // deliver says an event: its group described first where that changed, its files fetched where
 // wanted. wait: until it was handled (the error is the handler's), for what Signal waits for.
-func (c *client) deliver(cli *signalmeow.Client, x converted, download, wait bool) error {
+func (c *client) deliver(ctx context.Context, cli *signalmeow.Client, x converted, download, wait bool) error {
 	if !c.deletionAllowed(cli, x) {
 		return nil
 	}
@@ -808,7 +835,7 @@ func (c *client) deliver(cli *signalmeow.Client, x converted, download, wait boo
 			}
 		}
 	}
-	c.files(x, download)
+	c.files(ctx, x, download)
 	if wait {
 		return c.ev.sayAndWait(x.name, x.ev)
 	}
@@ -822,7 +849,7 @@ const maxLongText = 64 * 1024
 
 // files fetches an event's files into the media folder (where download), named by attachmentName;
 // a long message's text (fetched whatever the setting) becomes its text, and leaves its files.
-func (c *client) files(x converted, download bool) {
+func (c *client) files(ctx context.Context, x converted, download bool) {
 	list, _ := x.ev["attachments"].([]M)
 	if len(list) == 0 || len(list) != len(x.atts) {
 		return
@@ -844,7 +871,7 @@ func (c *client) files(x converted, download bool) {
 			break
 		}
 		if !isFile(path) {
-			if err := c.fetch(ptr, hashOf(x, i), path); err != nil {
+			if err := c.fetch(ctx, ptr, hashOf(x, i), path); err != nil {
 				c.log.Warn().Err(err).Msg("the text of a long message")
 				list[i]["error"] = err.Error()
 				long = -1
@@ -876,16 +903,17 @@ func (c *client) files(x converted, download bool) {
 		case download && ptr.GetCdnKey() == "" && ptr.GetCdnId() == 0:
 			list[i]["error"] = "not on Signal's server" // a file of the history the phone kept to itself
 		case download:
-			if err := c.fetch(ptr, hashOf(x, i), path); err != nil {
+			if err := c.fetch(ctx, ptr, hashOf(x, i), path); err != nil {
 				list[i]["error"] = err.Error()
 			} else {
 				list[i]["file"] = name
 			}
 		}
 	}
-	// the files keep the names of their places among the message's (the text's taken out after)
+	// the text's file stays in the list (the importer leaves it out), so that each file keeps the
+	// name of its place among the message's, also when fetched again or kept by an edit
 	if long >= 0 {
-		x.ev["attachments"] = append(list[:long:long], list[long+1:]...)
+		delete(list[long], "error")
 	}
 }
 
@@ -912,14 +940,16 @@ func toU64(v any) uint64 {
 }
 
 // fetch downloads a file into path (by a part file, renamed once whole).
-func (c *client) fetch(ptr *signalpb.AttachmentPointer, hash []byte, path string) error {
+func (c *client) fetch(ctx context.Context, ptr *signalpb.AttachmentPointer, hash []byte, path string) error {
 	part := path + ".part"
 	f, err := os.OpenFile(part, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(c.ctx, 10*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
+	stop := context.AfterFunc(c.ctx, cancel) // the client ending ends it too
+	defer stop()
 	_, err = signalmeow.DownloadAttachmentWithPointer(ctx, ptr, hash, f)
 	if cerr := f.Close(); err == nil {
 		err = cerr
@@ -1205,6 +1235,13 @@ func (c *client) groupChanges(cli *signalmeow.Client, g *signalpb.GroupContextV2
 			add(M{"type": "unbanned", "who": s.String()})
 		}
 	}
+	// the group ended by an admin: not in signalmeow's reading of the change, read from its actions
+	var change signalpb.GroupChange
+	var acts signalpb.GroupChange_Actions
+	if proto.Unmarshal(g.GetGroupChange(), &change) == nil && proto.Unmarshal(change.GetActions(), &acts) == nil &&
+		acts.GetTerminateGroup() != nil {
+		add(M{"type": "ended"})
+	}
 	return M{"editor": editor, "actions": actions}, true
 }
 
@@ -1485,6 +1522,7 @@ func (c *client) fetchAgain(ctx context.Context, refs []ref) (any, error) {
 			continue
 		}
 		var atts []*signalpb.AttachmentPointer
+		var hashes [][]byte
 		list := []M{}
 		for i, a := range e.Attachments {
 			p := pointerOf(a.Pointer)
@@ -1493,6 +1531,8 @@ func (c *client) fetchAgain(ctx context.Context, refs []ref) (any, error) {
 				break
 			}
 			atts = append(atts, p)
+			hash, _ := base64.StdEncoding.DecodeString(a.Hash)
+			hashes = append(hashes, hash)
 			m, _ := ev["attachments"].([]any)[i].(map[string]any)
 			delete(m, "error")
 			list = append(list, m)
@@ -1502,7 +1542,7 @@ func (c *client) fetchAgain(ctx context.Context, refs []ref) (any, error) {
 		}
 		delete(ev, "event")
 		ev["attachments"] = list
-		if err := c.deliver(cli, converted{name: "message", ev: ev, atts: atts}, true, false); err == nil {
+		if err := c.deliver(ctx, cli, converted{name: "message", ev: ev, atts: atts, hashes: hashes}, true, false); err == nil {
 			found++
 		}
 	}
@@ -1575,7 +1615,14 @@ func (c *client) end(wait time.Duration) {
 			c.endReceiving(cli, ended, nil, "")
 		}
 		if stop != nil {
-			stop() // the connections closed: what was in hand is not acknowledged, and comes again
+			// the connections closed: what was in hand is not acknowledged, and comes again (waited for
+			// a while: signalmeow's loops may hang on a full channel)
+			stopped := make(chan struct{})
+			go func() { stop(); close(stopped) }()
+			select {
+			case <-stopped:
+			case <-time.After(wait):
+			}
 		}
 		done := make(chan struct{})
 		go func() { c.work.Wait(); close(done) }()

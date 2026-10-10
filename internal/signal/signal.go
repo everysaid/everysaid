@@ -301,19 +301,23 @@ func (n *conn) event(name string, raw []byte) error {
 		}
 		// the phone sends its contacts by itself once linked; where they did not come, asked once
 		// (after the queue: Signal's apps send nothing before they have read what waited)
-		if !n.synced && !n.syncAsked {
-			n.syncAsked = true
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			if _, err := n.h.Call(ctx, "sync", nil); err == nil {
-				n.c.Log("Asked the phone for its contacts", nil)
+		ask := !n.synced && !n.syncAsked
+		n.syncAsked = n.syncAsked || ask
+		// not in this handler: the client waits for its events to be handled, and these go to Signal
+		go func() {
+			if ask {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				if _, err := n.h.Call(ctx, "sync", nil); err == nil {
+					n.c.Log("Asked the phone for its contacts", nil)
+				}
+				cancel()
 			}
-			cancel()
-		}
-		if n.c.Bool("media") {
-			n.fetchAgain()
-		}
-		signal(n.queueEmpty)
-		signal(n.dirty)
+			if n.c.Bool("media") {
+				n.fetchAgain()
+			}
+			signal(n.queueEmpty)
+			signal(n.dirty)
+		}()
 	case "contacts":
 		kept, err := n.store.Apply(raw)
 		if err != nil {

@@ -1299,10 +1299,12 @@ phone may still list the device until it is removed there.
 `signal_edit`, `signal_deletion`, `signal_reaction` (the latest of each person), `signal_receipt`,
 `signal_read`, `signal_call`, `signal_poll_vote`, `signal_unreadable`, `signal_chat_state` (a
 chat's archived, pinned, muted), and the bookkeeping of files fetched again (`signal_late_file`,
-`signal_fetch_try`, `signal_fetch_at`). After each import, a message the archive has that was sent
-over 30 days ago (its files are asked again for as long) leaves the store with what was about it
-alone (its edits, deletion, votes); receipts, reads, reactions, calls and notes as old go too. A
-chat the user left out of the import stays.
+`signal_fetch_try`, `signal_fetch_at`). After each import, a message the archive has that came over
+30 days ago (by when it came, not when it was sent: the history transferred at link time is old;
+its files are asked again for as long) leaves the store with what was about it alone (its deletion,
+votes, its edits' content: their times stay, so that what is aimed at an edit still finds the
+message); reactions, receipts and reads as old whose message left go too, and calls and notes as
+old. A chat the user left out of the import stays whole.
 
 **The history transferred at link time.** Once connected, the client waits (up to an hour, as
 signalmeow does) for the archive the phone uploads when its user agrees to transfer the history;
