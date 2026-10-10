@@ -63,13 +63,17 @@ func PurgeSpam(q db.Querier, only []int64) (out Purged) {
 		db.Exec(q, "DELETE FROM call WHERE id IN "+marks, ids...)
 	})
 	chunked(convs, func(marks string, ids []any) {
-		for _, t := range []string{"state_report", "conversation_member"} {
+		for _, t := range []string{"state_report", "conversation_member", "chat_photo"} {
 			db.Exec(q, "DELETE FROM "+t+" WHERE conversation_id IN "+marks, ids...)
 		}
 		db.Exec(q, "DELETE FROM chat_state WHERE chat IN (SELECT 'c' || id FROM conversation WHERE id IN "+marks+")", ids...)
 		db.Exec(q, "DELETE FROM conversation WHERE id IN "+marks, ids...)
 	})
 	db.Exec(q, "DELETE FROM handle_name WHERE address_id IN "+in, db.Args(addrs)...)
+	for _, s := range db.Strs(q, "SELECT DISTINCT sha256 FROM handle_photo WHERE sha256 IS NOT NULL AND address_id IN "+in, db.Args(addrs)...) {
+		shas[s] = true
+	}
+	db.Exec(q, "DELETE FROM handle_photo WHERE address_id IN "+in, db.Args(addrs)...)
 	// people who have nothing but such handles: what the app kept of their chat goes too
 	people := db.Ints(q, "SELECT DISTINCT person_id FROM person_address pa WHERE address_id IN "+in+
 		" AND NOT EXISTS (SELECT 1 FROM person_address o WHERE o.person_id = pa.person_id AND o.address_id NOT IN "+
@@ -84,8 +88,9 @@ func PurgeSpam(q db.Querier, only []int64) (out Purged) {
 		var path string
 		if db.Row(q, "SELECT path FROM media WHERE sha256 = ? AND NOT EXISTS (SELECT 1 FROM attachment WHERE sha256 = ?) "+
 			"AND NOT EXISTS (SELECT 1 FROM library_link WHERE sha256 = ?) "+
-			"AND NOT EXISTS (SELECT 1 FROM media_same WHERE sha256 = ? OR same_as = ?)",
-			[]any{sha, sha, sha, sha, sha}, &path) {
+			"AND NOT EXISTS (SELECT 1 FROM media_same WHERE sha256 = ? OR same_as = ?) "+
+			"AND NOT EXISTS (SELECT 1 FROM handle_photo WHERE sha256 = ?) AND NOT EXISTS (SELECT 1 FROM chat_photo WHERE sha256 = ?)",
+			[]any{sha, sha, sha, sha, sha, sha, sha}, &path) {
 			db.Exec(q, "DELETE FROM media_decision WHERE sha256 = ?", sha)
 			db.Exec(q, "DELETE FROM media WHERE sha256 = ?", sha)
 			out.Files = append(out.Files, path)

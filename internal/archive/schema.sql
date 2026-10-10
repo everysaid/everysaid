@@ -266,6 +266,26 @@ CREATE TABLE IF NOT EXISTS media_decision (  -- the user's choice about a file (
     date_ms INTEGER,                    -- the date the user gave it (else EXIF, else the message's)
     at INTEGER NOT NULL                 -- Unix seconds: the newest decision is the one that counts
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS handle_photo (    -- the photos a service showed for a handle (the owner's too):
+    id INTEGER PRIMARY KEY,                 -- a row for each photo it had, never overwritten
+    address_id INTEGER NOT NULL REFERENCES address,
+    service_id INTEGER NOT NULL REFERENCES service,
+    sha256 TEXT REFERENCES media,           -- NULL: none (the photo was removed)
+    first_seen INTEGER NOT NULL,            -- Unix seconds
+    last_seen INTEGER NOT NULL,             -- moves while it stays
+    removed_at INTEGER                      -- when the service said there was none any more
+);
+CREATE INDEX IF NOT EXISTS handle_photo_address ON handle_photo (address_id, service_id, first_seen);
+CREATE TABLE IF NOT EXISTS chat_photo (      -- the photos of a group, as handle_photo
+    id INTEGER PRIMARY KEY,
+    conversation_id INTEGER NOT NULL REFERENCES conversation,
+    service_id INTEGER NOT NULL REFERENCES service,
+    sha256 TEXT REFERENCES media,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL,
+    removed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS chat_photo_conversation ON chat_photo (conversation_id, service_id, first_seen);
 CREATE TABLE IF NOT EXISTS contact (    -- a contact from an address book (a `contacts` plugin instance)
     id INTEGER PRIMARY KEY,
     instance_id INTEGER NOT NULL REFERENCES plugin_instance,
