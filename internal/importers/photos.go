@@ -341,9 +341,37 @@ func ViberDesktopPhotos(database string, avatars ...string) MediaStep {
 	}
 }
 
+// storedPhoto is the digest of a photo a live source recorded (sha: the digest it noted, path: its
+// file, "" for none): the archive's copy where it has one (the source's file let go), else the
+// file taken in. ok false: its file went before the archive had it.
+func storedPhoto(a *archive.Archive, s *Store, sha, path string) (string, bool) {
+	if sha != "" && a.Exists("SELECT 1 FROM media WHERE sha256 = ?", sha) {
+		if path != "" {
+			s.held(path, sha) // had: the source's copy goes
+		}
+		return sha, true
+	}
+	if path == "" {
+		return "", false
+	}
+	got := s.Keep(path)
+	return got, got != ""
+}
+
+// localPath is a file of a source's folder by its relative path, "" for none or one leading out.
+func localPath(folder, rel string) string {
+	rel = filepath.FromSlash(rel)
+	if rel == "" || !filepath.IsLocal(rel) {
+		return ""
+	}
+	return filepath.Join(folder, rel)
+}
+
 // PhotosWhatsAppBridge: the profile photos the WhatsApp bridge asked for (messages.db's
 // profile_photo; devices: whatsmeow's store, for the LIDs' numbers), each at its first and last
-// sighting; the files taken into the store (Move), a row whose file has gone known by its digest.
+// sighting, of the people and groups the archive has (the others wait in the bridge's store for a
+// later import); the files taken into the store (Move), a row whose file has gone known by its
+// digest.
 func PhotosWhatsAppBridge(database string, devices *sql.DB) MediaStep {
 	return func(a *archive.Archive, s *Store) {
 		bridge := roBridge(database)
@@ -360,40 +388,34 @@ func PhotosWhatsAppBridge(database string, devices *sql.DB) MediaStep {
 		for _, r := range maps(bridge, "SELECT jid, picture_id, path, sha256, first_seen, last_seen FROM profile_photo "+
 			"ORDER BY first_seen, rowid") {
 			jid := str(r["jid"])
-			sha := ""
-			if str(r["picture_id"]) != "" {
-				sha = strOrEmpty(r["sha256"])
-				if sha == "" || !a.Exists("SELECT 1 FROM media WHERE sha256 = ?", sha) {
-					rel := strOrEmpty(r["path"])
-					if rel == "" || filepath.IsAbs(rel) || !filepath.IsLocal(filepath.FromSlash(rel)) {
-						continue
-					}
-					if sha = s.Keep(filepath.Join(folder, filepath.FromSlash(rel))); sha == "" {
-						continue // its file gone before the archive had it
-					}
-				} else if rel := strOrEmpty(r["path"]); rel != "" && filepath.IsLocal(filepath.FromSlash(rel)) {
-					s.held(filepath.Join(folder, filepath.FromSlash(rel)), sha) // had: the bridge's copy goes
-				}
-			}
-			first, last := toInt(r["first_seen"]), toInt(r["last_seen"])
+			var record func(sha string, at int64)
 			if strings.HasSuffix(jid, "@g.us") {
 				if conv, ok := a.FindConversation("whatsapp", jid); ok {
-					a.ChatPhoto(conv, "whatsapp", sha, first)
-					a.ChatPhoto(conv, "whatsapp", sha, last)
+					record = func(sha string, at int64) { a.ChatPhoto(conv, "whatsapp", sha, at) }
 				}
+			} else if h, ok := person.of(jid); ok && a.Known(h) {
+				record = func(sha string, at int64) { a.HandlePhoto(h, "whatsapp", sha, at) }
+			}
+			if record == nil {
 				continue
 			}
-			if h, ok := person.of(jid); ok && a.Known(h) {
-				a.HandlePhoto(h, "whatsapp", sha, first)
-				a.HandlePhoto(h, "whatsapp", sha, last)
+			sha := ""
+			if str(r["picture_id"]) != "" {
+				var ok bool
+				if sha, ok = storedPhoto(a, s, strOrEmpty(r["sha256"]), localPath(folder, strOrEmpty(r["path"]))); !ok {
+					continue
+				}
 			}
+			record(sha, toInt(r["first_seen"]))
+			record(sha, toInt(r["last_seen"]))
 		}
 	}
 }
 
 // PhotosTelegram: the photos the Telegram connection recorded (telegram_photo of its store), each at
-// its first and last sighting: a user's to their handle, a group's to its conversation; the files
-// taken into the store (Move), a row whose file has gone known by its digest.
+// its first and last sighting: a user's to their handle, a group's to its conversation, those the
+// archive has (the others wait in the store for a later import); the files taken into the store
+// (Move), a row whose file has gone known by its digest.
 func PhotosTelegram(a *archive.Archive, s *Store) {
 	if !exists(telegramstore.DB()) {
 		return
@@ -404,36 +426,26 @@ func PhotosTelegram(a *archive.Archive, s *Store) {
 	person := newTGPeople(d)
 	root := telegramstore.Media()
 	for _, r := range maps(d, "SELECT peer_id, photo_id, file, sha256, first_seen, last_seen FROM telegram_photo ORDER BY first_seen, rowid") {
+		peer := toInt(r["peer_id"])
+		var record func(sha string, at int64)
+		if peer < 0 {
+			if conv, ok := a.FindConversation("telegram", fmt.Sprint(peer)); ok {
+				record = func(sha string, at int64) { a.ChatPhoto(conv, "telegram", sha, at) }
+			}
+		} else if h := person.of(peer, true); a.Known(h) {
+			record = func(sha string, at int64) { a.HandlePhoto(h, "telegram", sha, at) }
+		}
+		if record == nil {
+			continue
+		}
 		sha := ""
 		if toInt(r["photo_id"]) != 0 {
-			sha = strOrEmpty(r["sha256"])
-			rel := filepath.FromSlash(strOrEmpty(r["file"]))
-			local := rel != "" && filepath.IsLocal(rel)
-			switch {
-			case sha != "" && a.Exists("SELECT 1 FROM media WHERE sha256 = ?", sha):
-				if local {
-					s.held(filepath.Join(root, rel), sha) // had: the connection's copy goes
-				}
-			case local:
-				if sha = s.Keep(filepath.Join(root, rel)); sha == "" {
-					continue // its file gone before the archive had it
-				}
-			default:
+			var ok bool
+			if sha, ok = storedPhoto(a, s, strOrEmpty(r["sha256"]), localPath(root, strOrEmpty(r["file"]))); !ok {
 				continue
 			}
 		}
-		peer := toInt(r["peer_id"])
-		first, last := toInt(r["first_seen"]), toInt(r["last_seen"])
-		if peer < 0 {
-			if conv, ok := a.FindConversation("telegram", fmt.Sprint(peer)); ok {
-				a.ChatPhoto(conv, "telegram", sha, first)
-				a.ChatPhoto(conv, "telegram", sha, last)
-			}
-			continue
-		}
-		if h := person.of(peer, true); a.Known(h) {
-			a.HandlePhoto(h, "telegram", sha, first)
-			a.HandlePhoto(h, "telegram", sha, last)
-		}
+		record(sha, toInt(r["first_seen"]))
+		record(sha, toInt(r["last_seen"]))
 	}
 }
