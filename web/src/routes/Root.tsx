@@ -31,9 +31,11 @@ export function Root() {
   useEffect(() => {
     if (auth.data?.logged_in) return connectEvents(qc);
   }, [auth.data?.logged_in, qc]);
-  // a plugin's warning (as a push too): stays until dismissed
+  // a plugin's warning (as a push too; without push, from the page): stays until dismissed
   useEffect(() => onEvent((e) => {
-    if (e.type === "alert") toast.warning(e.title, { description: e.body, duration: Infinity, closeButton: true });
+    if (e.type !== "alert") return;
+    toast.warning(e.title, { description: e.body, duration: Infinity, closeButton: true });
+    if (localNotify()) new Notification(e.title, { body: e.body, tag: "alert", icon: "/icon-192.png" });
   }), []);
   // no push in this browser: the page shows the notifications itself (not for the chat being looked at)
   const navigate = useNavigate();
