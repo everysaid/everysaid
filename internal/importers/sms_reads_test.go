@@ -54,3 +54,32 @@ CREATE TABLE message (ROWID INTEGER PRIMARY KEY, guid TEXT, date INTEGER, is_fro
 	eq(t, "mine got and read", []any{delivered, read}, []any{t0 + 200_000, t0 + 300_000})
 	eq(t, "no receipts of SMS", a.Int("SELECT count(*) FROM receipt"), int64(1))
 }
+
+// An MMS whose phone did not know its own number names that side "insert-address-token": not a
+// member, so a picture from someone is in the same one-to-one chat as their texts.
+func TestAndroidMMSOwnPlaceholder(t *testing.T) {
+	a, _ := newArchive(t)
+	dir := t.TempDir()
+	export := androidExport(t, dir)
+	d, err := db.Open(export.DB)
+	must(t, err)
+	db.Exec(d, "INSERT INTO mms VALUES ('3', '1', ?)", pairTS/1000+60)
+	db.Exec(d, "INSERT INTO mms_part VALUES ('1', '3', '0', 'text/plain', 'look', NULL)")
+	db.Exec(d, "INSERT INTO mms_addr VALUES ('1', '3', '+15557770001', '137')")
+	db.Exec(d, "INSERT INTO mms_addr VALUES ('2', '3', 'insert-address-token', '151')")
+	d.Close()
+	must(t, SMS(a, nil, SMSOptions{IphoneDB: filepath.Join(dir, "missing.db"), Exports: []archive.AndroidExport{export}}))
+	if n := a.Int("SELECT count(*) FROM conversation"); n != 1 {
+		t.Errorf("conversations: %d, want 1", n)
+	}
+	var key string
+	if a.Row("SELECT key FROM conversation", nil, &key); key != "+15557770001" {
+		t.Errorf("key %q", key)
+	}
+	if n := a.Int("SELECT count(*) FROM message"); n != 2 {
+		t.Errorf("messages: %d, want 2", n)
+	}
+	if n := a.Int("SELECT count(*) FROM address WHERE value = 'insert-address-token'"); n != 0 {
+		t.Errorf("the placeholder is an address")
+	}
+}

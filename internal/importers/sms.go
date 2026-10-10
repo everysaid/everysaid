@@ -31,6 +31,7 @@ const (
 	groupStyle      = 43
 	androidMMSSent  = "2"
 	androidMMSFrom  = "137"
+	androidMMSSelf  = "insert-address-token" // the phone's own side of an MMS, when it does not know its number
 	smsNoSourceLine = "no source: neither {db} nor an Android export"
 )
 
@@ -231,6 +232,9 @@ func readAndroidSMS(path string, own map[archive.Handle]bool, device string) []*
 		outgoing := isStr(r["msg_box"]) && str(r["msg_box"]) == androidMMSSent
 		var members []archive.Handle
 		for _, a := range as {
+			if strings.EqualFold(str(a["address"]), androidMMSSelf) {
+				continue
+			}
 			if m := address(str(a["address"])); !own[m] && !containsHandle(members, m) {
 				members = append(members, m)
 			}
@@ -238,7 +242,7 @@ func readAndroidSMS(path string, own map[archive.Handle]bool, device string) []*
 		var sender *archive.Handle
 		if !outgoing {
 			for _, a := range as {
-				if isStr(a["type"]) && str(a["type"]) == androidMMSFrom {
+				if isStr(a["type"]) && str(a["type"]) == androidMMSFrom && !strings.EqualFold(str(a["address"]), androidMMSSelf) {
 					h := address(str(a["address"]))
 					sender = &h
 					break
