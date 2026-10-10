@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -188,24 +189,72 @@ func (s *Store) LinkNamed(source string, sourceID int64, path, rel string, messa
 		s.held(path, digest)
 		return
 	}
-	if !a.Exists("SELECT 1 FROM media WHERE sha256 = ?", digest) {
-		_, ext := splitext(path)
-		stored := "media/" + digest[:2] + "/" + digest + strings.ToLower(ext)
-		target := filepath.Join(s.Root, stored)
-		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-			panic(err)
-		}
-		if !exists(target) {
-			if err := linkOrCopy(path, target); err != nil {
-				panic(err)
-			}
-		}
-		a.Exec("INSERT INTO media VALUES (?, ?, ?, ?)", digest, fileSize(path), archive.NullStr(guessType(path)), stored)
-	}
+	s.put(path, digest)
 	a.Exec("INSERT INTO attachment (message_id, sha256, source_id, source_path, name) VALUES (?, ?, ?, ?, ?)",
 		messageID, digest, sourceID, rel, archive.NullStr(name))
 	s.Added[source]++
 	s.held(path, digest)
+}
+
+// put stores the file at path (of that digest) once: linked (or copied) into the store and recorded
+// in media, unless the store has it already.
+func (s *Store) put(path, digest string) {
+	_, ext := splitext(path)
+	s.putAs(path, digest, ext, guessType(path))
+}
+
+// putAs is put with the stored file's extension and type given.
+func (s *Store) putAs(path, digest, ext, mime string) {
+	if s.a.Exists("SELECT 1 FROM media WHERE sha256 = ?", digest) {
+		return
+	}
+	stored := "media/" + digest[:2] + "/" + digest + strings.ToLower(ext)
+	target := filepath.Join(s.Root, stored)
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		panic(err)
+	}
+	if !exists(target) {
+		if err := linkOrCopy(path, target); err != nil {
+			panic(err)
+		}
+	}
+	s.a.Exec("INSERT INTO media VALUES (?, ?, ?, ?)", digest, fileSize(path), archive.NullStr(mime), stored)
+}
+
+// Keep stores a file that is no message's (a photo of a person or a group) and says its digest, ""
+// when there is no file at path. With Move, Release removes it once what records it is committed.
+func (s *Store) Keep(path string) string {
+	if !isFile(path) {
+		return ""
+	}
+	digest := sha256File(path)
+	_, ext := splitext(path)
+	mime := guessType(path)
+	if !strings.HasPrefix(mime, "image/") { // WhatsApp's .thumb, Viber's names without one: by content
+		if sniffed := sniffImage(path); sniffed != "" {
+			mime, ext = sniffed, imageExt[sniffed]
+		}
+	}
+	s.putAs(path, digest, ext, mime)
+	s.held(path, digest)
+	return digest
+}
+
+var imageExt = map[string]string{"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp"}
+
+// sniffImage is a picture's type by its first bytes ("" for none of imageExt's).
+func sniffImage(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	head := make([]byte, 512)
+	n, _ := io.ReadFull(f, head)
+	if t := http.DetectContentType(head[:n]); imageExt[t] != "" {
+		return t
+	}
+	return ""
 }
 
 // StoredFile is a message's file in the archive's store, the first linked ("" for none there).

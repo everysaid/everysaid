@@ -41,6 +41,10 @@
    "rows": 475,
    "sha256": "e9725aa315ab0f3916ec4a0c7fa5641502deb6f068b4ec4a439e3bc2b0ba7e94"
   },
+  "chat_photo": {
+   "rows": 0,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
   "chat_state": {
    "rows": 36,
    "sha256": "f396567288f079d7e63dc2cf47240dbded0afbc866002ea30de2be4a2954ac67"
@@ -76,6 +80,10 @@
   "handle_name": {
    "rows": 33,
    "sha256": "8df62c42410415a9d410e3e04d71d53221ce1e404bed13fe6a1877606faacab2"
+  },
+  "handle_photo": {
+   "rows": 0,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   },
   "label": {
    "rows": 16,
