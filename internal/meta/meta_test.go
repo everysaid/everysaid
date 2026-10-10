@@ -413,6 +413,10 @@ func TestTranslateKeepsFoldersAndSpamOut(t *testing.T) {
 	if len(o.threads) != 1 || o.threads[0].Key != "3" {
 		t.Errorf("threads: %+v", o.threads)
 	}
+	o2 := tr.translate(&table.LSTable{LSMoveThreadToE2EECutoverFolder: []*table.LSMoveThreadToE2EECutoverFolder{{ThreadKey: 3}}})
+	if len(o2.threads) != 1 || o2.threads[0].Type != table.ENCRYPTED_OVER_WA_ONE_TO_ONE {
+		t.Errorf("moved to the encrypted chats: %+v", o2.threads)
+	}
 	if len(o.titles) != 1 || o.titles[0].Thread != "60" {
 		t.Errorf("an encrypted group's Facebook key not mapped: %+v", o.titles)
 	}
