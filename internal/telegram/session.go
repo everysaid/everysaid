@@ -1,5 +1,6 @@
 // The account's keys: the API id and hash, and the session (scripts/telegram-sync.py's
-// save_credentials, client, keep_session).
+// save_credentials, client, keep_session), in keys.db (those of the keyring from before move there
+// when first read).
 //
 // Telethon keeps its session as a StringSession in the secret `telegram-session`; gotd keeps its own
 // (JSON: data centre, address, auth key) in `telegram-session-go`. The first time the Go client
@@ -15,7 +16,7 @@ import (
 
 	"github.com/gotd/td/session"
 
-	"everysaid/internal/config"
+	"everysaid/internal/keys"
 )
 
 const (
@@ -25,11 +26,12 @@ const (
 	SecretSession  = "telegram-session-go" // gotd's session
 )
 
-// secrets is how the package reaches the keyring; tests put a map in its place.
+// secrets is how the package reaches its secrets: keys.db (internal/keys), a secret of the keyring
+// from before moving there when first read; tests put a map in its place.
 var secrets = struct {
 	get  func(name string) string
 	save func(name, value string) (string, error)
-}{config.SecretOrEmpty, config.SaveSecret}
+}{keys.GetOr, keys.Set}
 
 // credentials are the API id and hash; ok false when either is missing.
 func credentials() (int, string, bool) {

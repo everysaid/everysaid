@@ -161,3 +161,49 @@ func Close() {
 		delete(opens, p)
 	}
 }
+
+// The secrets that are a value each (a service's session, its API keys), in keys.db's table secret.
+
+const secretSchema = `CREATE TABLE IF NOT EXISTS secret (name TEXT PRIMARY KEY, value TEXT NOT NULL)`
+
+// Get is a secret kept in keys.db ("" if none, or keys.db cannot be opened).
+func Get(name string) string {
+	d, err := Open()
+	if err != nil {
+		return ""
+	}
+	var v string
+	if _, err := d.Exec(secretSchema); err != nil {
+		return ""
+	}
+	d.QueryRow("SELECT value FROM secret WHERE name = ?", name).Scan(&v)
+	return v
+}
+
+// Set keeps a secret in keys.db; it gives where it went (keys.db's path), as config.SaveSecret does.
+func Set(name, value string) (string, error) {
+	d, err := Open()
+	if err != nil {
+		return "", err
+	}
+	if _, err := d.Exec(secretSchema); err != nil {
+		return "", err
+	}
+	_, err = d.Exec("INSERT INTO secret (name, value) VALUES (?, ?) ON CONFLICT (name) DO UPDATE SET value = excluded.value",
+		name, value)
+	return Path(), err
+}
+
+// GetOr is Get, else the secret as config keeps it (the keyring, or its file), which it then copies
+// into keys.db: a secret from before keys.db moves there the first time it is read (the old copy is
+// left as it is).
+func GetOr(name string) string {
+	if v := Get(name); v != "" {
+		return v
+	}
+	v := config.SecretOrEmpty(name)
+	if v != "" {
+		Set(name, v)
+	}
+	return v
+}

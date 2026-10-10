@@ -96,9 +96,13 @@ libimobiledevice (`idevicebackup2`, `idevice_id`), adb.
 
 ### Secrets
 
-The iPhone backup password (`backup-password`), the immich API key (`immich-key`), Telegram's
-`telegram-api-id`, `telegram-api-hash` and `telegram-session-go`, and any other source's token are kept
-in the system's keyring (service `everysaid`): Secret Service on Linux (KWallet or GNOME Keyring),
+The live services' secrets (WhatsApp's device keys, Telegram's `telegram-api-id`,
+`telegram-api-hash` and `telegram-session-go`, the peers' access hashes, and the others as they come)
+are in one file, `<data>/keys.db`: a SQLite database encrypted whole (`internal/keys`), whose key is
+the one secret of theirs in the keyring (`keys-db`); one of the keyring from before moves into it
+the first time it is read. The iPhone backup password (`backup-password`), the immich API key
+(`immich-key`) and the key of keys.db are kept in the system's keyring (service `everysaid`):
+Secret Service on Linux (KWallet or GNOME Keyring),
 the Keychain on macOS, the Credential Manager on Windows. Where there is none (a headless Linux
 without a Secret Service, or a session without D-Bus, such as plain ssh), the file of that name in
 the config folder (mode 600) is used instead. `config.Secret(name)` reads either;
@@ -278,7 +282,7 @@ each time, the API works for any user and brings only what is new.
 
 - `--save-credentials`: api_id and api_hash from my.telegram.org, as secrets.
 - `--login`: the code arrives inside Telegram, not by SMS; the session, full access to the account,
-  is kept as a secret (`telegram-session-go`).
+  is kept as a secret (`telegram-session-go`, in keys.db).
 - `--survey`: every chat with its kind, size and dates, no content, in `<cache>/telegram/survey.tsv`.
 - With no option: every chat but channels and bots into the Telegram store (`keys.db`, tables `telegram_*`), each message
   whole (as JSON); later runs bring only what is new, from where each chat's history was last read
