@@ -350,7 +350,9 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
         return withoutSent(prev, prev, 10_000);
       });
       toEnd.current = true;
-      await loadNewer(true);
+      // it went: what comes after is brought later if not now (the server restarting, say), never
+      // said as a failed sending
+      await loadNewer(true).catch(() => {});
     } catch (e) {
       mark("failed");
       toast.error(`${t("chat.sendFailed")}: ${(e as Error).message}`);

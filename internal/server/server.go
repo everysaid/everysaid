@@ -256,9 +256,13 @@ var idleTimeout = 2 * time.Minute
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// the requests' own context, ended only after the server stopped taking new ones and those under
+	// way finished (a message being sent as the server is stopped goes, rather than failing half-way)
+	reqs, endReqs := context.WithCancel(context.Background())
+	defer endReqs()
 	hs := &http.Server{Handler: s, ReadHeaderTimeout: 30 * time.Second, IdleTimeout: idleTimeout,
 		ErrorLog:    slog.NewLogLogger(s.log.Handler(), slog.LevelWarn),
-		BaseContext: func(net.Listener) context.Context { return ctx }}
+		BaseContext: func(net.Listener) context.Context { return reqs }}
 	s.Start(ctx)
 	go func() { // the statistics counted once at the start (seconds on a large archive); later only what comes
 		defer func() {
@@ -279,7 +283,8 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 	}
 	shut, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
-	hs.Shutdown(shut)
+	hs.Shutdown(shut) // no new requests; those under way finish (at most 10 s)
+	endReqs()         // the WebSockets of events, and anything still left
 	s.Host.Wait(10 * time.Second)
 	return nil
 }
