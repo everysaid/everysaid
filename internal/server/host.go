@@ -1177,6 +1177,29 @@ func (h *Host) ToLibrary(sha256 string, iid int64, dateMs *int64) (out M, err er
 	return M{"already": false, "ref": ref, "library": row.Label}, nil
 }
 
+// ReleaseLocal removes the archive's own copy of a file the photo library holds, on the user's word:
+// only where a library has it linked and gives it back now (asked, not taken on trust), and never a
+// file the archive keeps as someone's or a group's picture. The records stay (media, attachment,
+// library_link): the file is then shown from the library.
+func (h *Host) ReleaseLocal(sha256 string) (err error) {
+	defer db.Recover(&err)
+	q := h.store.Read()
+	for _, t := range []string{"handle_photo", "chat_photo"} {
+		if db.Exists(q, "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", t) &&
+			db.Exists(q, "SELECT 1 FROM "+t+" WHERE sha256 = ?", sha256) {
+			return errs.New("media.a_picture", 409, nil)
+		}
+	}
+	path := h.LocalFile(sha256)
+	if path == "" {
+		return errs.New("file_gone", 409, nil)
+	}
+	if got := h.Fetch(sha256, "original"); got == nil || (got.Path == "" && len(got.Data) == 0) {
+		return errs.New("media.only_copy", 409, nil)
+	}
+	return os.Remove(path)
+}
+
 // Fetch is a file from the library that holds it (a path, or bytes and their type), or nil.
 func (h *Host) Fetch(sha256, size string) *plugins.Fetched {
 	type ref struct {
