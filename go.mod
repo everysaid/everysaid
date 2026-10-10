@@ -3,8 +3,14 @@ module everysaid
 go 1.26.0
 
 require (
+	github.com/BurntSushi/toml v1.6.0
+	github.com/ncruces/go-sqlite3 v0.35.6
+	github.com/zalando/go-keyring v0.2.8
+	modernc.org/sqlite v1.60.1
+)
+
+require (
 	filippo.io/edwards25519 v1.2.0 // indirect
-	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/SherClockHolmes/webpush-go v1.4.1-0.20260422052225-76cc00f5ac2d // indirect
 	github.com/andybalholm/brotli v1.2.1 // indirect
 	github.com/beeper/argo-go v1.1.2 // indirect
@@ -40,7 +46,9 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mdp/qrterminal v1.0.1 // indirect
 	github.com/modelcontextprotocol/go-sdk v1.8.0 // indirect
+	github.com/ncruces/go-sqlite3-wasm/v6 v6.3.35304 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
+	github.com/ncruces/julianday v1.0.0 // indirect
 	github.com/nyaruka/phonenumbers v1.8.1 // indirect
 	github.com/nyaruka/phonenumbers/v2 v2.0.14 // indirect
 	github.com/ogen-go/ogen v1.23.0 // indirect
@@ -57,7 +65,6 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/yuin/goldmark v1.8.5 // indirect
-	github.com/zalando/go-keyring v0.2.8 // indirect
 	go.mau.fi/libsignal v0.2.2 // indirect
 	go.mau.fi/util v0.10.1 // indirect
 	go.mau.fi/whatsmeow v0.0.0-20260929112325-8b41cfe6d9c4 // indirect
@@ -82,9 +89,9 @@ require (
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	howett.net/plist v1.0.1 // indirect
+	lukechampine.com/adiantum v1.1.1 // indirect
 	modernc.org/libc v1.77.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
-	modernc.org/sqlite v1.60.1 // indirect
 	rsc.io/qr v0.2.0 // indirect
 )
