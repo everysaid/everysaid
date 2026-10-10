@@ -28,7 +28,10 @@ export function Pending({ chatId }: { chatId: string }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const local = useUnsent(chatId);
-  const kept = useQuery({ queryKey: ["outbox", chatId], queryFn: () => api.get<{ items: Kept[] }>(`/api/chats/${chatId}/outbox`) });
+  // asked again every 5 s while something is on its way: not only when the server's events say so
+  // (they may not come, on a connection that died without saying)
+  const kept = useQuery({ queryKey: ["outbox", chatId], queryFn: () => api.get<{ items: Kept[] }>(`/api/chats/${chatId}/outbox`),
+    refetchInterval: (q) => (q.state.data?.items.some((k) => k.state !== "failed") ? 5000 : false) });
   const refresh = () => qc.invalidateQueries({ queryKey: ["outbox", chatId] });
   const fail = (e: unknown) => toast.error((e as Error).message);
   const said = (e: Kept["error"]) => !e ? null : e.text ?? t(`errors.${e.code}`, { ...e.params, defaultValue: e.code });
