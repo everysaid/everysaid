@@ -1495,21 +1495,30 @@ func TestPrune(t *testing.T) {
 		map[string]any{"event": "reaction", "chat": contact(anna), "sender": fakeOwn, "ts": 1600, "emoji": "👍",
 			"target_author": anna, "target_ts": 1000},
 		map[string]any{"event": "message", "chat": contact(anna), "sender": anna, "ts": recent, "text": "new"},
-		map[string]any{"event": "message", "chat": contact(bob), "sender": bob, "ts": 2000, "text": "left out"})
+		map[string]any{"event": "message", "chat": contact(bob), "sender": bob, "ts": 2000, "text": "left out"},
+		// old when it came (the history transferred at link time): kept until it came a while ago
+		map[string]any{"event": "message", "chat": contact(anna), "sender": anna, "ts": 1200, "text": "transferred"},
+		map[string]any{"event": "reaction", "chat": contact(bob), "sender": fakeOwn, "ts": 2100, "emoji": "👍",
+			"target_author": bob, "target_ts": 2000})
+	// these came long ago
+	db.Exec(s.DB, "UPDATE signal_message SET stored_at = 0 WHERE ts IN (1000, 2000)")
 	a, err := archive.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	if n, err := Import(a, s, "", 0, map[string]bool{bob: true}); err != nil || n.Messages != 2 {
+	if n, err := Import(a, s, "", 0, map[string]bool{bob: true}); err != nil || n.Messages != 3 {
 		t.Fatalf("%+v %v", n, err)
 	}
 	left := db.Strs(s.DB, "SELECT author || ':' || ts FROM signal_message ORDER BY ts")
-	if strings.Join(left, ",") != bob+":2000,"+Key(anna, recent) {
+	if strings.Join(left, ",") != Key(anna, 1200)+","+bob+":2000,"+Key(anna, recent) {
 		t.Fatalf("left %v", left)
 	}
-	if db.Int(s.DB, "SELECT count(*) FROM signal_edit")+db.Int(s.DB, "SELECT count(*) FROM signal_reaction") != 0 {
-		t.Fatal("what was about the old message stayed")
+	// the edit's times stay (what is aimed at them finds the message), not its content; the reaction
+	// to the old message goes, the one in the chat left out stays
+	if db.Str(s.DB, "SELECT json FROM signal_edit") != "" ||
+		strings.Join(db.Strs(s.DB, "SELECT target_author FROM signal_reaction"), ",") != bob {
+		t.Fatal("what was about the old message")
 	}
 	// the archive keeps it all, and an import again changes nothing
 	if db.Str(a.DB, "SELECT text FROM message WHERE key = ?", Key(anna, 1000)) != "old!" ||
@@ -1521,6 +1530,13 @@ func TestPrune(t *testing.T) {
 	}
 	if db.Str(a.DB, "SELECT text FROM message WHERE key = ?", Key(anna, 1000)) != "old!" || db.Int(a.DB, "SELECT count(*) FROM reaction") != 1 {
 		t.Fatal("an import after the pruning undid something")
+	}
+	// a reaction aimed at the edit's time, later: still the message's
+	apply(t, s, map[string]any{"event": "reaction", "chat": contact(anna), "sender": anna, "ts": recent, "emoji": "❤️",
+		"target_author": anna, "target_ts": 1500})
+	if _, err := Import(a, s, "", 0, map[string]bool{bob: true}); err != nil ||
+		db.Int(a.DB, "SELECT count(*) FROM reaction r JOIN message m ON m.id = r.message_id WHERE m.key = ?", Key(anna, 1000)) != 2 {
+		t.Fatalf("the reaction to the edit: %v", err)
 	}
 }
 
