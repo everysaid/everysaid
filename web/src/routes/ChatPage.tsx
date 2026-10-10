@@ -6,7 +6,7 @@ import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import * as Popover from "@radix-ui/react-popover";
 import { ArrowDown, ArrowLeft, BellOff, CalendarDays, Check, ChevronDown, ChevronRight, CornerUpLeft, Archive, ArchiveRestore, FileText, Info, Lock, MoreVertical, Paperclip, Pencil, Pin, PinOff, Search, SendHorizontal, Smile, X } from "lucide-react";
 import { toast } from "sonner";
-import { api, qs, type Attachment, type ChatDetail, type Handle, type Member, type MessageItem, type StreamItem, type StreamPage } from "@/lib/api";
+import { api, qs, type Attachment, type ChatDetail, type Member, type MessageItem, type StreamItem, type StreamPage } from "@/lib/api";
 import { useBack } from "@/lib/back";
 import { bytes, dateOnly, dayLabel, isoDay, sameDay } from "@/lib/format";
 import { onEvent } from "@/lib/events";
@@ -574,7 +574,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
         {detail.data && (
           <Composer services={[...detail.data.services.filter((s) => service(s).messages), ...found]} sendable={sendable}
             findable={!!detail.data.findable} reach={detail.data.reach ?? {}} replyable={detail.data.replyable} missing={detail.data.unsendable}
-            accounts={detail.data.accounts ?? []} handles={detail.data.person?.handles ?? []}
+            accounts={detail.data.accounts ?? []}
             mentionable={isGroup ? detail.data.mentionable ?? [] : []} fileable={detail.data.fileable ?? []} members={detail.data.members ?? []}
             chatId={chatId} onSend={send} replyTo={replyTo} onCancelReply={() => setReplyTo(null)}
             editing={editing} onEdit={edit} onCancelEdit={() => setEditing(null)}
@@ -728,13 +728,13 @@ export function placeMentions(text: string, members: { label: string; address_id
  * (or answer a given message in); mentionable / fileable: those where people of the group can be named
  * with @ / a file sent; missing: why a source cannot send to one now. preferred: where the chat was last
  * active, the way to answer until the user picks another. One it cannot send through still shows,
- * closed, with a lock for Send. accounts: a person's conversations with their handle on each (handles:
- * how each is written); a service where they have more than one opens a menu of them, the last active
- * picked until the user picks another. */
-function Composer({ chatId, services, sendable, replyable, mentionable, fileable, members, missing, preferred, findable, reach, accounts, handles, onSend, replyTo, onCancelReply, editing, onEdit, onCancelEdit }: {
+ * closed, with a lock for Send. accounts: the conversations a message may go to (a person's handles,
+ * the groups merged into one); a service with more than one opens a menu of them, by name, the last
+ * active picked until the user picks another. */
+function Composer({ chatId, services, sendable, replyable, mentionable, fileable, members, missing, preferred, findable, reach, accounts, onSend, replyTo, onCancelReply, editing, onEdit, onCancelEdit }: {
   chatId: string; services: string[]; sendable: string[]; replyable: string[]; mentionable: string[]; fileable: string[];
   findable: boolean; reach: Record<string, string>;
-  accounts: NonNullable<ChatDetail["accounts"]>; handles: Handle[];
+  accounts: NonNullable<ChatDetail["accounts"]>;
   members: Member[]; missing: Record<string, string>;
   preferred?: string | null;
   onSend: (text: string, service: string | null, replyTo: MessageItem | null, mentions: Mentioned[], file: File | null, conversationId: number | null) => void;
@@ -789,13 +789,19 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   }, [text]);
   const via = editing?.service ?? replyTo?.service ?? svc ?? "";          // an answer goes where the message came from
   const accountsOf = (s: string) => accounts.filter((a) => a.service === s);
-  const handleOf = (a: { address_id: number }) => handles.find((h) => h.address_id === a.address_id)?.label ?? "";
-  // their handle it goes to, where they have more than one on the service: an answer's own, else the one picked
+  type Account = (typeof accounts)[number];
+  // how one is said: by its name, and the handle where there is one (the name alone where no other of
+  // the service has it, the handle where it says nothing more)
+  const full = (a: Account) => (a.name && a.handle ? `${a.name} (${a.handle})` : a.name ?? a.handle ?? "");
+  const short = (a: Account) => (a.name && accountsOf(a.service).filter((x) => x.name === a.name).length === 1 ? a.name : a.handle ?? a.name ?? "");
+  // where it goes, where the service has more than one: an answer's own, else the one picked
   const fixed = editing ?? replyTo;
   const several = accountsOf(via);
   const account = several.length < 2 ? null
     : several.find((a) => a.conversation_id === (fixed ? fixed.conversation_id : conv)) ?? (fixed ? null : several[0]);
-  const viaName = account ? `${service(via).name} · ${handleOf(account)}` : service(via).name;
+  const viaName = account ? `${service(via).name} · ${short(account)}` : service(via).name;
+  // whom a message there may name: of the group it goes to
+  const there = (m: Member) => m.services.includes(via) && (!account || !m.conversations || m.conversations.includes(account.conversation_id));
   // "@" and what follows it, up to the caret: whom to name
   const asked = useMemo(() => {
     if (!mentionable.includes(via) || noList) return null;
@@ -805,9 +811,9 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   const options = useMemo(() => {
     if (!asked) return [];
     const q = plain(asked.query);
-    return members.filter((m) => m.services.includes(via) && m.name && plain(m.name).split(/\s+/).some((w) => w.startsWith(q)))
+    return members.filter((m) => there(m) && m.name && plain(m.name).split(/\s+/).some((w) => w.startsWith(q)))
       .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "")).slice(0, 8);
-  }, [asked, members, via]);
+  }, [asked, members, via, account?.conversation_id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => setPick(0), [asked?.query]);
   // an emoji where the caret is (or in place of what is selected); the picker stays open for more
   const [emojiOpen, setEmojiOpen] = useState(false);
@@ -870,7 +876,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
     if ((!body && !file) || !can || (file && !canFile)) return;
     setText("");                        // free for the next one at once
     setFile(null);
-    const named = members.filter((m) => m.name && m.services.includes(via)).map((m) => ({ label: `@${m.name}`, address_id: m.address_id }));
+    const named = members.filter((m) => m.name && there(m)).map((m) => ({ label: `@${m.name}`, address_id: m.address_id }));
     onSend(body, svc, replyTo, mentionable.includes(via) ? placeMentions(body, named) : [], file, account?.conversation_id ?? null);
     onCancelReply();
     ref.current?.focus();
@@ -929,7 +935,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
               <button data-via={via} aria-label={t("chat.sendVia")} title={`${t("chat.sendVia")} ${viaName}`}
                 className="mb-1 ml-1 flex h-9 shrink-0 items-center gap-0.5 rounded-full pl-2 pr-1 hover:bg-panel disabled:hover:bg-transparent data-[state=open]:bg-panel">
                 <ServiceIcon id={via} className="size-5" />
-                {!replyTo && !editing && (services.length > 1 || findable) && <ChevronDown className="size-3.5 text-muted" />}
+                {!replyTo && !editing && (services.length > 1 || findable || services.some((s) => accountsOf(s).length > 1)) && <ChevronDown className="size-3.5 text-muted" />}
               </button>
             </MenuTrigger>
             <MenuContent align="start" className="w-60">
@@ -952,9 +958,13 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
                     <MenuSubTrigger>{row}<ChevronRight className="size-4 text-muted" /></MenuSubTrigger>
                     <MenuSubContent className="max-w-80">
                       {theirs.map((a) => (
-                        <MenuItem key={a.conversation_id} title={`${service(s).name} · ${handleOf(a)}`} onSelect={() => pick(a.conversation_id)}>
-                          <span data-account={a.conversation_id} className="min-w-0 flex-1 truncate">{handleOf(a)}</span>
-                          {!!a.last_ts && <span className="text-xs text-muted">{dateOnly(a.last_ts)}</span>}
+                        <MenuItem key={a.conversation_id} title={`${service(s).name} · ${full(a)}`} onSelect={() => pick(a.conversation_id)}>
+                          <span data-account={a.conversation_id} className="min-w-0 flex-1">
+                            <span className="block truncate">{a.name ?? a.handle}</span>
+                            <span className="block truncate text-xs text-muted">
+                              {[a.name && a.handle, a.last_ts && dateOnly(a.last_ts)].filter(Boolean).join(" · ")}
+                            </span>
+                          </span>
                           <span className="grid size-4 place-items-center">{s === svc && a === account && <Check className="size-4 text-accent" />}</span>
                         </MenuItem>
                       ))}

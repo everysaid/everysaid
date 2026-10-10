@@ -17,6 +17,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 
+	"everysaid/internal/archive"
 	"everysaid/internal/core"
 	"everysaid/internal/db"
 )
@@ -345,6 +346,8 @@ func TestSendToOneOfTheirHandles(t *testing.T) {
 	newer, older := accounts[0].(map[string]any), accounts[1].(map[string]any)
 	must(t, newer["service"] == "whatsapp" && older["service"] == "whatsapp" && num(newer["last_ts"]) > num(older["last_ts"]) &&
 		num(newer["address_id"]) == db.Int(q, "SELECT id FROM address WHERE value = '+15556660002'"), "accounts: %v", accounts)
+	must(t, newer["name"] == "Θανάσης Οικονόμου" && older["name"] == "Κατερίνα Σοφία" && newer["handle"] != nil && newer["handle"] != older["handle"],
+		"each by the name it goes by, and its handle: %v", accounts)
 
 	r = c.post("/api/chats/"+chat+"/send", M{"text": "unsaid", "service": "whatsapp"})
 	next(t)
@@ -352,6 +355,49 @@ func TestSendToOneOfTheirHandles(t *testing.T) {
 	r = c.post("/api/chats/"+chat+"/send", M{"text": "unsaid", "service": "whatsapp", "conversation_id": num(older["conversation_id"])})
 	next(t)
 	must(t, r.status == 200 && num(r.json()["conversation_id"]) == num(older["conversation_id"]), "the one asked for: %d %s", r.status, r.body)
+}
+
+// Two groups of one service merged: each by its name, the last active first; a message goes to the
+// one asked for, and names only its own members.
+func TestSendToOneOfMergedGroups(t *testing.T) {
+	c := newServer(t)
+	c.login()
+	drain()
+	a, err := archive.Open(c.s.Store.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := a.Source("test/fixture", "", "", "")
+	two := a.Conversation("whatsapp", []archive.Handle{archive.H("phone", "+15557770001"), archive.H("phone", "+15550000000")},
+		"group-2@g.us", "Two of us")
+	a.AddMessage(src, "g2", archive.Message{Service: "whatsapp", ConversationID: two, TS: 1_000, Outgoing: true, Kind: "text",
+		Text: "long ago", Key: "whatsapp-g2"})
+	a.Resolve()
+	a.Commit()
+	a.Close()
+	q := c.s.Store.Read()
+	chatOf := func(conv int64) string { return core.ChatOfConversation(c.s.Store, conv) }
+	friends := db.Int(q, "SELECT id FROM conversation WHERE key = 'group-1@g.us'")
+	r := c.post("/api/chats/"+chatOf(friends)+"/merge", M{"other": chatOf(two)})
+	must(t, r.status == 200, "merge: %d %s", r.status, r.body)
+	chat := r.json()["id"].(string)
+	d := c.getJSON("/api/chats/" + chat)
+	accounts, _ := d["accounts"].([]any)
+	must(t, len(accounts) == 2, "accounts: %v", accounts)
+	newer, older := accounts[0].(map[string]any), accounts[1].(map[string]any)
+	must(t, newer["name"] == "Friends" && older["name"] == "Two of us" && num(older["conversation_id"]) == two, "accounts: %v", accounts)
+	for _, m := range d["members"].([]any) {
+		m := m.(map[string]any)
+		in := slices.Contains(m["conversations"].([]any), any(float64(two)))
+		must(t, in == (num(m["address_id"]) == fx.maria), "of the second group, Maria alone: %v", m)
+	}
+
+	r = c.post("/api/chats/"+chat+"/send", M{"text": "@Nick unsaid", "service": "whatsapp", "conversation_id": two,
+		"mentions": []M{{"start": 0, "length": 5, "address_id": fx.nick}}})
+	must(t, r.status >= 400 && strings.Contains(string(r.body), "not_a_member"), "Nick is not of the second group: %d %s", r.status, r.body)
+	r = c.post("/api/chats/"+chat+"/send", M{"text": "unsaid", "service": "whatsapp", "conversation_id": two})
+	next(t)
+	must(t, r.status == 200 && num(r.json()["conversation_id"]) == two, "the one asked for: %d %s", r.status, r.body)
 }
 
 // A person looked for on the services their chat has none of: each answer as it comes, then a first

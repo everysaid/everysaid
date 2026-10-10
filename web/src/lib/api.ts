@@ -184,7 +184,9 @@ export interface ChatDetail {
   person_id?: number | null;
   conversation_id?: number | null;
   conversations: number[];
-  accounts?: { conversation_id: number; service: string; address_id: number; last_ts: number | null }[];   // a person's: each conversation with their handle on it, the last active first
+  // each conversation where a message may go, the last active first: a person's with their handle on it
+  // and the name it goes by, a group's (those merged into it) with its name
+  accounts?: { conversation_id: number; service: string; address_id: number | null; name: string | null; handle: string | null; last_ts: number | null }[];
   last_ts: number;
   pinned: boolean;
   muted: boolean;
@@ -202,6 +204,7 @@ export interface Member {
   name: string | null;
   address_id: number;
   services: string[];       // the services of the group's conversations they are in
+  conversations?: number[]; // those conversations
 }
 
 export interface Mention {

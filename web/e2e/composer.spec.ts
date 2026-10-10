@@ -177,9 +177,9 @@ test("a service where they have two handles: a menu of them, and the one picked 
     const r = await fetch(`/api/people/${people[0].id}/merge`, { method: "POST", headers: h, body: JSON.stringify({ other: people[1].id }) });
     if (r.status !== 200) return null;
     const d = await (await fetch(`/api/chats/p${people[0].id}`, { headers: h })).json();
-    const label = (a: any) => d.person.handles.find((x: any) => x.address_id === a.address_id).label;
     const wa = d.accounts.filter((a: any) => a.service === "whatsapp");
-    return { id: d.id as string, newer: label(wa[0]), older: label(wa[1]), olderConv: wa[1].conversation_id as number };
+    return { id: d.id as string, newer: wa[0].handle as string, older: wa[1].handle as string, olderName: wa[1].name as string | null,
+      olderConv: wa[1].conversation_id as number };
   }, h);
   test.skip(!chat, "no two people to merge");
   try {
@@ -190,6 +190,7 @@ test("a service where they have two handles: a menu of them, and the one picked 
     const handles = page.getByRole("menu").last().getByRole("menuitem");
     await expect(handles).toHaveCount(2);
     await expect(handles.filter({ hasText: chat!.newer }).locator("svg")).toHaveCount(1);   // the last active, ticked
+    if (chat!.olderName) await expect(handles.filter({ hasText: chat!.older })).toContainText(chat!.olderName);   // by the name it goes by
     await handles.filter({ hasText: chat!.older }).click();
     const field = page.locator("[data-composer-body] textarea");
     await expect(field).toHaveAttribute("placeholder", new RegExp(chat!.older.replace(/[+]/g, "\\+")));

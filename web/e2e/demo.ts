@@ -50,7 +50,7 @@ export async function signIn(page: Page) {
 /** Signed in, once per project and demo run: the session is kept and reused by the next tests (each
  *  sign-in counts against the server's limit on attempts, as it should). */
 export async function signedIn(page: Page, project: string) {
-  const file = `/tmp/chr-e2e-session-${project}.json`;
+  const file = `${DEMO}/e2e-session-${project}.json`;   // in the demo's folder: demos side by side keep their own
   if (existsSync(file)) {
     await page.context().addCookies(JSON.parse(readFileSync(file, "utf8")));
     await page.goto("/");
