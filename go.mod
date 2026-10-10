@@ -66,6 +66,7 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/yuin/goldmark v1.8.5 // indirect
 	go.mau.fi/libsignal v0.2.2 // indirect
+	go.mau.fi/mautrix-signal v0.2609.0
 	go.mau.fi/util v0.10.1 // indirect
 	go.mau.fi/whatsmeow v0.0.0-20260929112325-8b41cfe6d9c4 // indirect
 	go.opentelemetry.io/otel v1.44.0 // indirect
@@ -95,3 +96,5 @@ require (
 	modernc.org/memory v1.12.1 // indirect
 	rsc.io/qr v0.2.0 // indirect
 )
+
+replace go.mau.fi/mautrix-signal => ./third_party/mautrix-signal
