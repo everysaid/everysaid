@@ -376,7 +376,8 @@ UI (planned); on an iPhone that is not possible at all, and the backup stays.
   `/api/labels`, `/api/settings`, `/api/auth/...` and the rest; long lists are paginated. Every
   call the interface makes is checked against the routes by the server's tests.
 - WebSocket `/api/events`: new records, plugin status, import progress; a ping every 25 seconds.
-- Web Push (VAPID) for new messages while the app is closed.
+- Web Push (VAPID) for new messages while the app is closed; the same notifications in the "new"
+  event, for a browser without a push service (the open page shows them).
 
 ## 9. Security
 

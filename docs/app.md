@@ -104,6 +104,14 @@ screen"); on an iPhone, Share → Add to Home Screen. Installed, it runs full sc
 and can receive notifications (Settings → Notifications; on an iPhone only once installed). What
 the web cannot do on an iPhone: reply from a notification, or share into the app from another app.
 
+**Notifications** are of new messages still unread (as the chats count them: one already read on
+another device says nothing), one per chat, none of muted or archived chats or of hidden services
+and accounts; a chat read here or elsewhere closes its notifications while the app is open. A
+device with push can leave out services whose own app notifies there already (Settings →
+Notifications). A browser without a push service (Ferdium and other Electron apps, Chromium
+without Google's) is notified by the open page itself, plugins' warnings too; the unread chats
+are also in the page's title, `(N) Everysaid`, which such apps show on their icon.
+
 ## Sources, libraries, contacts
 
 All in Sources: add a plugin instance, set it up, import, and for the live services turn on the
