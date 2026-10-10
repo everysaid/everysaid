@@ -99,6 +99,10 @@ func (s SignalWebsocketConnectionEvent) String() string {
 	return signalWebsocketConnectionEventNames[s]
 }
 
+// ErrClientOutdated (everysaid): the server refused the connection with HTTP 499, its answer to a
+// client version it no longer accepts.
+var ErrClientOutdated = errors.New("signal refuses this client version (HTTP 499)")
+
 type SignalWebsocketConnectionStatus struct {
 	Event SignalWebsocketConnectionEvent
 	Err   error
@@ -293,6 +297,10 @@ func (s *SignalWebsocket) connectLoop(
 				} else if resp.StatusCode == 403 {
 					// We are logged out, so we should stop trying to reconnect
 					s.pushStatus(ctx, SignalWebsocketConnectionEventLoggedOut, fmt.Errorf("403 opening websocket, we are logged out"))
+					return // NOT RETRYING, KILLING THE CONNECTION LOOP
+				} else if resp.StatusCode == 499 {
+					// everysaid: the server refuses this client's version ("update required")
+					s.pushStatus(ctx, SignalWebsocketConnectionEventFatalError, fmt.Errorf("%w: %v", ErrClientOutdated, resp.Status))
 					return // NOT RETRYING, KILLING THE CONNECTION LOOP
 				} else if resp.StatusCode > 0 && resp.StatusCode < 500 {
 					// Unexpected status code
