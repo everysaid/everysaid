@@ -269,7 +269,68 @@ func (r *syncRun) extract(b *Backup) (err error) {
 		r.Say("OK {folder}: {new} new, {skipped} already in the archive, {total} in all",
 			map[string]any{"folder": m.folder, "new": added, "skipped": skipped, "total": len(paths)})
 	}
+	if err := r.photos(b, info); err != nil {
+		return err
+	}
 	r.Say("Done: {out}", map[string]any{"out": r.Out})
+	return nil
+}
+
+// photos copies the photos of people and groups: WhatsApp's Media/Profile files of the chats and
+// members its database knows, and Viber's files named by the photo ids its database gives
+// (wherever they are in its folders). They stay in the extract once the archive has them, so each
+// is copied once.
+func (r *syncRun) photos(b *Backup, info func(string) func(int64, int64)) error {
+	waUsers := importers.WhatsAppPhotoUsers(filepath.Join(r.Out, "whatsapp.sqlite"))
+	viberIDs := importers.ViberIconIDs(filepath.Join(r.Out, "viber.sqlite"))
+	sets := []struct {
+		folder, prefix string
+		domains        []string
+		want           func(name string) bool
+	}{
+		{"whatsapp-photos", "Media/Profile/", []string{"AppDomainGroup-group.net.whatsapp.WhatsApp.shared"}, func(name string) bool {
+			u, _, _, ok := importers.WhatsAppProfilePhoto(name)
+			return ok && waUsers[u]
+		}},
+		{"viber-photos", "", []string{"AppDomain-com.viber", "AppDomainGroup-group.viber.share.container"}, func(name string) bool {
+			return importers.ViberPhotoFile(name, viberIDs)
+		}},
+	}
+	for _, set := range sets {
+		folder := filepath.Join(r.Out, set.folder)
+		added := 0
+		for _, domain := range set.domains {
+			for _, rel := range db.Strs(b.Manifest(), "SELECT relativePath FROM Files WHERE flags = 1 AND domain = ? "+
+				"ORDER BY relativePath", domain) {
+				name := rel[strings.LastIndexByte(rel, '/')+1:]
+				if !strings.HasPrefix(rel, set.prefix) || set.prefix != "" && strings.Contains(rel[len(set.prefix):], "/") ||
+					!set.want(name) {
+					continue
+				}
+				dest := filepath.Join(folder, name)
+				if !inside(folder, dest) {
+					continue
+				}
+				if _, err := os.Stat(dest); err == nil {
+					continue
+				}
+				if err := os.MkdirAll(folder, 0o700); err != nil {
+					return err
+				}
+				if err := b.ExtractFile(rel, domain, dest+".part", info(dest+".part")); err != nil {
+					return err
+				}
+				if err := os.Chmod(dest+".part", 0o600); err != nil {
+					return err
+				}
+				if err := os.Rename(dest+".part", dest); err != nil {
+					return err
+				}
+				added++
+			}
+		}
+		r.Say("OK {folder}: {new} new", map[string]any{"folder": set.folder, "new": added})
+	}
 	return nil
 }
 

@@ -10,6 +10,7 @@ import { dateOnly, number } from "@/lib/format";
 import { service } from "@/lib/services";
 import { cn } from "@/lib/utils";
 import { Avatar, Button, Dialog, Empty, LoadingBar, Segmented, ServiceBadge, Spinner, Switch } from "@/components/ui";
+import { personAvatarUrl } from "@/lib/avatar";
 import { PageHeader } from "@/components/PageHeader";
 import type { Blocked, SpamCheck, SpamList } from "@/components/Spam";
 
@@ -146,7 +147,7 @@ function Row({ b, c, set }: { b: Blocked; c: Choice | undefined; set: (c: Choice
   return (
     <div className={cn("mx-auto max-w-5xl border-b border-line px-4 py-3 md:px-6", c === "keep" && "opacity-60")} data-blocked>
       <div className="flex flex-wrap items-center gap-2">
-        <Avatar name={p.name} src={p.avatar ? `/api/avatar/${p.id}` : null} size={36} />
+        <Avatar name={p.name} src={personAvatarUrl(p)} size={36} />
         <div className="min-w-0 flex-1">
           <Link to="/people/$personId" params={{ personId: String(p.id) }} className="block truncate font-medium hover:underline">{p.name}</Link>
           <div className="text-xs text-muted">

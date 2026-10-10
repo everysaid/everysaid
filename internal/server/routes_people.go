@@ -4,17 +4,12 @@ package server
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 
-	"everysaid/internal/config"
 	"everysaid/internal/core"
 	"everysaid/internal/db"
 	"everysaid/internal/errs"
 	"everysaid/internal/plugins"
 )
-
-// Avatars is where the people's pictures are kept: <cache>/avatars.
-func Avatars() string { return filepath.Join(config.Cache, "avatars") }
 
 // described is a person with their labels (the models' only when the user shows them) and a name
 // found for them.
@@ -429,10 +424,11 @@ func (s *Server) peopleRoutes() {
 		name, err1 := optString(q.body, "name")
 		note, err2 := optString(q.body, "note")
 		source, err3 := optString(q.body, "name_source")
-		if err := errors.Join(err1, err2, err3); err != nil {
+		photo, err4 := optString(q.body, "photo_source")
+		if err := errors.Join(err1, err2, err3, err4); err != nil {
 			return nil, failed(400, err.Error())
 		}
-		if err := core.SetPerson(s.Store, pid, name, note, source); err != nil {
+		if err := core.SetPerson(s.Store, pid, name, note, source, photo); err != nil {
 			return nil, is404(err, func(e error) error { return failed(400, e.Error()) })
 		}
 		return s.personOrNull(pid), nil
@@ -490,11 +486,23 @@ func (s *Server) peopleRoutes() {
 		if err != nil {
 			return nil, err
 		}
-		f := core.PeopleOf(s.Store).Avatar(pid)
-		if f == "" {
+		// the photo shown, or the one a pin would show (pin: for the user's choice)
+		ph := core.PeopleOf(s.Store).PhotoChoice(pid, q.r.URL.Query().Get("pin"))
+		if ph == nil {
 			return nil, notFound("no_photo")
 		}
-		if err := serveFile(q.w, q.r, filepath.Join(Avatars(), f), "", "private, max-age=86400"); err != nil {
+		if err := serveFile(q.w, q.r, ph.File, "", "private, max-age=86400"); err != nil {
+			return nil, notFound("no_photo")
+		}
+		return done, nil
+	})
+
+	h("GET /api/chats/{chat_id}/avatar", bodyNone, func(q *req) (any, error) {
+		ph := core.GroupPhoto(s.Store, core.ChatOf(s.Store, q.r.PathValue("chat_id")))
+		if ph == nil {
+			return nil, notFound("no_photo")
+		}
+		if err := serveFile(q.w, q.r, ph.File, "", "private, max-age=86400"); err != nil {
 			return nil, notFound("no_photo")
 		}
 		return done, nil

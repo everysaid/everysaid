@@ -95,10 +95,19 @@ func Person(s *Store, personID int64) M {
 	if p, ok := ppl.Pinned[personID]; ok {
 		pinned = p
 	}
+	var photoPinned, photoFrom any
+	if p, ok := ppl.PhotoPinned[personID]; ok {
+		photoPinned = p
+	}
+	if ph := ppl.Photo(personID); ph != nil {
+		photoFrom = ph.Source
+	}
 	return M{"id": personID, "name": name, "given_name": given, "name_from": from, "name_source": pinned,
 		"self_named": ppl.SelfNamed(personID), "aka": ppl.Aka(personID), "note": note,
 		"handles": ppl.Describe(personID), "me": ppl.Me[personID], "contact": contact, "contacts": contacts,
-		"avatar": ppl.Avatar(personID) != "", "stats": stats, "groups": groups}
+		"avatar": nullable(ppl.Avatar(personID)), "photo_source": photoPinned, "photo_from": photoFrom,
+		"photo_choices": ppl.PhotoChoices(personID), "photo_history": ppl.PhotoHistory(personID),
+		"stats": stats, "groups": groups}
 }
 
 // active are the people the archive has something of: a message, a call, a chat, a reaction, a mention.

@@ -81,6 +81,21 @@ CREATE TABLE IF NOT EXISTS telegram_poll (           -- which message has each p
     id INTEGER NOT NULL,
     PRIMARY KEY (poll_id, chat_id, id)
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS telegram_photo (          -- the photos seen of each user and group, a row for each
+    peer_id INTEGER NOT NULL,               -- marked id
+    photo_id INTEGER NOT NULL,              -- Telegram's; 0: none
+    file TEXT,                              -- the file, relative to media/ (gone once the archive has it)
+    sha256 TEXT,                            -- its content's
+    first_seen INTEGER NOT NULL,            -- Unix s
+    last_seen INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS telegram_photo_peer ON telegram_photo (peer_id, first_seen);
+CREATE TABLE IF NOT EXISTS telegram_photo_fail (     -- a photo whose download failed: tried again a day later
+    peer_id INTEGER NOT NULL,
+    photo_id INTEGER NOT NULL,
+    at INTEGER NOT NULL,                    -- Unix s
+    PRIMARY KEY (peer_id, photo_id)
+) WITHOUT ROWID;
 CREATE TRIGGER IF NOT EXISTS telegram_message_poll_insert AFTER INSERT ON telegram_message
     WHEN json_extract(new.json, '$.media.poll.id') IS NOT NULL BEGIN
     INSERT OR IGNORE INTO telegram_poll VALUES (json_extract(new.json, '$.media.poll.id'), new.chat_id, new.id); END;

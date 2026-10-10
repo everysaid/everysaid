@@ -9,6 +9,7 @@ import { api, type Person } from "@/lib/api";
 import { dateOnly, number } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Avatar, Button, Dialog, Empty, LoadingBar, Segmented, ServiceBadge, Spinner } from "@/components/ui";
+import { personAvatarUrl } from "@/lib/avatar";
 import { PageHeader } from "@/components/PageHeader";
 import { WHY, type Suggestion } from "@/components/MergeSuggestion";
 
@@ -165,7 +166,7 @@ function Card({ p, on, toggle }: { p: Candidate; on: boolean; toggle: () => void
         <span className={cn("grid size-5 shrink-0 place-items-center rounded-md border", on ? "border-accent bg-accent text-white" : "border-line")}>
           {on && <Check className="size-3.5" />}
         </span>
-        <Avatar name={p.name} src={p.avatar ? `/api/avatar/${p.id}` : null} size={32} />
+        <Avatar name={p.name} src={personAvatarUrl(p)} size={32} />
         <Link to="/people/$personId" params={{ personId: String(p.id) }} onClick={(e) => e.stopPropagation()}
           className="min-w-0 truncate text-sm font-medium hover:underline">{p.name}</Link>
       </div>

@@ -41,11 +41,28 @@ func trimmedOrNil(p *string) any {
 }
 
 // SetPerson: name, the user's own name for them; nameSource, where their name comes from (a
-// source of names, 'address:<id>' for one of their handles, or nothing: by the order).
-func SetPerson(s *Store, personID int64, name, note, nameSource Opt[string]) error {
+// source of names, 'address:<id>' for one of their handles, or nothing: by the order); photoSource,
+// where their photo comes from ('contacts', a service, 'address:<id>', 'none' for initials, or
+// nothing: by the order).
+func SetPerson(s *Store, personID int64, name, note, nameSource, photoSource Opt[string]) error {
 	return s.Write(func(tx *sql.Tx) error {
 		if !db.Exists(tx, "SELECT 1 FROM person WHERE id = ?", personID) {
 			return ErrNotFound
+		}
+		if photoSource.Set {
+			src := ""
+			if photoSource.Value != nil {
+				src = *photoSource.Value
+			}
+			if a, ok := strings.CutPrefix(src, "address:"); ok {
+				aid, _ := strconv.ParseInt(a, 10, 64)
+				if !db.Exists(tx, "SELECT 1 FROM person_address WHERE address_id = ? AND person_id = ?", aid, personID) {
+					return errs.New("people.not_their_handle", 0, nil)
+				}
+			} else if src != "" && src != "none" && src != "contacts" && !db.Exists(tx, "SELECT 1 FROM service WHERE name = ?", src) {
+				return errs.New("people.no_such_photo_source", 0, nil)
+			}
+			db.Exec(tx, "UPDATE person SET photo_source = ? WHERE id = ?", db.NullStr(src), personID)
 		}
 		if nameSource.Set {
 			src := ""
@@ -97,13 +114,13 @@ func MergePeople(s *Store, into, other int64) (int64, error) {
 }
 
 func merge(tx *sql.Tx, into, other int64) error {
-	type row struct{ name, note, uid, url, source sql.NullString }
+	type row struct{ name, note, uid, url, source, photo sql.NullString }
 	rows := map[int64]row{}
-	db.Each(tx, "SELECT id, name, note, contact_uid, contact_url, name_source FROM person WHERE id IN (?, ?)",
+	db.Each(tx, "SELECT id, name, note, contact_uid, contact_url, name_source, photo_source FROM person WHERE id IN (?, ?)",
 		[]any{into, other}, func(scan func(...any)) {
 			var id int64
 			var r row
-			scan(&id, &r.name, &r.note, &r.uid, &r.url, &r.source)
+			scan(&id, &r.name, &r.note, &r.uid, &r.url, &r.source, &r.photo)
 			rows[id] = r
 		})
 	a, okA := rows[into]
@@ -127,9 +144,9 @@ func merge(tx *sql.Tx, into, other int64) error {
 			notes = append(notes, n.String)
 		}
 	}
-	db.Exec(tx, "UPDATE person SET name = ?, note = ?, contact_uid = ?, contact_url = ?, name_source = ? WHERE id = ?",
-		or(a.name, b.name), db.NullStr(strings.Join(notes, "\n\n")), or(a.uid, b.uid), or(a.url, b.url),
-		or(a.source, b.source), into)
+	db.Exec(tx, "UPDATE person SET name = ?, note = ?, contact_uid = ?, contact_url = ?, name_source = ?, photo_source = ? "+
+		"WHERE id = ?", or(a.name, b.name), db.NullStr(strings.Join(notes, "\n\n")), or(a.uid, b.uid), or(a.url, b.url),
+		or(a.source, b.source), or(a.photo, b.photo), into)
 	pInto, pOther := fmt.Sprintf("p%d", into), fmt.Sprintf("p%d", other)
 	mergeChatState(tx, pInto, pOther)
 	db.Exec(tx, "DELETE FROM merge_dismissed WHERE a = ? OR b = ?", other, other)
