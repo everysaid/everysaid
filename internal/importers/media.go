@@ -528,7 +528,7 @@ func SMSAttachment(filename string) string {
 }
 
 // Phones are what a phone's sources bring.
-var Phones = []MediaStep{MediaWhatsApp, MediaViberIphone, MediaSMSIphone, MediaMMSAndroid}
+var Phones = []MediaStep{MediaWhatsApp, MediaViberIphone, MediaSMSIphone, MediaMMSAndroid, PhotosWhatsAppIphone, PhotosViberIphone}
 
 // Media links the files of the steps given (all of them when none is).
 func Media(a *archive.Archive, out func(string), steps ...MediaStep) (err error) {
@@ -543,6 +543,8 @@ func Media(a *archive.Archive, out func(string), steps ...MediaStep) (err error)
 		s.Release()
 		s.Move = false
 	}
+	ChatPhotosFromNotices(a, s) // the groups' photos among the files just linked
+	a.Commit()
 	s.report(a, out)
 	return nil
 }

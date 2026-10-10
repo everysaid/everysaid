@@ -326,7 +326,10 @@ func importUnless(ctx context.Context, c *plugins.Context, done func() bool) err
 		}},
 		{Label: "files", Run: func(a *archive.Archive, out func(string)) error {
 			sent := filepath.Join(dir(c), "sent")
-			return importers.Media(a, out, importers.MediaViberDesktop(snapshotPath(c), sourceName, Downloads(c), sent))
+			// the photos of people and groups, in each account's Avatars (its links followed)
+			avatars, _ := filepath.Glob(filepath.Join(Home(c), ".ViberPC", "*", "Avatars"))
+			return importers.Media(a, out, importers.MediaViberDesktop(snapshotPath(c), sourceName, Downloads(c), sent),
+				importers.ViberDesktopPhotos(snapshotPath(c), avatars...))
 		}},
 	})
 	return err
