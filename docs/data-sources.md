@@ -804,6 +804,11 @@ and trims.
 **Keys.** `guid` is the row key. iMessages also get `message.key = guid`. SMS/MMS have no global id,
 so `key` is NULL.
 
+**Reading.** `is_read` on a message from others: the newest one read is the conversation's
+`read_until` (`date_read`, its change). On the owner's iMessage and RCS in a chat with one person,
+`is_delivered`/`date_delivered` and `is_read`/`date_read` are receipts (an SMS's say nothing of
+the other).
+
 ### 7.2 Android SMS and MMS (`android.db`)
 
 - **SMS.**
@@ -816,6 +821,8 @@ so `key` is NULL.
     is the one of type 137.
   - The text is the concatenation of `text/plain` parts, in `seq` order.
   - The kind comes from the first part that is neither `text/plain` nor `application/smil`.
+- **Reading.** `read` 1 on a message from others: the newest one read is the conversation's
+  `read_until`.
 
 ### 7.3 Pairing the two phones (`internal/importers/sms.go`)
 
