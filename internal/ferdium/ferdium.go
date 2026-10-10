@@ -47,7 +47,9 @@ func Files(url string) (map[string][]byte, error) {
 	pkg, err := json.MarshalIndent(map[string]any{
 		"id": ID, "name": "Everysaid", "version": version, "license": "AGPL-3.0-or-later",
 		"config": map[string]any{
-			"serviceURL":           url,
+			"serviceURL": url,
+			// the address made in, offered as the "hosted" one (ready to save); another, as a custom one
+			"hasHostedOption":      true,
 			"hasCustomUrl":         true,
 			"hasNotificationSound": true,
 			"hasDirectMessages":    true,

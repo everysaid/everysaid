@@ -9,7 +9,8 @@ it only opens the page, and Ferdium shows a number only when a recipe hands it o
 ## What the recipe does
 
 - It opens the app at the server's address (`[server] origin`, the one passkeys are tied to: use
-  the same address as in a browser). The address can be changed in the service's settings.
+  the same address as in a browser), offered as the service's own ("hosted") one, ready to save;
+  another can be given under "Self hosted".
 - It reads the number of unread chats from the page's title, `(3) Everysaid` (the app writes it
   there for every browser tab too), and hands it to Ferdium as it changes (Ferdium.loop).
 - Notifications need nothing of it. Ferdium is built on Electron, which has no push service, so the
