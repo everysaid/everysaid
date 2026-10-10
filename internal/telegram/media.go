@@ -348,6 +348,25 @@ func mediaRun(ctx context.Context, c *conn, dryRun bool, sel mediaSel, out *prin
 			size += n
 		}
 	})
+	// of chats chosen whole, also the messages the store no longer keeps (taken out once imported):
+	// those the archive has with a file to be and none linked
+	if sel.only != nil {
+		have := map[[2]int64]bool{}
+		for chat, ids := range todo {
+			for _, id := range ids {
+				have[[2]int64{chat, int64(id)}] = true
+			}
+		}
+		for _, k := range archiveWithoutFiles(sel.only, sel.since) {
+			if skip[k[0]] || have[k] {
+				continue
+			}
+			if _, had := todo[k[0]]; !had {
+				order = append(order, k[0])
+			}
+			todo[k[0]] = append(todo[k[0]], int(k[1]))
+		}
+	}
 	total := 0
 	for _, ids := range todo {
 		total += len(ids)
@@ -375,6 +394,41 @@ func mediaRun(ctx context.Context, c *conn, dryRun bool, sel mediaSel, out *prin
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, out.say("{n} downloaded into {folder}", map[string]any{"n": done, "folder": MediaPath()}))
 	return nil
+}
+
+// archiveWithoutFiles are the Telegram messages of those chats, sent since (Unix s), that the archive
+// has as a picture, a video, a voice message, a file or a sticker with no file linked: (chat, id).
+// None where there is no archive yet.
+func archiveWithoutFiles(chats map[int64]bool, since int64) (out [][2]int64) {
+	path := archive.DB()
+	if _, err := os.Stat(path); err != nil || len(chats) == 0 {
+		return nil
+	}
+	d, err := db.ReadOnly(path)
+	if err != nil {
+		return nil
+	}
+	defer d.Close()
+	defer func() { recover() }() // an archive that cannot be read: none
+	keys := make([]any, 0, len(chats))
+	for chat := range chats {
+		keys = append(keys, strconv.FormatInt(chat, 10))
+	}
+	db.Each(d, "SELECT cv.key, m.key FROM message m JOIN conversation cv ON cv.id = m.conversation_id "+
+		"JOIN service s ON s.id = m.service_id JOIN message_kind k ON k.id = m.kind_id "+
+		"WHERE s.name = 'telegram' AND cv.key IN ("+db.Marks(len(keys))+") AND m.key IS NOT NULL AND m.ts >= ? "+
+		"AND k.name IN ('image', 'video', 'voice', 'file', 'sticker') AND NOT m.deleted "+
+		"AND NOT EXISTS (SELECT 1 FROM attachment a WHERE a.message_id = m.id) ORDER BY cv.key, m.key",
+		append(keys, since*1000), func(scan func(...any)) {
+			var chat, id string
+			scan(&chat, &id)
+			c, err1 := strconv.ParseInt(chat, 10, 64)
+			i, err2 := strconv.ParseInt(id, 10, 64)
+			if err1 == nil && err2 == nil {
+				out = append(out, [2]int64{c, i})
+			}
+		})
+	return out
 }
 
 // fetchFiles downloads the files of a chat's messages into the media folder and records each in
@@ -468,6 +522,9 @@ func (Plugin) FetchMedia(ctx context.Context, c *plugins.Context, messageID int6
 		return "", nil
 	}
 	defer db.Recover(&err)
+	if p := storedFile(c, messageID); p != "" {
+		return p, nil
+	}
 	store, err := openStore(DBPath())
 	if err != nil {
 		return "", err
@@ -508,7 +565,31 @@ func (Plugin) FetchMedia(ctx context.Context, c *plugins.Context, messageID int6
 		return "", err
 	}
 	db.Exec(store, "UPDATE telegram_message SET file = ? WHERE chat_id = ? AND id = ?", rel, chatID, id)
+	// into the archive's store at once, where it stays the only copy
+	if err := withArchive(c, func(a *archive.Archive) error { return importMedia(a, func(string) {}) }); err != nil {
+		return "", err
+	}
+	if p := storedFile(c, messageID); p != "" {
+		return p, nil
+	}
 	return dest, nil
+}
+
+// storedFile is the file of a message in the archive's store ("" for none there).
+func storedFile(c *plugins.Context, messageID int64) string {
+	var rel string
+	if db.Row(c.Store().Read(), "SELECT md.path FROM attachment a JOIN media md ON md.sha256 = a.sha256 "+
+		"WHERE a.message_id = ? ORDER BY a.rowid LIMIT 1", []any{messageID}, &rel) {
+		if p := filepath.Join(archive.MediaRoot(), filepath.FromSlash(rel)); isRegular(p) {
+			return p
+		}
+	}
+	return ""
+}
+
+func isRegular(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && st.Mode().IsRegular()
 }
 
 // mediaBackfill is how far back the files not downloaded yet are looked for, at each connection

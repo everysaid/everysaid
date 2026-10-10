@@ -10,7 +10,8 @@
 //   - iPhone Viber: ZATTACHMENT.ZNAME, message by token;
 //   - Android MMS (android-export.py): mms-parts/<part _id>, message by MMS id, or by time and
 //     direction where the iPhone's copy of the message was the one kept;
-//   - Telegram (telegram-sync --media): <chat>/<message><ext>, message by its row key (TelegramMedia);
+//   - Telegram (telegram-sync --media, the live connection): the files in its download folder,
+//     <chat>/<message><ext>, message by its row key (TelegramMedia), taken into the store (Move);
 //   - the WhatsApp bridge: the files it downloaded (messages.media_path, relative to its store
 //     folder), message by its row key, else by its id (the iPhone's copy of the same message).
 //
@@ -101,12 +102,35 @@ func sameFile(a, b string) bool {
 
 type missingKey struct{ source, why string }
 
-// Store links files to messages, each file stored once.
+// Store links files to messages, each file stored once. With Move (a live source's downloads), a
+// file the store holds is taken from where it was: Release removes those, once what links them is
+// committed (never before: a failure in between would leave the store without its record).
 type Store struct {
 	a       *archive.Archive
 	Root    string
 	Added   map[string]int
 	Missing map[missingKey]int
+	Move    bool
+	moved   []string
+}
+
+// held notes a source file the store now holds, to be removed by Release where Move is set.
+func (s *Store) held(path, sha string) {
+	if !s.Move {
+		return
+	}
+	var stored string
+	if s.a.Row("SELECT path FROM media WHERE sha256 = ?", []any{sha}, &stored) && isFile(filepath.Join(s.Root, stored)) {
+		s.moved = append(s.moved, path)
+	}
+}
+
+// Release removes the source files the store took (Move), after the commit that records them.
+func (s *Store) Release() {
+	for _, p := range s.moved {
+		os.Remove(p)
+	}
+	s.moved = nil
 }
 
 func NewStore(a *archive.Archive) *Store {
@@ -131,11 +155,16 @@ func (s *Store) LinkNamed(source string, sourceID int64, path, rel string, messa
 		s.Missing[missingKey{source, "no message"}]++
 		return
 	}
-	if !isFile(path) {
-		s.Missing[missingKey{source, "no file"}]++
+	var linked string
+	if a.Row("SELECT sha256 FROM attachment WHERE source_id = ? AND source_path = ? AND message_id = ?",
+		[]any{sourceID, rel, messageID}, &linked) {
+		if isFile(path) {
+			s.held(path, linked)
+		}
 		return
 	}
-	if a.Exists("SELECT 1 FROM attachment WHERE source_id = ? AND source_path = ? AND message_id = ?", sourceID, rel, messageID) {
+	if !isFile(path) {
+		s.Missing[missingKey{source, "no file"}]++
 		return
 	}
 	// the file of this source path hashed before, while it is the same file: the stored copy (a hard
@@ -153,6 +182,7 @@ func (s *Store) LinkNamed(source string, sourceID int64, path, rel string, messa
 	// the same file once on a message (an edited Signal message comes with its files again, under
 	// other names)
 	if a.Exists("SELECT 1 FROM attachment WHERE message_id = ? AND sha256 = ?", messageID, digest) {
+		s.held(path, digest)
 		return
 	}
 	if !a.Exists("SELECT 1 FROM media WHERE sha256 = ?", digest) {
@@ -172,6 +202,7 @@ func (s *Store) LinkNamed(source string, sourceID int64, path, rel string, messa
 	a.Exec("INSERT INTO attachment (message_id, sha256, source_id, source_path, name) VALUES (?, ?, ?, ?, ?)",
 		messageID, digest, sourceID, rel, archive.NullStr(name))
 	s.Added[source]++
+	s.held(path, digest)
 }
 
 func byKey(a *archive.Archive, service string) map[string]int64 {
@@ -380,6 +411,8 @@ func Media(a *archive.Archive, out func(string), steps ...MediaStep) (err error)
 	for _, step := range steps {
 		step(a, s)
 		a.Commit()
+		s.Release()
+		s.Move = false
 	}
 	s.report(a, out)
 	return nil

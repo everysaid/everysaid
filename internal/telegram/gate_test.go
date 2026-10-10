@@ -408,12 +408,16 @@ func TestFetchMedia(t *testing.T) {
 	liveConn.Store(cn)
 	defer liveConn.Store(nil)
 	got, err := p.FetchMedia(newTestCtx(), c, mid)
-	want := filepath.Join(MediaPath(), "2", "300.mp4")
-	if err != nil || got != want {
+	// in the archive's store at once, the only copy: the download folder keeps none
+	if err != nil || !strings.HasPrefix(got, filepath.Join(archive.MediaRoot(), "media")+string(filepath.Separator)) {
 		t.Fatal(got, err)
 	}
+	want := got
 	if b, _ := os.ReadFile(got); string(b) != "video bytes" {
 		t.Fatalf("%q", b)
+	}
+	if _, err := os.Stat(filepath.Join(MediaPath(), "2", "300.mp4")); !os.IsNotExist(err) {
+		t.Fatalf("still in the download folder: %v", err)
 	}
 	d, _ := readStore()
 	defer d.Close()
@@ -472,5 +476,40 @@ func TestDeletedEndToEnd(t *testing.T) {
 	}
 	if lines := strings.Join(c.LastLines(50), "\n"); strings.Contains(lines, "error") {
 		t.Fatal(lines)
+	}
+}
+
+// A message the store no longer keeps (taken out once imported) is fetched again when an update
+// names it, and imported; one it keeps is left as it is.
+func TestRefetchTakenOut(t *testing.T) {
+	in := newInstance(t, M{})
+	c := in.ctx()
+	f := account()
+	f.chats[0].messages = append(f.chats[0].messages, text(310, &tg.PeerUser{UserID: 2}, 2, 1700000310, "an old one", false))
+	cn := f.conn()
+	if err := syncRun(newTestCtx(), cn, en(&bytes.Buffer{})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cn.dialogs(newTestCtx()); err != nil {
+		t.Fatal(err)
+	}
+	store, _ := openStore(DBPath())
+	db.Exec(store, "DELETE FROM telegram_message WHERE chat_id = 2 AND id = 310")
+	store.Close()
+	if err := refetch(newTestCtx(), c, cn, 2, []int{310}); err != nil {
+		t.Fatal(err)
+	}
+	d, _ := readStore()
+	defer d.Close()
+	if n := db.Int(d, "SELECT count(*) FROM telegram_message WHERE chat_id = 2 AND id = 310"); n != 1 {
+		t.Fatalf("not fetched again: %d", n)
+	}
+	if last := in.keys[len(in.keys)-1]; !last[[2]int64{2, 310}] {
+		t.Fatalf("not imported: %v", in.keys)
+	}
+	// kept: nothing asked of Telegram, nothing imported again
+	imports := in.imports
+	if err := refetch(newTestCtx(), c, cn, 2, []int{310}); err != nil || in.imports != imports {
+		t.Fatalf("fetched again: %v %d", err, in.imports)
 	}
 }
