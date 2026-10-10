@@ -56,7 +56,7 @@ const (
 
 var (
 	Services = []string{"sms", "mms", "imessage", "rcs", "viber", "whatsapp", "phone", "facetime", "telegram",
-		"messenger", "signal"}
+		"messenger", "signal", "instagram"}
 	KeyPerConversation = []string{"telegram"} // message ids unique only within a chat
 	// phone, email, sender (an SMS sender name), uri: the same for every service; id, username,
 	// name: within one service.

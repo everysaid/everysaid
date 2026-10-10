@@ -1,7 +1,8 @@
 # Everysaid
 
 A personal archive of messages and calls: SMS and iMessage, phone and FaceTime calls, Viber,
-WhatsApp, Telegram, Signal, the logs of older messengers, with their media, in one SQLite database.
+WhatsApp, Telegram, Signal, Messenger, Instagram, the logs of older messengers, with their media,
+in one SQLite database.
 It is built from local phone backups (iPhone), Android phones over adb, and the services' own APIs
 and exports. Over it: a core, an app for a person (a messenger for the whole history, on desktop
 and phone, `everysaid serve`) and an MCP server for an assistant (`everysaid mcp`). `docs/app.md`
@@ -9,8 +10,8 @@ tells how to run them, `docs/design.md` how they are built, `docs/ferdium.md` ho
 
 The goal is a complete, permanent history that does not depend on what the phones keep: a message
 stays in the archive after the phone that held it is gone, deleted or replaced. Nothing goes
-through iCloud. Telegram, WhatsApp, Signal and Viber (through Viber Desktop) can also be live: new
-messages arrive in the app as they come, and can be answered from it.
+through iCloud. Telegram, WhatsApp, Signal, Messenger, Instagram and Viber (through Viber Desktop)
+can also be live: new messages arrive in the app as they come, and can be answered from it.
 
 Backups are not the project's job. Keeping the archive itself safe (and the phone backups it reads,
 and the photo library) is the user's concern, with whatever backup they use. What Everysaid owes is
@@ -35,6 +36,8 @@ history); nothing in the tracked documentation depends on it.
 | Telegram through its API | working (`everysaid telegram-sync`) |
 | WhatsApp through a whatsmeow client linked as a device (the `whatsapp-bridge` source) | working (`internal/whatsapp`) |
 | Signal through a helper linked as a device | working (`bridges/signal/`, `internal/signal`) |
+| Meta's export (Download your information) of Messenger and Instagram | working (`internal/importers/meta_export.go`; the `messenger` and `instagram` sources, `everysaid import messenger instagram`) |
+| Messenger and Instagram live, through mautrix-meta's clients linked in, logged in with the browser's cookies | written, tested on fakes only (`internal/meta`, `third_party/mautrix-meta`) |
 | Unified archive, deduplicated across sources | working (`everysaid import`, `internal/importers`) |
 | Replies, reactions, edits, locations, call outcomes | working (`internal/importers/extras.go`) |
 | WhatsApp and Viber calls, carrier missed-call notices | working (`internal/importers/voip.go`) |
@@ -81,6 +84,8 @@ own (users, passkeys, sessions, push subscriptions, audit; mode 600).
 <data>/keys.db (telegram_*)              Telegram's messages until imported, as read by telegram-sync
 <cache>/telegram/media/                   their files (telegram-sync --media)
 <data>/whatsapp-bridge/                   the WhatsApp source's store (default; [whatsapp] bridge)
+<data>/keys.db (meta_*)                   Messenger's and Instagram's sessions (cookies), what they learned of threads, files still to download
+<cache>/meta/<instance>/media/            their downloads, until the store takes them
 ```
 
 (The archive's media are in the data folder, not the cache: some exist nowhere else once their source
@@ -139,6 +144,7 @@ TOML, optional: every key has a general default.
 | `[whatsapp] send`, `download` | false, true | whether the WhatsApp source may send at all (its own setting is a second key), and whether it downloads the files of messages as they arrive |
 | `[imlogs] adium`, `pidgin` | none | the folders of Adium (`Adium 2.0`, `Users/Default` or `Logs`) and of Pidgin (`.purple` or its `logs`), for the "Adium and Pidgin logs" source |
 | `[telegram] media`, `no_media` | true, none | `telegram-sync --media`: false downloads nothing; `no_media` lists chat ids whose media are passed over |
+| `[messenger] export`, `owner`; `[instagram] export`, `owner` | none | Meta's export unpacked, for `everysaid import messenger` / `instagram`; the owner's name as the export writes it, where the export does not say (the sources in the app have the same as settings) |
 | `[immich] url` | none | the address an immich library is offered with |
 | `[immich] make` | `Everysaid` | the camera make written into files sent to a library that have none |
 | `[media] store` | `<data>` | where the archive's media files are (`media/<ab>/...`) |
@@ -325,12 +331,37 @@ account as a secondary device. Its keys are kept encrypted in `<data>/signal/<in
 receives goes to `<cache>/signal/<instance>/` and from there into the archive. Only what arrives
 after the link can be had.
 
-### Facebook Messenger
+### Messenger and Instagram
 
-Not in the iPhone backup (the app excludes its messages). Meta's "Download your information" export
-(JSON); since late 2023 personal chats are end-to-end encrypted and stay on the server only with
-"secure storage" (a PIN), and are believed to be downloadable from Messenger's own settings. Not
-verified yet.
+Not in the iPhone backup (the apps exclude their messages). Two ways, one source each (`messenger`,
+`instagram`, `internal/meta`), both optional per instance:
+
+- **Meta's export** ("Download your information", in JSON, unpacked: one folder, or a folder of its
+  parts): every thread under `messages/` (inbox, archived, filtered, requests; under
+  `your_facebook_activity/` or `your_instagram_activity/` in newer exports), with its files, its
+  reactions and its calls (`internal/importers/meta_export.go`). Meta writes the text's UTF-8 bytes
+  as Latin-1 escapes (`\u00ce\u00b1` for α): they are read back as UTF-8. People are known only by
+  their names; the owner is the one the settings name, else the export's profile, else the one in
+  the most threads. The end-to-end encrypted chats Messenger gives from its own settings (secure
+  storage, camelCase JSON) are read too. A message already in the archive from the live source
+  (same millisecond, direction and text), or from an Adium or Pidgin log of Facebook's chat (within
+  two seconds), is kept once; an export's name joins the one person the live source knows by it.
+- **Live**, through mautrix-meta's client libraries linked into the binary
+  (`third_party/mautrix-meta`: messagix for Messenger, instameow for Instagram; AGPL-3.0, patched
+  as `PATCHES.md` says). The login is the browser's: log in to facebook.com (or messenger.com, or
+  instagram.com) and paste its cookies into the source's settings (a JSON object, a request copied
+  as cURL from the developer tools, or the Cookie header; c_user, xs and datr for Messenger,
+  sessionid, csrftoken and ds_user_id for Instagram). They are checked with Meta, kept in `keys.db`
+  (`meta_session`) and taken out of the settings. Every chat as it changes (messages, files,
+  replies, mentions, reactions, edits, unsends, receipts, names, members, mutes), Messenger's
+  encrypted chats through whatsmeow with a device of the account's own (its keys in `keys.db` beside
+  WhatsApp's), each chat's earlier history brought back to what the archive has, a page at a time,
+  and sending (text, replies, mentions, files), reactions, edits, unsends and read receipts (where
+  the user allows). Files are downloaded as they arrive (Meta's addresses expire) and go straight
+  into the store; what is still to download waits in `keys.db` (`meta_file`). Unofficial clients:
+  Meta may ask to check the account (the source says so; open the site in the browser), or log the
+  cookies out (give them again). Messenger's history before the encrypted chats' device was
+  added is not in the encrypted chats: the export has it.
 
 ### Adium and Pidgin: the messengers of the 2000s
 
@@ -483,8 +514,8 @@ pages) are separate, outside this repository and not part of the app.
 ## Plans
 
 1. **Sources still missing**: the iPhone's SMS/iMessage attachments (`MediaDomain`
-   `Library/SMS/Attachments`), Android WhatsApp (its encrypted backup), Messenger (Meta's export),
-   a native Android companion for live SMS and calls.
+   `Library/SMS/Attachments`), Android WhatsApp (its encrypted backup), a native Android companion
+   for live SMS and calls.
 2. **Writes through the core**: the importers become sources that yield records, the core's
    pipeline storing and deduplicating them (they write through `Archive`, wrapped as plugins).
 3. **Native wrappers** (Capacitor, Tauri) if notification replies or sharing into the app on an

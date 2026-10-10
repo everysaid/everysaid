@@ -3,6 +3,7 @@
 package all
 
 import (
+	_ "everysaid/internal/meta"
 	_ "everysaid/internal/plugins/analysis"
 	_ "everysaid/internal/plugins/contacts"
 	_ "everysaid/internal/plugins/libraries"

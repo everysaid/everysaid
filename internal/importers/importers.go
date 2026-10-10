@@ -68,6 +68,8 @@ var Names = []Importer{
 	{"telegram", "Telegram messages and calls", func(a *archive.Archive, out func(string)) error {
 		return Telegram(a, out, TelegramOptions{})
 	}},
+	{"messenger", "Messenger's export (Download your information)", metaExportImporter("messenger")},
+	{"instagram", "Instagram's export (Download your information)", metaExportImporter("instagram")},
 	{"voip", "WhatsApp and Viber calls, carrier notices", func(a *archive.Archive, out func(string)) error {
 		return VoIP(a, out, VoIPOptions{})
 	}},

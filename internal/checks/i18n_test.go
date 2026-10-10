@@ -372,7 +372,7 @@ func TestNoTextInTheInterfaceBypassesT(t *testing.T) {
 	}
 }
 
-var proper = map[string]bool{"Telegram": true, "WhatsApp": true, "Viber": true, "iMessage": true, "SMS": true, "MMS": true,
+var proper = map[string]bool{"Telegram": true, "WhatsApp": true, "Instagram": true, "Viber": true, "iMessage": true, "SMS": true, "MMS": true,
 	"RCS": true, "FaceTime": true, "Messenger": true, "Signal": true, "UDID": true, "API key": true, "adb": true,
 	"Android (adb)": true, "immich": true, "Immich": true, "CardDAV": true, "URL": true, "Passkey": true,
 	"Viber Desktop": true, "libimobiledevice (idevicebackup2)": true}
