@@ -116,10 +116,14 @@ function BottomTabs() {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const wide = useWide();
-  // the unread chats in the title too: Ferdium (and the tabs) show the number from it
+  // the unread chats in the title too: Ferdium (and the tabs) show the number from it; and on the
+  // installed app's icon (a push puts a dot there, this the number, or nothing)
   const unread = useUnread();
   useEffect(() => {
     document.title = unread > 0 ? `(${unread}) Everysaid` : "Everysaid";
+    const nav = navigator as unknown as { setAppBadge?: (n: number) => Promise<void>; clearAppBadge?: () => Promise<void> };
+    if (unread > 0) nav.setAppBadge?.(unread).catch(() => {});
+    else nav.clearAppBadge?.().catch(() => {});
   }, [unread]);
   const path = useRouterState({ select: (s) => s.location.pathname });
   const inChat = path.startsWith("/chat/");
