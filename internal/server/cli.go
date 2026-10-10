@@ -108,6 +108,9 @@ func UserMain(argv []string, out io.Writer) error {
 	case "link":
 		var forUser *int64
 		if uid != 0 {
+			if auth.User(uid) == nil {
+				return fmt.Errorf("%s", i18n.Say("no such user: {id}", M{"id": uid}))
+			}
 			forUser = &uid
 		}
 		token := auth.SetupLink(forUser, *minutes)

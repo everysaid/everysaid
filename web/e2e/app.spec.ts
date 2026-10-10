@@ -1,18 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
-import { everysaid } from "./demo";
+import { hasUser, setupLink } from "./demo";
 
 const SHOTS = process.env.SHOTS ?? "/tmp/chr-shots";
 mkdirSync(SHOTS, { recursive: true });
 
-function setupLink(existing: boolean) {
-  const out = everysaid("user", "link", ...(existing ? ["--user", "1"] : []));
-  return new URL(out.split("\n")[0]).pathname + new URL(out.split("\n")[0]).hash;
-}
-
-function hasUser() {
-  return everysaid("user", "list").startsWith("1\t");
-}
 
 async function authenticator(page: Page) {
   const cdp = await page.context().newCDPSession(page);
@@ -70,7 +62,7 @@ test("setup, chats, a chat, search, media, sources, settings", async ({ page }, 
   await page.getByRole("button", { name: /Πληροφορίες|Info/ }).first().click();
   await page.waitForTimeout(500);
   await page.screenshot({ path: `${SHOTS}/${tag}-06-info.png` });
-  const states = page.getByText(/^(Κατάσταση|State)$/).last();
+  const states = page.getByText(/^(Κατασταση|State)$/).last();
   await states.scrollIntoViewIfNeeded();
   await expect(page.getByText(/^(Αρχειοθετημένη|Archived)$/).last()).toBeVisible();
   await page.screenshot({ path: `${SHOTS}/${tag}-06b-states.png` });

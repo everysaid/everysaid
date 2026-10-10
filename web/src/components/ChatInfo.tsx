@@ -12,6 +12,7 @@ import { avatarUrl } from "./ChatList";
 import { GroupParts } from "./GroupMerge";
 import { ChatLabels } from "./Labels";
 import { PhotoFrom } from "./Photos";
+import { caps } from "@/lib/caps";
 
 export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => void }) {
   const { t } = useTranslation();
@@ -68,7 +69,7 @@ export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => 
             <Stat label={t("people.lastContact")} value={dateOnly(p.stats.last)} small />
           </div>
           <div className="space-y-2">
-            <div className="text-xs font-semibold uppercase tracking-wide text-muted">{t("people.name")}</div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-muted">{caps(t("people.name"))}</div>
             <div className="flex gap-2">
               <Input value={name} placeholder={chat.title} onChange={(e) => setName(e.target.value)} />
               <Button onClick={() => save.mutate({ name })} disabled={name === (p.given_name ?? "")}>{t("common.save")}</Button>
@@ -77,7 +78,7 @@ export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => 
           <NameFrom chat={chat} />
           <PhotoFrom p={p} />
           <div className="space-y-2">
-            <div className="text-xs font-semibold uppercase tracking-wide text-muted">{t("people.handles")}</div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-muted">{caps(t("people.handles"))}</div>
             <div className="divide-y divide-line rounded-2xl border border-line">
               {p.handles.map((h) => (
                 <div key={h.address_id} className="px-3 py-2 text-sm">
@@ -95,7 +96,7 @@ export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => 
             </div>
           </div>
           <div className="space-y-2">
-            <div className="text-xs font-semibold uppercase tracking-wide text-muted">{t("people.note")}</div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-muted">{caps(t("people.note"))}</div>
             <Textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} onBlur={() => note !== (p.note ?? "") && save.mutate({ note })} />
           </div>
           {p.stats.by_service && Object.keys(p.stats.by_service).length > 1 && (
@@ -120,7 +121,7 @@ export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => 
 
       {chat.members && (
         <div className="space-y-2">
-          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted"><Users className="size-3.5" />{chat.members.length} {t("chat.members")}</div>
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted"><Users className="size-3.5" />{chat.members.length} {caps(t("chat.members"))}</div>
           <div className="divide-y divide-line rounded-2xl border border-line">
             {chat.members.map((m, i) => (
               <Link key={i} to={m.person_id ? "/chat/$chatId" : "."} params={{ chatId: `p${m.person_id}` }} className="flex items-center gap-3 px-3 py-2 text-sm hover:bg-panel-2">
@@ -134,7 +135,7 @@ export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => 
 
       {(media.data?.items.length ?? 0) > 0 && (
         <div className="space-y-2">
-          <Link to="/media" search={{ chat: chat.id }} className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted"><Images className="size-3.5" />{t("nav.media")}</Link>
+          <Link to="/media" search={{ chat: chat.id }} className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted"><Images className="size-3.5" />{caps(t("nav.media"))}</Link>
           <div className="grid grid-cols-3 gap-1">
             {media.data!.items.map((m) => (
               <Link key={m.sha256} to="/chat/$chatId" params={{ chatId: chat.id }} search={{ m: m.message_id }} className="aspect-square overflow-hidden rounded-lg bg-panel-2">
@@ -147,7 +148,7 @@ export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => 
 
       {p && p.groups.length > 0 && (
         <div className="space-y-2">
-          <div className="text-xs font-semibold uppercase tracking-wide text-muted">{t("people.groups")}</div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted">{caps(t("people.groups"))}</div>
           <div className="divide-y divide-line rounded-2xl border border-line">
             {p.groups.map((g) => (
               <Link key={g.chat_id} to="/chat/$chatId" params={{ chatId: g.chat_id }} className="flex items-center gap-3 px-3 py-2 text-sm hover:bg-panel-2">
@@ -240,7 +241,7 @@ function ChatStates({ chat }: { chat: ChatDetail }) {
   });
   return (
     <div className="space-y-3">
-      <div className="text-xs font-semibold uppercase tracking-wide text-muted">{t("chat.state")}</div>
+      <div className="text-xs font-semibold uppercase tracking-wide text-muted">{caps(t("chat.state"))}</div>
       {STATE_FIELDS.map(({ field, label }) => {
         const mine = chat.state_user[field];
         const now = Boolean(chat[field as "archived" | "muted" | "pinned"]);

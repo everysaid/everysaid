@@ -204,6 +204,17 @@ func TestPasswordWithCode(t *testing.T) {
 	must(t, c.get("/api/chats").status == 200, "signed in")
 }
 
+// A link made for a user who is not there (any more): refused as a bad link, not a failure of the server.
+func TestLinkOfAUserNotThere(t *testing.T) {
+	c := newServer(t)
+	missing := int64(99)
+	token := c.s.Auth.SetupLink(&missing, 60)
+	o := c.post("/api/auth/password/options", M{"token": token, "name": "Me"}).json()
+	code := TOTPAt(o["secret"].(string), time.Now().Unix()/30)
+	r := c.post("/api/auth/password/set", M{"nonce": o["nonce"], "password": "a long enough password", "code": code})
+	must(t, r.status == 403 && r.code() == "auth.bad_link", "refused: %d %s", r.status, r.body)
+}
+
 func TestPasswordLockout(t *testing.T) {
 	c := newServer(t)
 	a := c.s.Auth

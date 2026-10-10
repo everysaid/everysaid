@@ -14,6 +14,7 @@ import { Button, Card, Dialog, Field, Input, Section, Segmented, Spinner, Switch
 import { sourcesRoute } from "@/router";
 import { PageHeader } from "@/components/PageHeader";
 import { DateField } from "@/components/DateField";
+import { caps } from "@/lib/caps";
 
 const KINDS = [
   { kind: "source", icon: Smartphone },
@@ -298,7 +299,7 @@ function AddDialog({ open, onOpenChange, catalog }: { open: boolean; onOpenChang
         <div className="space-y-5">
           {KINDS.map(({ kind, icon: Icon }) => (
             <div key={kind} className="space-y-2">
-              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted"><Icon className="size-3.5" />{t(`sources.${kind}`)}</div>
+              <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted"><Icon className="size-3.5" />{caps(t(`sources.${kind}`))}</div>
               <div className="grid gap-2 sm:grid-cols-2">
                 {catalog.filter((m) => m.kind === kind).map((m) => (
                   <button key={m.id} disabled={!m.available} onClick={() => pick(m)}

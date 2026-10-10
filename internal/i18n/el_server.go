@@ -11,6 +11,7 @@ func init() {
 		"(one use, valid {minutes} minutes)":                                "(μίας χρήσης, ισχύει {minutes} λεπτά)",
 		"(one use, valid {minutes} minutes · a new user)":                   "(μίας χρήσης, ισχύει {minutes} λεπτά · νέος χρήστης)",
 		"no user":                "κανένας χρήστης",
+		"no such user: {id}":     "δεν υπάρχει χρήστης {id}",
 		"no such token: {id}":    "δεν υπάρχει token {id}",
 		"token {id} revoked":     "το token {id} ανακλήθηκε",
 		"never":                  "ποτέ",

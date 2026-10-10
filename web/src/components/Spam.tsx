@@ -8,6 +8,7 @@ import { api, type Person } from "@/lib/api";
 import { dateOnly, number } from "@/lib/format";
 import { service } from "@/lib/services";
 import { Button, Card, Dialog, ServiceBadge, Switch } from "@/components/ui";
+import { caps } from "@/lib/caps";
 
 /** What removing someone as spam takes (GET /api/people/{id}/spam). refused: why they may not be
  * removed ("" when they may): someone the user named, an address book lists, or the user. */
@@ -107,7 +108,7 @@ export function SpamSuggestions() {
     <div className="border-b border-line bg-panel px-4 pb-3 md:px-6">
       <Link to="/people/blocked" className="flex items-center gap-1.5 rounded-xl py-1 text-xs font-semibold uppercase tracking-wide text-muted hover:text-fg"
         data-spam-suggestions>
-        <ShieldBan className="size-3.5" />{t("spam.blocked")}
+        <ShieldBan className="size-3.5" />{caps(t("spam.blocked"))}
         <span className="rounded-full bg-panel-2 px-2 py-0.5 tabular-nums normal-case tracking-normal">{number(n)}</span>
         <ChevronRight className="ml-auto size-4" />
       </Link>
