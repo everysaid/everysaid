@@ -70,6 +70,22 @@ func SetPerson(s *Store, personID int64, name, note, nameSource Opt[string]) err
 	})
 }
 
+// SetAccountLabel is the user's own name for one of a person's handles ("" or nil: none).
+func SetAccountLabel(s *Store, personID, addressID int64, label *string) error {
+	return s.Write(func(tx *sql.Tx) error {
+		if !db.Exists(tx, "SELECT 1 FROM person_address WHERE address_id = ? AND person_id = ?", addressID, personID) {
+			return errs.New("people.not_their_handle", 0, nil)
+		}
+		if v := trimmedOrNil(label); v != nil {
+			db.Exec(tx, "INSERT INTO account_label (address_id, label) VALUES (?, ?) ON CONFLICT (address_id) DO UPDATE SET label = excluded.label",
+				addressID, v)
+		} else {
+			db.Exec(tx, "DELETE FROM account_label WHERE address_id = ?", addressID)
+		}
+		return nil
+	})
+}
+
 // MergePeople: `other` becomes part of `into`: its addresses move over (marked as merged by the
 // user), its name and note are kept where `into` has none, and its own row goes.
 func MergePeople(s *Store, into, other int64) (int64, error) {

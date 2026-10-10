@@ -226,6 +226,7 @@ export interface BubbleProps {
   first: boolean;            // first of a run by the same sender
   last: boolean;             // last of a run
   showService: boolean;      // the service changed: say it
+  account?: string;          // which of the person's accounts on the service (more than one): said beside it
   highlight?: boolean;
   onOpen: (a: Attachment, m: MessageItem) => void;
   onJump: (id: number) => void;
@@ -299,7 +300,7 @@ function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange }: {
   );
 }
 
-export const Bubble = memo(function Bubble({ m, group, first, last, showService, highlight, onOpen, onJump, onReply, onInfo, react, onEdit, onDelete }: BubbleProps) {
+export const Bubble = memo(function Bubble({ m, group, first, last, showService, account, highlight, onOpen, onJump, onReply, onInfo, react, onEdit, onDelete }: BubbleProps) {
   const { t } = useTranslation();
   const [menu, setMenu] = useState(false);
   // deleted for everyone: the notice, as the service shows it; what it was, on a tap
@@ -421,12 +422,12 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
           {m.deleted && <div className="mt-0.5 text-xs opacity-70">{t("chat.deleted")}</div>}
           </>}
           <div className={cn("mt-0.5 flex items-center justify-end gap-1 text-[11px] leading-none", out ? "text-bubble-out-fg/70" : "text-muted", onlyMedia && "absolute bottom-2 right-2.5 rounded-full bg-black/45 px-1.5 py-1 text-white")}>
-            {showService && <span className="flex items-center gap-1"><span className="size-1.5 rounded-full" style={{ background: svc.color }} />{svc.name} ·</span>}
+            {showService && <span className="flex items-center gap-1"><span className="size-1.5 rounded-full" style={{ background: svc.color }} />{svc.name}{account && ` · ${account}`} ·</span>}
             {m.pinned && <Pin className="size-3" aria-label={t("chat.pinned")} />}
             {m.edited && <span>{t("chat.edited")} ·</span>}
             {m.status === "sending" && <span>{t("chat.sending")} ·</span>}
             {m.status === "failed" && <span className="text-danger">{t("chat.sendFailed")} ·</span>}
-            <span>{time(m.ts)}</span>
+            <span title={account ? `${svc.name} · ${account}` : svc.name}>{time(m.ts)}</span>
             {out && m.receipts && <Ticks r={m.receipts} onInfo={onInfo && (() => onInfo(m))} />}
           </div>
         </div>

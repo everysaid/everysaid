@@ -105,6 +105,7 @@ export interface Handle {
   service: string | null;
   label: string;
   address_id: number;
+  account_label?: string | null;  // the user's own name for it (two accounts on one service told apart)
 }
 
 export interface Person {
@@ -186,7 +187,8 @@ export interface ChatDetail {
   conversations: number[];
   // each conversation where a message may go, the last active first: a person's with their handle on it
   // and the name it goes by, a group's (those merged into it) with its name
-  accounts?: { conversation_id: number; service: string; address_id: number | null; name: string | null; handle: string | null; last_ts: number | null }[];
+  // (handle: a number, an address or a username, never a service's bare id; label: the user's own name for it)
+  accounts?: { conversation_id: number; service: string; address_id: number | null; name: string | null; handle: string | null; label?: string | null; last_ts: number | null }[];
   last_ts: number;
   pinned: boolean;
   muted: boolean;

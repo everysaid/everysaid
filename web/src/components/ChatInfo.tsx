@@ -26,6 +26,13 @@ export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => 
     queryKey: ["media", { chat: chat.id, limit: 9 }],
     queryFn: () => api.get<{ items: MediaItem[] }>(`/api/media${qs({ chat: chat.id, kind: "image", limit: 9, available: true })}`),
   });
+  const nameAccount = useMutation({
+    mutationFn: ({ aid, label }: { aid: number; label: string }) => api.patch(`/api/people/${p!.id}/handles/${aid}`, { label: label || null }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["chat", chat.id] });
+      toast.success(t("common.done"));
+    },
+  });
   const save = useMutation({
     mutationFn: (body: Record<string, string>) => api.patch(`/api/people/${p!.id}`, body),
     onSuccess: () => {
@@ -71,9 +78,16 @@ export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => 
             <div className="text-xs font-semibold uppercase tracking-wide text-muted">{t("people.handles")}</div>
             <div className="divide-y divide-line rounded-2xl border border-line">
               {p.handles.map((h) => (
-                <div key={h.address_id} className="flex items-center gap-2 px-3 py-2 text-sm">
-                  <span className="min-w-0 flex-1 truncate">{h.label}</span>
-                  {h.service ? <ServiceBadge id={h.service} /> : <span className="text-xs text-muted">{h.kind}</span>}
+                <div key={h.address_id} className="px-3 py-2 text-sm">
+                  <div className="flex items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate">{h.label}</span>
+                    {h.service ? <ServiceBadge id={h.service} /> : <span className="text-xs text-muted">{h.kind}</span>}
+                  </div>
+                  {/* two accounts of theirs on one service: a name of the user's own tells them apart */}
+                  {h.service && p.handles.filter((x) => x.service === h.service).length > 1 && (
+                    <AccountLabel key={`${h.address_id}:${h.account_label ?? ""}`} value={h.account_label ?? ""}
+                      onSave={(label) => nameAccount.mutate({ aid: h.address_id, label })} />
+                  )}
                 </div>
               ))}
             </div>
@@ -264,5 +278,15 @@ function ChatStates({ chat }: { chat: ChatDetail }) {
       })}
       <p className="text-xs text-muted">{t("chat.stateHint")}</p>
     </div>
+  );
+}
+
+// the user's own name for one of a person's accounts, kept when the field is left
+function AccountLabel({ value, onSave }: { value: string; onSave: (label: string) => void }) {
+  const { t } = useTranslation();
+  const [v, setV] = useState(value);
+  return (
+    <Input className="mt-1.5 h-8 text-xs" value={v} placeholder={t("people.accountLabel")} onChange={(e) => setV(e.target.value)}
+      onBlur={() => v.trim() !== value && onSave(v.trim())} />
   );
 }

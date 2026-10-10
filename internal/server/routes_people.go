@@ -438,6 +438,26 @@ func (s *Server) peopleRoutes() {
 		return s.personOrNull(pid), nil
 	})
 
+	// the user's own name for one of their handles: two accounts of theirs on one service told apart
+	h("PATCH /api/people/{pid}/handles/{aid}", bodyRequired, func(q *req) (any, error) {
+		pid, err := q.pathInt("pid")
+		if err != nil {
+			return nil, err
+		}
+		aid, err := q.pathInt("aid")
+		if err != nil {
+			return nil, err
+		}
+		label, err := optString(q.body, "label")
+		if err != nil {
+			return nil, failed(400, err.Error())
+		}
+		if err := core.SetAccountLabel(s.Store, pid, aid, label.Value); err != nil {
+			return nil, is404(err, func(e error) error { return e })
+		}
+		return s.personOrNull(pid), nil
+	})
+
 	h("POST /api/people/{pid}/merge", bodyRequired, func(q *req) (any, error) {
 		pid, err := q.pathInt("pid")
 		if err != nil {
