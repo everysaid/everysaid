@@ -9,6 +9,7 @@ import { api, type Guess, type Label, type LabelKind, type Person, type PersonLa
 import { dateOnly, number } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Button, Card, Dialog, Field, Input, Switch, Textarea } from "@/components/ui";
+import { caps } from "@/lib/caps";
 
 export function useLabels() {
   return useQuery({ queryKey: ["labels"], queryFn: () => api.get<{ items: Label[]; stale: number }>("/api/labels") });
@@ -140,7 +141,7 @@ function Chip({ l, onYes, onNo }: { l: PersonLabel; onYes: () => void; onNo: () 
         mine ? "bg-accent/15 text-fg" : "border border-dashed border-line text-muted")}>
       {mine && <Check className="size-3.5 text-accent" />}
       {!mine ? <button type="button" className="hover:text-fg" title={t("labels.confirm")} onClick={onYes}>{labelName(t, l)}</button> : labelName(t, l)}
-      {l.kind === "relation" && <span className="text-[10px] uppercase text-muted">{t("labels.relationShort")}</span>}
+      {l.kind === "relation" && <span className="text-[10px] uppercase text-muted">{caps(t("labels.relationShort"))}</span>}
       {!mine && <Votes votes={l.votes} models={l.models} />}
       <button type="button" className="grid size-5 place-items-center rounded-full hover:bg-panel-2" aria-label={mine ? t("labels.remove") : t("labels.wrong")}
         title={mine ? t("labels.remove") : t("labels.wrong")} onClick={onNo}><X className="size-3" /></button>
@@ -165,7 +166,7 @@ function LabelPicker({ open, onOpenChange, taken, onPick }: { open: boolean; onO
       <div className="space-y-4 p-4">
         {(["tone", "relation"] as const).map((k) => (
           <div key={k}>
-            <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">{t(k === "tone" ? "labels.tones" : "labels.relations")}</div>
+            <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted">{caps(t(k === "tone" ? "labels.tones" : "labels.relations"))}</div>
             <div className="flex flex-wrap gap-2">
               {labels.data?.items.filter((l) => l.kind === k && !taken.has(l.id)).map((l) => (
                 <button key={l.id} type="button" onClick={() => onPick(l.id)} data-pick={l.key ?? l.name}

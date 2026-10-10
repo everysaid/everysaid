@@ -4,6 +4,7 @@ import { Check, CheckCheck, Clock, Play } from "lucide-react";
 import { api, type MessageItem, type Receipt } from "@/lib/api";
 import { dateOnly, time } from "@/lib/format";
 import { Avatar, Center, Dialog, Spinner } from "./ui";
+import { caps } from "@/lib/caps";
 
 /** Who got, read and played one of the user's messages, and when, as the service told. */
 export function MessageInfo({ m, onClose }: { m: MessageItem | null; onClose: () => void }) {
@@ -52,7 +53,7 @@ function Part({ title, icon, items, when, extra }: {
   if (!items.length) return null;
   return (
     <section>
-      <h3 className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted">{icon}{title} · {items.length}</h3>
+      <h3 className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted">{icon}{caps(title)} · {items.length}</h3>
       <ul className="divide-y divide-line">
         {items.map((r, i) => (
           <li key={`${r.person_id}:${i}`} className="flex items-center gap-3 py-2">

@@ -26,15 +26,21 @@ export function totp(secret: string, offset = 0) {
   return String((h.readUInt32BE(o) & 0x7fffffff) % 1_000_000).padStart(6, "0");
 }
 
-export function setupLink() {
-  const out = everysaid("user", "link", "--user", "1");
+export function setupLink(existing = true) {
+  const out = everysaid("user", "link", ...(existing ? ["--user", "1"] : []));
   const url = new URL(out.split("\n")[0]);
   return url.pathname + url.hash;
 }
 
-/** Signed in as the demo's user (who exists once app.spec.ts has run): a new password and secret. */
+/** Whether the demo's user is there yet (made by the first test that signs in, whichever runs first). */
+export function hasUser() {
+  return everysaid("user", "list").startsWith("1\t");
+}
+
+/** Signed in as the demo's user, made first where there is none yet: a new password and secret. */
 export async function signIn(page: Page) {
-  await page.goto(setupLink());
+  const existing = hasUser();
+  await page.goto(setupLink(existing));
   await page.getByRole("button", { name: /κωδικός και εφαρμογή|password and an authenticator/ }).click();
   await page.locator('input[autocomplete="username"]').fill("Demo");
   await page.getByRole("button", { name: /Συνέχεια|Continue/ }).click();
@@ -44,6 +50,7 @@ export async function signIn(page: Page) {
   await page.locator('input[type="password"]').nth(1).fill(pw);
   await page.locator('input[autocomplete="one-time-code"]').fill(totp(secret));
   await page.getByRole("button", { name: /Ορισμός κωδικού|Set a password/ }).click();
+  if (!existing) await page.getByRole("button", { name: /φύλαξα|saved them/ }).click();     // a new user's recovery codes
   await expect(page.getByRole("heading", { name: /Συνομιλίες|Chats/ })).toBeVisible({ timeout: 15000 });
 }
 

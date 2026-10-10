@@ -14,6 +14,7 @@ import { SpamSuggestions } from "@/components/Spam";
 import { labelName, useLabels } from "@/components/Labels";
 import { cn } from "@/lib/utils";
 import type { LabelKind } from "@/lib/api";
+import { caps } from "@/lib/caps";
 
 type Row = { id: number; name: string; handles: number;
   labels: { id: number; kind: LabelKind; key: string | null; name: string | null; state: "yes" | "suggested" }[] };
@@ -94,7 +95,7 @@ export function PeoplePage() {
       </div>
       {!dq && !label && (sugg.data?.items.length ?? 0) > 0 && (
         <div className="border-b border-line bg-panel px-4 pb-3 md:px-6">
-          <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted"><Sparkles className="size-3.5" />{t("people.suggestions")}
+          <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted"><Sparkles className="size-3.5" />{caps(t("people.suggestions"))}
             <Link to="/people/merge" className="ml-auto normal-case tracking-normal text-accent hover:underline" data-alike-all>{t("people.alikeAll")}</Link>
           </div>
           <div className="flex gap-2 overflow-x-auto pb-1">

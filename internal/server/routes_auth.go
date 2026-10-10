@@ -170,6 +170,9 @@ func (s *Server) authRoutes() {
 			}
 		}
 		if known {
+			if s.Auth.User(u) == nil { // the user it was made for is not there (any more)
+				return nil, errs.New("auth.bad_link", 403, nil)
+			}
 			uid = u
 		} else {
 			uid = s.Auth.CreateUser(info["name"].(string), s.Store.Path)
@@ -324,6 +327,9 @@ func (s *Server) authRoutes() {
 			}
 		}
 		if known {
+			if s.Auth.User(u) == nil { // the user it was made for is not there (any more)
+				return nil, errs.New("auth.bad_link", 403, nil)
+			}
 			uid = u
 		} else {
 			uid = s.Auth.CreateUser(info["name"].(string), s.Store.Path)

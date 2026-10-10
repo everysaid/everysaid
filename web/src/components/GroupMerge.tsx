@@ -8,6 +8,7 @@ import { api, type ChatDetail } from "@/lib/api";
 import { dateOnly, number } from "@/lib/format";
 import { useChats, useDebounced } from "@/lib/hooks";
 import { Avatar, Button, Dialog, Input, ServiceBadge } from "./ui";
+import { caps } from "@/lib/caps";
 
 /** Two groups that look like one, and why. */
 export interface GroupSuggestion {
@@ -70,7 +71,7 @@ export function GroupParts({ chat }: { chat: ChatDetail }) {
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <div className="text-xs font-semibold uppercase tracking-wide text-muted">{t("chat.groupParts")}</div>
+        <div className="text-xs font-semibold uppercase tracking-wide text-muted">{caps(t("chat.groupParts"))}</div>
         <Button size="sm" variant="ghost" data-merge-group onClick={() => setMerging(true)}><Merge className="size-4" />{t("chat.mergeGroup")}</Button>
       </div>
       <div className="divide-y divide-line rounded-2xl border border-line">
@@ -154,7 +155,7 @@ export function GroupSuggestions() {
   if (!sugg.data?.items.length) return null;
   return (
     <div data-group-suggestions className="px-4 pb-2">
-      <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted"><Sparkles className="size-3.5" />{t("chat.alikeGroups")}</div>
+      <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted"><Sparkles className="size-3.5" />{caps(t("chat.alikeGroups"))}</div>
       <div className="flex gap-2 overflow-x-auto pb-1">
         {sugg.data.items.map((s) => {
           const [a, b] = s.chats;
