@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { Avatar, Menu, MenuContent, MenuItem, MenuTrigger } from "./ui";
 import { EmojiPicker } from "./EmojiPicker";
 import { copyFile, copyText } from "@/lib/clip";
+import { Sending } from "./Sending";
 
 const URL_RE = /(https?:\/\/[^\s<>"')\]]+)/g;
 const BIDI = /[\u202a-\u202e\u2066-\u2069]/g;      // direction marks around a name (Viber writes "\u202a@Name\u202c")
@@ -432,7 +433,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
             {showService && <span className="flex items-center gap-1"><span className="size-1.5 rounded-full" style={{ background: svc.color }} />{svc.name}{account && ` · ${account}`} ·</span>}
             {m.pinned && <Pin className="size-3" aria-label={t("chat.pinned")} />}
             {m.edited && <span>{t("chat.edited")} ·</span>}
-            {m.status === "sending" && <span>{t("chat.sending")} ·</span>}
+            {m.status === "sending" && <span><Sending /> ·</span>}
             {m.status === "failed" && <span className="text-danger">{t("chat.sendFailed")} ·</span>}
             <span title={account ? `${svc.name} · ${account}` : svc.name}>{time(m.ts)}</span>
             {out && m.receipts && <Ticks r={m.receipts} onInfo={onInfo && (() => onInfo(m))} />}
