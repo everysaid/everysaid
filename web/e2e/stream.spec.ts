@@ -177,7 +177,8 @@ test("replying: pick a message, the bar shows it (Esc cancels), the answer goes 
       }, [box.x + 10, box.y + box.height / 2]);
     } else {
       await row(page, asked).hover();
-      await row(page, asked).locator("[data-reply]").click();
+      await row(page, asked).locator("[data-actions]").click();
+      await page.getByRole("menuitem", { name: /^(Απάντηση|Reply)$/ }).click();
     }
     await expect(page.locator("[data-replying]")).toContainText(asked);
   };

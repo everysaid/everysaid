@@ -25,6 +25,7 @@ import { EmojiPicker } from "@/components/EmojiPicker";
 import { Pending } from "@/components/Pending";
 import { dropUnsent, flying, keepUnsent, sendUnsent, unreached, type Unsent, type Went } from "@/lib/outbox";
 import { avatarUrl } from "@/components/ChatList";
+import { isFileLink, pastedFile } from "@/lib/clip";
 
 const START = 1_000_000_000;
 const PAGE = 80;
@@ -86,6 +87,27 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   const replyable = detail.data?.replyable ?? [];
   const [replyTo, setReplyTo] = useState<MessageItem | null>(null);
   const [infoOf, setInfoOf] = useState<MessageItem | null>(null);      // the message whose receipts are shown
+  // a file dropped on the chat goes to the composer (set by it), where one can be sent now
+  const take = useRef<Taker | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const drag = {
+    onDragOver: (e: React.DragEvent) => {
+      if (!e.dataTransfer.types.includes("Files")) return;
+      e.preventDefault();                               // not opened by the browser in place of the app
+      const ok = !!take.current?.ok();
+      e.dataTransfer.dropEffect = ok ? "copy" : "none";
+      setDragging(ok);
+    },
+    onDragLeave: (e: React.DragEvent) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false); },
+    onDrop: (e: React.DragEvent) => {
+      const f = e.dataTransfer.files?.[0];
+      if (!f) return;
+      e.preventDefault();
+      setDragging(false);
+      if (take.current?.ok()) take.current.put(f);
+      else toast(t("chat.noFilesHere"));
+    },
+  };
   // where the user was reading, when they come back to the chat (not when sent to a message or a time)
   const [resume, setResume] = useState(() => (jumpTo || around ? undefined : place(chatId)));
   const hasNewerRef = useRef(false);
@@ -512,7 +534,12 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
 
   return (
     <div className="flex h-full">
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="relative flex min-w-0 flex-1 flex-col" {...drag}>
+        {dragging && (
+          <div data-drop className="pointer-events-none absolute inset-2 z-30 grid place-items-center rounded-2xl border-2 border-dashed border-accent bg-panel/85 backdrop-blur-sm">
+            <span className="flex items-center gap-2 text-sm font-medium text-accent"><Paperclip className="size-5" />{t("chat.dropFile")}</span>
+          </div>
+        )}
         <ChatHeader chat={detail.data} wide={wide} onInfo={() => setInfoOpen((o) => !o)} onJumpDate={(d) => navigate({ to: "/chat/$chatId", params: { chatId }, search: { ts: d, hide } })}
           hidden={hide ? hide.split(",") : []} onHide={(list) => navigate({ to: "/chat/$chatId", params: { chatId }, search: { hide: list.join(",") || undefined }, replace: true })} />
         <div data-stream className="chat-bg relative min-h-0 flex-1 overflow-hidden" onWheel={letGo} onTouchStart={letGo} onKeyDown={letGo} onMouseDown={letGo}>
@@ -576,7 +603,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
             findable={!!detail.data.findable} reach={detail.data.reach ?? {}} replyable={detail.data.replyable} missing={detail.data.unsendable}
             accounts={detail.data.accounts ?? []}
             mentionable={isGroup ? detail.data.mentionable ?? [] : []} fileable={detail.data.fileable ?? []} members={detail.data.members ?? []}
-            chatId={chatId} onSend={send} replyTo={replyTo} onCancelReply={() => setReplyTo(null)}
+            chatId={chatId} onSend={send} take={take} replyTo={replyTo} onCancelReply={() => setReplyTo(null)}
             editing={editing} onEdit={edit} onCancelEdit={() => setEditing(null)}
             preferred={(!hasNewer && [...items].reverse().find((i) => i.type === "message")?.service) || detail.data.last_service} />
         )}
@@ -723,6 +750,9 @@ export function placeMentions(text: string, members: { label: string; address_id
   return out.sort((a, b) => a.start - b.start);
 }
 
+/** Where the chat's dropped files go: the composer, when it can send one now. */
+type Taker = { ok: () => boolean; put: (f: File) => void };
+
 /** services: those of the chat with messages, and those the person was found on; findable: the person
  * can be looked for on other services (reach: what they said, each as it answers); sendable / replyable: those something can send to now
  * (or answer a given message in); mentionable / fileable: those where people of the group can be named
@@ -731,13 +761,14 @@ export function placeMentions(text: string, members: { label: string; address_id
  * closed, with a lock for Send. accounts: the conversations a message may go to (a person's handles,
  * the groups merged into one); a service with more than one opens a menu of them, by name, the last
  * active picked until the user picks another. */
-function Composer({ chatId, services, sendable, replyable, mentionable, fileable, members, missing, preferred, findable, reach, accounts, onSend, replyTo, onCancelReply, editing, onEdit, onCancelEdit }: {
+function Composer({ chatId, services, sendable, replyable, mentionable, fileable, members, missing, preferred, findable, reach, accounts, onSend, take, replyTo, onCancelReply, editing, onEdit, onCancelEdit }: {
   chatId: string; services: string[]; sendable: string[]; replyable: string[]; mentionable: string[]; fileable: string[];
   findable: boolean; reach: Record<string, string>;
   accounts: NonNullable<ChatDetail["accounts"]>;
   members: Member[]; missing: Record<string, string>;
   preferred?: string | null;
   onSend: (text: string, service: string | null, replyTo: MessageItem | null, mentions: Mentioned[], file: File | null, conversationId: number | null) => void;
+  take: React.MutableRefObject<Taker | null>;          // set here: where a dropped or pasted file goes
   replyTo: MessageItem | null; onCancelReply: () => void;
   editing: MessageItem | null; onEdit: (m: MessageItem, text: string) => void; onCancelEdit: () => void;
 }) {
@@ -753,6 +784,27 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
+  const fileOk = useRef(false);                         // a file can go now (known below, at each render)
+  fileOk.current = false;
+  // a paste of a file (or of the address of one copied in a chat here) anywhere but another field:
+  // the file to send; text with it (an office program's picture of what was copied) stays text
+  useEffect(() => {
+    const put = (f: File) => { setFile(f); ref.current?.focus(); };
+    take.current = { ok: () => fileOk.current, put };
+    const on = (e: ClipboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el !== ref.current && el?.closest?.("input, textarea, [contenteditable]")) return;
+      const text = e.clipboardData?.getData("text/plain") ?? "";
+      const f = e.clipboardData?.files?.[0];
+      if (!isFileLink(text) && (!f || text.trim())) return;
+      e.preventDefault();
+      if (!fileOk.current) { toast(t("chat.noFilesHere")); return; }
+      if (f && !isFileLink(text)) { put(f); return; }
+      pastedFile(text).then(put, () => toast.error(t("chat.gone")));
+    };
+    window.addEventListener("paste", on);
+    return () => { window.removeEventListener("paste", on); take.current = null; };
+  }, [take, t]);
   const [caret, setCaret] = useState(0);
   const [pick, setPick] = useState(0);              // the person marked in the @ list
   const [noList, setNoList] = useState(false);       // the @ list closed with Esc, until the text changes
@@ -853,6 +905,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   if (!services.length || !svc) return null;          // calls only: nothing to write
   const can = !!editing || (replyTo ? replyable : sendable).includes(via);
   const canFile = can && fileable.includes(via);
+  fileOk.current = canFile && !editing;
   const why = () => toast(t("chat.cannotSend", { service: service(via).name }), {
     description: missing[via] ?? t("chat.cannotSendHint"), action: { label: t("nav.sources"), onClick: () => navigate({ to: "/sources" }) },
   });

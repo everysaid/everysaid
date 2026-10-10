@@ -1,7 +1,8 @@
 import { memo, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "@tanstack/react-router";
-import { Check, CheckCheck, CornerUpLeft, FileText, Forward, ImageOff, MapPin, Pencil, Phone, Pin, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Plus, SmilePlus, Trash2, Video } from "lucide-react";
+import { toast } from "sonner";
+import { Check, CheckCheck, Copy, CornerUpLeft, Ellipsis, FileText, Forward, ImageOff, MapPin, Pencil, Phone, Pin, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Plus, SmilePlus, Trash2, Video } from "lucide-react";
 import { thumbUrl, type Attachment, type CallItem, type Mention, type MessageItem, type Receipts } from "@/lib/api";
 import { bytes, duration, time } from "@/lib/format";
 import { service } from "@/lib/services";
@@ -9,6 +10,7 @@ import { noticeLines, pollOf } from "@/lib/notice";
 import { cn } from "@/lib/utils";
 import { Avatar, Menu, MenuContent, MenuItem, MenuTrigger } from "./ui";
 import { EmojiPicker } from "./EmojiPicker";
+import { copyFile, copyText } from "@/lib/clip";
 
 const URL_RE = /(https?:\/\/[^\s<>"')\]]+)/g;
 const BIDI = /[\u202a-\u202e\u2066-\u2069]/g;      // direction marks around a name (Viber writes "\u202a@Name\u202c")
@@ -236,8 +238,8 @@ export interface BubbleProps {
   onDelete?: (m: MessageItem) => void;
 }
 
-/** The actions of a message: its service's quick reactions, any other it takes, answer, edit,
- * delete for everyone. Opened by its button, or by a long press on a touch screen (open). */
+/** The actions of a message: its service's quick reactions, any other it takes, copy, edit,
+ * delete for everyone, answer. Opened by its button, or by a long press on a touch screen (open). */
 function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange }: {
   m: MessageItem; react?: BubbleProps["react"]; onReply?: (m: MessageItem) => void; onEdit?: (m: MessageItem) => void;
   onDelete?: (m: MessageItem) => void; open: boolean; onOpenChange: (o: boolean) => void;
@@ -248,12 +250,14 @@ function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange }: {
   const mine = m.reactions.find((r) => r.mine)?.emoji ?? null;
   const put = (e: string) => { onOpenChange(false); react?.on(m, e === mine ? "" : e); };
   const others = react && !react.free ? react.all ?? [] : [];      // any emoji: the picker instead
+  const file = m.attachments.find((a) => a.available !== "gone");    // the first, to paste in a chat (any service's)
+  const copy = (p: Promise<void>) => p.then(() => toast.success(t("common.copied")), () => toast.error(t("chat.actionFailed")));
   return (
     <Menu open={open} onOpenChange={onOpenChange}>
       <MenuTrigger asChild>
         <button data-actions aria-label={t("chat.actions")} title={t("chat.actions")}
           className="self-center rounded-full p-1.5 text-muted opacity-0 transition hover:bg-panel-2 hover:text-fg focus:opacity-100 group-hover/msg:opacity-100 data-[state=open]:opacity-100">
-          <SmilePlus className="size-4" />
+          {react ? <SmilePlus className="size-4" /> : <Ellipsis className="size-4" />}
         </button>
       </MenuTrigger>
       <MenuContent align={m.outgoing ? "end" : "start"} className="w-72">
@@ -282,9 +286,11 @@ function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange }: {
           </div>
         )}
         {mine && react && <MenuItem onSelect={() => react.on(m, "")}><span className="w-5 text-center">{mine}</span>{t("chat.removeReaction")}</MenuItem>}
-        {onReply && <MenuItem icon={<CornerUpLeft className="size-4" />} onSelect={() => onReply(m)}>{t("chat.reply")}</MenuItem>}
+        {m.text && <MenuItem icon={<Copy className="size-4" />} onSelect={() => copy(copyText(m.text!))}>{t("common.copy")}</MenuItem>}
+        {file && <MenuItem icon={<Copy className="size-4" />} onSelect={() => copy(copyFile(file))}>{t("chat.copyFile")}</MenuItem>}
         {onEdit && <MenuItem icon={<Pencil className="size-4" />} onSelect={() => onEdit(m)}>{t("chat.edit")}</MenuItem>}
         {onDelete && <MenuItem danger icon={<Trash2 className="size-4" />} onSelect={() => onDelete(m)}>{t("chat.deleteForAll")}</MenuItem>}
+        {onReply && <MenuItem icon={<CornerUpLeft className="size-4" />} onSelect={() => onReply(m)}>{t("chat.reply")}</MenuItem>}
       </MenuContent>
     </Menu>
   );
@@ -296,7 +302,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
   // deleted for everyone: the notice, as the service shows it; what it was, on a tap
   const [reveal, setReveal] = useState(false);
   const hidden = m.deleted && !reveal;
-  const hasActions = m.id > 0 && !m.deleted && !!(react || onEdit || onDelete);
+  const hasActions = m.id > 0 && !m.deleted && !!(react || onEdit || onDelete || onReply || m.text || m.attachments.some((a) => a.available !== "gone"));
   const press = useRef<ReturnType<typeof setTimeout> | null>(null);   // a long press opens the actions
   const unpress = () => { if (press.current) clearTimeout(press.current); press.current = null; };
   // a swipe to the right on a touch screen answers the message (as in the messaging apps)
@@ -327,12 +333,6 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
   const actions = hasActions && (
     <Actions m={m} react={react} onReply={onReply} onEdit={onEdit} onDelete={onDelete} open={menu} onOpenChange={setMenu} />
   );
-  const replyButton = onReply && m.id > 0 && (
-    <button data-reply onClick={() => onReply(m)} aria-label={t("chat.reply")} title={t("chat.reply")}
-      className="self-center rounded-full p-1.5 text-muted opacity-0 transition hover:bg-panel-2 hover:text-fg focus:opacity-100 group-hover/msg:opacity-100">
-      <CornerUpLeft className="size-4" />
-    </button>
-  );
   const out = m.outgoing;
   const svc = service(m.service);
   const media = m.attachments.filter((a) => a.mime?.startsWith("image/") || a.mime?.startsWith("video/"));
@@ -344,7 +344,6 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
   return (
     <div id={`m${m.id}`} className={cn("group/msg flex gap-2 px-3 md:px-6", out ? "justify-end" : "justify-start", first ? "mt-2" : "mt-0.5")}>
       {out && actions}
-      {out && replyButton}
       {group && !out && (
         <div className="w-8 shrink-0 self-end">{last && <Avatar name={m.sender || "?"} size={32} />}</div>
       )}
@@ -448,7 +447,6 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
           </div>
         )}
       </div>
-      {!out && replyButton}
       {!out && actions}
     </div>
   );
