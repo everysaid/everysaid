@@ -1,22 +1,25 @@
 package signal
 
-// A fake helper, speaking the helper's protocol without Signal: the test binary itself, started with
-// EVERYSAID_FAKE_SIGNAL=1. In the store folder it is given it keeps `linked` (once linked), and reads
+// A fake client, answering the client's commands and saying its events without Signal, in this
+// process. In the instance's folder (StoreDir) it keeps `linked` (once linked), and reads
 // `script.jsonl` (the events a receive brings; a fetch again gives their files); it writes
 // `sent.jsonl`, `acted.jsonl`, `read.jsonl` and `fetch.jsonl` (the sends, reactions, edits and
 // deletions, marks read and fetches asked of it), for the tests to look at; `discover.json` is who
-// has an account ({number: {aci, pni}}). `unlinked` there:
-// Signal refuses the device (it was removed from the phone); `link-fails`: a link fails. It never
+// has an account ({number: {aci, pni}}). `unlinked` there: Signal refuses the device (it was removed
+// from the phone); `link-fails`: a link fails; `no-scan`: the phone never scans the code. It never
 // touches the network.
 
 import (
-	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"everysaid/internal/config"
+	"everysaid/internal/plugins"
 )
 
 const (
@@ -24,194 +27,229 @@ const (
 	fakePhone = "+306900000000"
 )
 
-func fakeHelper() {
-	var mu sync.Mutex
-	out := bufio.NewWriter(os.Stdout)
-	write := func(v any) {
-		mu.Lock()
-		defer mu.Unlock()
-		b, _ := json.Marshal(v)
-		out.Write(append(b, '\n'))
-		out.Flush()
-	}
-	store, attachments := "", ""
-	linked := func() bool {
-		_, err := os.Stat(filepath.Join(store, "linked"))
-		return store != "" && err == nil
-	}
-	status := func() map[string]any {
-		if !linked() {
-			return map[string]any{"open": store != "", "linked": false, "receiving": false}
-		}
-		return map[string]any{"open": true, "linked": true, "receiving": false, "aci": fakeOwn,
-			"pni": "PNI:44444444-4444-4444-4444-444444444444", "phone": fakePhone, "device_id": 2, "device_name": "Everysaid"}
-	}
-	appendTo := func(name string, v any) {
-		f, _ := os.OpenFile(filepath.Join(store, name), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-		b, _ := json.Marshal(v)
-		f.Write(append(b, '\n'))
-		f.Close()
-	}
-	sent := 0
-	in := bufio.NewScanner(os.Stdin)
-	in.Buffer(make([]byte, 1<<20), 16<<20)
-	for in.Scan() {
-		var req map[string]any
-		if json.Unmarshal(in.Bytes(), &req) != nil {
-			write(map[string]any{"id": nil, "ok": false, "code": "bad_request", "error": "not JSON"})
-			continue
-		}
-		id := req["id"]
-		ok := func(r any) { write(map[string]any{"id": id, "ok": true, "result": r}) }
-		fail := func(code, msg string) { write(map[string]any{"id": id, "ok": false, "code": code, "error": msg}) }
-		cmd, _ := req["cmd"].(string)
-		if cmd != "open" && cmd != "quit" && cmd != "status" && store == "" {
-			fail("not_open", "the store is not open")
-			continue
-		}
-		needsLink := map[string]bool{"sync": true, "receive": true, "send": true, "mark_read": true, "history": true,
-			"react": true, "edit": true, "delete": true, "discover": true}
-		if needsLink[cmd] && !linked() {
-			fail("not_linked", "not linked to a Signal account")
-			continue
-		}
-		switch cmd {
-		case "open":
-			store, _ = req["store"].(string)
-			if p, _ := req["passphrase"].(string); len(p) < 32 {
-				fail("locked", "no passphrase")
-				store = ""
-				continue
-			}
-			os.MkdirAll(store, 0o700)
-			attachments, _ = req["attachments"].(string)
-			os.MkdirAll(attachments, 0o700)
-			ok(status())
-		case "status":
-			ok(status())
-		case "link":
-			if linked() {
-				fail("already_linked", "already linked")
-				continue
-			}
-			write(map[string]any{"event": "link_url", "url": "sgnl://linkdevice?uuid=fake&pub_key=fake"})
-			if _, err := os.Stat(filepath.Join(store, "link-fails")); err == nil {
-				fail("failed", "provisioning socket closed")
-				continue
-			}
-			if _, err := os.Stat(filepath.Join(store, "no-scan")); err == nil {
-				continue // the phone never scans it: no answer
-			}
-			os.WriteFile(filepath.Join(store, "linked"), nil, 0o600)
-			ok(status())
-		case "sync":
-			appendTo("sync.jsonl", map[string]any{})
-			ok(map[string]any{"requested": true})
-		case "receive":
-			ok(map[string]any{"started": true})
-			if _, err := os.Stat(filepath.Join(store, "unlinked")); err == nil {
-				write(map[string]any{"event": "receive_ended", "error": "Websocket error: websocket upgrade failed: unexpected status code: 403 Forbidden", "code": "unlinked"})
-				continue
-			}
-			if b, err := os.ReadFile(filepath.Join(store, "script.jsonl")); err == nil {
-				for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
-					if strings.TrimSpace(line) != "" {
-						mu.Lock()
-						out.WriteString(line + "\n")
-						out.Flush()
-						mu.Unlock()
-					}
-				}
-			}
-			write(map[string]any{"event": "queue_empty"})
-		case "send":
-			sent++
-			ts := 9_000_000 + sent
-			ev := map[string]any{"event": "message", "chat": req["chat"], "sender": fakeOwn, "sender_device": 2,
-				"outgoing": true, "ts": ts, "server_ts": ts}
-			for _, k := range []string{"text", "mentions", "quote"} {
-				if v, has := req[k]; has {
-					ev[k] = v
-				}
-			}
-			if atts, has := req["attachments"].([]any); has {
-				var list []any
-				for _, a := range atts {
-					m := a.(map[string]any)
-					data, _ := os.ReadFile(m["path"].(string))
-					m["bytes"] = string(data) // what it was given, while the file is there
-					list = append(list, map[string]any{"content_type": m["content_type"], "filename": m["filename"], "file": nil})
-				}
-				ev["attachments"] = list
-			}
-			appendTo("sent.jsonl", req)
-			write(ev)
-			ok(map[string]any{"ts": ts})
-		case "react", "edit", "delete":
-			// said back as Signal's events of the owner, as the helper does
-			sent++
-			ts := 9_000_000 + sent
-			ev := map[string]any{"event": map[string]string{"react": "reaction", "edit": "edit", "delete": "delete"}[cmd],
-				"chat": req["chat"], "sender": fakeOwn, "sender_device": 2, "outgoing": true, "ts": ts, "server_ts": ts}
-			switch cmd {
-			case "react":
-				target := req["target"].(map[string]any)
-				ev["emoji"], ev["remove"], ev["target_author"], ev["target_ts"] = req["emoji"], req["remove"] == true, target["author"], target["ts"]
-			case "edit":
-				ev["target_ts"], ev["text"] = req["target_ts"], req["text"]
-			case "delete":
-				ev["target_author"], ev["target_ts"] = fakeOwn, req["target_ts"]
-			}
-			appendTo("acted.jsonl", req)
-			write(ev)
-			ok(map[string]any{"ts": ts})
-		case "mark_read":
-			appendTo("read.jsonl", map[string]any{"messages": req["messages"], "receipts": req["receipts"]})
-			n := 0
-			if ms, has := req["messages"].([]any); has {
-				n = len(ms)
-			}
-			ok(map[string]any{"marked": n})
-		case "fetch":
-			appendTo("fetch.jsonl", req["messages"])
-			b, _ := os.ReadFile(filepath.Join(store, "script.jsonl"))
-			for _, ref := range req["messages"].([]any) {
-				r := ref.(map[string]any)
-				for _, line := range strings.Split(string(b), "\n") {
-					var ev map[string]any
-					if json.Unmarshal([]byte(line), &ev) != nil || ev["event"] != "message" || ev["sender"] != r["author"] || ev["ts"] != r["ts"] {
-						continue
-					}
-					if _, err := os.Stat(filepath.Join(store, "fetch-fails")); err != nil {
-						name := fmt.Sprintf("%.0f-%s-0.jpg", r["ts"], r["author"].(string)[:8])
-						os.WriteFile(filepath.Join(attachments, name), []byte("fetched"), 0o600)
-						ev["attachments"] = []any{map[string]any{"content_type": "image/jpeg", "file": name}}
-					}
-					write(ev)
-				}
-			}
-			ok(map[string]any{"found": len(req["messages"].([]any))})
-		case "discover":
-			var accounts map[string]map[string]any
-			b, _ := os.ReadFile(filepath.Join(store, "discover.json"))
-			json.Unmarshal(b, &accounts)
-			found := []any{}
-			for _, x := range req["numbers"].([]any) {
-				if a, has := accounts[x.(string)]; has {
-					write(map[string]any{"event": "ids", "aci": a["aci"], "pni": a["pni"], "phone": x})
-					found = append(found, map[string]any{"number": x, "aci": a["aci"], "pni": a["pni"]})
-				}
-			}
-			ok(map[string]any{"found": found})
-		case "history":
-			ok(map[string]any{"events": []any{}})
-		case "contacts", "groups":
-			ok(map[string]any{cmd: []any{}})
-		case "quit":
-			ok(map[string]any{})
-			return
-		default:
-			fail("bad_request", "unknown command "+cmd)
-		}
-	}
+// StoreDir is the fake's folder for an instance: <data>/signal/<instance>.
+func StoreDir(c *plugins.Context) string { return fakeDir(c.ID) }
+
+func fakeDir(instance int64) string {
+	return filepath.Join(config.Data, "signal", fmt.Sprint(instance))
 }
+
+type fake struct {
+	store, attachments string
+	ev                 *eventQueue
+
+	mu      sync.Mutex
+	sent    int
+	stopped chan struct{}
+	once    sync.Once
+}
+
+func startFake(cfg clientConfig) (transport, error) {
+	return &fake{store: fakeDir(cfg.Instance), attachments: cfg.Media, ev: newEventQueue(cfg.Handle), stopped: make(chan struct{})}, nil
+}
+
+// dropFake: the fake's device goes with its folder.
+func dropFake(instance int64) error { return os.RemoveAll(fakeDir(instance)) }
+
+func (f *fake) has(name string) bool {
+	_, err := os.Stat(filepath.Join(f.store, name))
+	return err == nil
+}
+
+func (f *fake) status() map[string]any {
+	if !f.has("linked") {
+		return map[string]any{"open": true, "linked": false, "receiving": false}
+	}
+	return map[string]any{"open": true, "linked": true, "receiving": false, "aci": fakeOwn,
+		"pni": "PNI:44444444-4444-4444-4444-444444444444", "phone": fakePhone, "device_id": 2, "device_name": "Everysaid"}
+}
+
+func (f *fake) appendTo(name string, v any) {
+	fh, _ := os.OpenFile(filepath.Join(f.store, name), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	b, _ := json.Marshal(v)
+	fh.Write(append(b, '\n'))
+	fh.Close()
+}
+
+// sayLine says an event as a script line has it.
+func (f *fake) sayLine(line string) {
+	var m map[string]any
+	if json.Unmarshal([]byte(line), &m) != nil {
+		return
+	}
+	name, _ := m["event"].(string)
+	delete(m, "event")
+	f.ev.say(name, m)
+}
+
+func (f *fake) Call(ctx context.Context, cmd string, args map[string]any) (json.RawMessage, error) {
+	select {
+	case <-f.stopped:
+		return nil, ErrStopped
+	default:
+	}
+	// the fields as JSON gives them (numbers as float64), as a client reading the protocol would
+	var req map[string]any
+	b, _ := json.Marshal(args)
+	json.Unmarshal(b, &req)
+	if req == nil {
+		req = map[string]any{}
+	}
+	result, err := f.call(ctx, cmd, req)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(result)
+}
+
+func (f *fake) call(ctx context.Context, cmd string, req map[string]any) (any, error) {
+	needsLink := map[string]bool{"sync": true, "receive": true, "send": true, "mark_read": true, "history": true,
+		"react": true, "edit": true, "delete": true, "discover": true}
+	if needsLink[cmd] && !f.has("linked") {
+		return nil, refuse("not_linked", "not linked to a Signal account")
+	}
+	switch cmd {
+	case "open":
+		os.MkdirAll(f.store, 0o700)
+		os.MkdirAll(f.attachments, 0o700)
+		return f.status(), nil
+	case "status":
+		return f.status(), nil
+	case "link":
+		if f.has("linked") {
+			return nil, refuse("already_linked", "already linked")
+		}
+		f.ev.say("link_url", map[string]any{"url": "sgnl://linkdevice?uuid=fake&pub_key=fake"})
+		if f.has("link-fails") {
+			return nil, refuse("failed", "provisioning socket closed")
+		}
+		if f.has("no-scan") { // the phone never scans it
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-f.stopped:
+				return nil, ErrStopped
+			}
+		}
+		os.WriteFile(filepath.Join(f.store, "linked"), nil, 0o600)
+		return f.status(), nil
+	case "sync":
+		f.appendTo("sync.jsonl", map[string]any{})
+		return map[string]any{"requested": true}, nil
+	case "receive":
+		if f.has("unlinked") {
+			f.ev.say("receive_ended", map[string]any{"error": "the websocket was refused: 403 opening websocket, we are logged out",
+				"code": "unlinked"})
+			return map[string]any{"started": true}, nil
+		}
+		if b, err := os.ReadFile(filepath.Join(f.store, "script.jsonl")); err == nil {
+			for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+				if strings.TrimSpace(line) != "" {
+					f.sayLine(line)
+				}
+			}
+		}
+		f.ev.say("queue_empty", nil)
+		return map[string]any{"started": true}, nil
+	case "send":
+		f.mu.Lock()
+		f.sent++
+		ts := 9_000_000 + f.sent
+		f.mu.Unlock()
+		ev := map[string]any{"chat": req["chat"], "sender": fakeOwn, "sender_device": 2, "outgoing": true, "ts": ts, "server_ts": ts}
+		for _, k := range []string{"text", "mentions", "quote"} {
+			if v, has := req[k]; has {
+				ev[k] = v
+			}
+		}
+		if atts, has := req["attachments"].([]any); has {
+			var list []any
+			for _, a := range atts {
+				m := a.(map[string]any)
+				data, _ := os.ReadFile(m["path"].(string))
+				m["bytes"] = string(data) // what it was given, while the file is there
+				list = append(list, map[string]any{"content_type": m["content_type"], "filename": m["filename"], "file": nil})
+			}
+			ev["attachments"] = list
+		}
+		f.appendTo("sent.jsonl", req)
+		f.ev.say("message", ev)
+		return map[string]any{"ts": ts}, nil
+	case "react", "edit", "delete":
+		// said back as Signal's events of the owner, as the client does
+		f.mu.Lock()
+		f.sent++
+		ts := 9_000_000 + f.sent
+		f.mu.Unlock()
+		ev := map[string]any{"chat": req["chat"], "sender": fakeOwn, "sender_device": 2, "outgoing": true, "ts": ts, "server_ts": ts}
+		switch cmd {
+		case "react":
+			target := req["target"].(map[string]any)
+			ev["emoji"], ev["remove"], ev["target_author"], ev["target_ts"] = req["emoji"], req["remove"] == true, target["author"], target["ts"]
+		case "edit":
+			ev["target_ts"], ev["text"] = req["target_ts"], req["text"]
+		case "delete":
+			ev["target_author"], ev["target_ts"] = fakeOwn, req["target_ts"]
+		}
+		f.appendTo("acted.jsonl", req)
+		f.ev.say(map[string]string{"react": "reaction", "edit": "edit", "delete": "delete"}[cmd], ev)
+		return map[string]any{"ts": ts}, nil
+	case "mark_read":
+		f.appendTo("read.jsonl", map[string]any{"messages": req["messages"], "receipts": req["receipts"]})
+		n := 0
+		if ms, has := req["messages"].([]any); has {
+			n = len(ms)
+		}
+		return map[string]any{"marked": n}, nil
+	case "fetch":
+		f.appendTo("fetch.jsonl", req["messages"])
+		b, _ := os.ReadFile(filepath.Join(f.store, "script.jsonl"))
+		for _, x := range req["messages"].([]any) {
+			r := x.(map[string]any)
+			for _, line := range strings.Split(string(b), "\n") {
+				var ev map[string]any
+				if json.Unmarshal([]byte(line), &ev) != nil || ev["event"] != "message" || ev["sender"] != r["author"] || ev["ts"] != r["ts"] {
+					continue
+				}
+				if !f.has("fetch-fails") {
+					name := fmt.Sprintf("%.0f-%s-0.jpg", r["ts"], r["author"].(string)[:8])
+					os.WriteFile(filepath.Join(f.attachments, name), []byte("fetched"), 0o600)
+					ev["attachments"] = []any{map[string]any{"content_type": "image/jpeg", "file": name}}
+				}
+				delete(ev, "event")
+				f.ev.say("message", ev)
+			}
+		}
+		return map[string]any{"found": len(req["messages"].([]any))}, nil
+	case "discover":
+		var accounts map[string]map[string]any
+		b, _ := os.ReadFile(filepath.Join(f.store, "discover.json"))
+		json.Unmarshal(b, &accounts)
+		found := []any{}
+		for _, x := range req["numbers"].([]any) {
+			if a, has := accounts[x.(string)]; has {
+				f.ev.say("ids", map[string]any{"aci": a["aci"], "pni": a["pni"], "phone": x})
+				found = append(found, map[string]any{"number": x, "aci": a["aci"], "pni": a["pni"]})
+			}
+		}
+		return map[string]any{"found": found}, nil
+	case "history":
+		return map[string]any{"events": []any{}}, nil
+	case "contacts", "groups":
+		return map[string]any{cmd: []any{}}, nil
+	}
+	return nil, refuse("bad_request", "unknown command "+cmd)
+}
+
+func (f *fake) Settle()               { f.ev.Settle() }
+func (f *fake) Done() <-chan struct{} { return f.stopped }
+
+func (f *fake) Close() {
+	f.once.Do(func() {
+		f.ev.end()
+		<-f.ev.done
+		close(f.stopped)
+	})
+}
+
+func (f *fake) Kill() { f.Close() }

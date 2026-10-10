@@ -28,7 +28,7 @@ the services themselves (it reads them; where a service allows, it also sends).
                 └──────────────────────────────────┬──────────────────────────┘
                                                     │
    iPhone backup · adb · Adium/Pidgin logs · Telegram API · WhatsApp (whatsmeow) · Messenger and
-
+   Instagram (messagix, instameow) · Signal (signalmeow) · CardDAV / .vcf ·
    immich / folder · Ollama
 ```
 
@@ -62,9 +62,11 @@ lock of their own while they write.
 
 ## 3. Plugins
 
-Plugins are of four kinds under one system (manifest, instances, settings, secrets, actions,
-logs): **source**, **library** (where kept pictures and videos go, 5), **contacts** (address books)
-and **analysis** (local models, 6). They are Go packages compiled into the binary, each registering
+Plugins are of five kinds under one system (manifest, instances, settings, secrets, actions,
+logs): **source**, **library** (where kept pictures and videos go, 5), **contacts** (address books),
+**analysis** (local models, 6) and **gifs** (the composer's GIFs, a tab each in the order added:
+the History of those in the archive, there from the start; Telegram's @gif through the account its
+source linked; Klipy, with the user's own key). They are Go packages compiled into the binary, each registering
 itself, all loaded by `internal/all`; there are no plugins from others (they would need isolation,
 a subprocess with a narrow protocol).
 
@@ -73,10 +75,11 @@ backup" and "WhatsApp live" are two plugins. The plugins today:
 
 | Kind | Plugins |
 |---|---|
-
+| source | `iphone-backup`, `android-adb`, `carrier-notices`, `im-logs` (`internal/plugins/sources`); `telegram`, `whatsapp-bridge`, `signal`, `messenger`, `instagram` (packages of their own) |
 | library | `folder`, `immich` (`internal/plugins/libraries`) |
 | contacts | `carddav`, `vcard-file` (`internal/plugins/contacts`) |
 | analysis | `ollama` (`internal/plugins/analysis`) |
+| gifs | `gif-history`, `klipy` (`internal/plugins/gifs`); `telegram-gif` (`internal/telegram`) |
 
 Each plugin declares a manifest (`plugins.Info`, `internal/plugins/base.go`): id, name, kind,
 services, description; `modes` (`import`: runs, brings what is new, stops; `live`: stays
@@ -84,23 +87,32 @@ connected) and `live_default`; `platforms` (where its tools exist); `needs`, in 
 settings (typed fields the UI turns into a form; a `secret` field goes to the keyring through
 `internal/config`, never into the settings); what it can do (`can_send`, `can_reply`,
 `can_mention`, `can_mark_read`, `can_send_files`, `can_react`, `can_edit`, `can_delete`, with the
-service's time limits, `can_report_spam`); extra actions (a QR link, an unlink); how its services look; and the
+service's time limits, `can_delete_for_me`, `can_report_spam`); extra actions (a QR link, an unlink); how its services look; and the
 weights of the names and the chat state it brings (7).
 
 Beyond the manifest a plugin implements only the interfaces it needs: `RunImport` (an import),
-`Live` (a connection), `Send`, `React`, `Edit`, `Delete`, `MarkRead`, `FetchMedia`, `ReportSpam`
+`Live` (a connection), `Send`, `React`, `Edit`, `Delete`, `DeleteForMe`, `MarkRead`, `FetchMedia`, `FilesPending` (the
+messages whose file it is still getting, shown in the chat as on their way until it comes), `ReportSpam`
 (report, block and delete the chat on the service), `Forget` (drop its own copy of a chat removed
 as spam), `Find` (which of a person's numbers have an account on its services: asked of every such
 source at once when the user looks for a person elsewhere, each answer reaching the app as a
 `reach` event as it comes, and a first message then sent to the key found), `Chats` (the
 chats it can see, with kind and size, for the user's choice of what to import and whose media to
 fetch; Telegram and Signal have it), `Asks` (what the user types for one run only, such as a backup
-password not kept), `Action`, `Check`; a library `Find`, `Store`, `Fetch`; a contacts plugin
-`Sync`.
+password not kept), `Action`, `Check`, `SearchGIFs` (a GIFs plugin's GIFs to send, from any
+service: Telegram's through its @gif bot, an inline query that sends nothing, Klipy's through its
+API; in the composer behind the emoji's button, a tab each after the emoji, the History's the GIFs
+already in the archive, each once however many copies the services made of it (a look of its
+frame), with a tab greyed and saying why where one cannot now; also "@gif" and words, the GIFs then
+shown above the text, "@" offering commands beside a group's members), `SentGIF` (a searcher told its GIF was sent,
+as Klipy's terms ask); a library `Find`,
+`Store`, `Fetch`; a contacts plugin `Sync`. A file sent as a GIF (`animated`) is a video without
+sound that each source sends as its service's GIF (WhatsApp and Messenger's encrypted chats with
+GIF playback, Telegram as an animation, Signal with its GIF flag), else as the video it is.
 
 The source plugins run the extraction and the importers: an import extracts what is new (an iPhone
 backup, adb, Telegram's API) and runs the importers on it, which write through `internal/archive`;
-a live plugin keeps its own store (whatsmeow's, , Telegram's,
+a live plugin keeps its own store (whatsmeow's, Telegram's,
 Signal's) and imports from it as things arrive. Planned (README, "Plans"): importers that yield
 records for one import pipeline in the core.
 
@@ -111,21 +123,19 @@ The live sources:
 - **WhatsApp** (`internal/whatsapp`, whatsmeow): in the process, linked as a device by a QR code.
   Unofficial, so sending is a setting of the instance, off by default, with the risk to the account
   stated where it is turned on, and turned off by itself when WhatsApp warns the account.
-- **Signal** (`internal/signal`): a separate helper program, `everysaid-signal` (`bridges/signal`,
-  Rust, on presage, AGPL-3.0), started by the plugin and spoken to in JSON lines on its stdin and
-  stdout; none of its code is linked into `everysaid`.
+- **Signal** (`internal/signal`, signalmeow): in the process where Everysaid is built with the tag
+  `signal` (cgo to Signal's libsignal; `docs/go.md`), linked as a device by a QR code; without the
+  tag the source says Signal is not built in. The client answers the commands and says the events
+  the earlier helper program did (`docs/data-sources.md`, section 15), so the plugin's store and
+  importer are those of before; what Signal sends is acknowledged once the store kept it. At link
+  time it also takes the history the phone transfers, and it reads the chats' state from Signal's
+  storage service.
 - **Messenger and Instagram** (`internal/meta`): in the process, on mautrix-meta's client
   libraries (`third_party/mautrix-meta`: messagix, instameow), logged in with the browser's cookies
   (kept in `keys.db`). What the clients give (Messenger's Lightspeed tables, Instagram's changes)
   is read into the archive by the package itself, with mautrix-meta's bridge as the reference; the
   libraries' types stay in it. Messenger's encrypted chats through whatsmeow, with a device of the
   account's own. Meta's export of both is imported by the same sources.
-
-  bridge (``, an `` library; `docs/.md`). The plugin starts
-  , in a session of its own so that the server's restarts leave it running,
-  starts it again if it goes, and stops it when the user says (kept stopped until started again)
-  or ends the live connection (`plugins.LiveStopper`).
-
 **Instances.** A plugin can be added many times: two iPhones, several Android phones, two Telegram
 accounts. Each instance (`plugin_instance`) has its own label, settings, secrets, state (its
 cursors), log and device; the user chooses which instances feed the archive.
@@ -151,9 +161,12 @@ changes in place).
   `call_origin`) but the Adium and Pidgin logs', which have no ids.
 - **People**: `address` (one handle), `person`, `person_address` (`auto`, or `manual` when the
   user merged), `account` (the user's own handles), `handle_name` (every name a service showed for a
-  handle). Suggested merges are shown to the user, never applied by themselves; the same phone
-  number on two services is one address, so one person. Contacts from an address book (`contact`,
-  `contact_address`) are linked by `contact_uid`/`contact_url`; the services' photos of handles and groups are kept with their history (`handle_photo`, `chat_photo`), and a person's photo is chosen as their name is (the order of names, or the user's pin `photo_source`), an address book's at the place of `contacts`, a service's at that of `<service>/profile`;
+  handle). Suggested merges are shown to the user, never applied by themselves, but for one
+  contact of an address book that lists handles of several people: the user's own word, merged at
+  each sync of the address book (not into the user, nor people the user turned down or split
+  apart); the same phone number on two services is one address, so one person. Contacts from an
+  address book (`contact`, `contact_address`; one deleted there is kept in `contact_gone`, its name
+  and photo still its person's where no contact still there lists the number) are linked by `contact_uid`/`contact_url`; the services' photos of handles and groups are kept with their history (`handle_photo`, `chat_photo`), and a person's photo is chosen as their name is (the order of names, or the user's pin `photo_source`), an address book's at the place of `contacts`, a service's at that of `<service>/profile`;
   else initials. Viber member ids are kept in `viber_member`.
 - **Media**: `media` (by content), `attachment`, `library_link` (pointing to a library instance),
   `media_same` (a copy linked to the kept one), `media_decision` (5).
@@ -168,6 +181,15 @@ changes in place).
   writes needs no custom function; `term` is checked against the index (fts5vocab) when the
   server starts and after an import from the command line (a live connection's import adds its words
   as it indexes and leaves the rest to the next start). The snippet is made from the original text.
+- **Link previews** (`link_preview`, `link_preview_image`) are what the services sent with a link,
+  never fetched from the page: Telegram's web page, WhatsApp's (the iPhone's data items and
+  thumbnails, the live connection's), Signal's, iMessage's rich links, Viber's (its picture, on the
+  linked site, the one thing fetched, through a client that reaches only public addresses), and
+  Messenger's and Instagram's shares (their title no longer in the text). An importer gives
+  `Extras.Preview`, or `Archive.SetPreview` for a message already there, so that importing again
+  brings them to old messages; the picture is kept small (JPEG, 480 px) in the archive, served by
+  `GET /api/previews/{sha}`, and the stream gives `preview` (its picture's size with it). SMS and
+  MMS have none.
 - **Notices** (`notice`: a message's code and values, JSON) say what a notice or a message's context
   is in a form the interface puts in the user's language, whatever the source: the importers write
   the codes below, and the UI and the MCP read them without knowing the service. A person in the
@@ -204,6 +226,16 @@ answers a person's stream page or a search in milliseconds at that size; nothing
 - **The media store** holds the archive's files by content (`media/<ab>/<sha256><ext>`), in the
   **data** folder by default (config `[media] store`), not the cache: some files exist nowhere else
   once their source is gone. Thumbnails are made on demand into `<cache>/thumbs`.
+- **Documents** are shown, not downloaded (`internal/server/documents.go`): a text file as it is
+  (one not in UTF-8 in the language's old encoding), a Markdown one formatted (its HTML left out),
+  a PDF in the UI's document viewer (pdf.js, loaded only when one is opened), an office document (Word, Excel,
+  PowerPoint, OpenDocument, RTF) as a PDF made once into `<cache>/documents` by a program on the
+  machine. At each start the server looks for the programs it knows (OnlyOffice's `x2t`, with the
+  fonts list its editors make on their first start; LibreOffice's `soffice`) and keeps, for each
+  kind of document, the best one there (OnlyOffice for Microsoft's formats, LibreOffice for
+  OpenDocument's and RTF) until it stops, and says so on its console; a kind with none is only
+  downloaded. `GET /api/documents`
+  says which types are shown, `GET /api/media/{sha}/document` gives the PDF.
 - **Libraries** are plugins: `folder` (a folder on disk, year/month subfolders, files named by date
   and service) and `immich` (upload through its API). A library answers "is it already there?" (by
   checksum), stores a file with its date and the camera make written in where the file has none
@@ -289,12 +321,16 @@ UI (planned); on an iPhone that is not possible at all, and the backup stays.
   502, 503, 504, or a failure it did not word) waits in the outbox (the archive's table `outbox`) and is
   sent by itself, each chat's in order, with growing pauses, for a day; before each try the chat is
   looked at, in case it went after all. A refusal is said at once. What waits shows after the chat's
-  messages, to be sent again now or discarded.
+  messages, to be sent again now or discarded, with its picture or video (this device's file, or
+  the outbox's).
+- **A file sent is the archive's at once**: each plugin records the file it sent where its own
+  downloads go, from the file itself, before its sending is answered (not downloaded back from the
+  service); the app shows the file from the device until the message that went has it.
 - **Names**: the plugins weigh them, the user orders them (Settings → Names, which can go back to
   the weights) or pins one source or handle for a person; every name seen is kept, with when ("also
   known as"). Self-chosen names are marked (~) in groups.
-- **Merge suggestions**: names shared across people (a contact listing both, the same name in a
-  service's address book copy, the same rare name, or names that sound the same whatever the
+- **Merge suggestions**: names shared across people (a contact listing both, where it was kept
+  apart: one of them the user, or two the user turned down; the same name in a service's address book copy, the same rare name, or names that sound the same whatever the
   accents, word order or alphabet), never applied by themselves: the user sees them side by side
   with a little of each one's history and ticks who is one, one suggestion at a time or all of them
   on a page of their own (ticked, but for names that only sound alike; applied together). Who is
@@ -448,21 +484,23 @@ Tools as calls into the core, with the official Go SDK (`github.com/modelcontext
 person (handles, services, counts, first and last contact), a person's direct chat, the last
 interaction, messages and calls of a period, a day's timeline across services, statistics, media
 (`find_media`, `download_media`). The changes it can make are a person's name and note and storing
-a file in the photo library (`send_media_to_library`), each with the user's approval. Times are
-given in the user's time zone.
+a file in the photo library (`send_media_to_library`), each with the user's approval; inside the
+server it can also send text to the user's notes to themselves (`send_note`: WhatsApp),
+to no one else. Times are given in the user's time zone.
 
 ## 11. Platforms and installation
 
-Linux first; macOS and Windows where the plugins' tools exist (each plugin says where it runs; the
- is Linux only). For users one static binary per system, built for Linux, macOS and
-Windows on amd64 or arm64 (`docs/go.md`), and, where Signal is wanted, its helper beside it.
+Linux first; macOS and Windows where the plugins' tools exist (each plugin says where it runs).
+For users one static binary per system, built for Linux, macOS and
+Windows on amd64 or arm64 (`docs/go.md`); Signal is built in on Linux and macOS (it needs libsignal
+built for the system, and cgo), not on Windows.
 
 ## 12. Where things are
 
 `internal/core/` (store, names, queries, changes, labels), `internal/archive/` (schema, writing),
 `internal/importers/`, `internal/plugins/` and the packages of the live sources
-(`internal/telegram`, `internal/whatsapp`, `internal/signal`, `internal/viber`, `internal/meta`),
-`third_party/` (client libraries taken in and patched), `bridges/` (the
-Signal helper, ), `internal/server/` (routes, auth, host, push, events),
+(`internal/telegram`, `internal/whatsapp`, `internal/signal`, `internal/meta`),
+`third_party/` (client libraries taken in and patched: signalmeow, messagix, instameow),
+`internal/server/` (routes, auth, host, push, events),
 `internal/mcp`, `internal/demo`, `cmd/everysaid` (the binary), `web/` (the PWA); tests beside the
 code they test, `internal/checks` over the whole code, and `web/e2e/`.

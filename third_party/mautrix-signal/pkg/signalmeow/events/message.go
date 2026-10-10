@@ -30,6 +30,7 @@ type SignalEvent interface {
 
 func (*ChatEvent) isSignalEvent()              {}
 func (*DecryptionError) isSignalEvent()        {}
+func (*Content) isSignalEvent()                {}
 func (*Receipt) isSignalEvent()                {}
 func (*ReadSelf) isSignalEvent()               {}
 func (*Call) isSignalEvent()                   {}
@@ -57,6 +58,25 @@ type DecryptionError struct {
 	Sender    uuid.UUID
 	Err       error
 	Timestamp uint64
+
+	// everysaid: the sender's device, the group the message was in (sealed sender's, where known),
+	// its content hint, and whether the sender was asked to send it again.
+	SenderDevice uint
+	GroupID      *libsignalgo.GroupIdentifier
+	ContentHint  libsignalgo.UnidentifiedSenderMessageContentHint
+	Retried      bool
+}
+
+// Content (everysaid) is every decrypted content whole, with its envelope, before signalmeow's own
+// handling of it: for a client that reads the protobufs itself (call messages and the phone's call
+// log, which signalmeow does not pass on, among them). The handler's false is a failure: the
+// envelope is not acknowledged, and comes again.
+type Content struct {
+	Envelope     *signalpb.Envelope
+	Content      *signalpb.Content
+	Sender       libsignalgo.ServiceID
+	SenderDevice uint
+	Destination  libsignalgo.ServiceID
 }
 
 type Receipt struct {

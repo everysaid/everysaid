@@ -2,11 +2,12 @@
 
 Everysaid is one program, `everysaid`, written in Go: the archive's core, the importers, the
 extraction from phones, the server with the interface inside it, the MCP server, and the live
-connections (Telegram, WhatsApp) all in one static binary (`CGO_ENABLED=0`), with no runtime to
-install. Signal is a helper program of its own (`everysaid-signal`, Rust, under the AGPL-3.0 as
-the libraries it is built on): Everysaid starts it and speaks to it in JSON lines on its stdin and
-stdout, and links none of its code, so the AGPL covers the helper alone. `docs/design.md` tells
-how the app is built.
+connections (Telegram, WhatsApp, Signal) all in one binary, with no runtime to install. Without
+Signal it is pure Go and static (`CGO_ENABLED=0`). Signal is built in with the tag `signal`: its
+client, mautrix-signal's signalmeow (`third_party/mautrix-signal`, patched: its `PATCHES.md`),
+calls Signal's own library, libsignal (Rust), through cgo, so that build needs libsignal built
+first and a C toolchain. Everysaid, signalmeow and libsignal are all AGPL-3.0. `docs/design.md`
+tells how the app is built.
 
 ## Building
 
@@ -21,14 +22,30 @@ Without `go generate` the binary still builds; its pages then say how to build t
 Any of Linux, macOS and Windows, on amd64 or arm64, builds from any of them:
 `GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./cmd/everysaid`.
 
-Signal's helper, only where Signal is wanted (Rust; it needs `protoc`, `cmake` and libclang):
+With Signal (Linux and macOS; Windows has no Signal, libsignal has no build of it for Go there):
 
 ```
-cd bridges/signal && cargo build --release      # target/release/everysaid-signal
+scripts/build-signal.sh [OUTPUT]                 # libsignal, then everysaid -tags signal (./everysaid)
 ```
 
-Put it beside `everysaid`, or on the PATH, or name it in the Signal source's settings. Whoever
-distributes its binary offers its source under the AGPL.
+The script clones Signal's libsignal at the version signalmeow's libsignalgo pins
+(`third_party/mautrix-signal/pkg/libsignalgo/signalversion`, now `v0.102.2`) into
+`~/.cache/everysaid-build/libsignal` (or `LIBSIGNAL_DIR`), builds its C library and links it in.
+It needs git, Rust (rustup takes the toolchain libsignal names), a C and C++ compiler, `protoc`,
+`cmake` and libclang (on Arch the packages `protobuf`, `cmake` and `clang`; on Debian and Ubuntu
+`protobuf-compiler`, `cmake` and `libclang-dev`). By hand it is:
+
+```
+git clone --depth 1 --branch v0.102.2 https://github.com/signalapp/libsignal.git ~/.cache/everysaid-build/libsignal
+(cd ~/.cache/everysaid-build/libsignal && cargo build -p libsignal-ffi --profile=release)
+CGO_ENABLED=1 CGO_LDFLAGS="-L$HOME/.cache/everysaid-build/libsignal/target/release" \
+    go build -tags signal -o everysaid ./cmd/everysaid
+```
+
+The library is linked in statically (the binary needs only the system's C and C++ libraries, `libz`
+among them); a binary with Signal is some 35 MB larger. When libsignalgo is updated, its pinned
+version changes and libsignal is built again at it. Whoever distributes a binary offers its source
+(Everysaid's, signalmeow's and libsignal's) under the AGPL.
 
 ## Running
 
@@ -64,6 +81,14 @@ go vet ./... && gofmt -l .                      # nothing to say
 cd web && pnpm dev                              # the interface with hot reload, /api proxied to :8520
 ```
 
+Signal's client is built and tested only with its tag (the rest of `internal/signal` runs without
+it, on a fake client in the tests):
+
+```
+export CGO_ENABLED=1 CGO_LDFLAGS="-L$HOME/.cache/everysaid-build/libsignal/target/release"
+go vet -tags signal ./internal/signal/ && go test -tags signal ./internal/signal/
+```
+
 End to end, on the demo, against a built binary:
 
 ```
@@ -93,7 +118,9 @@ cd web && EVERYSAID_CMD=/path/to/everysaid pnpm exec playwright test
   codes with words, plugin words with Greek, no Greek string in Go code outside `internal/i18n`.
   A new plugin package is added to `internal/all` (blank import) so that the checks and the binary
   load it.
-- **Dependencies.** `go get` what is needed; never `go mod tidy`.
+- **Dependencies.** `go get` what is needed; never `go mod tidy`. signalmeow and libsignalgo are
+  a copy in the repository (`third_party/mautrix-signal`, `replace` in `go.mod`), each change to
+  them listed in its `PATCHES.md`.
 - **Tests** sit next to the code they test and run on a demo archive or on fixtures made in the
   test, never on a real archive. Live accounts (Telegram, WhatsApp, Signal) are never connected to
   from tests: a second connection with the same key can end the account's session.
