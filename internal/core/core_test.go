@@ -1248,6 +1248,42 @@ func TestHiddenServicesShowNowhere(t *testing.T) {
 	}
 }
 
+// A group without a name is named by its people but the owner; when its source listed only the
+// owner (old chat rooms), by those who wrote in it, the most talkative first.
+func TestUntitledGroupIsNamedByOthers(t *testing.T) {
+	s := store(t)
+	var cid, a1, a2 int64
+	write(t, s, func(tx *sql.Tx) {
+		sid := db.Int(tx, "SELECT id FROM service WHERE name = 'telegram'")
+		own := db.Int(tx, "SELECT address_id FROM account LIMIT 1")
+		others := db.Ints(tx, "SELECT pa.address_id FROM person_address pa "+
+			"WHERE pa.address_id NOT IN (SELECT address_id FROM account) ORDER BY pa.person_id, pa.address_id")
+		a1, a2 = others[0], others[len(others)-1]
+		cid = db.LastID(tx, "INSERT INTO conversation (service_id, key, is_group) VALUES (?, 'chat1', 1)", sid)
+		db.Exec(tx, "INSERT INTO conversation_member VALUES (?, ?)", cid, own)
+		kind := db.Int(tx, "SELECT id FROM message_kind WHERE name = 'text'")
+		for i, a := range []int64{a2, a1, a2} {
+			db.Exec(tx, "INSERT INTO message (service_id, conversation_id, ts, outgoing, sender_id, kind_id, text) VALUES (?, ?, ?, 0, ?, ?, 'hi')", sid, cid, 1700000000000+int64(i), a, kind)
+		}
+		db.Exec(tx, "INSERT INTO message (service_id, conversation_id, ts, outgoing, kind_id, text) VALUES (?, ?, 1700000009000, 1, ?, 'yo')", sid, cid, kind)
+	})
+	ix := core.Index(s)
+	ppl := core.PeopleOf(s)
+	n1, n2 := ppl.NameOf(a1), ppl.NameOf(a2)
+	if n1 == "" || n2 == "" || n1 == n2 {
+		t.Fatalf("names %q %q", n1, n2)
+	}
+	if got := core.ChatTitle(s, ix.Chats[ix.ConvChat[cid]]); got != n2+", "+n1 {
+		t.Fatalf("title %q, want %q", got, n2+", "+n1)
+	}
+	// and a member listed beside the owner names it alone
+	write(t, s, func(tx *sql.Tx) { db.Exec(tx, "INSERT INTO conversation_member VALUES (?, ?)", cid, a1) })
+	ix = core.Index(s)
+	if got := core.ChatTitle(s, ix.Chats[ix.ConvChat[cid]]); got != n1 {
+		t.Fatalf("title %q, want %q", got, n1)
+	}
+}
+
 // Viber's notes and a Telegram chat with oneself (no one else in either, ever) are one chat; a
 // group everyone else left is not notes (others wrote in it).
 func TestNotesToSelfAreOneChatAcrossServices(t *testing.T) {
