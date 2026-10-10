@@ -151,11 +151,8 @@ func (w *MetaWriter) User(u MetaUser) int64 {
 	return aid
 }
 
-// name records the names a person goes by (an id's).
+// name records the names a person goes by (an export's name is the one its handle is).
 func (w *MetaWriter) name(u MetaUser) {
-	if u.ID == "" {
-		return
-	}
 	h := u.Handle(w.Service)
 	if u.Name != "" {
 		w.A.HandleName(h, w.Service, u.Name, "profile", 0)
@@ -234,13 +231,21 @@ func (w *MetaWriter) Message(thread, id string) int64 {
 }
 
 // twin is the message the archive already has that is this one from another source: the same time,
-// direction and text (a live message: only one without a key).
+// direction and text (a live message: only one without a key). A message of the export, which has
+// no id, may also be one of a log that kept only seconds (Adium's and Pidgin's of Facebook's chat):
+// the one such message within two seconds.
 func (w *MetaWriter) twin(m MetaMessage) int64 {
 	q := "SELECT id FROM message WHERE service_id = ? AND ts = ? AND outgoing = ? AND text IS ?"
 	if m.ID != "" {
 		q += " AND key IS NULL"
 	}
-	ids := w.A.Ints(q+" ORDER BY id LIMIT 2", w.A.Service.ID(w.Service), m.TS, archive.B2I(m.Outgoing), archive.NullStr(m.Text))
+	sid := w.A.Service.ID(w.Service)
+	ids := w.A.Ints(q+" ORDER BY id LIMIT 2", sid, m.TS, archive.B2I(m.Outgoing), archive.NullStr(m.Text))
+	if len(ids) == 0 && m.ID == "" && m.Text != "" {
+		ids = w.A.Ints("SELECT id FROM message WHERE service_id = ? AND ts BETWEEN ? AND ? AND ts % 1000 = 0 "+
+			"AND outgoing = ? AND text = ? AND key IS NULL ORDER BY id LIMIT 2", sid, m.TS-2000, m.TS+2000,
+			archive.B2I(m.Outgoing), m.Text)
+	}
 	if len(ids) != 1 {
 		return 0
 	}
