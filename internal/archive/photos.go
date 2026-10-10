@@ -43,6 +43,9 @@ func (a *Archive) photo(table, column string, id int64, service, sha string, t i
 	}
 	sid := a.Service.ID(service)
 	where := " FROM " + table + " WHERE " + column + " = ? AND service_id = ? "
+	if a.Exists("SELECT 1"+where+"AND sha256 IS ? AND first_seen <= ? AND last_seen >= ?", id, sid, NullStr(sha), t, t) {
+		return // a sighting already known (again, or two photos within one second)
+	}
 	var prev, next photoRow
 	hasPrev := a.Row("SELECT id, sha256, last_seen, removed_at"+where+"AND first_seen <= ? ORDER BY first_seen DESC, id DESC LIMIT 1",
 		[]any{id, sid, t}, &prev.id, &prev.sha, &prev.last, &prev.removed)
