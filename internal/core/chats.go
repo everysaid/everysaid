@@ -1107,18 +1107,21 @@ func GetChat(s *Store, chatID string) M {
 	ppl := PeopleOf(s)
 	if c.Type == "person" {
 		out["person"] = Person(s, c.PersonID)
-		// each conversation with their handle on it, the last active first: where a message may go
-		// when they have more than one handle on a service
+		// each conversation with their handle on it (and the name it goes by), the last active
+		// first: where a message may go when they have more than one handle on a service
 		accounts := []M{}
 		if len(convs) > 0 {
-			db.Each(q, "SELECT c.id, c.service_id, cm.address_id, (SELECT max(ts) FROM message WHERE conversation_id = c.id) "+
+			db.Each(q, "SELECT c.id, c.service_id, cm.address_id, k.name, a.value, (SELECT max(ts) FROM message WHERE conversation_id = c.id) "+
 				"FROM conversation c JOIN conversation_member cm ON cm.conversation_id = c.id "+
-				"WHERE c.id IN ("+db.Marks(len(convs))+") ORDER BY 4 DESC, c.id", db.Args(convs), func(scan func(...any)) {
+				"JOIN address a ON a.id = cm.address_id JOIN address_kind k ON k.id = a.kind_id "+
+				"WHERE c.id IN ("+db.Marks(len(convs))+") ORDER BY 6 DESC, c.id", db.Args(convs), func(scan func(...any)) {
 				var id, sid, a int64
+				var kind, value string
 				var last sql.NullInt64
-				scan(&id, &sid, &a, &last)
+				scan(&id, &sid, &a, &kind, &value, &last)
 				if !ppl.OwnAddresses[a] {
-					accounts = append(accounts, M{"conversation_id": id, "service": lk.Service[sid], "address_id": a, "last_ts": nullInt(last)})
+					accounts = append(accounts, M{"conversation_id": id, "service": lk.Service[sid], "address_id": a,
+						"name": nullable(ppl.NameOfHandle(a)), "handle": Pretty(kind, value), "last_ts": nullInt(last)})
 				}
 			})
 		}
@@ -1126,14 +1129,19 @@ func GetChat(s *Store, chatID string) M {
 		return out
 	}
 	members := []M{}
-	db.Each(q, "SELECT cm.address_id, group_concat(c.service_id) FROM conversation_member cm "+
+	db.Each(q, "SELECT cm.address_id, group_concat(c.service_id), group_concat(c.id) FROM conversation_member cm "+
 		"JOIN conversation c ON c.id = cm.conversation_id WHERE cm.conversation_id IN ("+db.Marks(len(convs))+") "+
 		"GROUP BY cm.address_id", db.Args(convs), func(scan func(...any)) {
 		var a int64
-		var sids string
-		scan(&a, &sids)
+		var sids, cids string
+		scan(&a, &sids, &cids)
 		if ppl.OwnAddresses[a] {
 			return
+		}
+		in := []int64{} // the conversations they are in: whom a message to one of the groups may name
+		for _, x := range strings.Split(cids, ",") {
+			id, _ := strconv.ParseInt(x, 10, 64)
+			in = append(in, id)
 		}
 		set := map[string]bool{}
 		for _, x := range strings.Split(sids, ",") {
@@ -1149,9 +1157,11 @@ func GetChat(s *Store, chatID string) M {
 		if p, ok := ppl.PersonOf[a]; ok {
 			pid = p
 		}
-		members = append(members, M{"person_id": pid, "name": ppl.NameOfAddress(a), "address_id": a, "services": services})
+		members = append(members, M{"person_id": pid, "name": ppl.NameOfAddress(a), "address_id": a, "services": services,
+			"conversations": in})
 	})
 	out["members"] = members
+	accounts := []M{}
 	if c.Type == "group" { // the groups it is made of (more than one when the user merged them)
 		groups := []M{}
 		db.Each(q, "SELECT c.id, c.service_id, c.title, count(m.id), min(m.ts), max(m.ts) FROM conversation c "+
@@ -1163,9 +1173,13 @@ func GetChat(s *Store, chatID string) M {
 			scan(&id, &sid, &title, &n, &first, &last)
 			groups = append(groups, M{"conversation_id": id, "service": lk.Service[sid], "title": nullString(title),
 				"messages": n, "first_ts": nullInt(first), "last_ts": nullInt(last)})
+			// as a person's handles: where a message may go when more than one is on a service, by its name
+			accounts = append(accounts, M{"conversation_id": id, "service": lk.Service[sid], "address_id": nil,
+				"name": ChatTitle(s, &Chat{Type: "group", ConversationID: id, Title: &title.String}), "handle": nil, "last_ts": nullInt(last)})
 		})
 		out["groups"] = groups
 	}
+	out["accounts"] = accounts
 	return out
 }
 

@@ -357,6 +357,21 @@ func (p *People) NameOfAddress(aid any) any {
 	return p.Name(pid)
 }
 
+// NameOfHandle is the name one handle of theirs goes by (a contact that lists it, a name a service
+// showed for it), in the order names are chosen; "" when it has none.
+func (p *People) NameOfHandle(aid int64) string {
+	pid, found := p.PersonOf[aid]
+	if !found {
+		return ""
+	}
+	for _, where := range p.Order {
+		if n := pick(p.candidates(pid, where, aid, true)); n != "" {
+			return n
+		}
+	}
+	return ""
+}
+
 // NameOf is the name of the person who has the address id, "" when there is none.
 func (p *People) NameOf(aid int64) string {
 	pid, found := p.PersonOf[aid]
