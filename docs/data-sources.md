@@ -31,6 +31,7 @@ Contents:
 12. [Incremental behaviour, summarised](#12-incremental-behaviour-summarised)
 13. [Known gaps, pitfalls and inconsistencies](#13-known-gaps-pitfalls-and-inconsistencies)
 14. [Files, permissions, caches](#14-files-permissions-caches)
+15. [Signal: the client's commands and events](#15-signal-the-clients-commands-and-events)
 
 ---
 
@@ -1262,6 +1263,8 @@ their own.) The photo-library work is done in the app's media view, or with the 
 | `<data>/whatsapp-bridge/` | the WhatsApp store: `messages.db`, `media/` (the session's keys are in `<data>/keys.db`) | the folder's | yes |
 | `<cache>/viber/<instance>/desktop.db` | Viber Desktop snapshot | 700/600 | no: made again by the bridge |
 | `<cache>/telegram/` | `media/` (`telegram-sync`); its store is in `<data>/keys.db` (`telegram_*`) | 700/600 | no: read again from the API |
+| `<data>/keys.db` (`signalmeow_*`, `signal_device`, `signal_*`) | Signal's devices (their keys, contacts, groups) and what each received until imported | 600 | yes, with the data folder (encrypted) |
+| `<cache>/signal/<instance>/media/` | the files Signal's client fetched, until the import takes them into the archive's media | 700/600 | no: in the archive once imported |
 | `<data>/media/` | the archive's media until they go to the photo library (`[media] store`) | 700/600 | yes, with the data folder: some exist nowhere else |
 | `<data>/archive.db` | the archive | 600 | yes, with the data folder |
 | `<config>/config.toml` | settings (README, "Folders and configuration") | the user's | yes |
@@ -1282,3 +1285,112 @@ The rule is:
 - `<data>` holds what cannot be rebuilt, or would cost hours to remake: the archive and its media,
   the backups and exports, the live sources' stores, the model answers and the user's decisions.
   The user's backups should cover it.
+
+## 15. Signal: the client's commands and events
+
+The `signal` source (`internal/signal`) speaks to its client (`client.go`: signalmeow in the
+process, built with the tag `signal`) in the words of the protocol its earlier helper program spoke
+over a pipe (presage, in Rust; gone): commands with their fields, answered in JSON, and events,
+JSON objects named by `event`, handed to the plugin one at a time and in order. The plugin keeps
+each event in the store (`store.go`), and the importer (`import.go`) reads the store into the
+archive. What Signal sends is acknowledged to its server only once the event is kept: signalmeow
+leaves an envelope whose handler failed unacknowledged, the server sends it again, and signalmeow's
+buffer of decrypted envelopes gives it again without decrypting twice.
+
+**The device.** Linking (`link`) is Signal's provisioning as a secondary device, with the phone
+offered the transfer of its history. signalmeow keeps the device in `keys.db` (`signalmeow_device`
+and the tables of its keys, sessions, contacts and groups, `signalmeow_*`, upgraded by signalmeow
+itself); `signal_device` (instance, ACI, name) names each plugin instance's. Unlinking from the app
+imports the store, then removes the device's rows (cascading) and the instance's store rows; the
+phone may still list the device until it is removed there.
+
+**The store** (`keys.db`, tables `signal_*`, each row of an instance): `signal_account`,
+`signal_contact`, `signal_pni` (a PNI's number and ACI, as Signal told them), `signal_group` and
+`signal_group_member`, `signal_message` (each message's event whole, by author and sent time),
+`signal_edit`, `signal_deletion`, `signal_reaction` (the latest of each person), `signal_receipt`,
+`signal_read`, `signal_call`, `signal_poll_vote`, `signal_unreadable`, `signal_chat_state` (a
+chat's archived, pinned, muted), and the bookkeeping of files fetched again (`signal_late_file`,
+`signal_fetch_try`, `signal_fetch_at`). After each import, a message the archive has that came over
+30 days ago (by when it came, not when it was sent: the history transferred at link time is old;
+its files are asked again for as long) leaves the store with what was about it alone (its deletion,
+votes, its edits' content: their times stay, so that what is aimed at an edit still finds the
+message); reactions, receipts and reads as old whose message left go too, and calls and notes as
+old. A chat the user left out of the import stays whole.
+
+**The history transferred at link time.** Once connected, the client waits (up to an hour, as
+signalmeow does) for the archive the phone uploads when its user agrees to transfer the history;
+signalmeow downloads, checks and decrypts it into `signalmeow_backup_*`, and the client says it as
+events (`transfer.go`): the people (their ids and names) and groups, each chat's state, and each
+chat item as a message (its earlier versions as edits), with its reactions, the others' receipts,
+the owner's reading, a poll's votes, a deletion for everyone, and the calls of the call log. Files
+come where Signal's transit CDN still has them. Once the events are kept the tables are cleared; a
+transfer a stopped client had not finished is finished at the next connection.
+
+**The chats' state.** At each connection, and when the phone says its storage changed, the client
+reads Signal's storage service (the account's master key comes at link time): each contact's and
+group's archived and muted state, the pinned chats, and each contact's ids (ACI, PNI, number) and
+names.
+
+**Ids.** A person's chat is keyed by their ACI, or by their PNI (`PNI:<uuid>`, the id of a phone
+number) for someone written to only by number. What ties a PNI to its person comes only from
+Signal: the phone's copy of a message it sent to a number (`destinationE164`), a reply signed with
+the PNI (`PniSignatureMessage`, signalmeow's `ACIFound`), the storage service's contact records,
+the transfer archive's recipients, and contact discovery (`discover`).
+
+### Commands
+
+| `cmd` | fields | result |
+|---|---|---|
+| `open`, `status` | | `{open, linked, receiving, aci, pni, phone, device_id, device_name}` |
+| `link` | `device_name` (default "Everysaid") | a `link_url` event, then (once scanned) status; `already_linked` where linked |
+| `sync` | | asks the phone for its contacts: `{requested: true}`; they come as a `contacts` event |
+| `contacts` | | `{contacts: [{aci, phone, name, profile_name}]}` |
+| `groups` | | `{groups: [{id, title, description, revision, members, pending}]}` |
+| `receive` | `download` (default true: fetch files) | `{started}`; then events until the client ends |
+| `send` | `chat`, `text`, `quote`, `mentions`, `attachments` | `{ts}`; and a `message` event of what was sent |
+| `react` | `chat`, `target: {author, ts}`, `emoji`, `remove` | the owner's reaction (`remove` with the emoji that was there takes it back): `{ts}`; and a `reaction` event |
+| `edit` | `chat`, `target_ts` (the newest version), `original_ts` (the first), `text` | a new text, the files and quote kept from the store's copy: `{ts}`; and an `edit` event |
+| `delete` | `chat`, `target_ts` | deleted for everyone: `{ts}`; and a `delete` event |
+| `mark_read` | `messages: [{author, ts}]`, `receipts` (default true) | a read sync to the phone always, read receipts to each author where `receipts`: `{marked}` |
+| `fetch` | `messages: [{author, ts}]` | the files of these messages (in the store) fetched again, each message said again: `{found}` |
+| `discover` | `numbers` (E.164) | `{found: [{number, aci, pni}]}` (Signal's contact discovery); each also an `ids` event |
+| `history` | `since` (Unix ms) | `{events: [...]}`: the transfer archive's events not yet taken in |
+| `quit` | | `{}`, then it ends |
+
+A `chat` is `{"kind": "contact", "id": "<ACI or PNI:...>"}` or `{"kind": "group", "id": "<group
+id>"}`, the base64 identifier Signal's apps show, never the master key. A `quote` is `{ts, author,
+text}`; `mentions` are `[{start, length, aci}]` in UTF-16 units, each over a U+FFFC in the text;
+`attachments` are `[{path, content_type, filename, voice}]`. Refusals have a code: `bad_request`,
+`not_linked`, `already_linked`, `unknown_group`, `failed` (Signal's own error).
+
+### Events
+
+Every message-like event has `chat`, `sender` (an ACI; the account's own for what the owner sent
+from any device), `sender_device`, `outgoing`, `ts` (when it was sent, Unix ms: with the author,
+Signal's name for a message) and `server_ts`.
+
+| `event` | fields |
+|---|---|
+| `link_url` | `url` (`sgnl://linkdevice?...`: drawn as a QR code for the phone) |
+| `queue_empty` | what waited on the server has all come |
+| `contacts` | `contacts`, as the `contacts` command (after the phone sent them) |
+| `contact` | `aci, phone, name, profile_name`: someone seen in a message (their profile), or in the storage service or the transfer |
+| `ids` | `aci`, `pni`, `phone` (each may be null): one person's ids as Signal told them (see Ids above) |
+| `group` | as one of `groups`, before the first message of a group at a new revision |
+| `message` | `text` (a long message's whole text, `long_text`), `mentions`, `quote`, `attachments` (`content_type, filename, size, width, height, caption, voice, gif, borderless, sticker, emoji, file` or `error`, and `pointer`: where Signal keeps the file and its key), `contacts`, `previews`, `poll`, `group_change`, `group_changes` (`{editor, actions}`), `group_revision`, `group_call`, `expire_timer_update`, `expire_timer`, `forwarded`, `view_once`, `pin`, `unpin`, `poll_end`, `payment`, `gift`, `story_reply`, `story_reaction`, `unsupported` |
+| `poll_vote` | `target_author`, `target_ts`, `options`, `vote_count` |
+| `edit` | `target_ts` and the message's new fields |
+| `delete` | `target_author`, `target_ts`; `admin` for a group admin's deletion, kept only when the sender is an admin of the group |
+| `reaction` | `emoji`, `remove`, `target_author`, `target_ts` |
+| `receipt` | `sender`, `kind` (`delivery`, `read`, `viewed`), `timestamps` (the owner's messages) |
+| `read` | `messages: [{author, ts}]`: the owner read them on another device |
+| `call` | `id`; from a call message: `action` (`offer`, `answer`, `busy`, `hangup`), `video`, `hangup` (how); from the phone's call log or the transfer (`source: "sync"`): `type`, `direction`, `result` |
+| `chat_state` | `chat`, `state` (`archived`, `pinned`: 0/1; `muted`: until, Unix ms, -1 for ever, 0 not), `ts` |
+| `transfer` | `messages` (how many came), or `error`: the history the phone transferred |
+| `decryption_error` | `sender`: they could not decrypt a message sent from here (signalmeow sends it again) |
+| `unreadable` | `sender`, `device`, `ts`, `chat`, `retry`, `resendable`: a message from them could not be decrypted here (the sender was asked to send it again); not said of what was not to be shown |
+| `number_changed` | `phone`: the account's number (its PNI) is no longer the one this device was linked with; checked once a connection |
+| `receive_ended` | `error`, `code`: `unlinked` (Signal refused this device: removed from the phone), `outdated` (HTTP 499: this version is too old), `stopped` (the client ended) |
+
+Typing, stories and Signal's own housekeeping messages are not passed on. Calls are seen as their
+signalling and the phone's call log, never answered or placed.

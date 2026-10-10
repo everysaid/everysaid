@@ -35,7 +35,7 @@ history); nothing in the tracked documentation depends on it.
 | Live Viber through Viber Desktop (Linux): history, arriving, sending | working (`bridges/viber/`, `internal/viber`) |
 | Telegram through its API | working (`everysaid telegram-sync`) |
 | WhatsApp through a whatsmeow client linked as a device (the `whatsapp-bridge` source) | working (`internal/whatsapp`) |
-| Signal through a helper linked as a device | working (`bridges/signal/`, `internal/signal`) |
+| Signal through a signalmeow client linked as a device, with the history the phone transfers at link time | working (`internal/signal`, built with `-tags signal`) |
 | Meta's export (Download your information) of Messenger and Instagram | working (`internal/importers/meta_export.go`; the `messenger` and `instagram` sources, `everysaid import messenger instagram`) |
 | Messenger and Instagram live, through mautrix-meta's clients linked in, logged in with the browser's cookies | written, tested on fakes only (`internal/meta`, `third_party/mautrix-meta`) |
 | Unified archive, deduplicated across sources | working (`everysaid import`, `internal/importers`) |
@@ -63,7 +63,7 @@ Linux the XDG folders, so `XDG_DATA_HOME` and the like move them):
 
 | Folder | Linux | Holds |
 |---|---|---|
-| data | `~/.local/share/everysaid` | what cannot be made again: `archive.db`, `server.db`, the archive's media, the iPhone backups, the Android exports, the WhatsApp and Signal stores |
+| data | `~/.local/share/everysaid` | what cannot be made again: `archive.db`, `server.db`, the archive's media, the iPhone backups, the Android exports, the WhatsApp store, `keys.db` (the live services' keys) |
 | cache | `~/.cache/everysaid` | what can: the iPhone's extracts, `telegram/`, thumbnails, avatars |
 | config | `~/.config/everysaid` | `config.toml`, and the secrets' files where there is no keyring |
 | state | `~/.local/state/everysaid` | `logs/`: the server's and each plugin's |
@@ -86,6 +86,8 @@ own (users, passkeys, sessions, push subscriptions, audit; mode 600).
 <data>/whatsapp-bridge/                   the WhatsApp source's store (default; [whatsapp] bridge)
 <data>/keys.db (meta_*)                   Messenger's and Instagram's sessions (cookies), what they learned of threads, files still to download
 <cache>/meta/<instance>/media/            their downloads, until the store takes them
+<data>/keys.db (signalmeow_*, signal_*)   Signal's device (its keys), and what it received until imported
+<cache>/signal/<instance>/media/          the files it fetched, until imported
 ```
 
 (The archive's media are in the data folder, not the cache: some exist nowhere else once their source
@@ -325,11 +327,16 @@ account blocked by WhatsApp; sending raises that risk.
 
 ### Signal: linked as a device
 
-The `signal` source (`internal/signal`) runs a helper, `everysaid-signal` (`bridges/signal/`, Rust
-on presage and libsignal, AGPL-3.0, a program of its own spoken to in JSON lines), linked to the
-account as a secondary device. Its keys are kept encrypted in `<data>/signal/<instance>/`; what it
-receives goes to `<cache>/signal/<instance>/` and from there into the archive. Only what arrives
-after the link can be had.
+The `signal` source (`internal/signal`) is a client inside the app, mautrix-signal's signalmeow on
+Signal's libsignal (AGPL-3.0, as Everysaid; built in with the tag `signal`, `docs/go.md`), linked
+to the account as a secondary device (like Signal Desktop) by a QR code. The device's keys are in
+`keys.db` (signalmeow's tables `signalmeow_*`); what it receives goes to the store there (tables
+`signal_*`), its files to `<cache>/signal/<instance>/media/`, and from there into the archive, a
+message leaving the store once the archive has had it for 30 days. Besides what arrives after the
+link, it takes the history the phone offers to transfer when it links it (Signal's "transfer
+message history": the chats with their messages, edits, reactions, receipts and calls; files only
+where Signal's server still has them), and the chats' state on the phone (archived, pinned, muted)
+from Signal's storage service. `docs/data-sources.md`, section 15, has its commands and events.
 
 ### Messenger and Instagram
 

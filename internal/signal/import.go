@@ -1,7 +1,8 @@
 package signal
 
 // New (the Python never had Signal); written as the importers of everysaid/telegram.py and
-// whatsapp.py are. Imports signal.db into the archive, service "signal".
+// whatsapp.py are. Imports the store (store.go: keys.db's signal_ tables) into the archive, service
+// "signal".
 //
 // A chat's conversation is keyed by Signal's own id: the other person's ACI (their PNI, the id of
 // their number, for someone the owner wrote to only by number), or the group's id.
@@ -9,17 +10,17 @@ package signal
 // source) is "<author ACI>:<sent ms>"; a reply's, its quote's. People are stored by phone number
 // where Signal shows it (so they meet the same person on other services), else by their ACI (an
 // `id` within the service); the ACI then joins the same person. A PNI is its number's, or its
-// ACI's, where Signal told them (the `pni` table), at every import: a chat kept under it before
-// joins the person then. The owner's ACI is an account.
+// ACI's, where Signal told them (the `signal_pni` table), at every import: a chat kept under it
+// before joins the person then. The owner's ACI is an account.
 // What changed on messages the archive has (edits: the text as last edited, marked so; deletions:
 // marked, the text stays; reactions: as they are now), receipts of the owner's messages, how far the
-// owner read each chat (on any device) and the calls the phone or the others reported are brought
-// too, and the files the helper fetched go to the media store.
+// owner read each chat (on any device), each chat's state on the phone (archived, pinned, muted) and
+// the calls the phone or the others reported are brought too, and the files the client fetched go
+// to the media store (taken from its folder).
 
 import (
 	"cmp"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -73,17 +74,17 @@ type people struct {
 // pniRow is what Signal told of a PNI: the number it is the id of, the ACI it belongs to.
 type pniRow struct{ phone, aci string }
 
-func loadPeople(d db.Querier) *people {
+func loadPeople(s *Store) *people {
 	p := &people{contacts: map[string]contactRow{}, pnis: map[string]pniRow{}, pniOf: map[string]string{}}
-	db.Each(d, "SELECT aci, coalesce(phone, ''), coalesce(name, ''), coalesce(profile_name, ''), seen_at FROM contact",
-		nil, func(scan func(...any)) {
-			var aci string
-			var c contactRow
-			scan(&aci, &c.phone, &c.name, &c.profile, &c.seen)
-			p.contacts[aci] = c
-		})
-	if db.Exists(d, "SELECT 1 FROM sqlite_master WHERE name = 'pni'") { // a signal.db from before it
-		db.Each(d, "SELECT pni, coalesce(phone, ''), coalesce(aci, '') FROM pni ORDER BY pni", nil, func(scan func(...any)) {
+	db.Each(s.DB, "SELECT aci, coalesce(phone, ''), coalesce(name, ''), coalesce(profile_name, ''), seen_at FROM signal_contact "+
+		"WHERE instance = ?", []any{s.Instance}, func(scan func(...any)) {
+		var aci string
+		var c contactRow
+		scan(&aci, &c.phone, &c.name, &c.profile, &c.seen)
+		p.contacts[aci] = c
+	})
+	db.Each(s.DB, "SELECT pni, coalesce(phone, ''), coalesce(aci, '') FROM signal_pni WHERE instance = ? ORDER BY pni",
+		[]any{s.Instance}, func(scan func(...any)) {
 			var pni string
 			var r pniRow
 			scan(&pni, &r.phone, &r.aci)
@@ -92,7 +93,6 @@ func loadPeople(d db.Querier) *people {
 				p.pniOf[r.aci] = pni
 			}
 		})
-	}
 	return p
 }
 
@@ -433,24 +433,19 @@ type msgRow struct {
 	js             string
 }
 
-// Import brings signal.db (at dbPath, its files in mediaDir) into the archive, for the plugin
-// instance iid; skip: chats not to import (the user's choice), what is in the archive stays.
-func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[string]bool) (n Counts, err error) {
+// Import brings the store (its files in mediaDir, taken from there into the archive's store) into
+// the archive, for the plugin instance iid (0: none); skip: chats not to import (the user's choice),
+// what is in the archive stays. The messages the archive has that are old enough then leave the
+// store (Store.Prune).
+func Import(a *archive.Archive, s *Store, mediaDir string, iid int64, skip map[string]bool) (n Counts, err error) {
 	defer archive.Recover(&err)
-	if _, err := os.Stat(dbPath); err != nil {
-		return n, nil
-	}
-	d, err := db.ReadOnly(dbPath)
-	if err != nil {
-		return n, err
-	}
-	defer d.Close()
-	own := db.Str(d, "SELECT value FROM account WHERE key = 'aci'")
+	d, in := s.DB, s.Instance
+	own := s.Own()
 	if own == "" {
 		return n, nil // not linked yet: nothing it could have
 	}
-	p := loadPeople(d)
-	src := a.Source(SourceName(own), dbPath, Service, mediaDir)
+	p := loadPeople(s)
+	src := a.Source(SourceName(own), s.Path, Service, mediaDir)
 	if iid != 0 {
 		a.Exec("UPDATE source SET instance_id = ? WHERE id = ? AND instance_id IS NULL", iid, src)
 	}
@@ -466,12 +461,12 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 	}
 
 	titles, members := map[string]string{}, map[string][]string{}
-	db.Each(d, "SELECT id, coalesce(title, '') FROM grp", nil, func(scan func(...any)) {
+	db.Each(d, "SELECT id, coalesce(title, '') FROM signal_group WHERE instance = ?", []any{in}, func(scan func(...any)) {
 		var id, t string
 		scan(&id, &t)
 		titles[id] = t
 	})
-	db.Each(d, "SELECT group_id, aci FROM group_member ORDER BY group_id, aci", nil, func(scan func(...any)) {
+	db.Each(d, "SELECT group_id, aci FROM signal_group_member WHERE instance = ? ORDER BY group_id, aci", []any{in}, func(scan func(...any)) {
 		var g, aci string
 		scan(&g, &aci)
 		members[g] = append(members[g], aci)
@@ -517,7 +512,7 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 		js         string
 	}
 	var editRows []editRow
-	db.Each(d, "SELECT author, target_ts, ts, json FROM edit ORDER BY ts", nil, func(scan func(...any)) {
+	db.Each(d, "SELECT author, target_ts, ts, json FROM signal_edit WHERE instance = ? ORDER BY ts", []any{in}, func(scan func(...any)) {
 		var r editRow
 		scan(&r.author, &r.target, &r.ts, &r.js)
 		editRows = append(editRows, r)
@@ -542,32 +537,40 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 	for _, r := range editRows {
 		edits[root(Key(r.author, r.target))] = r.js
 	}
+	for k, js := range edits {
+		if js == "" { // its message left the store, the archive having had it for a while: nothing to do
+			delete(edits, k)
+		}
+	}
 	deleted := map[string]bool{}
-	for _, k := range db.Strs(d, "SELECT author || ':' || ts FROM deletion") {
+	for _, k := range db.Strs(d, "SELECT author || ':' || ts FROM signal_deletion WHERE instance = ?", in) {
 		deleted[root(k)] = true
 	}
 
 	var rows []msgRow
-	db.Each(d, "SELECT author, ts, chat_kind, chat, outgoing, json FROM message ORDER BY ts, author", nil,
-		func(scan func(...any)) {
+	db.Each(d, "SELECT author, ts, chat_kind, chat, outgoing, json FROM signal_message WHERE instance = ? ORDER BY ts, author",
+		[]any{in}, func(scan func(...any)) {
 			var r msgRow
 			scan(&r.author, &r.ts, &r.chatKind, &r.chat, &r.outgoing, &r.js)
 			rows = append(rows, r)
 		})
 	files := importers.NewStore(a)
+	files.Move = true // downloaded into the archive's store: kept there only
 	linkFiles := func(mid int64, atts []attachmentEv) {
 		for _, at := range atts {
 			f := deref(at.File)
 			if f == "" || f != filepath.Base(f) || f == "." || f == ".." {
-				continue // only files within the helper's folder
+				continue // only files within the client's folder
 			}
 			files.LinkNamed(SourceName(own), src, filepath.Join(mediaDir, f), f, mid, deref(at.Filename))
 		}
 	}
+	var imported []ref // the messages the archive has (each of them, once this import is committed)
 	for _, r := range rows {
 		if skip[r.chat] {
 			continue
 		}
+		imported = append(imported, ref{r.author, r.ts})
 		cid := conv(r.chatKind, r.chat)
 		if !r.outgoing && r.chatKind == "group" && r.author != own { // a group's members: whoever wrote there too
 			if h := p.handle(r.author); !ownSet[h] {
@@ -620,24 +623,24 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 	}
 	// messages that could not be decrypted and that their sender did not send again within a day: a
 	// note where they were (the owner's own, from another device, have no chat known)
-	db.Each(d, "SELECT u.author, u.ts, u.chat_kind, u.chat FROM unreadable u WHERE u.at < ? AND u.author != ? "+
-		"AND NOT EXISTS (SELECT 1 FROM message m WHERE m.author = u.author AND m.ts = u.ts) ORDER BY u.ts, u.author",
-		[]any{time.Now().Add(-24 * time.Hour).Unix(), own}, func(scan func(...any)) {
-			var r msgRow
-			scan(&r.author, &r.ts, &r.chatKind, &r.chat)
-			key := "unreadable:" + Key(r.author, r.ts)
-			if skip[r.chat] || a.HasOrigin(src, key, "") {
-				return
-			}
-			a.AddMessage(src, key, archive.Message{Service: Service, ConversationID: conv(r.chatKind, r.chat), TS: r.ts,
-				SenderID: a.Address(p.handle(r.author)), Kind: "system", Key: key,
-				Extras: &archive.Extras{Subtype: "notice", SubtypeCode: "signal:unreadable",
-					Notice: &archive.Notice{Code: "unreadable", Args: map[string]any{"by": p.person(a, r.author, own)}}}})
-			n.Messages++
-		})
+	db.Each(d, "SELECT u.author, u.ts, u.chat_kind, u.chat FROM signal_unreadable u WHERE u.instance = ? AND u.at < ? AND u.author != ? "+
+		"AND NOT EXISTS (SELECT 1 FROM signal_message m WHERE m.instance = u.instance AND m.author = u.author AND m.ts = u.ts) "+
+		"ORDER BY u.ts, u.author", []any{in, time.Now().Add(-24 * time.Hour).Unix(), own}, func(scan func(...any)) {
+		var r msgRow
+		scan(&r.author, &r.ts, &r.chatKind, &r.chat)
+		key := "unreadable:" + Key(r.author, r.ts)
+		if skip[r.chat] || a.HasOrigin(src, key, "") {
+			return
+		}
+		a.AddMessage(src, key, archive.Message{Service: Service, ConversationID: conv(r.chatKind, r.chat), TS: r.ts,
+			SenderID: a.Address(p.handle(r.author)), Kind: "system", Key: key,
+			Extras: &archive.Extras{Subtype: "notice", SubtypeCode: "signal:unreadable",
+				Notice: &archive.Notice{Code: "unreadable", Args: map[string]any{"by": p.person(a, r.author, own)}}}})
+		n.Messages++
+	})
 	// polls with their votes as they are now
 	votes := map[string][][]int64{}
-	db.Each(d, "SELECT target_author, target_ts, options FROM poll_vote ORDER BY voter", nil, func(scan func(...any)) {
+	db.Each(d, "SELECT target_author, target_ts, options FROM signal_poll_vote WHERE instance = ? ORDER BY voter", []any{in}, func(scan func(...any)) {
 		var author, opts string
 		var ts int64
 		scan(&author, &ts, &opts)
@@ -676,8 +679,8 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 	}
 	// files (and a long message's whole text) that came after their message was imported (fetched
 	// again)
-	db.Each(d, "SELECT l.author, l.ts, m.json FROM late_file l JOIN message m ON m.author = l.author AND m.ts = l.ts "+
-		"ORDER BY l.ts, l.author", nil, func(scan func(...any)) {
+	db.Each(d, "SELECT l.author, l.ts, m.json FROM signal_late_file l JOIN signal_message m ON m.instance = l.instance AND "+
+		"m.author = l.author AND m.ts = l.ts WHERE l.instance = ? ORDER BY l.ts, l.author", []any{in}, func(scan func(...any)) {
 		var r msgRow
 		scan(&r.author, &r.ts, &r.js)
 		mid, ok := a.MessageByKey(Service, Key(r.author, r.ts), 0)
@@ -693,11 +696,12 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 		}
 	})
 
-	n.Changes += changes(a, d, p, own, ownSet, edits, deleted, root, linkFiles)
+	n.Changes += changes(a, s, p, own, ownSet, edits, deleted, root, linkFiles)
 	n.Files = files.Added[SourceName(own)]
-	receipts(a, d, p, own, ownSet, root)
-	reads(a, d, src)
-	n.Calls += calls(a, d, p, src, conv, skip)
+	receipts(a, s, p, own, ownSet, root)
+	reads(a, s, src, root)
+	chatStates(a, s, src, skip)
+	n.Calls += calls(a, s, p, src, conv, skip)
 
 	for _, aci := range ids { // the names Signal shows, for the handles in the archive
 		c, ok := p.contacts[aci]
@@ -717,13 +721,18 @@ func Import(a *archive.Archive, dbPath, mediaDir string, iid int64, skip map[str
 	importers.ApplyPins(a, Service)
 	a.Imported(src)
 	a.Commit()
+	files.Release()
+	if err := s.Prune(imported, skip); err != nil {
+		return n, err
+	}
 	return n, nil
 }
 
 // changes: what happened to messages the archive has: edits and deletions (marked), and reactions
 // as they are now (one per person: changed, added, or removed once taken back). It returns how many.
-func changes(a *archive.Archive, d db.Querier, p *people, own string, ownSet map[archive.Handle]bool,
+func changes(a *archive.Archive, s *Store, p *people, own string, ownSet map[archive.Handle]bool,
 	edits map[string]string, deleted map[string]bool, root func(string) string, linkFiles func(int64, []attachmentEv)) int {
+	d, in := s.DB, s.Instance
 	n := 0
 	var ek, dk []string
 	for k := range edits {
@@ -738,13 +747,15 @@ func changes(a *archive.Archive, d db.Querier, p *people, own string, ownSet map
 	// too), its files linked
 	for _, k := range ek {
 		mid, ok := a.MessageByKey(Service, k, 0)
-		author, ts, _ := SplitKey(k)
-		var js string
-		if !ok || !db.Row(d, "SELECT json FROM message WHERE author = ? AND ts = ?", []any{author, ts}, &js) {
+		if !ok {
 			continue
 		}
+		// the message as the store has it; one gone from the store (the archive has had it a while)
+		// is its edit alone
+		author, ts, _ := SplitKey(k)
+		js, _ := s.MessageJSON(author, ts)
 		var e event
-		if json.Unmarshal([]byte(js), &e) != nil || !asEdited(&e, edits[k]) {
+		if js != nil && json.Unmarshal(js, &e) != nil || !asEdited(&e, edits[k]) {
 			continue
 		}
 		_, x, text := describe(e)
@@ -775,18 +786,18 @@ func changes(a *archive.Archive, d db.Querier, p *people, own string, ownSet map
 	var targets []string
 	// in the order they were made: one person's reactions aimed at different times of an edited
 	// message are one, the newest last
-	db.Each(d, "SELECT target_author, target_ts, sender, emoji FROM reaction ORDER BY ts, target_author, target_ts, sender",
-		nil, func(scan func(...any)) {
-			var author, sender string
-			var ts int64
-			var emoji *string
-			scan(&author, &ts, &sender, &emoji)
-			k := root(Key(author, ts))
-			if _, ok := byTarget[k]; !ok {
-				targets = append(targets, k)
-			}
-			byTarget[k] = append(byTarget[k], reaction{sender, emoji})
-		})
+	db.Each(d, "SELECT target_author, target_ts, sender, emoji FROM signal_reaction WHERE instance = ? "+
+		"ORDER BY ts, target_author, target_ts, sender", []any{in}, func(scan func(...any)) {
+		var author, sender string
+		var ts int64
+		var emoji *string
+		scan(&author, &ts, &sender, &emoji)
+		k := root(Key(author, ts))
+		if _, ok := byTarget[k]; !ok {
+			targets = append(targets, k)
+		}
+		byTarget[k] = append(byTarget[k], reaction{sender, emoji})
+	})
 	for _, k := range targets {
 		mid, ok := a.MessageByKey(Service, k, 0)
 		if !ok {
@@ -830,38 +841,74 @@ func changes(a *archive.Archive, d db.Querier, p *people, own string, ownSet map
 var receiptColumn = map[string]string{"delivery": "delivered_at", "read": "read_at", "viewed": "played_at"}
 
 // receipts: who got, read and played the owner's messages, and when (the first time each).
-func receipts(a *archive.Archive, d db.Querier, p *people, own string, ownSet map[archive.Handle]bool, root func(string) string) {
-	db.Each(d, "SELECT ts, aci, kind, at FROM receipt ORDER BY ts, aci, kind", nil, func(scan func(...any)) {
-		var ts, at int64
-		var aci, kind string
-		scan(&ts, &aci, &kind, &at)
-		col, ok := receiptColumn[kind]
-		h := p.handle(aci)
-		if !ok || aci == own || ownSet[h] {
-			return
-		}
-		mid, found := a.MessageByKey(Service, root(Key(own, ts)), 0)
-		if !found {
-			return
-		}
-		aid := a.Address(h)
-		a.Exec("INSERT OR IGNORE INTO receipt (message_id, address_id) SELECT id, ? FROM message WHERE id = ? AND outgoing", aid, mid)
-		a.Exec("UPDATE receipt SET "+col+" = ? WHERE message_id = ? AND address_id = ? AND (coalesce("+col+", 0) = 0 OR ("+
-			col+" > ? AND ? > 0))", at, mid, aid, at, at)
-	})
+func receipts(a *archive.Archive, s *Store, p *people, own string, ownSet map[archive.Handle]bool, root func(string) string) {
+	db.Each(s.DB, "SELECT ts, aci, kind, at FROM signal_receipt WHERE instance = ? ORDER BY ts, aci, kind", []any{s.Instance},
+		func(scan func(...any)) {
+			var ts, at int64
+			var aci, kind string
+			scan(&ts, &aci, &kind, &at)
+			col, ok := receiptColumn[kind]
+			h := p.handle(aci)
+			if !ok || aci == own || ownSet[h] {
+				return
+			}
+			mid, found := a.MessageByKey(Service, root(Key(own, ts)), 0)
+			if !found {
+				return
+			}
+			aid := a.Address(h)
+			a.Exec("INSERT OR IGNORE INTO receipt (message_id, address_id) SELECT id, ? FROM message WHERE id = ? AND outgoing", aid, mid)
+			a.Exec("UPDATE receipt SET "+col+" = ? WHERE message_id = ? AND address_id = ? AND (coalesce("+col+", 0) = 0 OR ("+
+				col+" > ? AND ? > 0))", at, mid, aid, at, at)
+		})
 }
 
 // reads: how far the owner read each chat, on any device (the newest message read there, and when).
-func reads(a *archive.Archive, d db.Querier, src int64) {
-	db.Each(d, "SELECT m.chat, max(m.ts), max(r.at) FROM read r JOIN message m ON m.author = r.author AND m.ts = r.ts "+
-		"GROUP BY m.chat ORDER BY m.chat", nil, func(scan func(...any)) {
-		var chat string
-		var newest, when int64
-		scan(&chat, &newest, &when)
-		if cid, ok := a.FindConversation(Service, chat); ok {
-			a.ReportState(src, cid, "read_until", newest, when, when)
-		}
-	})
+// The messages are the archive's (one read late may have left the store already).
+func reads(a *archive.Archive, s *Store, src int64, root func(string) string) {
+	type mark struct{ newest, when int64 }
+	marks := map[int64]*mark{}
+	var convs []int64
+	db.Each(s.DB, "SELECT author, ts, at FROM signal_read WHERE instance = ? ORDER BY author, ts", []any{s.Instance},
+		func(scan func(...any)) {
+			var author string
+			var ts, at int64
+			scan(&author, &ts, &at)
+			mid, ok := a.MessageByKey(Service, root(Key(author, ts)), 0)
+			if !ok {
+				return
+			}
+			var cid, mts int64
+			if !a.Row("SELECT conversation_id, ts FROM message WHERE id = ?", []any{mid}, &cid, &mts) {
+				return
+			}
+			m := marks[cid]
+			if m == nil {
+				m = &mark{}
+				marks[cid] = m
+				convs = append(convs, cid)
+			}
+			m.newest, m.when = max(m.newest, mts), max(m.when, at)
+		})
+	for _, cid := range convs {
+		a.ReportState(src, cid, "read_until", marks[cid].newest, marks[cid].when, marks[cid].when)
+	}
+}
+
+// chatStates: each chat's state on the phone (archived, pinned, muted), as Signal last said it.
+func chatStates(a *archive.Archive, s *Store, src int64, skip map[string]bool) {
+	db.Each(s.DB, "SELECT chat, field, value, at FROM signal_chat_state WHERE instance = ? ORDER BY chat, field", []any{s.Instance},
+		func(scan func(...any)) {
+			var chat, field string
+			var value, at int64
+			scan(&chat, &field, &value, &at)
+			if skip[chat] {
+				return
+			}
+			if cid, ok := a.FindConversation(Service, chat); ok {
+				a.ReportState(src, cid, field, value, at, 0)
+			}
+		})
 }
 
 // callSettle: a call not yet ended nor reported by the phone is taken as over after this long.
@@ -869,7 +916,7 @@ const callSettle = 10 * time.Minute
 
 // calls: the calls as they ended (or as the phone reported them); a call already in the archive is
 // brought up to date. It returns how many are new.
-func calls(a *archive.Archive, d db.Querier, p *people, src int64, conv func(kind, chat string) int64, skip map[string]bool) int {
+func calls(a *archive.Archive, s *Store, p *people, src int64, conv func(kind, chat string) int64, skip map[string]bool) int {
 	n := 0
 	now := time.Now().UnixMilli()
 	type row struct {
@@ -879,12 +926,13 @@ func calls(a *archive.Archive, d db.Querier, p *people, src int64, conv func(kin
 		video                          bool
 	}
 	var rows []row
-	db.Each(d, "SELECT id, coalesce(chat_kind, ''), coalesce(chat, ''), ts, outgoing, video, accepted, coalesce(result, ''), "+
-		"coalesce(hangup, ''), ended_at FROM call WHERE chat IS NOT NULL ORDER BY ts, id", nil, func(scan func(...any)) {
-		var r row
-		scan(&r.id, &r.kind, &r.chat, &r.ts, &r.outgoing, &r.video, &r.accepted, &r.result, &r.hangup, &r.ended)
-		rows = append(rows, r)
-	})
+	db.Each(s.DB, "SELECT id, coalesce(chat_kind, ''), coalesce(chat, ''), ts, outgoing, video, accepted, coalesce(result, ''), "+
+		"coalesce(hangup, ''), ended_at FROM signal_call WHERE instance = ? AND chat IS NOT NULL ORDER BY ts, id",
+		[]any{s.Instance}, func(scan func(...any)) {
+			var r row
+			scan(&r.id, &r.kind, &r.chat, &r.ts, &r.outgoing, &r.video, &r.accepted, &r.result, &r.hangup, &r.ended)
+			rows = append(rows, r)
+		})
 	for _, r := range rows {
 		if skip[r.chat] || (r.result == "" && r.ended == nil && now-r.ts < callSettle.Milliseconds()) {
 			continue
@@ -933,37 +981,29 @@ func calls(a *archive.Archive, d db.Querier, p *people, src int64, conv func(kin
 	return n
 }
 
-// ChatList is the chats signal.db has, for the user's choice of what to import: [{id, kind, title,
+// ChatList is the chats the store has, for the user's choice of what to import: [{id, kind, title,
 // messages, first, last, import}].
-func ChatList(dbPath string, skip map[string]bool) (out []map[string]any, err error) {
+func ChatList(s *Store, skip map[string]bool) (out []map[string]any, err error) {
 	out = []map[string]any{}
-	if _, err := os.Stat(dbPath); err != nil {
-		return out, nil
-	}
-	d, err := db.ReadOnly(dbPath)
-	if err != nil {
-		return nil, err
-	}
-	defer d.Close()
 	defer db.Recover(&err)
-	p := loadPeople(d)
+	p := loadPeople(s)
 	titles := map[string]string{}
-	db.Each(d, "SELECT id, coalesce(title, '') FROM grp", nil, func(scan func(...any)) {
+	db.Each(s.DB, "SELECT id, coalesce(title, '') FROM signal_group WHERE instance = ?", []any{s.Instance}, func(scan func(...any)) {
 		var id, t string
 		scan(&id, &t)
 		titles[id] = t
 	})
-	db.Each(d, "SELECT chat_kind, chat, count(*), min(ts), max(ts) FROM message GROUP BY chat_kind, chat ORDER BY max(ts) DESC",
-		nil, func(scan func(...any)) {
-			var kind, chat string
-			var count, first, last int64
-			scan(&kind, &chat, &count, &first, &last)
-			title := titles[chat]
-			if kind != "group" {
-				title = p.mentionName(chat)
-			}
-			out = append(out, map[string]any{"id": chat, "kind": kind, "title": title, "messages": count,
-				"first": first, "last": last, "import": !skip[chat]})
-		})
+	db.Each(s.DB, "SELECT chat_kind, chat, count(*), min(ts), max(ts) FROM signal_message WHERE instance = ? "+
+		"GROUP BY chat_kind, chat ORDER BY max(ts) DESC", []any{s.Instance}, func(scan func(...any)) {
+		var kind, chat string
+		var count, first, last int64
+		scan(&kind, &chat, &count, &first, &last)
+		title := titles[chat]
+		if kind != "group" {
+			title = p.mentionName(chat)
+		}
+		out = append(out, map[string]any{"id": chat, "kind": kind, "title": title, "messages": count,
+			"first": first, "last": last, "import": !skip[chat]})
+	})
 	return out, nil
 }

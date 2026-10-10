@@ -28,7 +28,7 @@ the services themselves (it reads them; where a service allows, it also sends).
                 └──────────────────────────────────┬──────────────────────────┘
                                                     │
    iPhone backup · adb · Adium/Pidgin logs · Telegram API · WhatsApp (whatsmeow) · Messenger and
-   Instagram (messagix, instameow) · Viber Desktop (bridge) · Signal (helper) · CardDAV / .vcf ·
+   Instagram (messagix, instameow) · Viber Desktop (bridge) · Signal (signalmeow) · CardDAV / .vcf ·
    immich / folder · Ollama
 ```
 
@@ -111,9 +111,13 @@ The live sources:
 - **WhatsApp** (`internal/whatsapp`, whatsmeow): in the process, linked as a device by a QR code.
   Unofficial, so sending is a setting of the instance, off by default, with the risk to the account
   stated where it is turned on, and turned off by itself when WhatsApp warns the account.
-- **Signal** (`internal/signal`): a separate helper program, `everysaid-signal` (`bridges/signal`,
-  Rust, on presage, AGPL-3.0), started by the plugin and spoken to in JSON lines on its stdin and
-  stdout; none of its code is linked into `everysaid`.
+- **Signal** (`internal/signal`, signalmeow): in the process where Everysaid is built with the tag
+  `signal` (cgo to Signal's libsignal; `docs/go.md`), linked as a device by a QR code; without the
+  tag the source says Signal is not built in. The client answers the commands and says the events
+  the earlier helper program did (`docs/data-sources.md`, section 15), so the plugin's store and
+  importer are those of before; what Signal sends is acknowledged once the store kept it. At link
+  time it also takes the history the phone transfers, and it reads the chats' state from Signal's
+  storage service.
 - **Messenger and Instagram** (`internal/meta`): in the process, on mautrix-meta's client
   libraries (`third_party/mautrix-meta`: messagix, instameow), logged in with the browser's cookies
   (kept in `keys.db`). What the clients give (Messenger's Lightspeed tables, Instagram's changes)
@@ -455,14 +459,15 @@ given in the user's time zone.
 
 Linux first; macOS and Windows where the plugins' tools exist (each plugin says where it runs; the
 Viber bridge is Linux only). For users one static binary per system, built for Linux, macOS and
-Windows on amd64 or arm64 (`docs/go.md`), and, where Signal is wanted, its helper beside it.
+Windows on amd64 or arm64 (`docs/go.md`); Signal is built in on Linux and macOS (it needs libsignal
+built for the system, and cgo), not on Windows.
 
 ## 12. Where things are
 
 `internal/core/` (store, names, queries, changes, labels), `internal/archive/` (schema, writing),
 `internal/importers/`, `internal/plugins/` and the packages of the live sources
 (`internal/telegram`, `internal/whatsapp`, `internal/signal`, `internal/viber`, `internal/meta`),
-`third_party/` (client libraries taken in and patched), `bridges/` (the
-Signal helper, the Viber bridge), `internal/server/` (routes, auth, host, push, events),
+`third_party/` (client libraries taken in and patched: signalmeow, messagix, instameow), `bridges/`
+(the Viber bridge, the standalone WhatsApp bridge), `internal/server/` (routes, auth, host, push, events),
 `internal/mcp`, `internal/demo`, `cmd/everysaid` (the binary), `web/` (the PWA); tests beside the
 code they test, `internal/checks` over the whole code, and `web/e2e/`.

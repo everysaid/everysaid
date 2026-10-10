@@ -1,24 +1,21 @@
-// Package signal is the `signal` source: Signal through a helper program linked to the account as a
-// secondary device (like Signal Desktop).
+// Package signal is the `signal` source: Signal through a client inside Everysaid linked to the
+// account as a secondary device (like Signal Desktop).
 //
-// New: the Python never had Signal. The helper (bridges/signal, everysaid-signal) is written in
-// Rust on presage and libsignal, which are AGPL-3.0; it is a program of its own, spoken to in JSON
-// lines over its stdin and stdout, so that Everysaid's binary links no AGPL code. Its state (the
-// device's keys, what it received) is kept, encrypted with a passphrase this plugin makes and keeps
-// in the keyring, in `<data>/signal/<instance>/`; what it says goes to `<cache>/signal/<instance>/
-// signal.db` and the files it fetches to `media/` beside it, and from there into the archive
-// (import.go).
+// New: the Python never had Signal. The client (client.go) is mautrix-signal's signalmeow (Go, on
+// Signal's libsignal in Rust through cgo, both AGPL-3.0 as Everysaid is), built in with the tag
+// `signal` (docs/go.md); without it Everysaid has no Signal and says so. Its state (the device's
+// keys, signalmeow's own tables) is in keys.db, encrypted; what it says goes to the store (store.go,
+// keys.db's signal_ tables) and the files it fetches to `<cache>/signal/<instance>/media/`, and from
+// there into the archive (import.go).
 //
-// One helper runs per instance at a time (two connections of one device would share its
-// messages between them): the live connection's while it runs, else one started for the work at
-// hand (an import, a link, a message sent) and stopped after it.
+// One client runs per instance at a time (two connections of one device would share its messages
+// between them): the live connection's while it runs, else one made for the work at hand (an
+// import, a link, a message sent) and ended after it.
 package signal
 
 import (
 	"cmp"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -48,17 +45,16 @@ func init() { plugins.Register(Plugin{}) }
 func (Plugin) Info() *plugins.Info {
 	return &plugins.Info{
 		ID: "signal", Name: "Signal", Kind: "source",
-		Services:    []string{Service},
-		ServiceInfo: sourcekit.Looks(Service),
-		NameWeights: []plugins.Weight{{Key: "signal/book", Weight: 80}, {Key: "signal/profile", Weight: 30}},
-		Description: "Signal as it arrives, through a helper linked to the account as a device (like Signal " +
-			"Desktop): what arrives from the moment it is linked, not the history before it.",
+		Services:     []string{Service},
+		ServiceInfo:  sourcekit.Looks(Service),
+		NameWeights:  []plugins.Weight{{Key: "signal/book", Weight: 80}, {Key: "signal/profile", Weight: 30}},
+		StateWeights: map[string]int{"muted": 60, "pinned": 0},
+		Description: "Signal through a client inside Everysaid, linked to the account as a device (like Signal " +
+			"Desktop): what arrives from the moment it is linked, and the history the phone transfers when it links it.",
 		Modes:       []string{"import", "live"},
 		LiveDefault: true,
-		Needs:       []string{"the Signal helper (everysaid-signal)", "a link from the phone (a QR code)"},
+		Needs:       []string{"Everysaid built with Signal", "a link from the phone (a QR code)"},
 		Settings: []plugins.Setting{
-			{Key: "helper", Label: "The Signal helper (everysaid-signal)", Type: "path",
-				Help: "Empty: the one next to Everysaid, else the one on the PATH"},
 			{Key: "device_name", Label: "This device's name on the phone", Default: "Everysaid"},
 			{Key: "media", Label: "Download pictures, videos and files", Type: "bool", Default: true},
 			{Key: "read_receipts", Label: "Send read receipts", Type: "bool", Default: false,
@@ -77,46 +73,19 @@ func (Plugin) Info() *plugins.Info {
 	}
 }
 
-// StoreDir holds the helper's state (the device's keys): <data>/signal/<instance>.
-func StoreDir(c *plugins.Context) string {
-	return filepath.Join(config.Data, "signal", fmt.Sprint(c.ID))
-}
-
-// CacheDir holds signal.db and the files: <cache>/signal/<instance>.
+// CacheDir holds the files the client fetches: <cache>/signal/<instance>.
 func CacheDir(c *plugins.Context) string {
 	return filepath.Join(config.Cache, "signal", fmt.Sprint(c.ID))
 }
 
-func dbPath(c *plugins.Context) string   { return filepath.Join(CacheDir(c), "signal.db") }
 func mediaDir(c *plugins.Context) string { return filepath.Join(CacheDir(c), "media") }
 
-// passphrase is the helper's store's: made the first time, kept in the keyring (never shown). A
-// store already made is never given a new one (the keyring locked, or cleared): it would be lost.
-func passphrase(c *plugins.Context) (string, error) {
-	p, err := config.Secret(c.SecretName("passphrase"))
-	if err != nil {
-		return "", err
-	}
-	if p != "" {
-		return p, nil
-	}
-	if _, err := os.Stat(filepath.Join(StoreDir(c), "presage.db")); err == nil {
-		return "", errs.Plugin("The Signal helper's store cannot be opened with the passphrase in the keyring", 0)
-	}
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	p = hex.EncodeToString(b)
-	if _, err := c.SaveSecret("passphrase", p); err != nil {
-		return "", err
-	}
-	return p, nil
-}
+// notBuiltText says that this Everysaid was built without Signal.
+const notBuiltText = "This Everysaid was built without Signal (it needs the build tag “signal” and Signal's library, libsignal)"
 
 func (p Plugin) Check(c *plugins.Context) (bool, string) {
-	if FindHelper(c.Str("helper")) == "" {
-		return false, "missing: the Signal helper (everysaid-signal)"
+	if !available {
+		return false, "missing: Everysaid built with Signal"
 	}
 	return true, "ready"
 }
@@ -149,9 +118,23 @@ func (p Plugin) InfoFacts(c *plugins.Context) []plugins.Fact {
 	if phone, _ := c.State["phone"].(string); phone != "" {
 		facts = append(facts, plugins.Fact{Label: "Account", Value: phone})
 	}
-	if contacts, groups, ok := counts(dbPath(c)); ok && aci != "" {
-		facts = append(facts, plugins.Fact{Label: "Contacts", Value: fmt.Sprint(contacts)},
-			plugins.Fact{Label: "Groups", Value: fmt.Sprint(groups)})
+	if aci != "" {
+		k.mu.Lock()
+		live := k.live
+		k.mu.Unlock()
+		s, err := (*Store)(nil), error(nil)
+		if live != nil {
+			s = live.store
+		} else if s, err = OpenStore("", c.ID); err == nil {
+			defer s.Close()
+		}
+		if err == nil {
+			// (the live connection's store, closed if it ends meanwhile: then no counts)
+			if contacts, groups, err := s.Counts(); err == nil {
+				facts = append(facts, plugins.Fact{Label: "Contacts", Value: fmt.Sprint(contacts)},
+					plugins.Fact{Label: "Groups", Value: fmt.Sprint(groups)})
+			}
+		}
 	}
 	return facts
 }
@@ -163,16 +146,16 @@ func (p Plugin) IdleActions(c *plugins.Context) []string {
 	return []string{"sync", "unlink"}
 }
 
-// instance is what runs for a plugin instance: at most one helper at a time.
+// instance is what runs for a plugin instance: at most one client at a time.
 type instance struct {
-	run sync.Mutex // held by whoever runs the helper (the live connection, or one piece of work)
+	run sync.Mutex // held by whoever runs the client (the live connection, or one piece of work)
 
 	mu        sync.Mutex
 	live      *conn  // the live connection's, while it runs
-	status    Status // the helper's last word on its account
+	status    Status // the client's last word on its account
 	linkURL   string // a link waiting for the phone to scan it
-	linking   bool   // a link asked of the helper, not yet answered
-	unlinking bool   // "Unlink this computer" under way: no helper is started
+	linking   bool   // a link asked of the client, not yet answered
+	unlinking bool   // "Unlink this computer" under way: no client is started
 	phase     string // "", linking, syncing (receiving what waited on the server), ready
 	linked    chan struct{}
 }
@@ -186,23 +169,6 @@ func (k *instance) setPhase(c *plugins.Context, phase string) {
 	if changed {
 		c.Emit(M{"type": "changed"})
 	}
-}
-
-// counts are how many contacts and groups signal.db has (false: none yet).
-func counts(path string) (int64, int64, bool) {
-	if _, err := os.Stat(path); err != nil {
-		return 0, 0, false
-	}
-	d, err := db.ReadOnly(path)
-	if err != nil {
-		return 0, 0, false
-	}
-	defer d.Close()
-	var contacts, groups int64
-	if d.QueryRow("SELECT (SELECT count(*) FROM contact), (SELECT count(*) FROM grp)").Scan(&contacts, &groups) != nil {
-		return 0, 0, false
-	}
-	return contacts, groups, true
 }
 
 var (
@@ -221,9 +187,9 @@ func instanceOf(id int64) *instance {
 	return k
 }
 
-// conn is a running helper and what it feeds: signal.db, and the import after it.
+// conn is a running client and what it feeds: the store, and the import after it.
 type conn struct {
-	h     *Helper
+	h     transport
 	c     *plugins.Context
 	k     *instance
 	store *Store
@@ -236,37 +202,29 @@ type conn struct {
 	ended      chan string   // the receiving ended (why)
 }
 
-// open starts the helper, opens its store, and signal.db.
+// open makes the client and opens the store.
 func open(c *plugins.Context, k *instance) (*conn, error) {
-	path := FindHelper(c.Str("helper"))
-	if path == "" {
-		return nil, errs.Plugin("The Signal helper (everysaid-signal) is not installed: put it next to Everysaid or on the PATH", 0)
+	if !available {
+		return nil, errs.Plugin(notBuiltText, 0)
 	}
-	pass, err := passphrase(c)
-	if err != nil {
-		return nil, err
-	}
-	st, err := OpenStore(dbPath(c))
+	st, err := OpenStore("", c.ID)
 	if err != nil {
 		return nil, err
 	}
 	n := &conn{c: c, k: k, store: st, dirty: make(chan struct{}, 1), queueEmpty: make(chan struct{}, 1),
 		ended: make(chan string, 1)}
 	n.synced, _ = c.State["contacts_synced"].(bool)
-	n.h, err = StartHelper(path, n.event, func(line string) { c.Logf("[signal] %s", line) })
+	n.h, err = newClient(clientConfig{Instance: c.ID, Media: mediaDir(c), Download: c.Bool("media"), Store: st, Handle: n.event,
+		Logs: func(line string) { c.Logf("[signal] %s", line) }})
 	if err != nil {
 		st.Close()
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	raw, err := n.h.Call(ctx, "open", map[string]any{"store": StoreDir(c), "attachments": mediaDir(c), "passphrase": pass})
+	raw, err := n.h.Call(ctx, "open", nil)
 	if err != nil {
 		n.close()
-		var he *HelperError
-		if errors.As(err, &he) && he.Code == "locked" {
-			return nil, errs.Plugin("The Signal helper's store cannot be opened with the passphrase in the keyring", 0)
-		}
 		return nil, err
 	}
 	if err := n.setStatus(raw); err != nil {
@@ -282,7 +240,7 @@ func (n *conn) close() {
 	n.store.Close()
 }
 
-// setStatus keeps the helper's word on its account: in the instance, signal.db and its state.
+// setStatus keeps the client's word on its account: in the instance, the store and its state.
 func (n *conn) setStatus(raw json.RawMessage) error {
 	st, err := decodeStatus(raw)
 	if err != nil {
@@ -291,12 +249,19 @@ func (n *conn) setStatus(raw json.RawMessage) error {
 	n.k.mu.Lock()
 	n.k.status = st
 	n.k.mu.Unlock()
+	was, _ := n.c.State["aci"].(string)
+	switch {
+	case st.Linked && was != st.ACI:
+		n.c.SaveState(M{"aci": st.ACI, "phone": st.Phone})
+	case !st.Linked && was != "":
+		// the device of an earlier link is not there (that of Signal's earlier helper, or one whose
+		// keys are gone): this computer is to be linked again, as a new device
+		n.c.SaveState(M{"aci": "", "phone": "", "contacts_synced": false, "unlinked": false, "connected_at": nil})
+		n.synced = false
+	}
 	if st.Linked {
 		n.own = st.ACI
 		n.store.Account(st)
-		if was, _ := n.c.State["aci"].(string); was != st.ACI {
-			n.c.SaveState(M{"aci": st.ACI, "phone": st.Phone})
-		}
 	}
 	return nil
 }
@@ -308,8 +273,9 @@ func signal(ch chan struct{}) {
 	}
 }
 
-// event is one of the helper's events, as it comes.
-func (n *conn) event(name string, raw []byte) {
+// event is one of the client's events, as it comes. An error: it was not kept (what Signal sent
+// is then not acknowledged, and comes again).
+func (n *conn) event(name string, raw []byte) error {
 	switch name {
 	case "link_url":
 		var e struct {
@@ -335,24 +301,28 @@ func (n *conn) event(name string, raw []byte) {
 		}
 		// the phone sends its contacts by itself once linked; where they did not come, asked once
 		// (after the queue: Signal's apps send nothing before they have read what waited)
-		if !n.synced && !n.syncAsked {
-			n.syncAsked = true
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			if _, err := n.h.Call(ctx, "sync", nil); err == nil {
-				n.c.Log("Asked the phone for its contacts", nil)
+		ask := !n.synced && !n.syncAsked
+		n.syncAsked = n.syncAsked || ask
+		// not in this handler: the client waits for its events to be handled, and these go to Signal
+		go func() {
+			if ask {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				if _, err := n.h.Call(ctx, "sync", nil); err == nil {
+					n.c.Log("Asked the phone for its contacts", nil)
+				}
+				cancel()
 			}
-			cancel()
-		}
-		if n.c.Bool("media") {
-			n.fetchAgain()
-		}
-		signal(n.queueEmpty)
-		signal(n.dirty)
+			if n.c.Bool("media") {
+				n.fetchAgain()
+			}
+			signal(n.queueEmpty)
+			signal(n.dirty)
+		}()
 	case "contacts":
 		kept, err := n.store.Apply(raw)
 		if err != nil {
 			n.c.Log("error: {e}", map[string]any{"e": err})
-			return
+			return err
 		}
 		var e struct {
 			Contacts []any `json:"contacts"`
@@ -365,6 +335,17 @@ func (n *conn) event(name string, raw []byte) {
 		}
 		if kept {
 			signal(n.dirty)
+		}
+	case "transfer":
+		var e struct {
+			Messages int    `json:"messages"`
+			Error    string `json:"error"`
+		}
+		json.Unmarshal(raw, &e)
+		if e.Error != "" {
+			n.c.Log("The history from the phone did not come: {e}", map[string]any{"e": e.Error})
+		} else {
+			n.c.Log("History from the phone: {n} messages", map[string]any{"n": e.Messages})
 		}
 	case "receive_ended":
 		var e struct {
@@ -379,8 +360,8 @@ func (n *conn) event(name string, raw []byte) {
 			n.k.setPhase(n.c, "")
 		case "outdated":
 			n.c.Log(outdatedText, nil)
-		case "stopped": // the helper is being stopped (an unlink, the end): no failure
-			return
+		case "stopped": // the client is being stopped (an unlink, the end): no failure
+			return nil
 		}
 		select {
 		case n.ended <- deref(e.Error):
@@ -408,17 +389,19 @@ func (n *conn) event(name string, raw []byte) {
 		}
 		if _, err := n.store.Apply(raw); err != nil {
 			n.c.Log("error: {e}", map[string]any{"e": err})
+			return err
 		}
 	default:
 		kept, err := n.store.Apply(raw)
 		if err != nil {
 			n.c.Log("error: {e}", map[string]any{"e": err})
-			return
+			return err
 		}
 		if kept {
 			signal(n.dirty)
 		}
 	}
+	return nil
 }
 
 // staleText says that Signal will soon remove this computer for not connecting.
@@ -442,7 +425,7 @@ func longUnconnected(c *plugins.Context) bool {
 // healthyRun is how long a connection ran for its end not to count as a failure.
 const healthyRun = 10 * time.Minute
 
-// outdatedText says that Signal's server refuses this version of the helper.
+// outdatedText says that Signal's server refuses this version of the client.
 const outdatedText = "Signal no longer accepts this version: Everysaid needs an update to connect to Signal again"
 
 // removedText says that the phone removed this computer from the account's linked devices, and the
@@ -456,7 +439,7 @@ func removed(c *plugins.Context) bool {
 	return r
 }
 
-// fetchAgain asks the helper again for the files that failed to come (each a few times, while
+// fetchAgain asks the client again for the files that failed to come (each a few times, while
 // Signal's server may still have them); they come as their messages again.
 func (n *conn) fetchAgain() {
 	refs := n.store.FailedFiles(time.Now().Add(-fetchDays * 24 * time.Hour).UnixMilli())
@@ -470,9 +453,9 @@ func (n *conn) fetchAgain() {
 	}
 }
 
-// helperFor is the helper for a piece of work: the live connection's while it runs, else one
-// started for it (done stops it). It waits for another piece of work to end, until ctx does.
-func helperFor(ctx context.Context, c *plugins.Context) (*conn, func(), error) {
+// clientFor is the client for a piece of work: the live connection's while it runs, else one made
+// for it (done ends it). It waits for another piece of work to end, until ctx does.
+func clientFor(ctx context.Context, c *plugins.Context) (*conn, func(), error) {
 	k := instanceOf(c.ID)
 	for {
 		k.mu.Lock()
@@ -508,12 +491,17 @@ func skipChats(c *plugins.Context) map[string]bool {
 	return skip
 }
 
-// importNow brings signal.db into the archive, as the other sources' imports do; changes to
+// importNow brings the store into the archive, as the other sources' imports do; changes to
 // messages already shown are said too.
 func importNow(c *plugins.Context) error {
 	var n Counts
-	_, _, err := sourcekit.RunImporters(c, []sourcekit.Step{{Label: "Signal", Run: func(a *archive.Archive, out func(string)) (err error) {
-		n, err = Import(a, dbPath(c), mediaDir(c), c.ID, skipChats(c))
+	_, _, err := sourcekit.RunImporters(c, []sourcekit.Step{{Label: "Signal", Run: func(a *archive.Archive, out func(string)) error {
+		s, err := OpenStore("", c.ID)
+		if err != nil {
+			return err
+		}
+		defer s.Close()
+		n, err = Import(a, s, mediaDir(c), c.ID, skipChats(c))
 		return err
 	}}})
 	if err == nil && n.Changes > 0 { // edits, deletions, reactions on messages already shown
@@ -532,7 +520,7 @@ func (n *conn) receive(ctx context.Context) error {
 }
 
 // drain waits for what waited on the server (or for the receiving to end, or ctx), then for it to
-// be in signal.db.
+// be in the store.
 func (n *conn) drain(ctx context.Context) {
 	select {
 	case <-n.queueEmpty:
@@ -546,14 +534,14 @@ func (n *conn) drain(ctx context.Context) {
 }
 
 // RunImport brings what waited on Signal's server (where the live connection does not run) and
-// what signal.db has into the archive.
+// what the store has into the archive.
 func (p Plugin) RunImport(c *plugins.Context) error {
 	if removed(c) {
 		return errs.Plugin(removedText, 0)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	n, done, err := helperFor(ctx, c)
+	n, done, err := clientFor(ctx, c)
 	if err != nil {
 		return err
 	}
@@ -577,7 +565,7 @@ func (p Plugin) RunImport(c *plugins.Context) error {
 	return importNow(c)
 }
 
-// Live receives as messages arrive, keeping them in signal.db and importing them a moment later.
+// Live receives as messages arrive, keeping them in the store and importing them a moment later.
 // Not linked, it waits for “Link this computer” (which then goes through it).
 func (p Plugin) Live(ctx context.Context, c *plugins.Context) error {
 	k := instanceOf(c.ID)
@@ -623,19 +611,6 @@ func (p Plugin) Live(ctx context.Context, c *plugins.Context) error {
 		}
 	}
 	c.Log("connected to Signal", nil)
-	// what this device received while signal.db did not keep it (the app stopped half way)
-	hctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	since := n.store.Newest() - int64(24*time.Hour/time.Millisecond)
-	if raw, err := n.h.Call(hctx, "history", map[string]any{"since": max(since, 0), "chats": n.store.PNIs()}); err == nil {
-		var h struct {
-			Events []json.RawMessage `json:"events"`
-		}
-		json.Unmarshal(raw, &h)
-		for _, e := range h.Events {
-			n.store.Apply(e)
-		}
-	}
-	cancel()
 	if err := n.receive(ctx); err != nil {
 		return err
 	}
@@ -688,13 +663,13 @@ func (p Plugin) Action(c *plugins.Context, name string) error {
 	if name == "unlink" {
 		return unlink(ctx, c)
 	}
-	n, done, err := helperFor(ctx, c)
+	n, done, err := clientFor(ctx, c)
 	if err != nil {
 		return err
 	}
 	switch name {
 	case "link":
-		// one at a time: a second would start over on the store the first is linking (the live one)
+		// one at a time: a second would start over on the device the first is linking (the live one)
 		n.k.mu.Lock()
 		busy := n.k.linking
 		n.k.linking = true
@@ -711,9 +686,9 @@ func (p Plugin) Action(c *plugins.Context, name string) error {
 		n.k.linkURL, n.k.linking = "", false
 		n.k.mu.Unlock()
 		c.Emit(M{"type": "changed"})
-		var he *HelperError
+		var ce *ClientError
 		switch {
-		case errors.As(err, &he) && he.Code == "already_linked":
+		case errors.As(err, &ce) && ce.Code == "already_linked":
 			done()
 			if removed(c) {
 				return errs.Plugin(removedText, 0)
@@ -721,18 +696,12 @@ func (p Plugin) Action(c *plugins.Context, name string) error {
 			return errs.Plugin("Already linked to Signal", 0)
 		case errors.Is(err, context.DeadlineExceeded):
 			n.k.setPhase(c, "")
-			n.k.mu.Lock()
-			live := n.k.live == n
-			n.k.mu.Unlock()
 			done()
-			if live { // the live helper is still waiting for the scan: it starts again
-				n.h.Kill()
-			}
 			return errs.Plugin("No code was scanned in time", 0)
 		case err != nil:
 			n.k.setPhase(c, "")
 			done()
-			if errors.As(err, &he) || errors.Is(err, ErrStopped) { // Signal's own words, for the log
+			if errors.As(err, &ce) || errors.Is(err, ErrStopped) { // Signal's own words, for the log
 				c.Log("error: {e}", map[string]any{"e": err})
 				return errs.Plugin("Linking to Signal failed: try “Link this computer” again", 0)
 			}
@@ -769,9 +738,10 @@ func (p Plugin) Action(c *plugins.Context, name string) error {
 	return errs.Plugin("unknown action", 0)
 }
 
-// unlink takes this computer off the account, as the user chose (the UI asked first): the helper
-// stops, everything signal.db has goes into the archive, then the helper's store (the device's keys,
-// what waits) and signal.db are removed; "Link this computer" works again. The files fetched stay.
+// unlink takes this computer off the account, as the user chose (the UI asked first): the client
+// stops, everything the store has goes into the archive, then the device (its keys in keys.db, what
+// waits) and the instance's store are removed; "Link this computer" works again. The files fetched
+// stay.
 func unlink(ctx context.Context, c *plugins.Context) error {
 	k := instanceOf(c.ID)
 	k.mu.Lock()
@@ -802,17 +772,17 @@ func unlink(ctx context.Context, c *plugins.Context) error {
 	if err := importNow(c); err != nil {
 		return err
 	}
-	store := StoreDir(c)
-	if config.Data == "" || filepath.Base(store) != fmt.Sprint(c.ID) || filepath.Base(filepath.Dir(store)) != "signal" {
-		return fmt.Errorf("not the helper's store: %s", store)
-	}
-	if err := os.RemoveAll(store); err != nil {
+	if err := forgetDevice(c.ID); err != nil {
 		return err
 	}
-	for _, f := range []string{dbPath(c), dbPath(c) + "-wal", dbPath(c) + "-shm"} {
-		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
+	s, err := OpenStore("", c.ID)
+	if err != nil {
+		return err
+	}
+	err = s.Forget()
+	s.Close()
+	if err != nil {
+		return err
 	}
 	c.SaveState(M{"aci": "", "phone": "", "contacts_synced": false, "unlinked": false, "connected_at": nil})
 	k.mu.Lock()
@@ -832,18 +802,23 @@ func (k *instance) isUnlinking() bool {
 // linkWait is how long a link code waits for the phone.
 var linkWait = 5 * time.Minute
 
-// notLinked says the helper's not_linked in the user's words.
+// notLinked says the client's not_linked in the user's words.
 func notLinked(err error) error {
-	var he *HelperError
-	if errors.As(err, &he) && he.Code == "not_linked" {
+	var ce *ClientError
+	if errors.As(err, &ce) && ce.Code == "not_linked" {
 		return errs.Plugin("Not linked to Signal yet: use “Link this computer” and scan the code with the phone", 0)
 	}
 	return err
 }
 
-// Chats are the chats signal.db has, with the user's choice for each.
+// Chats are the chats the store has, with the user's choice for each.
 func (p Plugin) Chats(c *plugins.Context) ([]M, error) {
-	list, err := ChatList(dbPath(c), skipChats(c))
+	s, err := OpenStore("", c.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer s.Close()
+	list, err := ChatList(s, skipChats(c))
 	if err != nil {
 		return nil, err
 	}
@@ -897,7 +872,7 @@ func mentionsOut(c *plugins.Context, text string, ms []plugins.Mention, conversa
 		}
 		out = append(out, runes[at:start]...)
 		placed = append(placed, outMention{Start: len(utf16.Encode(out)), Length: 1, ACI: aci})
-		out = append(out, '\uFFFC')
+		out = append(out, '￼')
 		at = max(end, start)
 	}
 	out = append(out, runes[at:]...)
@@ -912,7 +887,7 @@ func (p Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conve
 	if removed(c) {
 		return nil, errs.Plugin(removedText, 0)
 	}
-	n, done, err := helperFor(ctx, c)
+	n, done, err := clientFor(ctx, c)
 	if err != nil {
 		return nil, err
 	}
@@ -942,6 +917,9 @@ func (p Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conve
 		req["quote"] = q
 	}
 	if file != nil {
+		if err := os.MkdirAll(CacheDir(c), 0o700); err != nil {
+			return nil, err
+		}
 		tmp, err := os.CreateTemp(CacheDir(c), "send-*-"+filepath.Base(file.Filename))
 		if err != nil {
 			return nil, err
@@ -965,13 +943,13 @@ func (p Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conve
 	}
 	raw, err := n.h.Call(ctx, "send", req)
 	if err != nil {
-		var he *HelperError
-		if errors.As(err, &he) && he.Code == "failed" {
+		var ce *ClientError
+		if errors.As(err, &ce) && ce.Code == "failed" {
 			return nil, errs.Plugin("Sending failed", 0)
 		}
 		return nil, notLinked(err)
 	}
-	n.h.Settle() // the message it sent is in signal.db
+	n.h.Settle() // the message it sent is in the store
 	if err := importNow(c); err != nil {
 		return nil, err
 	}
@@ -983,14 +961,14 @@ func (p Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conve
 }
 
 // Find says which of the numbers have a Signal account (Signal's contact discovery): the key is
-// their ACI, else the PNI Signal gave (a person's chat is keyed so). The helper also says each as
-// an `ids` event, which signal.db keeps, so that the chat a first message starts (Send, with no
+// their ACI, else the PNI Signal gave (a person's chat is keyed so). The client also says each as
+// an `ids` event, which the store keeps, so that the chat a first message starts (Send, with no
 // conversation yet) is the person with that number.
 func (p Plugin) Find(ctx context.Context, c *plugins.Context, phones []string) ([]plugins.Found, error) {
 	if removed(c) {
 		return nil, errs.Plugin(removedText, 0)
 	}
-	n, done, err := helperFor(ctx, c)
+	n, done, err := clientFor(ctx, c)
 	if err != nil {
 		return nil, err
 	}
@@ -999,7 +977,7 @@ func (p Plugin) Find(ctx context.Context, c *plugins.Context, phones []string) (
 	if err != nil {
 		return nil, notLinked(err)
 	}
-	n.h.Settle() // its ids are in signal.db
+	n.h.Settle() // its ids are in the store
 	var answer struct {
 		Found []struct {
 			Number string  `json:"number"`
@@ -1052,9 +1030,9 @@ func (p Plugin) MarkRead(ctx context.Context, c *plugins.Context, conv plugins.C
 // maxEdits is how many times Signal's apps let a message be edited (but in the notes to oneself).
 const maxEdits = 10
 
-// act sends what the user did to a message (a reaction, an edit, a deletion) through the helper,
-// which says it back as Signal's events: kept in signal.db, then brought into the archive as the
-// same change from the phone would be. ask gets the helper (its signal.db, its account) and the
+// act sends what the user did to a message (a reaction, an edit, a deletion) through the client,
+// which says it back as Signal's events: kept in the store, then brought into the archive as the
+// same change from the phone would be. ask gets the client (its store, its account) and the
 // message's author and times, and says the request, or why there is none (nil and no error: nothing
 // to do).
 func act(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref, cmd string,
@@ -1066,7 +1044,7 @@ func act(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg
 	if !ok {
 		return errs.Plugin("Signal cannot find this message", 0)
 	}
-	n, done, err := helperFor(ctx, c)
+	n, done, err := clientFor(ctx, c)
 	if err != nil {
 		return err
 	}
@@ -1081,13 +1059,13 @@ func act(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg
 	}
 	req["chat"] = M{"kind": kind, "id": conv.Key}
 	if _, err := n.h.Call(ctx, cmd, req); err != nil {
-		var he *HelperError
-		if errors.As(err, &he) && he.Code == "failed" {
+		var ce *ClientError
+		if errors.As(err, &ce) && ce.Code == "failed" {
 			return errs.Plugin("Sending failed", 0)
 		}
 		return notLinked(err)
 	}
-	n.h.Settle() // what it sent is in signal.db
+	n.h.Settle() // what it sent is in the store
 	return importNow(c)
 }
 
@@ -1101,7 +1079,7 @@ func (p Plugin) React(ctx context.Context, c *plugins.Context, conv plugins.Conv
 			return M{"target": target, "emoji": emoji}, nil
 		}
 		was, known := n.store.MyReaction(n.own, author, times)
-		if !known { // put before signal.db kept reactions: the archive has it
+		if !known { // not in the store (put before it kept reactions, or gone from it): the archive has it
 			var e *string
 			db.Row(c.Store().Read(), "SELECT emoji FROM reaction WHERE message_id = ? AND outgoing = 1", []any{msg.ID}, &e)
 			was = deref(e)

@@ -267,7 +267,7 @@ func TestTheNoticesWordsBuiltFromValuesExist(t *testing.T) {
 
 // Every notice an importer writes (archive.Notice{Code: "..."}) has words in the interface
 // (notice.<code>, a group's change notice.group.changed), and so does every action of a group's
-// change the Signal helper writes (convert.rs: "type": "...").
+// change the Signal client writes (internal/signal: "type": "...").
 func TestEveryNoticeHasWords(t *testing.T) {
 	keys := uiKeys(t, "el")
 	codes := map[string]bool{}
@@ -315,13 +315,17 @@ func TestEveryNoticeHasWords(t *testing.T) {
 			t.Errorf("notice without words: notice.%s", c)
 		}
 	}
-	src, err := os.ReadFile(filepath.Join(root(t), "bridges", "signal", "src", "convert.rs"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	said := map[string]bool{ // said by other words (on or off, how far)
 		"admin": true, "access_link": true, "announcements": true, "timer": true, "invited": true, "approval": true}
-	sources := []string{string(src)}
+	var sources []string
+	// the Signal client's group changes (built only with the tag signal: read as text)
+	for _, name := range []string{"client.go", "transfer.go"} {
+		src, err := os.ReadFile(filepath.Join(root(t), "internal", "signal", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sources = append(sources, string(src))
+	}
 	// the Go importers' notices and the WhatsApp bridge's group changes, pins and timers
 	files, _ := filepath.Glob(filepath.Join(root(t), "internal", "importers", "*notice*.go"))
 	files = append(files, filepath.Join(root(t), "internal", "whatsapp", "groups.go"),
