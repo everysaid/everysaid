@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -396,6 +397,50 @@ func TestLiveHandlers(t *testing.T) {
 // The live connection's files: a new message's queued and downloaded, then brought into the
 // archive and the chats told; at connecting, those of the last week still without one, not of a
 // chat left out; none with the setting off.
+// The file of a message sent from here is in the archive once the sending is answered: the file
+// itself, not downloaded again from Telegram.
+func TestSendKeepsFile(t *testing.T) {
+	in := newInstance(t, M{})
+	importTelegram = func(a *archive.Archive, out func(string), only map[[2]int64]bool, skip map[int64]bool) error {
+		return importers.Telegram(a, out, importers.TelegramOptions{Only: only, Skip: skip})
+	}
+	c := in.ctx()
+	a, _ := archive.Open(in.path)
+	conv := a.Conversation("telegram", []archive.Handle{archive.H("id", "2", "telegram")}, "2", "Bob")
+	a.Commit()
+	a.Close()
+	f := account()
+	cn := f.conn()
+	if _, err := cn.dialogs(newTestCtx()); err != nil {
+		t.Fatal(err)
+	}
+	_, release, _ := one.take(newTestCtx(), false, nil)
+	defer release()
+	defer one.share(cn)()
+	var p Plugin
+	res, err := p.Send(newTestCtx(), c, plugins.Conversation{ID: conv, Key: "2", Service: "telegram"}, "look", nil, nil,
+		&plugins.File{Filename: "dot.png", MimeType: "image/png", Data: []byte("png bytes")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := res.(plugins.Sent).Keys[0]
+	d, _ := readStore()
+	var file sql.NullString
+	db.Row(d, "SELECT file FROM telegram_message WHERE chat_id = 2 AND id = ?", []any{key}, &file)
+	d.Close()
+	if file.String != "2/"+key+".png" {
+		t.Fatalf("%q", file.String)
+	}
+	a, _ = archive.Open(in.path)
+	defer a.Close()
+	var size int64
+	var mime sql.NullString
+	if !a.Row("SELECT m.size, m.mime FROM message g JOIN attachment t ON t.message_id = g.id JOIN media m ON m.sha256 = t.sha256 "+
+		"WHERE g.conversation_id = ? AND g.key = ?", []any{conv, key}, &size, &mime) || size != int64(len("png bytes")) {
+		t.Fatalf("no attachment (%d %q)", size, mime.String)
+	}
+}
+
 func TestLiveFiles(t *testing.T) {
 	in := newInstance(t, M{"skip_chats": []any{-10}})
 	imported := 0

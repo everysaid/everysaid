@@ -64,10 +64,14 @@ test("Esc closes the @ list, and a file goes with its caption", async ({ page },
   await page.locator("[data-file-input]").setInputFiles({ name: "dot.png", mimeType: "image/png", buffer: png });
   await expect(page.locator("[data-file]")).toContainText("dot.png");
   await box.fill("quiet: a dot");
+  let answer = () => {};
+  const held = new Promise<void>((ok) => { answer = ok; });
+  await page.route("**/api/chats/*/send", async (r) => { await held; await r.continue(); });   // the sending held
   await page.locator("[data-send]").click();
   await expect(page.locator("[data-file]")).toHaveCount(0);
   const sent = page.locator("[id^=m]", { hasText: "a dot" }).last();
   await expect(sent.locator("[data-local] img")).toBeVisible();          // at once, from the file itself
+  answer();
   await expect(sent.locator("button img")).toBeVisible({ timeout: 15000 });   // then the server's
   await expect(sent.locator("[data-local]")).toHaveCount(0);
 });

@@ -576,6 +576,48 @@ func (Plugin) FetchMedia(ctx context.Context, c *plugins.Context, messageID int6
 	return dest, nil
 }
 
+// keepSent records the file of a message just sent from here as a download does, from the file
+// itself (not Telegram's copy of it, fetched back), and brings it into the archive: the message has
+// it once its sending is answered. One downloaded meanwhile is left as it is.
+func keepSent(c *plugins.Context, chatID int64, m tg.MessageClass, f *plugins.File) (err error) {
+	defer db.Recover(&err)
+	p, d := fileOf(m)
+	if p == nil && d == nil {
+		return nil
+	}
+	store, err := openStore(DBPath())
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	if !db.Exists(store, "SELECT 1 FROM telegram_message WHERE chat_id = ? AND id = ? AND file IS NULL", chatID, m.GetID()) {
+		return nil
+	}
+	ext := path.Ext(strings.ReplaceAll(f.Filename, `\`, "/")) // the file's own kind: a picture is kept as it was
+	if !plainExt.MatchString(ext) {
+		ext = fileExt(p, d)
+	}
+	rel := fmt.Sprintf("%d/%d%s", chatID, m.GetID(), ext)
+	dest := filepath.Join(MediaPath(), filepath.FromSlash(rel))
+	if _, err := os.Stat(dest); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+		return err
+	}
+	part := fmt.Sprintf("%s.%d.part", dest, rand.Int64())
+	if err := os.WriteFile(part, f.Data, 0o600); err != nil {
+		os.Remove(part)
+		return err
+	}
+	if err := os.Rename(part, dest); err != nil {
+		os.Remove(part)
+		return err
+	}
+	db.Exec(store, "UPDATE telegram_message SET file = ? WHERE chat_id = ? AND id = ?", rel, chatID, m.GetID())
+	return withArchive(c, func(a *archive.Archive) error { return importMedia(a, func(string) {}) })
+}
+
 // storedFile is a message's file in the archive's store ("" for none there).
 func storedFile(c *plugins.Context, messageID int64) string {
 	return importers.StoredFile(c.Store().Read(), messageID)

@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Clock, Paperclip, RotateCw, X } from "lucide-react";
@@ -7,6 +8,7 @@ import { dropUnsent, flushUnsent, isFlying, useUnsent } from "@/lib/outbox";
 import { service } from "@/lib/services";
 import { cn } from "@/lib/utils";
 import { Sending } from "@/components/Sending";
+import { LocalThumb } from "@/components/Message";
 
 // What of a chat waits to be sent, after its messages: this device's, not taken by the server yet
 // (it could not be reached), and the server's, which it sends by itself when it can. Each can be sent
@@ -17,12 +19,32 @@ interface Kept {
   text: string;
   service: string;
   file_name: string;
+  file_type?: string;
   state: "queued" | "sending" | "failed";
   error: { code?: string; text?: string; params?: Record<string, unknown> } | null;
 }
 
-type Row = { id: string; text: string; service: string | null; file: string | null; state: "waiting" | "queued" | "sending" | "failed";
-  why: string | null; again: () => void; discard: () => void };
+// a picture or video, from the server's copy (its address) or this device's
+type Picture = { src: string | Blob; video: boolean };
+
+type Row = { id: string; text: string; service: string | null; file: string | null; picture: Picture | null;
+  state: "waiting" | "queued" | "sending" | "failed"; why: string | null; again: () => void; discard: () => void };
+
+const pictured = (type: string | undefined) => !!type && (type.startsWith("image/") || type.startsWith("video/"));
+
+function PictureView({ p }: { p: Picture }) {
+  const [url, setUrl] = useState(typeof p.src === "string" ? p.src : "");
+  useEffect(() => {
+    if (typeof p.src === "string") {
+      setUrl(p.src);
+      return;
+    }
+    const u = URL.createObjectURL(p.src);
+    setUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [p.src]);
+  return url ? <div className="mb-1"><LocalThumb l={{ url, video: p.video }} /></div> : null;
+}
 
 export function Pending({ chatId }: { chatId: string }) {
   const { t } = useTranslation();
@@ -38,11 +60,13 @@ export function Pending({ chatId }: { chatId: string }) {
   const rows: Row[] = [
     ...(kept.data?.items ?? []).filter((k) => !(k.state === "sending" && isFlying(k.id))).map((k): Row => ({
       id: k.id, text: k.text, service: k.service || null, file: k.file_name || null, state: k.state, why: said(k.error),
+      picture: pictured(k.file_type) ? { src: `/api/outbox/${k.id}/file`, video: k.file_type!.startsWith("video/") } : null,
       again: () => { api.post(`/api/outbox/${k.id}/retry`).then(refresh, fail); },
       discard: () => { api.del(`/api/outbox/${k.id}`).then(refresh, fail); },
     })),
     ...local.filter((u) => !kept.data?.items.some((k) => k.id === u.id)).map((u): Row => ({
       id: u.id, text: u.text, service: u.service, file: u.fileName, state: u.state, why: u.error,
+      picture: u.file && pictured(u.file.type) ? { src: u.file, video: u.file.type.startsWith("video/") } : null,
       again: () => { flushUnsent(u.id).then(refresh); },
       discard: () => { dropUnsent(u.id); },
     })),
@@ -54,7 +78,8 @@ export function Pending({ chatId }: { chatId: string }) {
         <div key={r.id} data-pending-item={r.state} className="flex max-w-[85%] flex-col items-end">
           {/* as a message being sent: what becomes of it said in the bubble, as in the chat's own */}
           <div className="rounded-bubble bg-bubble-out px-3 py-2 text-[15px] leading-snug text-bubble-out-fg opacity-70 shadow-sm">
-            {r.file && <div className="mb-1 flex items-center gap-1.5 text-sm"><Paperclip className="size-3.5" />{r.file}</div>}
+            {r.picture && <PictureView p={r.picture} />}
+            {r.file && !r.picture && <div className="mb-1 flex items-center gap-1.5 text-sm"><Paperclip className="size-3.5" />{r.file}</div>}
             {r.text && <div className="whitespace-pre-wrap break-words">{r.text}</div>}
             <div className={cn("mt-0.5 flex items-center justify-end gap-1 text-[11px] leading-none", r.state === "failed" ? "font-medium" : "text-bubble-out-fg/70")}>
               {r.state !== "failed" && r.state !== "sending" && <Clock className="size-3" />}

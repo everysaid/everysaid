@@ -245,7 +245,16 @@ func (f *fake) answer(input bin.Encoder) (bin.Encoder, error) {
 			return nil, &tgerr.Error{Code: 400, Type: "PHOTO_INVALID_DIMENSIONS"}
 		}
 		f.nextID++
-		return &tg.UpdatesBox{Updates: &tg.UpdateShortSentMessage{Out: true, ID: f.nextID, Date: 1700000000}}, nil
+		// the message with the file as Telegram keeps it
+		s := &tg.UpdateShortSentMessage{Out: true, ID: f.nextID, Date: 1700000000}
+		switch m := r.Media.(type) {
+		case *tg.InputMediaUploadedPhoto:
+			s.SetMedia(&tg.MessageMediaPhoto{Photo: &tg.Photo{ID: int64(f.nextID), AccessHash: 1, FileReference: []byte("r")}})
+		case *tg.InputMediaUploadedDocument:
+			s.SetMedia(&tg.MessageMediaDocument{Document: &tg.Document{ID: int64(f.nextID), AccessHash: 1, FileReference: []byte("r"),
+				MimeType: m.MimeType, Attributes: m.Attributes}})
+		}
+		return &tg.UpdatesBox{Updates: s}, nil
 	case *tg.MessagesSendMessageRequest:
 		f.calls = append(f.calls, "sendMessage")
 		f.requests = append(f.requests, r)
