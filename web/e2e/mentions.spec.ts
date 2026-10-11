@@ -67,7 +67,9 @@ test("Esc closes the @ list, and a file goes with its caption", async ({ page },
   await page.locator("[data-send]").click();
   await expect(page.locator("[data-file]")).toHaveCount(0);
   const sent = page.locator("[id^=m]", { hasText: "a dot" }).last();
-  await expect(sent.locator("img")).toBeVisible({ timeout: 15000 });
+  await expect(sent.locator("[data-local] img")).toBeVisible();          // at once, from the file itself
+  await expect(sent.locator("button img")).toBeVisible({ timeout: 15000 });   // then the server's
+  await expect(sent.locator("[data-local]")).toHaveCount(0);
 });
 
 test("a file dropped on the chat or pasted goes to the composer; one copied from a message, to another chat", async ({ page, context }, info) => {

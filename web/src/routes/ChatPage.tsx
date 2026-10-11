@@ -6,7 +6,7 @@ import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import * as Popover from "@radix-ui/react-popover";
 import { ArrowDown, ArrowLeft, BellOff, CalendarDays, Check, ChevronDown, ChevronRight, CornerUpLeft, Archive, ArchiveRestore, FileText, Info, Lock, MoreVertical, Paperclip, Pencil, Pin, PinOff, Search, SendHorizontal, Smile, X } from "lucide-react";
 import { toast } from "sonner";
-import { api, qs, type Attachment, type ChatDetail, type Member, type MessageItem, type StreamItem, type StreamPage } from "@/lib/api";
+import { api, qs, type Attachment, type ChatDetail, type Local, type Member, type MessageItem, type StreamItem, type StreamPage } from "@/lib/api";
 import { useBack } from "@/lib/back";
 import { bytes, dateOnly, dayLabel, isoDay, sameDay } from "@/lib/format";
 import { onEvent } from "@/lib/events";
@@ -42,7 +42,8 @@ function inOrder(items: StreamItem[]): StreamItem[] {
   return items;
 }
 
-function withoutSent(items: StreamItem[], real: StreamItem[], since = Infinity): StreamItem[] {
+// `carry`: the picture or video of a placeholder gone, by the cursor of the message that took its place
+function withoutSent(items: StreamItem[], real: StreamItem[], since = Infinity, carry?: Map<string, Local>): StreamItem[] {
   const sent = items.filter((i): i is MessageItem => i.type === "message" && i.id < 0);
   if (!sent.length) return items;
   const gone = new Set<number>();
@@ -51,9 +52,18 @@ function withoutSent(items: StreamItem[], real: StreamItem[], since = Infinity):
     const open = (i: MessageItem) => !gone.has(i.id) && f.ts >= i.ts - since;
     const p = sent.find((i) => open(i) && (i.text ?? "") === (f.text ?? ""))
       ?? sent.find((i) => open(i) && i.loose && i.conversation_id === f.conversation_id);
-    if (p) gone.add(p.id);
+    if (p) {
+      gone.add(p.id);
+      if (p.local) carry?.set(f.cursor, p.local);
+    }
   }
   return gone.size ? items.filter((i) => !(i.type === "message" && gone.has(i.id))) : items;
+}
+
+/** The message with this device's picture or video of it, while the server has none of its own. */
+function withLocal(i: StreamItem, local: Local | undefined): StreamItem {
+  if (!local || i.type !== "message" || i.attachments.some((a) => a.mime?.startsWith("image/") || a.mime?.startsWith("video/"))) return i;
+  return { ...i, local };
 }
 
 export function ChatPage() {
@@ -90,6 +100,9 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   const busy = useRef({ older: false, newer: false, again: false });
   const itemsRef = useRef(items);
   itemsRef.current = items;
+  // the files' pictures of what was sent from here (object URLs), let go with the chat
+  const localUrls = useRef<string[]>([]);
+  useEffect(() => () => localUrls.current.forEach((u) => URL.revokeObjectURL(u)), []);
   // where the person was found on a service the chat has none of: a first message may go there
   const found = Object.entries(detail.data?.reach ?? {}).filter(([s, v]) => v === "found" && !detail.data?.services.includes(s)).map(([s]) => s);
   const sendable = [...(detail.data?.sendable ?? []), ...found];
@@ -295,7 +308,9 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
         const seen = new Set(prev.map((i) => i.cursor));
         const fresh = page.items.filter((i) => !seen.has(i.cursor));
         // a placeholder goes once the message itself is here, also before the answer to its sending
-        return inOrder([...withoutSent(prev, fresh), ...fresh]);
+        const carry = new Map<string, Local>();
+        const kept = withoutSent(prev, fresh, Infinity, carry);
+        return inOrder([...kept, ...fresh.map((i) => withLocal(i, carry.get(i.cursor)))]);
       });
       if (!force) setHasNewer(page.has_newer);
     } finally {
@@ -329,12 +344,18 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
     const mark = (status: string, conversation_id = 0) => setItems((prev) => prev.map((i) => (i.type === "message" && i.id === id
       ? { ...i, status, conversation_id: conversation_id || i.conversation_id } : i)));
     const kind = !file ? "text" : file.type.startsWith("image/") ? "image" : file.type.startsWith("video/") ? "video" : "file";
+    // a picture or video shown from the file itself, until the server has its own
+    let local: Local | undefined;
+    if (file && (kind === "image" || kind === "video")) {
+      local = { url: URL.createObjectURL(file), video: kind === "video" };
+      localUrls.current.push(local.url);
+    }
     toEnd.current = true;
     setItems((prev) => [...prev, {
       type: "message", id, ts: Date.now(), cursor: `tmp:${id}`, service: service ?? "", conversation_id: 0, outgoing: true,
       kind, subtype: null, text: body, sender_id: null, sender: null, reply_to: null, reply_text: null, edited: false,
       deleted: false, forwarded: false, starred: false, status: "sending", location: null, reactions: [], attachments: [],
-      loose: mentions.length > 0 || !!file,
+      loose: mentions.length > 0 || !!file, local,
       reply: answered ? { id: answered.id, text: answered.text ?? "", outgoing: answered.outgoing, sender: answered.sender, kind: answered.kind } : undefined,
     }]);
     // kept on this device until the server has it: if it cannot be reached, it waits there (Pending)
@@ -369,10 +390,13 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       const messages = (went.messages ?? []) as MessageItem[];
       setItems((prev) => {
         const seen = new Set(prev.map((i) => i.cursor));
-        const real = messages.filter((m) => !seen.has(m.cursor));
+        // the file's picture on what went: the one message, or those of it not text alone
+        const real = messages.filter((m) => !seen.has(m.cursor))
+          .map((m) => (messages.length === 1 || m.kind !== "text" ? withLocal(m, local) : m));
         if (messages.length) return inOrder(prev.flatMap((i) => (i.type === "message" && i.id === id ? real : [i])));
         // where the service cannot say what went: the message itself, if it came before the answer
-        return withoutSent(prev, prev, 10_000);
+        const carry = new Map<string, Local>();
+        return withoutSent(prev, prev, 10_000, carry).map((i) => withLocal(i, carry.get(i.cursor)));
       });
       toEnd.current = true;
       // it went: what comes after is brought later if not now (the server restarting, say), never
@@ -414,7 +438,10 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
         const page = await api.get<StreamPage>(`/api/chats/${chatId}/stream${qs({ limit: PAGE, hide })}`).catch(() => null);
         if (!page) return;
         const fresh = new Map(page.items.map((i) => [i.cursor, i]));
-        setItems((prev) => prev.map((i) => fresh.get(i.cursor) ?? i));
+        setItems((prev) => prev.map((i) => {
+          const f = fresh.get(i.cursor);
+          return f ? withLocal(f, i.type === "message" ? i.local : undefined) : i;
+        }));
       }, 300);
     });
     return () => { off(); clearTimeout(timer); };

@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Check, CheckCheck, Copy, CornerUpLeft, EllipsisVertical, FileText, Forward, ImageOff, MapPin, Pencil, Phone, Pin, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Plus, Trash2, Video } from "lucide-react";
-import { thumbUrl, type Attachment, type CallItem, type Mention, type MessageItem, type Receipts } from "@/lib/api";
+import { thumbUrl, type Attachment, type Local, type CallItem, type Mention, type MessageItem, type Receipts } from "@/lib/api";
 import { bytes, duration, time } from "@/lib/format";
 import { service } from "@/lib/services";
 import { noticeLines, pollOf } from "@/lib/notice";
@@ -109,10 +109,25 @@ function LoopVideo({ a, className }: { a: Attachment; className: string }) {
   );
 }
 
+const thumbSize = "block max-h-80 min-h-24 w-full min-w-40 max-w-72 object-cover";
+
+// LocalThumb is the picture or video this device is sending, from the file itself: in the place of
+// the server's, until it has it
+function LocalThumb({ l }: { l: Local }) {
+  return (
+    <div data-local className="relative block overflow-hidden rounded-xl bg-black/10">
+      {l.video
+        ? <video src={`${l.url}#t=0.1`} muted playsInline preload="metadata" className={thumbSize} />
+        : <img src={l.url} alt="" decoding="async" className={thumbSize}
+            onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />}
+    </div>
+  );
+}
+
 export function Thumb({ a, onOpen, className, loop }: { a: Attachment; onOpen?: () => void; className?: string; loop?: boolean }) {
   const { t } = useTranslation();
   const isVideo = a.mime?.startsWith("video/");
-  const size = "block max-h-80 min-h-24 w-full min-w-40 max-w-72 object-cover";
+  const size = thumbSize;
   if (a.available === "gone") {
     return (
       // a line, not a picture's place: nothing is there to see
@@ -345,9 +360,10 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
   const media = m.attachments.filter((a) => a.mime?.startsWith("image/") || a.mime?.startsWith("video/"));
   const others = m.attachments.filter((a) => !media.includes(a));
   // pictures alone: the time over them (not when none of them is there any more: a line of text then)
-  const onlyMedia = !(m.deleted && !reveal) && media.some((a) => a.available !== "gone") && !m.text && !others.length && !m.reply;
+  const local = !media.length ? m.local : undefined;
+  const onlyMedia = !(m.deleted && !reveal) && (media.some((a) => a.available !== "gone") || !!local) && !m.text && !others.length && !m.reply;
   const tail = last && !onlyMedia;     // the run's last says it is said, by its sender's side
-  const label = m.kind !== "text" && !m.attachments.length && !m.text && !m.location ? t(`kind.${m.kind}`, { defaultValue: m.kind }) : null;
+  const label = m.kind !== "text" && !m.attachments.length && !local && !m.text && !m.location ? t(`kind.${m.kind}`, { defaultValue: m.kind }) : null;
   const poll = pollOf(m.notice);
   return (
     <div id={`m${m.id}`} className={cn("group/msg flex gap-2 px-3 md:px-6", out ? "justify-end" : "justify-start", first ? "mt-2" : "mt-0.5")}>
@@ -411,6 +427,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
               {media.map((a) => <Thumb key={a.sha256} a={a} loop={m.subtype === "gif"} onOpen={() => onOpen(a, m)} />)}
             </div>
           )}
+          {local && <LocalThumb l={local} />}
           {others.map((a) => <div key={a.sha256} className="my-1"><AttachmentView a={a} onOpen={(x) => onOpen(x, m)} /></div>)}
           {m.location && (
             <a
