@@ -52,6 +52,45 @@ test("a chat opens at its first unread, which are read as they are seen", async 
   }
   await expect(line).toHaveCount(1);
 
+  // away a while and back: the line before the first not seen yet; none, all seen
+  const away = () => page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  const back = () => page.evaluate(() => {
+    const now = Date.now;
+    Date.now = () => now() + 60_000;                   // a minute later
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  const toEnd = async () => {
+    for (let i = 0; i < 10; i++) {
+      await page.evaluate((s) => { const el = document.querySelector(s)!; el.scrollTop = el.scrollHeight; }, SCROLLER);
+      await page.waitForTimeout(150);
+    }
+  };
+  await away();
+  for (let i = 0; i < 3; i++)
+    await page.request.post("/api/demo/incoming", { data: { chat, text: `while away ${i}` }, headers: h });
+  await page.waitForTimeout(1500);                     // brought meanwhile (below the view: not drawn)
+  await back();
+  await toEnd();
+  await expect(page.locator("[data-cursor]", { has: line }).getByText("while away 0", { exact: true })).toHaveCount(1);
+  await away();
+  await back();
+  await expect(line).toHaveCount(0);
+
+  // and once the user answers
+  await away();
+  await page.request.post("/api/demo/incoming", { data: { chat, text: "while away again" }, headers: h });
+  await page.waitForTimeout(1500);
+  await back();
+  await toEnd();
+  await expect(page.locator("[data-cursor]", { has: line }).getByText("while away again", { exact: true })).toHaveCount(1);
+  await page.locator("[data-composer-body] textarea").fill(`quiet: answered ${info.project.name}`);
+  await page.locator("[data-send]").click();
+  await expect(line).toHaveCount(0);
+
   // opened again with nothing unread: at its end, no line
   await page.reload();
   await expect(page.locator(SCROLLER)).toBeVisible();
