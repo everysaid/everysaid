@@ -211,19 +211,44 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   const latest = () => {
     keepPlace(chatId, null);
     setResume(undefined);
+    toLatest.current = true;
     setReady(false);
     setGeneration((g) => g + 1);
   };
 
-  // the first page: the latest, or around a message or a time
+  // the first unread message when the chat was opened (its cursor): the line "new messages" before it
+  const [newFrom, setNewFrom] = useState<string | null>(null);
+  const told = useRef(0);               // how far the server was told the chat was read (ms)
+  const toLatest = useRef(false);       // the latest asked for: not the first unread
+  // the first page: the latest, or around a message or a time; with something unread (and not sent
+  // elsewhere), from the first unread, wherever the user was before
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
+        const info = await qc.fetchQuery({ queryKey: ["chat", chatId], queryFn: () => api.get<ChatDetail>(`/api/chats/${chatId}`) });
+        const after = info.unread_after;
+        const fresh = (i: StreamItem) => i.type === "message" && !i.outgoing && i.kind !== "system" && i.ts > after;
         let at = around ?? resume?.ts;
         if (jumpTo && !at) at = (await api.get<MessageItem>(`/api/messages/${jumpTo}`)).ts + 1;
-        const page = await api.get<StreamPage>(`/api/chats/${chatId}/stream${qs({ around: at, limit: PAGE, hide })}`);
+        let page: StreamPage | null = null;
+        if (!jumpTo && !around && !toLatest.current && after > 0 && info.last_ts > after) {
+          page = await api.get<StreamPage>(`/api/chats/${chatId}/stream${qs({ limit: PAGE, hide })}`);
+          const i = page.items.findIndex(fresh);
+          if (i < 0) page = null;
+          else {
+            at = undefined;
+            if (i === 0 && page.has_older) {         // more unread than a page: from the first of them
+              at = after + 1;
+              page = await api.get<StreamPage>(`/api/chats/${chatId}/stream${qs({ around: at, limit: PAGE, hide })}`);
+            }
+            setResume(undefined);
+          }
+        }
+        page ??= await api.get<StreamPage>(`/api/chats/${chatId}/stream${qs({ around: at, limit: PAGE, hide })}`);
         if (cancelled) return;
+        told.current = Math.max(told.current, after);
+        setNewFrom(page.items.find(fresh)?.cursor ?? null);
         setItems(page.items);
         setFirst(START - page.items.length);
         setHasOlder(page.has_older);
@@ -395,13 +420,9 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
     return () => { off(); clearTimeout(timer); };
   }, [chatId, hasNewer, hide]);
 
-  // read: when the latest are in view
-  const read = useMutation({
-    mutationFn: () => api.post(`/api/chats/${chatId}/read`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["chats"] }),
-  });
-  const lastTs = items.length ? items[items.length - 1].ts : 0;
-  // only while someone looks at it: the services may tell the others it was read
+  // read as it is seen: a message counts once its end has been in view (give or take 5% of it, so
+  // that a few pixels do not matter; one taller than the view, once its end is reached), only while
+  // someone looks at the page; the server is told the latest seen, or all of it once the end is
   const [looking, setLooking] = useState(() => document.visibilityState === "visible" && document.hasFocus());
   useEffect(() => {
     const look = () => setLooking(document.visibilityState === "visible" && document.hasFocus());
@@ -414,12 +435,45 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       window.removeEventListener("blur", look);
     };
   }, []);
+  const lookingRef = useRef(looking);
+  lookingRef.current = looking;
+  const seen = useRef(0);
+  const tellTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const markSeen = useCallback(() => {
+    const el = scroller.current;
+    if (!el || !lookingRef.current) return;
+    const view = el.getBoundingClientRect();
+    let latest = 0;
+    for (const row of el.querySelectorAll<HTMLElement>("[data-cursor]")) {
+      const body = row.lastElementChild;               // the message itself, not its day or the space after
+      if (!body || row.dataset.cursor!.startsWith("tmp:")) continue;   // one being sent: its time is this device's
+      const r = body.getBoundingClientRect();
+      if (r.bottom > view.top && r.bottom - r.height * 0.05 <= view.bottom) latest = Math.max(latest, Number(row.dataset.ts));
+    }
+    if (latest <= seen.current) return;
+    seen.current = latest;
+    clearTimeout(tellTimer.current);
+    tellTimer.current = setTimeout(() => {
+      const cur = itemsRef.current.filter((i) => !(i.type === "message" && i.id < 0));
+      const all = !hasNewerRef.current && cur.length > 0 && seen.current >= cur[cur.length - 1].ts;
+      if ((all ? cur[cur.length - 1].ts : seen.current) <= told.current) return;     // nothing new read
+      const until = all ? Date.now() : seen.current;
+      told.current = until;
+      api.post(`/api/chats/${chatId}/read`, all ? {} : { until })
+        .then(() => qc.invalidateQueries({ queryKey: ["chats"] }))
+        .catch(() => { told.current = seen.current = 0; });     // tried again on the next look
+    }, 500);
+  }, [chatId, qc]);
+  useEffect(() => () => clearTimeout(tellTimer.current), []);
   useEffect(() => {
-    if (!ready || !atBottom || hasNewer || !looking) return;
-    const timer = setTimeout(() => read.mutate(), 800);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, atBottom, hasNewer, lastTs, chatId, looking]);
+    const el = scroller.current;
+    if (!ready || !el) return;
+    let frame = 0;
+    const on = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(markSeen); };
+    el.addEventListener("scroll", on, { passive: true });
+    const timer = setTimeout(on, 300);                // once drawn, and as messages come or the page is looked at again
+    return () => { el.removeEventListener("scroll", on); clearTimeout(timer); cancelAnimationFrame(frame); };
+  }, [ready, items, looking, markSeen]);
 
   // highlight fades
   useEffect(() => {
@@ -477,6 +531,10 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       if (i >= 0) return { index: i, align: "center" as const };
     }
     if (around) return { index: nearest, align: "center" as const };
+    if (newFrom) {
+      const i = items.findIndex((x) => x.cursor === newFrom);
+      if (i >= 0) return { index: i, align: "start" as const };
+    }
     if (resume) {
       const i = items.findIndex((x) => x.cursor === resume.cursor);
       if (i >= 0) return { index: i, align: "start" as const, offset: resume.offset ?? 0 };
@@ -487,7 +545,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   // long texts measured), until the user scrolls, or for a few seconds
   const stick = useRef(false);
   useEffect(() => {
-    stick.current = ready && !jumpTo && !around && !resume;
+    stick.current = ready && !jumpTo && !around && !resume && !newFrom;
     if (!stick.current) return;
     const done = setTimeout(() => { stick.current = false; }, 4000);
     return () => clearTimeout(done);
@@ -547,8 +605,13 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
         onEdit={own && item.text && within(editable?.[svc]) ? startEdit : undefined}
         onDelete={own && within(deletable?.[svc]) ? setDeleting : undefined} />;
     }
-    return <div data-cursor={item.cursor} data-ts={item.ts} className={cn(next ? "" : "pb-3")}>{sep}{body}</div>;
-  }, [first, items, isGroup, highlight, openMedia, jump, replyable.join(), answer, detail.data, react, startEdit]); // eslint-disable-line react-hooks/exhaustive-deps
+    const unread = item.cursor === newFrom ? (
+      <div data-new-from className="my-2 flex items-center gap-3 px-4 text-xs font-medium text-accent">
+        <span className="h-px flex-1 bg-accent/40" />{t("chat.newMessages")}<span className="h-px flex-1 bg-accent/40" />
+      </div>
+    ) : null;
+    return <div data-cursor={item.cursor} data-ts={item.ts} className={cn(next ? "" : "pb-3")}>{sep}{unread}{body}</div>;
+  }, [newFrom, t, first, items, isGroup, highlight, openMedia, jump, replyable.join(), answer, detail.data, react, startEdit]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (error) return <Center><div className="space-y-2"><div className="font-semibold">{t("common.error")}</div><div className="text-sm text-muted">{error}</div></div></Center>;
 
