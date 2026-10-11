@@ -30,6 +30,7 @@ import { isFileLink, pastedFile } from "@/lib/clip";
 
 const START = 1_000_000_000;
 const PAGE = 80;
+const AWAY = 30_000;        // away this long, the line "new messages" is put again on coming back
 
 /** Placeholders of messages being sent, gone for the messages themselves among `real`: the one of the
  * same text, else (its text written otherwise by the service: mentions, a file) the oldest of the
@@ -232,6 +233,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   // the first unread message when the chat was opened (its cursor): the line "new messages" before it
   const [newFrom, setNewFrom] = useState<string | null>(null);
   const told = useRef(0);               // how far the server was told the chat was read (ms)
+  const readBefore = useRef(0);         // how far it was read when it was opened (the messages' time, ms)
   const toLatest = useRef(false);       // the latest asked for: not the first unread
   // the first page: the latest, or around a message or a time; with something unread (and not sent
   // elsewhere), from the first unread, wherever the user was before
@@ -261,6 +263,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
         page ??= await api.get<StreamPage>(`/api/chats/${chatId}/stream${qs({ around: at, limit: PAGE, hide })}`);
         if (cancelled) return;
         told.current = Math.max(told.current, after);
+        readBefore.current = after;
         setNewFrom(page.items.find(fresh)?.cursor ?? null);
         setItems(page.items);
         setFirst(START - page.items.length);
@@ -340,6 +343,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   const send = useCallback(async (body: string, service: string | null, answered: MessageItem | null, mentions: Mentioned[], file: File | null,
     conversationId: number | null) => {
     if (hasNewer) navigate({ to: "/chat/$chatId", params: { chatId }, search: { hide } });
+    setNewFrom(null);                                  // answered: what was new is seen
     const id = -Date.now() - Math.random();
     const mark = (status: string, conversation_id = 0) => setItems((prev) => prev.map((i) => (i.type === "message" && i.id === id
       ? { ...i, status, conversation_id: conversation_id || i.conversation_id } : i)));
@@ -484,14 +488,31 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       const cur = itemsRef.current.filter((i) => !(i.type === "message" && i.id < 0));
       const all = !hasNewerRef.current && cur.length > 0 && seen.current >= cur[cur.length - 1].ts;
       if ((all ? cur[cur.length - 1].ts : seen.current) <= told.current) return;     // nothing new read
-      const until = all ? Date.now() : seen.current;
-      told.current = until;
-      api.post(`/api/chats/${chatId}/read`, all ? {} : { until })
+      // as far as the messages' own time (not this device's clock, which may be ahead of theirs)
+      told.current = all ? cur[cur.length - 1].ts : seen.current;
+      api.post(`/api/chats/${chatId}/read`, all ? {} : { until: seen.current })
         .then(() => qc.invalidateQueries({ queryKey: ["chats"] }))
         .catch(() => { told.current = seen.current = 0; });     // tried again on the next look
     }, 500);
   }, [chatId, qc]);
   useEffect(() => () => clearTimeout(tellTimer.current), []);
+
+  // back after a while away (another tab or service, the window hidden, asleep): the line "new
+  // messages" put again as on opening the chat, before the first message not seen yet, wherever
+  // the user had read to (none, if all was); while they look, it stays where it is
+  const awaySince = useRef<number | null>(null);
+  useEffect(() => {
+    if (!looking) {
+      awaySince.current ??= Date.now();
+      return;
+    }
+    const since = awaySince.current;
+    awaySince.current = null;
+    if (since === null || Date.now() - since < AWAY) return;
+    const base = Math.max(seen.current, readBefore.current);
+    const first = itemsRef.current.find((i) => i.type === "message" && i.id > 0 && !i.outgoing && i.kind !== "system" && i.ts > base);
+    setNewFrom(first?.cursor ?? null);
+  }, [looking]);
   useEffect(() => {
     const el = scroller.current;
     if (!ready || !el) return;
