@@ -267,6 +267,12 @@ export interface Attachment {
   available: "local" | "library" | "gone";
 }
 
+/** A file of this device's (an object URL), shown in place of an attachment the server has not yet. */
+export interface Local {
+  url: string;
+  video: boolean;
+}
+
 export interface Reaction {
   emoji: string | null;
   code: string | null;
@@ -310,6 +316,7 @@ export interface MessageItem {
   chat_title?: string;
   highlight?: [string, boolean][];
   loose?: boolean;          // a message being sent whose text the service may write otherwise (mentions, a file)
+  local?: Local;            // the picture or video this device sent, shown until the server has its own
   notice?: Notice | null;   // what a notice (or the message's context) says, for noticeLines
 }
 
