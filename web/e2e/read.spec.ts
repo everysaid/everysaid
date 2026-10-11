@@ -52,14 +52,12 @@ test("a chat opens at its first unread, which are read as they are seen", async 
   }
   await expect(line).toHaveCount(1);
 
-  // away a while and back: the line before the first not seen yet; none, all seen
+  // away and back: the line before the first not seen yet; none, all seen
   const away = () => page.evaluate(() => {
     Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
     document.dispatchEvent(new Event("visibilitychange"));
   });
   const back = () => page.evaluate(() => {
-    const now = Date.now;
-    Date.now = () => now() + 60_000;                   // a minute later
     Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
     document.dispatchEvent(new Event("visibilitychange"));
   });
