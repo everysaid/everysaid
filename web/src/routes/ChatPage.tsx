@@ -30,7 +30,6 @@ import { isFileLink, pastedFile } from "@/lib/clip";
 
 const START = 1_000_000_000;
 const PAGE = 80;
-const AWAY = 30_000;        // away this long, the line "new messages" is put again on coming back
 
 /** Placeholders of messages being sent, gone for the messages themselves among `real`: the one of the
  * same text, else (its text written otherwise by the service: mentions, a file) the oldest of the
@@ -497,18 +496,17 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   }, [chatId, qc]);
   useEffect(() => () => clearTimeout(tellTimer.current), []);
 
-  // back after a while away (another tab or service, the window hidden, asleep): the line "new
+  // back from away (another tab or service, the window hidden, asleep): the line "new
   // messages" put again as on opening the chat, before the first message not seen yet, wherever
   // the user had read to (none, if all was); while they look, it stays where it is
-  const awaySince = useRef<number | null>(null);
+  const wasAway = useRef(false);
   useEffect(() => {
     if (!looking) {
-      awaySince.current ??= Date.now();
+      wasAway.current = true;
       return;
     }
-    const since = awaySince.current;
-    awaySince.current = null;
-    if (since === null || Date.now() - since < AWAY) return;
+    if (!wasAway.current) return;
+    wasAway.current = false;
     const base = Math.max(seen.current, readBefore.current);
     const first = itemsRef.current.find((i) => i.type === "message" && i.id > 0 && !i.outgoing && i.kind !== "system" && i.ts > base);
     setNewFrom(first?.cursor ?? null);
