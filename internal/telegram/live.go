@@ -1413,6 +1413,11 @@ func send(ctx context.Context, c *plugins.Context, conv plugins.Conversation, te
 		if _, err := storeMessages(c, chat, []sent{{msg, sender}}); err != nil {
 			return err
 		}
+		if file != nil {
+			if err := keepSent(c, chatID, msg, file); err != nil { // it went: downloaded later, as any
+				c.Log("{file}: not kept ({e})", map[string]any{"file": file.Filename, "e": err.Error()})
+			}
+		}
 		out = plugins.Sent{Keys: []string{strconv.Itoa(msg.GetID())}}
 		return nil
 	})

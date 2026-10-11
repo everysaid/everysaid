@@ -293,7 +293,11 @@ UI (planned); on an iPhone that is not possible at all, and the backup stays.
   502, 503, 504, or a failure it did not word) waits in the outbox (the archive's table `outbox`) and is
   sent by itself, each chat's in order, with growing pauses, for a day; before each try the chat is
   looked at, in case it went after all. A refusal is said at once. What waits shows after the chat's
-  messages, to be sent again now or discarded.
+  messages, to be sent again now or discarded, with its picture or video (this device's file, or
+  the outbox's).
+- **A file sent is the archive's at once**: each plugin records the file it sent where its own
+  downloads go, from the file itself, before its sending is answered (not downloaded back from the
+  service); the app shows the file from the device until the message that went has it.
 - **Names**: the plugins weigh them, the user orders them (Settings → Names, which can go back to
   the weights) or pins one source or handle for a person; every name seen is kept, with when ("also
   known as"). Self-chosen names are marked (~) in groups.

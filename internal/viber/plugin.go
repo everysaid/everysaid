@@ -802,9 +802,9 @@ func (Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Convers
 			os.Remove(f.Name())
 			return nil, failed(err)
 		}
-		if text != "" { // the text after the file: Viber writes the file once it is uploaded
-			waitFile(ctx, c, f.Name())
-		}
+		// until Viber has uploaded it: the text after the file (Viber writes it once the file is
+		// up), and the import, which takes the file out of the folder Viber reads it from
+		waitFile(ctx, c, f.Name())
 	}
 	if text != "" {
 		if reply == nil && len(ms) == 0 {

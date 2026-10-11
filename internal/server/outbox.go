@@ -187,7 +187,7 @@ func (h *Host) Kept(chatID, lang string) []M {
 		scan(&id, &req, &created, &state, &attempts, &next, &e)
 		var r outboxRequest
 		json.Unmarshal([]byte(req), &r)
-		m := M{"id": id, "text": r.Text, "service": r.Service, "reply_to": r.ReplyTo, "file_name": r.FileName,
+		m := M{"id": id, "text": r.Text, "service": r.Service, "reply_to": r.ReplyTo, "file_name": r.FileName, "file_type": r.FileType,
 			"created_at": created, "state": state, "attempts": attempts, "next_at": next, "error": nil}
 		if ue := errOf(e.String); ue != nil {
 			m["error"] = userErrorDetail(ue, lang)
@@ -195,6 +195,18 @@ func (h *Host) Kept(chatID, lang string) []M {
 		out = append(out, m)
 	})
 	return out
+}
+
+// KeptFile is the file of a kept message, while it waits (ok false: none, or it has gone).
+func (h *Host) KeptFile(id string) (data []byte, typ string, ok bool) {
+	var req string
+	if !db.Row(h.outboxDB(), "SELECT request, file FROM outbox WHERE id = ? AND state != 'sent' AND file IS NOT NULL",
+		[]any{id}, &req, &data) {
+		return nil, "", false
+	}
+	var r outboxRequest
+	json.Unmarshal([]byte(req), &r)
+	return data, r.FileType, true
 }
 
 // Retry puts a kept message back to be sent now (one that failed, or waits for its next try).

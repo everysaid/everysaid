@@ -113,7 +113,7 @@ const thumbSize = "block max-h-80 min-h-24 w-full min-w-40 max-w-72 object-cover
 
 // LocalThumb is the picture or video this device is sending, from the file itself: in the place of
 // the server's, until it has it
-function LocalThumb({ l }: { l: Local }) {
+export function LocalThumb({ l }: { l: Local }) {
   return (
     <div data-local className="relative block overflow-hidden rounded-xl bg-black/10">
       {l.video

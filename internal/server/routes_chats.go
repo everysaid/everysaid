@@ -341,6 +341,21 @@ func (s *Server) chatRoutes() {
 	h("GET /api/chats/{chat_id}/outbox", bodyNone, func(q *req) (any, error) {
 		return M{"items": s.Host.Kept(q.r.PathValue("chat_id"), q.xlang())}, nil
 	})
+	// a kept message's file, to show it as it waits
+	h("GET /api/outbox/{id}/file", bodyNone, func(q *req) (any, error) {
+		data, typ, ok := s.Host.KeptFile(q.r.PathValue("id"))
+		if !ok {
+			return nil, notFound("")
+		}
+		if typ == "" {
+			typ = "application/octet-stream"
+		}
+		q.w.Header().Set("Content-Type", typ)
+		q.w.Header().Set("Cache-Control", "private, no-store")
+		inert(q.w.Header(), typ)
+		q.w.Write(data)
+		return done, nil
+	})
 	h("POST /api/outbox/{id}/retry", bodyNone, func(q *req) (any, error) {
 		return M{"ok": true}, is404(s.Host.Retry(q.r.PathValue("id")), nil)
 	})

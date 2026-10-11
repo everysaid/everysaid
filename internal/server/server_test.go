@@ -548,6 +548,18 @@ func TestOutbox(t *testing.T) {
 	must(t, len(kept()) == 1, "kept: %v", kept())
 	r = c.do("DELETE", "/api/outbox/e", nil, H)
 	must(t, r.status == 200 && len(kept()) == 0, "discarded: %d %v", r.status, kept())
+
+	// a kept file, shown as it waits
+	r = c.form("/api/chats/"+group+"/send", map[string]string{"text": "", "service": "whatsapp", "client_id": "f"},
+		"file", "photo.jpg", "image/jpeg", []byte("\xff\xd8 picture"))
+	must(t, r.status == 202, "a file kept: %d %s", r.status, r.body)
+	k = kept()
+	must(t, len(k) == 1 && k[0]["file_name"] == "photo.jpg" && k[0]["file_type"] == "image/jpeg", "outbox: %v", k)
+	r = c.get("/api/outbox/f/file")
+	must(t, r.status == 200 && string(r.body) == "\xff\xd8 picture" && r.header.Get("Content-Type") == "image/jpeg", "its file: %d %v", r.status, r.header)
+	c.do("DELETE", "/api/outbox/f", nil, H)
+	r = c.get("/api/outbox/f/file")
+	must(t, r.status == 404, "discarded, its file gone: %d", r.status)
 	busy.Store(false)
 }
 

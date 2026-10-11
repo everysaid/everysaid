@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import { signedIn } from "./demo";
 
 // The way to answer: where the chat was last active, even where nothing can send now (a lock then
@@ -112,7 +112,7 @@ test("a message that cannot go now waits, and goes", async ({ page }, info) => {
     const chats = (await (await fetch("/api/chats", { headers: h })).json()).items;
     for (const c of chats) {
       const d = await (await fetch(`/api/chats/${c.id}`, { headers: h })).json();
-      if (d.sendable.includes("whatsapp")) return c.id as string;
+      if (d.sendable.includes("whatsapp") && d.fileable?.includes("whatsapp")) return c.id as string;   // a file goes too
     }
     return null;
   });
@@ -123,31 +123,43 @@ test("a message that cannot go now waits, and goes", async ({ page }, info) => {
   await page.getByRole("menuitem", { name: "WhatsApp" }).click();
   const field = page.locator("[data-composer-body] textarea");
   const stream = page.locator('[id^="m"]');
+  // with a picture, shown as it waits (loaded: not a broken image)
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
+  const attach = (name: string) => page.locator("[data-file-input]").setInputFiles({ name, mimeType: "image/png", buffer: png });
+  const loaded = (row: Locator) => expect.poll(() => row.locator("[data-local] img")
+    .evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth > 0).catch(() => false)).toBe(true);
 
   // the server's: kept, then sent at once when asked
   const busy = `busy: quiet: later ${info.project.name} ${Date.now()}`;
+  await attach("later.png");
   await field.fill(busy);
   await page.locator("[data-send]").click();
   const kept = page.locator("[data-pending-item]").filter({ hasText: busy });
   await expect(kept).toBeVisible();
   await expect(kept).toHaveAttribute("data-pending-item", /queued|sending/);
+  await loaded(kept);
   await kept.locator("[data-resend]").click();
   await expect(kept).toHaveCount(0);
   await expect(stream.filter({ hasText: busy })).toHaveCount(1);
+  await expect(stream.filter({ hasText: busy }).locator("button img")).toBeVisible();
 
   // this device's: the server not reached, then reached
   const away = `quiet: away ${info.project.name} ${Date.now()}`;
   await page.route("**/api/chats/*/send", (r) => r.abort("connectionrefused"));
+  await attach("away.png");
   await field.fill(away);
   await page.locator("[data-send]").click();
   const waiting = page.locator('[data-pending-item="waiting"]').filter({ hasText: away });
   await expect(waiting).toBeVisible();
+  await loaded(waiting);
   await page.reload();                                  // kept on the device
   await expect(waiting).toBeVisible();
+  await loaded(waiting);
   await page.unroute("**/api/chats/*/send");
   await waiting.locator("[data-resend]").click();
   await expect(waiting).toHaveCount(0);
   await expect(stream.filter({ hasText: away })).toHaveCount(1);
+  await expect(stream.filter({ hasText: away }).locator("button img")).toBeVisible();
 });
 
 // In a group, a sender's name opens their own chat (to write to them alone).
