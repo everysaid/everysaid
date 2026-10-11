@@ -1003,3 +1003,43 @@ func TestABrokenLiveConnectionDoesNotEndTheServer(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	must(t, c.get("/api/health").status == 200, "the server goes on")
 }
+
+// Read as it is seen: up to a time, which only moves on; all of it with nothing said.
+func TestReadUntil(t *testing.T) {
+	c := newServer(t)
+	c.login()
+	unread := func(id string) float64 {
+		for _, x := range items(c.getJSON("/api/chats")) {
+			if x["id"] == id {
+				return x["unread"].(float64)
+			}
+		}
+		return -1
+	}
+	var chat string
+	for _, x := range items(c.getJSON("/api/chats")) {
+		if x["unread"].(float64) >= 2 {
+			chat = x["id"].(string)
+			break
+		}
+	}
+	must(t, chat != "", "a chat with two unread")
+	before := unread(chat)
+	var fresh []float64
+	after := c.getJSON("/api/chats/" + chat)["unread_after"].(float64)
+	for _, it := range items(c.getJSON("/api/chats/" + chat + "/stream?limit=200")) {
+		if it["type"] == "message" && it["outgoing"] == false && it["kind"] != "system" && it["ts"].(float64) > after {
+			fresh = append(fresh, it["ts"].(float64))
+		}
+	}
+	must(t, len(fresh) >= 2, "unread in the stream: %v", fresh)
+	r := c.post("/api/chats/"+chat+"/read", M{"until": fresh[0]})
+	must(t, r.status == 200, "read until: %d %s", r.status, r.body)
+	must(t, unread(chat) == before-1, "one read: %v of %v", unread(chat), before)
+	must(t, c.getJSON("/api/chats/" + chat)["unread_after"].(float64) == fresh[0], "unread after it")
+	must(t, c.post("/api/chats/"+chat+"/read", M{"until": fresh[0] - 1}).status == 200, "read until earlier")
+	must(t, unread(chat) == before-1, "not back: %v", unread(chat))
+	must(t, c.post("/api/chats/"+chat+"/read", M{"until": "x"}).status == 422, "not a time")
+	must(t, c.post("/api/chats/"+chat+"/read", M{}).status == 200, "all read")
+	must(t, unread(chat) == 0, "none left: %v", unread(chat))
+}

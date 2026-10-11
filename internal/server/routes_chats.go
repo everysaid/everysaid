@@ -235,13 +235,28 @@ func (s *Server) chatRoutes() {
 		return M{"ok": true}, nil
 	})
 
-	h("POST /api/chats/{chat_id}/read", bodyNone, func(q *req) (any, error) {
+	// read: all of it, or (`until`, Unix ms) up to the latest message the user saw
+	h("POST /api/chats/{chat_id}/read", bodyOptional, func(q *req) (any, error) {
 		chat := q.r.PathValue("chat_id")
-		if err := core.SetChatState(s.Store, chat, false, map[string]core.StateValue{"read_until": "now"}); err != nil {
+		until := time.Now().UnixMilli()
+		if v, ok := q.body["until"]; ok {
+			n, ok := v.(int64)
+			if !ok || n <= 0 {
+				return nil, &invalid{"body", "until", "Input should be a valid integer"}
+			}
+			until = n
+			moved, err := core.ReadChatUntil(s.Store, chat, until)
+			if err != nil {
+				return nil, is404(err, nil)
+			}
+			if !moved {
+				return M{"ok": true}, nil
+			}
+		} else if err := core.SetChatState(s.Store, chat, false, map[string]core.StateValue{"read_until": "now"}); err != nil {
 			return nil, is404(err, nil)
 		}
 		// the services' read receipts, where the user allows them: on their own, not waited for
-		s.Host.MarkReadSoon(chat, time.Now().UnixMilli())
+		s.Host.MarkReadSoon(chat, until)
 		return M{"ok": true}, nil
 	})
 

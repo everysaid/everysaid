@@ -216,6 +216,7 @@ export interface ChatDetail {
   // (handle: a number, an address or a username, never a service's bare id; label: the user's own name for it)
   accounts?: { conversation_id: number; service: string; address_id: number | null; name: string | null; handle: string | null; label?: string | null; last_ts: number | null }[];
   last_ts: number;
+  unread_after: number;     // Unix ms: what came later is unread (read_until, or the `unread_since` setting)
   pinned: boolean;
   muted: boolean;
   archived: boolean;

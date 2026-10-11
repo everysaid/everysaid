@@ -144,8 +144,12 @@ two days to edit).
 A message deleted for everyone (by the user or its sender) is kept in the archive but shows as the
 service shows it, "deleted", what it was on a tap; search and the media pages leave it out.
 
-**Reading** a chat in the app (something new from the others, while it is in view: a page in the
-background reads nothing) marks it read on the user's other devices too, where the service can
+**Reading** goes as far as the user has seen: a message is read once its end has been in view
+(give or take 5% of it; one taller than the view, once its end is reached), only while the page is
+looked at (one in the background reads nothing); the chat is read up to the latest seen, and whole
+once its end is. A chat with something unread opens at the first unread message, under a line "New
+messages" that stays while it is open; with nothing unread, where the user left it, or at its end.
+Reading in the app marks it read on the user's other devices too, where the service can
 without telling the sender: WhatsApp (read-self) and Signal always, Viber always (whether the others
 see it is Viber's own "seen" setting). The others are told only where the source's "Send read
 receipts" is on (off by default); on Telegram, which cannot tell one without the other, nothing

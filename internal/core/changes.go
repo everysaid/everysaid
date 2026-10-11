@@ -237,6 +237,23 @@ func SetChatState(s *Store, chatID string, always bool, fields map[string]StateV
 	})
 }
 
+// ReadChatUntil records that the user saw the chat up to `until` (Unix ms): its read_until only moves
+// on, never back (another device may have read further). It says whether it moved.
+func ReadChatUntil(s *Store, chatID string, until int64) (bool, error) {
+	if _, ok := Index(s).Chats[chatID]; !ok {
+		return false, ErrNotFound
+	}
+	if st := stateOf(States(s), chatID); st.ReadUntil != nil && *st.ReadUntil >= until {
+		return false, nil
+	}
+	err := s.Write(func(tx *sql.Tx) error {
+		db.Exec(tx, "INSERT INTO chat_state VALUES (?, 'read_until', ?, ?, 0) ON CONFLICT (chat, field) DO UPDATE SET "+
+			"value = max(value, excluded.value), set_at = excluded.set_at, always = 0", chatID, until, time.Now().UnixMilli())
+		return nil
+	})
+	return err == nil, err
+}
+
 func toInt(v any) int64 {
 	switch x := v.(type) {
 	case int64:

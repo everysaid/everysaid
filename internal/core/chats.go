@@ -1094,6 +1094,12 @@ func GetChat(s *Store, chatID string) M {
 		"conversations": nonNil(c.Conversations), "last_ts": c.LastTS, "pinned": st.Pinned,
 		"muted": st.Muted, "archived": st.Archived, "read_until": st.ReadUntil, "state_from": st.Origin,
 		"state_reports": stateReports(s, chatID), "state_user": userState}
+	// what came after this is unread (as the chat list counts it): read_until, or `unread_since`
+	unreadAfter := UnreadSince(s)
+	if st.ReadUntil != nil && *st.ReadUntil > unreadAfter {
+		unreadAfter = *st.ReadUntil
+	}
+	out["unread_after"] = unreadAfter
 	if c.Type == "person" {
 		out["avatar"] = nullable(PeopleOf(s).Avatar(c.PersonID))
 	} else {
