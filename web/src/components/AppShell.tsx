@@ -50,7 +50,7 @@ function Rail() {
   const connected = useConnected();
   const last = lastChat();
   return (
-    <nav className="flex w-[72px] shrink-0 flex-col items-center gap-1 border-r border-line bg-panel py-3">
+    <nav className="flex w-[72px] shrink-0 flex-col items-center gap-1 border-r border-line bg-panel pb-1 pt-3">
       {/* the connection to the server: a dot on the icon */}
       <Tip label={t(connected ? "nav.live" : "nav.offline")}>
         <Link to="/" className="relative mb-3" aria-label="Everysaid">
