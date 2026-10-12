@@ -240,7 +240,9 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
     let cancelled = false;
     (async () => {
       try {
-        const info = await qc.fetchQuery({ queryKey: ["chat", chatId], queryFn: () => api.get<ChatDetail>(`/api/chats/${chatId}`) });
+        // fetched here, not by fetchQuery: an invalidation meanwhile (a live event) would cancel it
+        const info = await api.get<ChatDetail>(`/api/chats/${chatId}`);
+        qc.setQueryData(["chat", chatId], info);
         const after = info.unread_after;
         const fresh = (i: StreamItem) => i.type === "message" && !i.outgoing && i.kind !== "system" && i.ts > after;
         let at = around ?? resume?.ts;
