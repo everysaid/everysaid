@@ -98,6 +98,9 @@ test("a right click on a bubble: its menu; on a link, the browser's", async ({ p
   const menu = page.getByRole("menu");
   await expect(menu).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: /Αντιγραφή|Copy/ }).first()).toBeVisible();
+  // beside the bubble, from its top (not under the ⋮, at its middle)
+  await expect.poll(async () => Math.abs((await menu.boundingBox())!.y - (await bubble.locator("[data-actions]").locator("..").boundingBox())!.y))
+    .toBeLessThan(3);
   await page.keyboard.press("Escape");
   await expect(menu).toHaveCount(0);
 });

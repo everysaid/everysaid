@@ -172,12 +172,17 @@ export function Dialog({ open, onOpenChange, title, description, children, class
 export const Menu = DropdownPrimitive.Root;
 export const MenuTrigger = DropdownPrimitive.Trigger;
 
-export function MenuContent({ children, align = "end", className, onCloseAutoFocus }: { children: React.ReactNode; align?: "start" | "end" | "center"; className?: string;
-  onCloseAutoFocus?: (e: Event) => void }) {     // e.preventDefault(): the focus is not given back to the menu's button
+export function MenuContent({ children, align = "end", className, onCloseAutoFocus, side, alignOffset }: { children: React.ReactNode; align?: "start" | "end" | "center"; className?: string;
+  onCloseAutoFocus?: (e: Event) => void;     // e.preventDefault(): the focus is not given back to the menu's button
+  side?: "left" | "right";                   // beside its button, not under it
+  alignOffset?: number }) {
   return (
     <DropdownPrimitive.Portal>
       <DropdownPrimitive.Content
         align={align}
+        side={side}
+        alignOffset={alignOffset}
+        sticky={alignOffset ? "always" : "partial"}     // moved along its button: free of it (else kept touching it)
         onCloseAutoFocus={onCloseAutoFocus}
         sideOffset={6}
         className={cn("z-50 min-w-48 overflow-hidden rounded-2xl border border-line bg-panel p-1 shadow-xl", className)}
