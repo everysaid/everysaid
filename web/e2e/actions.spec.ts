@@ -80,3 +80,24 @@ test("a reaction, an edit and a deletion of the user's own message", async ({ pa
   await expect(page.locator('[id^="m"]').filter({ hasText: `${text} (fixed)` }).locator(".italic")).toHaveCount(1);
   await composer.fill("");
 });
+
+// A right click on a bubble opens its menu, as its ⋮ does; on a link in it, the browser's own (to
+// open or copy the link).
+test("a right click on a bubble: its menu; on a link, the browser's", async ({ page }, info) => {
+  test.skip(info.project.name !== "desktop", "a mouse's");
+  await signedIn(page, info.project.name);
+  const found = await page.evaluate(async () => {
+    const r = await (await fetch(`/api/search?q=${encodeURIComponent("εύκολη")}`, { headers: { "X-Everysaid": "1" } })).json();
+    return { chat: r.items[0].chat_id as string, id: r.items[0].id as number };
+  });
+  await page.goto(`/chat/${found.chat}?m=${found.id}`);
+  const bubble = page.locator(`#m${found.id}`);
+  await bubble.locator("[data-preview]").click({ button: "right" });
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await bubble.getByText("Δες αυτή").click({ button: "right" });
+  const menu = page.getByRole("menu");
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: /Αντιγραφή|Copy/ }).first()).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+});

@@ -415,6 +415,14 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
             title={m.sender_self_named ? t("people.selfNamed") : undefined}>{m.sender_self_named && "~ "}{m.sender}</span>
         ))}
         <div ref={bubbleRef}
+          // a right click: its menu, as the ⋮ beside it; the browser's own on text selected in it (to
+          // copy that) and on a link (to open or copy it)
+          onContextMenu={hasActions ? (e) => {
+            const sel = window.getSelection();
+            if ((sel && !sel.isCollapsed && e.currentTarget.contains(sel.anchorNode)) || (e.target as HTMLElement).closest("a")) return;
+            e.preventDefault();
+            setMenu(true);
+          } : undefined}
           className={cn(
             "relative rounded-bubble text-[15px] leading-snug",
             // its shadow the shape's, the tail's too (a box-shadow stopped where the tail begins)
