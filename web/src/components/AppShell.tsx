@@ -51,12 +51,10 @@ function Rail() {
   const last = lastChat();
   return (
     <nav className="flex w-[72px] shrink-0 flex-col items-center gap-1 border-r border-line bg-panel pb-1 pt-3">
-      {/* the connection to the server: a dot on the icon */}
+      {/* the connection to the server: the icon in colour, grey until it is there */}
       <Tip label={t(connected ? "nav.live" : "nav.offline")}>
-        <Link to="/" className="relative mb-3" aria-label="Everysaid">
-          <Logo className="size-10" />
-          <span data-connected={connected || undefined}
-            className={cn("absolute -right-0.5 -top-0.5 size-2.5 rounded-full ring-2 ring-panel", connected ? "bg-ok" : "bg-muted")} />
+        <Link to="/" className="mb-3" aria-label="Everysaid" data-connected={connected || undefined}>
+          <Logo className={cn("size-10 transition-[filter,opacity] duration-500", !connected && "opacity-60 grayscale")} />
         </Link>
       </Tip>
       {NAV.map(({ to, icon: Icon, key }) => (
