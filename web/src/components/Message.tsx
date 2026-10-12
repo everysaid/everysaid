@@ -501,11 +501,12 @@ function nameColor(name: string) {
 }
 
 // The tail of a run's last bubble, at its lower corner on the sender's side, as the bubble's own
-// (its colour; the incoming one's border too); it covers the bubble's edge where they meet.
+// (its colour; the incoming one's border too); it covers the bubble's edge where they meet. The
+// incoming one's placed from inside the bubble's border: 1px further out, its line on the border's.
 function Tail({ out }: { out: boolean }) {
   return (
-    <svg aria-hidden viewBox="0 0 9 13" className={cn("pointer-events-none absolute -bottom-px h-[13px] w-[9px]",
-      out ? "-right-2 scale-x-[-1] text-bubble-out" : "-left-2 text-bubble-in")}>
+    <svg aria-hidden viewBox="0 0 9 13" className={cn("pointer-events-none absolute h-[13px] w-[9px]",
+      out ? "-right-2 bottom-0 scale-x-[-1] text-bubble-out" : "-bottom-px -left-[9px] text-bubble-in")}>
       <path d="M9 0 C8 6 5 10 1 12 Q0 12.6 1 13 H9 Z" fill="currentColor" />
       {!out && <path d="M8.6 0 C7.6 6 4.6 9.6 1 11.6 Q-0.4 12.6 1 12.6 H9" fill="none" className="stroke-line/60" strokeWidth="1" />}
     </svg>
