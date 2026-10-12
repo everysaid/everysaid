@@ -127,7 +127,9 @@ export function LocalThumb({ l }: { l: Local }) {
 export function Thumb({ a, onOpen, className, loop }: { a: Attachment; onOpen?: () => void; className?: string; loop?: boolean }) {
   const { t } = useTranslation();
   const isVideo = a.mime?.startsWith("video/");
-  const size = thumbSize;
+  // a picture smaller than the place for one: at its own size, not blown up and cut
+  const [small, setSmall] = useState(false);
+  const size = small ? "block max-h-80 max-w-72" : thumbSize;
   if (a.available === "gone") {
     return (
       // a line, not a picture's place: nothing is there to see
@@ -137,13 +139,14 @@ export function Thumb({ a, onOpen, className, loop }: { a: Attachment; onOpen?: 
     );
   }
   return (
-    <button onClick={onOpen} className={cn("relative block overflow-hidden rounded-xl bg-black/10", className)} aria-label={isVideo ? t("kind.video") : t("kind.image")}>
+    <button onClick={onOpen} className={cn("relative block overflow-hidden rounded-xl bg-black/10", small && "w-fit", className)} aria-label={isVideo ? t("kind.video") : t("kind.image")}>
       {isVideo && loop ? <LoopVideo a={a} className={size} /> : <img
         src={thumbUrl(a.sha256)}
         alt=""
         loading="lazy"
         decoding="async"
         className={size}
+        onLoad={(e) => { const i = e.currentTarget; setSmall(i.naturalWidth < 160 || i.naturalHeight < 96); }}
         onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")}
       />}
       {isVideo && !loop && (
@@ -483,7 +486,8 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
             </div>
           )}
           {media.length > 0 && (
-            <div className={cn("grid gap-1", media.length > 1 && "grid-cols-2")}>
+            // one picture: as wide as it is shown (a caption wider than it leaves no empty band beside it)
+            <div className={cn("grid gap-1", media.length > 1 ? "grid-cols-2" : "w-fit max-w-full")}>
               {media.map((a) => <Thumb key={a.sha256} a={a} loop={m.subtype === "gif"} onOpen={() => onOpen(a, m)} />)}
             </div>
           )}
