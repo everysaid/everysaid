@@ -323,6 +323,7 @@ function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange }: {
 // The bubbles' widths (by message), for their neighbours' corners: measured once laid out, kept
 // when a bubble leaves the view (it is soon back the same).
 const widths = new Map<number, number>();
+const REACH = 12;           // how far past its neighbour (px) a bubble must reach for a round corner
 const widthWatchers = new Set<() => void>();
 const watchWidths = (f: () => void) => { widthWatchers.add(f); return () => { widthWatchers.delete(f); }; };
 function useWidth(id: number | undefined) {
@@ -390,11 +391,12 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
   const local = !media.length ? m.local : undefined;
   const onlyMedia = !(m.deleted && !reveal) && (media.some((a) => a.available !== "gone") || !!local) && !m.text && !others.length && !m.reply;
   const tail = last && !onlyMedia;     // the run's last says it is said, by its sender's side
-  // the far side's corners round only where the bubble reaches out past its neighbour in the run
+  // the far side's corners round only where the bubble reaches out past its neighbour in the run,
+  // by more than a few pixels (a round corner a hair out looks cut: both tight then)
   const bubbleRef = useMeasured(m.id);
   const width = useWidth(m.id), widthAbove = useWidth(above), widthBelow = useWidth(below);
-  const tightTop = above !== undefined && width > 0 && widthAbove >= width;
-  const tightBottom = below !== undefined && width > 0 && widthBelow >= width;
+  const tightTop = width > 0 && widthAbove > 0 && widthAbove >= width - REACH;
+  const tightBottom = width > 0 && widthBelow > 0 && widthBelow >= width - REACH;
   const label = m.kind !== "text" && !m.attachments.length && !local && !m.text && !m.location ? t(`kind.${m.kind}`, { defaultValue: m.kind }) : null;
   const poll = pollOf(m.notice);
   return (
