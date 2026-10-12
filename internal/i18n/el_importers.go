@@ -23,6 +23,7 @@ func init() {
 		"pairs:  {n} (from Android in its time: {m})":                  "ζεύγη:  {n} (από το Android στην εποχή του: {m})",
 		"new:    {n} {source} {service}":                               "νέα:    {n} {source} {service}",
 		"new:    none":                                                 "νέα:    κανένα",
+		"link previews on messages already here: {n}":                  "προεπισκοπήσεις συνδέσμων σε μηνύματα που υπήρχαν ήδη: {n}",
 		"iPhone: {n} calls":                                            "iPhone: {n} κλήσεις",
 		"Android ({devices}): {n} calls":                               "Android ({devices}): {n} κλήσεις",
 		"new:   {n} {source} {service}":                                "νέες:   {n} {source} {service}",

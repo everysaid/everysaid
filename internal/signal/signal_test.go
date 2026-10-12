@@ -1,8 +1,12 @@
 package signal
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"image"
+	"image/color"
+	pngenc "image/png"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1577,5 +1581,76 @@ func TestChatState(t *testing.T) {
 	got := db.Strs(c.Store().Read(), "SELECT field || '=' || value FROM state_report WHERE field != 'read_until' ORDER BY field")
 	if strings.Join(got, ",") != "archived=1,muted=-1,pinned=0" {
 		t.Fatalf("%v", got)
+	}
+}
+
+// A link's preview: a new message's with its description and picture (the file the client fetched,
+// taken into the preview and removed, never a file of the message), and one kept before previews
+// were (its link and title only) brought in at the next import.
+func TestPreviewImport(t *testing.T) {
+	dir := folders(t)
+	path := newArchive(t, dir)
+	media := filepath.Join(dir, "media")
+	os.MkdirAll(media, 0o700)
+	var png bytes.Buffer
+	pic := image.NewRGBA(image.Rect(0, 0, 4, 3))
+	pic.Set(1, 1, color.RGBA{200, 10, 10, 255})
+	if err := pngenc.Encode(&png, pic); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(media, "preview-1000-22222222-0.png")
+	os.WriteFile(file, png.Bytes(), 0o600)
+	s, err := OpenStore("", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.Account(Status{Linked: true, ACI: fakeOwn})
+	apply(t, s, map[string]any{"event": "message", "chat": contact(anna), "sender": anna, "ts": 1000, "text": "https://example.org/a",
+		"previews": []any{map[string]any{"url": "https://example.org/a", "title": "A page", "description": "About it",
+			"image": map[string]any{"content_type": "image/png", "file": "preview-1000-22222222-0.png"}}}},
+		map[string]any{"event": "message", "chat": contact(anna), "sender": anna, "ts": 2000, "text": "https://example.org/b",
+			"previews": []any{map[string]any{"url": "https://example.org/b", "title": "B page"}}})
+	a, err := archive.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	if _, err := Import(a, s, media, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	row := func(key string) (url, title, desc string, img bool) {
+		var u, ti, d, i *string
+		a.Row("SELECT p.url, p.title, p.description, p.image FROM link_preview p JOIN message m ON m.id = p.message_id WHERE m.key = ?",
+			[]any{key}, &u, &ti, &d, &i)
+		return deref(u), deref(ti), deref(d), i != nil
+	}
+	if u, ti, d, img := row(Key(anna, 1000)); u != "https://example.org/a" || ti != "A page" || d != "About it" || !img {
+		t.Fatalf("%q %q %q %v", u, ti, d, img)
+	}
+	if u, ti, _, img := row(Key(anna, 2000)); u != "https://example.org/b" || ti != "B page" || img {
+		t.Fatalf("%q %q %v", u, ti, img)
+	}
+	if _, err := os.Stat(file); err == nil || db.Int(a.DB, "SELECT count(*) FROM attachment") != 0 || db.Int(a.DB, "SELECT count(*) FROM link_preview_image") != 1 {
+		t.Fatal("the preview's picture is a file of the message, or still in the folder")
+	}
+	if sub := db.Str(a.DB, "SELECT subtype_code FROM message WHERE key = ?", Key(anna, 2000)); sub != "signal:preview" {
+		t.Fatalf("subtype %q", sub)
+	}
+	// imported before previews were kept: brought in now; the picture kept stays without its file
+	a.Exec("DELETE FROM link_preview WHERE message_id = (SELECT id FROM message WHERE key = ?)", Key(anna, 2000))
+	a.Commit()
+	n, err := Import(a, s, media, 0, nil)
+	if err != nil || n.Changes != 1 {
+		t.Fatalf("%v %+v", err, n)
+	}
+	if _, ti, _, _ := row(Key(anna, 2000)); ti != "B page" {
+		t.Fatal("the old message's preview")
+	}
+	if _, _, _, img := row(Key(anna, 1000)); !img {
+		t.Fatal("the picture went")
+	}
+	if n, _ := Import(a, s, media, 0, nil); n != (Counts{}) {
+		t.Fatalf("again: %+v", n)
 	}
 }

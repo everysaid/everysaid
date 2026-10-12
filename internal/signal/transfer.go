@@ -491,7 +491,12 @@ func (a *transferArchive) message(chat M, author string, outgoing bool, it *back
 		if ps := m.GetLinkPreview(); len(ps) > 0 {
 			previews := []M{}
 			for _, p := range ps {
-				previews = append(previews, M{"url": p.GetUrl(), "title": optStr(p.Title)})
+				var img *signalpb.AttachmentPointer
+				var hash []byte
+				if p.GetImage() != nil {
+					img, hash = pointer(p.GetImage(), 0)
+				}
+				previews = append(previews, previewJSON(p.GetUrl(), optStr(p.Title), optStr(p.Description), optU64(p.Date), img, hash))
 			}
 			ev["previews"] = previews
 		}

@@ -48,6 +48,7 @@ type smsRec struct {
 	text     string // "" is none
 	key      string
 	code     string // the source's own service, where it is not one we know
+	preview  *archive.Preview
 }
 
 // attributedText is the plain text of an NSAttributedString typedstream (sms.db attributedBody).
@@ -132,12 +133,15 @@ func readIphoneSMS(path string) []*smsRec {
 		members[r["chat_id"]] = append(members[r["chat_id"]], address(handles[r["handle_id"]]))
 	}
 	mime := map[any]string{}
-	for _, r := range maps(d, "SELECT j.message_id, a.mime_type FROM message_attachment_join j "+
+	// (a link preview's pictures are not files of the message)
+	for _, r := range maps(d, "SELECT j.message_id, a.* FROM message_attachment_join j "+
 		"JOIN attachment a ON a.ROWID = j.attachment_id ORDER BY a.ROWID") {
-		if _, ok := mime[r["message_id"]]; !ok {
+		if _, ok := mime[r["message_id"]]; !ok && !strings.HasSuffix(str(r["filename"]), ".pluginPayloadAttachment") {
 			mime[r["message_id"]] = str(r["mime_type"])
 		}
 	}
+	previews := imessagePreviews(d)
+	media := filepath.Join(filepath.Dir(path), "sms-media") // where the sync copied their pictures
 	services := map[string]string{"SMS": "sms", "iMessage": "imessage", "RCS": "rcs"}
 	var recs []*smsRec
 	eachMap(d, "SELECT * FROM message ORDER BY ROWID", nil, func(r row) {
@@ -196,8 +200,12 @@ func readIphoneSMS(path string) []*smsRec {
 		if service == "imessage" {
 			key = guid
 		}
+		var preview *archive.Preview
+		if p, ok := previews[toInt(id)]; ok {
+			preview = p.withPicture(media)
+		}
 		recs = append(recs, &smsRec{archive.Iphone() + "/sms", guid, r, service, ts, truthy(r["is_from_me"]), sender, mem,
-			kind, cleanText(text), key, code})
+			kind, cleanText(text), key, code, preview})
 	})
 	return recs
 }
@@ -217,7 +225,7 @@ func readAndroidSMS(path string, own map[archive.Handle]bool, device string) []*
 		}
 		date, _ := pyInt(r["date"])
 		recs = append(recs, &smsRec{device + "/sms", pyStr(r["_id"]), r, "sms", date, outgoing, sender,
-			[]archive.Handle{addr}, "text", cleanText(str(r["body"])), "", ""})
+			[]archive.Handle{addr}, "text", cleanText(str(r["body"])), "", "", nil})
 	}
 	parts, addrs := map[any][]row{}, map[any][]row{}
 	for _, p := range maps(d, "SELECT * FROM mms_part ORDER BY CAST(seq AS INTEGER), CAST(_id AS INTEGER)") {
@@ -266,7 +274,7 @@ func readAndroidSMS(path string, own map[archive.Handle]bool, device string) []*
 		}
 		date, _ := pyInt(r["date"])
 		recs = append(recs, &smsRec{device + "/mms", pyStr(r["_id"]), r, "mms", date * 1000, outgoing, sender, members,
-			kind, cleanText(text.String()), "", ""})
+			kind, cleanText(text.String()), "", "", nil})
 	}
 	return recs
 }
@@ -481,9 +489,16 @@ func SMS(a *archive.Archive, out func(string), opt SMSOptions) (err error) {
 	type addedKey struct{ source, service string }
 	added := map[addedKey]int{}
 	sort.SliceStable(chosen, func(x, y int) bool { return chosen[x].ts < chosen[y].ts })
+	previews := 0 // brought to messages the archive has
 	for _, r := range chosen {
 		sid := sources[r.source]
 		if a.HasOrigin(sid, r.rowKey, "") {
+			if r.preview != nil {
+				if mid, ok := a.IntOK("SELECT message_id FROM message_origin WHERE source_id = ? AND row_key = ?", sid, r.rowKey); ok &&
+					a.SetPreview(mid, r.preview) {
+					previews++
+				}
+			}
 			continue
 		}
 		// the other phone's copy came in on an earlier import (this phone's rows were not read
@@ -506,6 +521,7 @@ func SMS(a *archive.Archive, out func(string), opt SMSOptions) (err error) {
 			if r.code != "" && x.SubtypeCode == "" {
 				x.SubtypeCode = r.code
 			}
+			x.Preview = r.preview
 		}
 		a.AddMessage(sid, r.rowKey, archive.Message{Service: r.service, ConversationID: conv, TS: r.ts, Outgoing: r.outgoing,
 			SenderID: senderID, Kind: r.kind, Text: r.text, Key: r.key, Extras: x})
@@ -564,6 +580,9 @@ func SMS(a *archive.Archive, out func(string), opt SMSOptions) (err error) {
 	}
 	if len(added) == 0 {
 		say(out, "new:    none", nil)
+	}
+	if previews > 0 {
+		say(out, "link previews on messages already here: {n}", map[string]any{"n": previews})
 	}
 	return nil
 }

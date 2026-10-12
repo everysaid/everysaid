@@ -327,6 +327,20 @@ func attachmentJSON(a *signalpb.AttachmentPointer, sticker bool) M {
 		"sticker":    sticker, "file": nil, "pointer": pointerText(a)}
 }
 
+// previewJSON is a link's preview as the events have it: its picture as an attachment's (its file
+// filled in once fetched; hash, where that is its check).
+func previewJSON(url, title, desc, date any, image *signalpb.AttachmentPointer, hash []byte) M {
+	p := M{"url": url, "title": title, "description": desc, "date": date}
+	if image != nil {
+		j := attachmentJSON(image, false)
+		if len(hash) > 0 {
+			j["hash"] = base64.StdEncoding.EncodeToString(hash)
+		}
+		p["image"] = j
+	}
+	return p
+}
+
 func joinNonEmpty(parts ...string) string {
 	var out []string
 	for _, p := range parts {
@@ -397,7 +411,7 @@ func (c conv) messageFields(ev M, dm *signalpb.DataMessage) []*signalpb.Attachme
 	if ps := dm.GetPreview(); len(ps) > 0 {
 		previews := []M{}
 		for _, p := range ps {
-			previews = append(previews, M{"url": optStr(p.Url), "title": optStr(p.Title)})
+			previews = append(previews, previewJSON(optStr(p.Url), optStr(p.Title), optStr(p.Description), optU64(p.Date), p.Image, nil))
 		}
 		ev["previews"] = previews
 	}
