@@ -11,7 +11,8 @@ import (
 
 // previews adds a few links with the previews their services sent (a page's picture, title and
 // description; one without a picture), after everything else, so that the rest of the demo stays
-// as it was. The pictures are drawn as the others, each of its own seed.
+// as it was: months back, so that none is anyone's latest message (which says the service a chat
+// writes on). The pictures are drawn as the others, each of its own seed.
 func previews(a *archive.Archive, source func(string) int64, people []*person, dir string, seed int64, now time.Time) error {
 	list := []struct {
 		service, url, site, title, description, text string
@@ -20,11 +21,11 @@ func previews(a *archive.Archive, source func(string) int64, people []*person, d
 	}{
 		{"whatsapp", "https://example.org/syntages/fakes", "Συνταγές", "Φακές με δυόσμο",
 			"Η κλασική σούπα του χειμώνα, με λίγο ξίδι στο τέλος.", "Δες αυτή, είναι εύκολη https://example.org/syntages/fakes",
-			false, true, 5},
+			false, true, 200},
 		{"telegram", "https://example.com/news/weekend-rain", "Example News", "Βροχές το Σαββατοκύριακο",
-			"Η πρόγνωση για την Αθήνα και τα νησιά.", "https://example.com/news/weekend-rain", true, true, 6},
+			"Η πρόγνωση για την Αθήνα και τα νησιά.", "https://example.com/news/weekend-rain", true, true, 210},
 		{"viber", "https://example.net/concert", "Example Tickets", "Συναυλία στο Ηρώδειο",
-			"Εισιτήρια από 20 €, για τις 14 Ιουνίου.", "Πάμε; https://example.net/concert", false, false, 7},
+			"Εισιτήρια από 20 €, για τις 14 Ιουνίου.", "Πάμε; https://example.net/concert", false, false, 220},
 	}
 	for i, l := range list {
 		var who *person
