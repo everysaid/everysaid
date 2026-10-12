@@ -129,3 +129,18 @@ test("sent, the next page not had: not said as failed", async ({ page }, info) =
   await page.waitForTimeout(2000);
   await expect(page.getByText(/Δεν στάλθηκε|Not sent/)).toHaveCount(0);     // neither on it nor in a toast
 });
+
+test("a chat opened while the server is out of reach: opens once it is back", async ({ page }, info) => {
+  await signedIn(page, info.project.name);
+  const chat = await page.evaluate(async () => {
+    const chats = (await (await fetch("/api/chats", { headers: { "X-Everysaid": "1" } })).json()).items;
+    return chats.find((c: any) => c.type === "person").id as string;
+  });
+  // the chat's detail not reached the first time (a restart), as fetch says it: no answer at all
+  let failed = 0;
+  await page.route(`**/api/chats/${chat}`, (route) => (failed++ ? route.continue() : route.abort("connectionrefused")));
+  await page.goto(`/chat/${chat}`);
+  await expect(page.locator("[data-stream] [data-cursor]").first()).toBeVisible();
+  expect(failed).toBeGreaterThan(1);
+  await expect(page.getByText(/Κάτι πήγε στραβά|Something went wrong/)).toHaveCount(0);
+});
