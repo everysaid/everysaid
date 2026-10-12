@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
@@ -241,6 +241,8 @@ export interface BubbleProps {
   group: boolean;            // a group chat: senders' names and avatars
   first: boolean;            // first of a run by the same sender
   last: boolean;             // last of a run
+  above?: number;            // the run's message before this one, and after (ids): the far corners
+  below?: number;            // round only where this bubble reaches out past theirs
   showService: boolean;      // the service changed: say it
   account?: string;          // which of the person's accounts on the service (more than one): said beside it
   highlight?: boolean;
@@ -318,7 +320,32 @@ function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange }: {
   );
 }
 
-export const Bubble = memo(function Bubble({ m, group, first, last, showService, account, highlight, onOpen, onJump, onReply, onInfo, react, onEdit, onDelete }: BubbleProps) {
+// The bubbles' widths (by message), for their neighbours' corners: measured once laid out, kept
+// when a bubble leaves the view (it is soon back the same).
+const widths = new Map<number, number>();
+const widthWatchers = new Set<() => void>();
+const watchWidths = (f: () => void) => { widthWatchers.add(f); return () => { widthWatchers.delete(f); }; };
+function useWidth(id: number | undefined) {
+  return useSyncExternalStore(watchWidths, () => (id === undefined ? 0 : widths.get(id) ?? 0));
+}
+function useMeasured(id: number) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const w = Math.round(el.offsetWidth);
+      if (widths.get(id) === w) return;
+      widths.set(id, w);
+      widthWatchers.forEach((f) => f());
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [id]);
+  return ref;
+}
+
+export const Bubble = memo(function Bubble({ m, group, first, last, above, below, showService, account, highlight, onOpen, onJump, onReply, onInfo, react, onEdit, onDelete }: BubbleProps) {
   const { t } = useTranslation();
   const [menu, setMenu] = useState(false);
   // deleted for everyone: the notice, as the service shows it; what it was, on a tap
@@ -363,6 +390,11 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
   const local = !media.length ? m.local : undefined;
   const onlyMedia = !(m.deleted && !reveal) && (media.some((a) => a.available !== "gone") || !!local) && !m.text && !others.length && !m.reply;
   const tail = last && !onlyMedia;     // the run's last says it is said, by its sender's side
+  // the far side's corners round only where the bubble reaches out past its neighbour in the run
+  const bubbleRef = useMeasured(m.id);
+  const width = useWidth(m.id), widthAbove = useWidth(above), widthBelow = useWidth(below);
+  const tightTop = above !== undefined && width > 0 && widthAbove >= width;
+  const tightBottom = below !== undefined && width > 0 && widthBelow >= width;
   const label = m.kind !== "text" && !m.attachments.length && !local && !m.text && !m.location ? t(`kind.${m.kind}`, { defaultValue: m.kind }) : null;
   const poll = pollOf(m.notice);
   return (
@@ -380,7 +412,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
           <span className="mb-0.5 ml-3 text-xs font-semibold" style={{ color: nameColor(m.sender) }}
             title={m.sender_self_named ? t("people.selfNamed") : undefined}>{m.sender_self_named && "~ "}{m.sender}</span>
         ))}
-        <div
+        <div ref={bubbleRef}
           className={cn(
             "relative rounded-bubble text-[15px] leading-snug shadow-sm",
             out ? "bg-bubble-out text-bubble-out-fg" : "border border-line/60 bg-bubble-in",
@@ -388,6 +420,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, showService,
             // before, on the sender's side, tighter; the run's outer corners round (one alone: all)
             out ? [!first && "rounded-tr-md", !last && "rounded-br-md"] : [!first && "rounded-tl-md", !last && "rounded-bl-md"],
             tail && (out ? "rounded-br-none" : "rounded-bl-none"),     // the run's last: its corner the tail's
+            out ? [tightTop && "rounded-tl-md", tightBottom && "rounded-bl-md"] : [tightTop && "rounded-tr-md", tightBottom && "rounded-br-md"],
             onlyMedia ? "p-1" : "px-3 py-2",
             m.deleted && "italic opacity-70",
             highlight && "flash",

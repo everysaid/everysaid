@@ -645,6 +645,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       const switched = !!acct && !!prev && prev.type === "message" && prev.service === item.service && prev.conversation_id !== item.conversation_id;
       const showService = !prev || prev.type !== "message" || prev.service !== item.service || newDay || switched;
       body = <Bubble m={item} group={isGroup} first={firstOfRun} last={lastOfRun} showService={showService}
+        above={firstOfRun ? undefined : (prev as MessageItem).id} below={lastOfRun ? undefined : (next as MessageItem).id}
         account={acct ? accountShort(acct) : undefined}
         highlight={highlight === item.id} onOpen={openMedia} onJump={jump}
         onReply={item.keyed && replyable.includes(item.service) ? answer : undefined}
