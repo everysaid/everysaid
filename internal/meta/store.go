@@ -4,7 +4,8 @@ package meta
 // instance's session (the cookies, which are the account; messagix's state for reconnecting; the
 // number of its end-to-end encryption device, whose keys are whatsmeow's in keys.db too), what
 // it learned of the threads (their kind, and an encrypted group's id), and the files still to
-// download (their addresses expire), until the archive has them.
+// download (their addresses expire), until the archive has them: with them the pictures of links'
+// previews, which are not files of their messages.
 
 import (
 	"context"
@@ -53,10 +54,10 @@ CREATE TABLE IF NOT EXISTS meta_file (        -- a message's file still to downl
     instance INTEGER NOT NULL,
     thread TEXT NOT NULL,
     message TEXT NOT NULL,                     -- the message's id
-    n INTEGER NOT NULL,                        -- its place among the message's files
+    n INTEGER NOT NULL,                        -- its place among the message's files (-1: its link preview's picture)
     url TEXT,                                  -- where it is (it expires)
     wa BLOB,                                   -- or an encrypted chat's file: its transport (JSON)
-    name TEXT,                                 -- the name it was sent with
+    name TEXT,                                 -- the name it was sent with (a preview's picture: the link)
     mime TEXT,
     at INTEGER NOT NULL,                       -- when it arrived, Unix s
     tries INTEGER NOT NULL DEFAULT 0,
@@ -206,7 +207,12 @@ func saveThread(iid int64, key string, t threadInfo) error {
 	return err
 }
 
-// pendingFile is a message's file still to download.
+// previewN is the place (pendingFile.N) of a message's link preview picture, which is not one of its
+// files: downloaded as they are, into the preview (link_preview).
+const previewN = -1
+
+// pendingFile is a message's file still to download (or its link preview's picture: N previewN,
+// Name the link).
 type pendingFile struct {
 	Thread, Message string
 	N               int

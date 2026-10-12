@@ -297,8 +297,27 @@ func (t *translator) igMessage(o *ops, key string, m *slidetypes.Message) (impor
 			}
 			if link != "" {
 				msg.Subtype = "link"
-				if !strings.Contains(text, link) {
-					text = strings.TrimSpace(strings.TrimSpace(text+"\n"+x.TitleText) + "\n" + link)
+				if strings.TrimSpace(text) == "" {
+					text = link
+				}
+				title, desc := x.TitleText, x.SubtitleText
+				if title == "" {
+					title = x.XMATitle
+				}
+				if desc == "" {
+					desc = x.CaptionBodyText
+				}
+				msg.Preview = linkPreview(link, x.HeaderTitleText, title, desc)
+				for _, p := range []*slidetypes.XMAPreviewImage{x.PreviewImage, x.XMAPreviewImage} {
+					if p != nil && (p.URL != "" || p.FallbackURL != "") {
+						u := p.URL
+						if u == "" {
+							u = p.FallbackURL
+						}
+						o.files = append(o.files, pendingFile{Thread: key, Message: m.ID, N: previewN, URL: u, Name: link,
+							At: time.Now().Unix()})
+						break
+					}
 				}
 			} else if text == "" {
 				text = strings.TrimSpace(x.TitleText + "\n" + x.SubtitleText)

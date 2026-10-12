@@ -79,6 +79,7 @@ type dyiMessage struct {
 	Share       *struct {
 		Link      string `json:"link"`
 		ShareText string `json:"share_text"`
+		Owner     string `json:"original_content_owner"` // Instagram: whose post it is
 	} `json:"share"`
 	Reactions []struct {
 		Reaction string `json:"reaction"`
@@ -342,6 +343,7 @@ func MetaExport(a *archive.Archive, out func(string), o MetaExportOptions) (err 
 		a.Exec("UPDATE source SET instance_id = ? WHERE id = ? AND instance_id IS NULL", o.Instance, w.Source)
 	}
 	w.Store = NewStore(a)
+	w.WeakPreviews = true
 	self := MetaUser{Name: owner}
 	w.Self(self)
 	keys := make([]string, 0, len(threads))
@@ -397,6 +399,9 @@ func MetaExport(a *archive.Archive, out func(string), o MetaExportOptions) (err 
 	w.Store.Release()
 	say(out, "{service}: {n} new messages ({calls} calls) from {threads} chats of the export", map[string]any{
 		"service": o.Service, "n": added, "calls": calls, "threads": len(threads)})
+	if w.Previews > 0 {
+		say(out, "changes to what was there: {list}", map[string]any{"list": fmt.Sprintf("preview %d", w.Previews)})
+	}
 	w.Store.report(a, out)
 	return nil
 }
@@ -441,6 +446,7 @@ func metaExportMessage(t *thread, roots []string, m *dyiMessage, owner string) M
 		if !strings.Contains(rec.Text, m.Share.Link) {
 			rec.Text = strings.TrimSpace(rec.Text + "\n" + m.Share.Link)
 		}
+		rec.Preview = shareText(m.Share.Link, metaText(m.Share.ShareText), metaText(m.Share.Owner), rec.Text)
 	}
 	for _, r := range m.Reactions {
 		actor := metaText(r.Actor)
@@ -459,6 +465,22 @@ func metaExportMessage(t *thread, roots []string, m *dyiMessage, owner string) M
 		rec.Kind, rec.Subtype, rec.Code = "system", "group event", "meta:"+m.Type
 	}
 	return rec
+}
+
+// shareText is the preview of a shared link from what the export says of it (its text, whose post
+// it is), nil where it says nothing more than the link or the message's text does.
+func shareText(link, text, owner, msg string) *archive.Preview {
+	text, owner = strings.TrimSpace(text), strings.TrimSpace(owner)
+	if text == link || strings.Contains(msg, text) {
+		text = ""
+	}
+	switch {
+	case owner != "":
+		return &archive.Preview{URL: link, Title: owner, Description: text}
+	case text != "":
+		return &archive.Preview{URL: link, Title: text}
+	}
+	return nil
 }
 
 // kindOfName is the kind of a message by its file's name.

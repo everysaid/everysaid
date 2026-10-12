@@ -399,8 +399,14 @@ func (s *liveSession) handle(ctx context.Context, it item) error {
 		}
 		return err
 	}
-	if len(res.files) > 0 && s.c.Bool("media") {
-		if err := queueFiles(s.c.ID, res.files); err != nil {
+	var files []pendingFile
+	for _, f := range res.files {
+		if f.N == previewN || s.c.Bool("media") {
+			files = append(files, f)
+		}
+	}
+	if len(files) > 0 {
+		if err := queueFiles(s.c.ID, files); err != nil {
 			s.c.Logf("keys.db: %v", err)
 		}
 		s.wakeDownloader()
