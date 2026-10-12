@@ -51,9 +51,14 @@ function Rail() {
   const last = lastChat();
   return (
     <nav className="flex w-[72px] shrink-0 flex-col items-center gap-1 border-r border-line bg-panel py-3">
-      <Link to="/" className="mb-3" aria-label="Everysaid">
-        <Logo className="size-10" />
-      </Link>
+      {/* the connection to the server: a dot on the icon */}
+      <Tip label={t(connected ? "nav.live" : "nav.offline")}>
+        <Link to="/" className="relative mb-3" aria-label="Everysaid">
+          <Logo className="size-10" />
+          <span data-connected={connected || undefined}
+            className={cn("absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full ring-2 ring-panel", connected ? "bg-ok" : "bg-muted")} />
+        </Link>
+      </Tip>
       {NAV.map(({ to, icon: Icon, key }) => (
         <Tip key={to} label={t(`nav.${key}`)}>
           <Link
@@ -76,9 +81,6 @@ function Rail() {
           </Link>
         </Tip>
       ))}
-      <Tip label={t(connected ? "nav.live" : "nav.offline")}>
-        <span className={cn("mt-2 size-2 rounded-full", connected ? "bg-ok" : "bg-muted")} />
-      </Tip>
     </nav>
   );
 }
