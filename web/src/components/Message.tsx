@@ -333,6 +333,23 @@ function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange, at }
   );
 }
 
+// A text of emoji alone, up to three of them (how many; 0 otherwise): shown larger the fewer they
+// are, as the services do; one alone without its bubble.
+const segments = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const EMOJI = /^(\p{Extended_Pictographic}|\p{Regional_Indicator}{2}|[#*0-9]\uFE0F?\u20E3)/u;
+const TEXTY = /^[\u00A9\u00AE\u2000-\u21FF](?!\uFE0F)/u;      // ©, ®, ™, arrows: text, unless asked as emoji
+const BIG = ["", "text-5xl leading-tight", "text-4xl leading-tight", "text-3xl leading-tight"];
+function emojiOnly(text: string | null | undefined): number {
+  const s = text?.trim();
+  if (!s || s.length > 64) return 0;
+  let n = 0;
+  for (const { segment } of segments.segment(s)) {
+    if (/^\s+$/.test(segment)) continue;
+    if (!EMOJI.test(segment) || TEXTY.test(segment) || ++n > 3) return 0;
+  }
+  return n;
+}
+
 // The bubbles' widths (by message), for their neighbours' corners: measured once laid out, kept
 // when a bubble leaves the view (it is soon back the same).
 const widths = new Map<number, number>();
@@ -405,7 +422,10 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
   // pictures alone: the time over them (not when none of them is there any more: a line of text then)
   const local = !media.length ? m.local : undefined;
   const onlyMedia = !(m.deleted && !reveal) && (media.some((a) => a.available !== "gone") || !!local) && !m.text && !others.length && !m.reply;
-  const tail = last && !onlyMedia;     // the run's last says it is said, by its sender's side
+  const poll = pollOf(m.notice);
+  const emoji = !m.deleted && !m.reply && !m.attachments.length && !local && !m.preview && !m.location && !poll ? emojiOnly(m.text) : 0;
+  const bare = emoji === 1;
+  const tail = last && !onlyMedia && !bare;     // the run's last says it is said, by its sender's side
   // the far side's corners round only where the bubble reaches out past its neighbour in the run,
   // by more than a few pixels (a round corner a hair out looks cut: both tight then)
   const bubbleRef = useMeasured(m.id);
@@ -413,7 +433,6 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
   const tightTop = width > 0 && widthAbove > 0 && widthAbove >= width - REACH;
   const tightBottom = width > 0 && widthBelow > 0 && widthBelow >= width - REACH;
   const label = m.kind !== "text" && !m.attachments.length && !local && !m.text && !m.location ? t(`kind.${m.kind}`, { defaultValue: m.kind }) : null;
-  const poll = pollOf(m.notice);
   return (
     <div id={`m${m.id}`} className={cn("group/msg flex gap-2 px-3 md:px-6", out ? "justify-end" : "justify-start", first ? "mt-2" : "mt-0.5")}>
       {group && !out && (
@@ -429,7 +448,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
           <span className="mb-0.5 ml-3 text-xs font-semibold" style={{ color: nameColor(m.sender) }}
             title={m.sender_self_named ? t("people.selfNamed") : undefined}>{m.sender_self_named && "~ "}{m.sender}</span>
         ))}
-        <div ref={bubbleRef}
+        <div ref={bubbleRef} data-emoji={emoji || undefined} data-bare={bare || undefined}
           // a right click: its menu, as the ⋮ beside it; the browser's own on text selected in it (to
           // copy that) and on a link (to open or copy it)
           onContextMenu={hasActions ? (e) => {
@@ -444,14 +463,14 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
           className={cn(
             "relative rounded-bubble text-[15px] leading-snug",
             // its shadow the shape's, the tail's too (a box-shadow stopped where the tail begins)
-            "[filter:drop-shadow(0_1px_1.5px_rgb(0_0_0/0.13))]",
-            out ? "bg-bubble-out text-bubble-out-fg" : "border border-line/60 bg-bubble-in",
+            !bare && "[filter:drop-shadow(0_1px_1.5px_rgb(0_0_0/0.13))]",
+            bare ? cn("flex flex-col", out ? "items-end" : "items-start") : out ? "bg-bubble-out text-bubble-out-fg" : "border border-line/60 bg-bubble-in",
             // a run of one sender's messages held together: the corners toward the next and the one
             // before, on the sender's side, tighter; the run's outer corners round (one alone: all)
             out ? [!first && "rounded-tr-md", !last && "rounded-br-md"] : [!first && "rounded-tl-md", !last && "rounded-bl-md"],
             tail && (out ? "rounded-br-none" : "rounded-bl-none"),     // the run's last: its corner the tail's
             out ? [tightTop && "rounded-tl-md", tightBottom && "rounded-bl-md"] : [tightTop && "rounded-tr-md", tightBottom && "rounded-br-md"],
-            onlyMedia ? "p-1" : "px-3 py-2",
+            onlyMedia || bare ? "p-1" : "px-3 py-2",
             m.deleted && "italic opacity-70",
             highlight && "flash",
           )}
@@ -504,14 +523,15 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
             </a>
           )}
           {poll && !m.deleted ? <PollView poll={poll} /> : (m.text || label || m.deleted) && (
-            <div className={cn("whitespace-pre-wrap break-words [overflow-wrap:anywhere]", onlyMedia && "px-2 pb-1")}>
+            <div className={cn("whitespace-pre-wrap break-words [overflow-wrap:anywhere]", onlyMedia && "px-2 pb-1", BIG[emoji])}>
               {m.deleted && !m.text ? t("chat.deleted") : m.text ? <RichText text={m.text} marks={m.highlight} mentions={m.mentions} /> : <span className="opacity-70">{label}</span>}
             </div>
           )}
           {m.preview && !m.deleted && <PreviewCard p={m.preview} out={out} />}
           {m.deleted && <div className="mt-0.5 text-xs opacity-70">{t("chat.deleted")}</div>}
           </>}
-          <div className={cn("mt-0.5 flex items-center justify-end gap-1 text-[11px] leading-none", out ? "text-bubble-out-fg/70" : "text-muted", onlyMedia && "absolute bottom-2 right-2.5 rounded-full bg-black/45 px-1.5 py-1 text-white")}>
+          <div className={cn("mt-0.5 flex items-center justify-end gap-1 text-[11px] leading-none", out ? "text-bubble-out-fg/70" : "text-muted", onlyMedia && "absolute bottom-2 right-2.5 rounded-full bg-black/45 px-1.5 py-1 text-white",
+            bare && "rounded-full bg-panel/90 px-1.5 py-1 text-muted shadow-sm")}>
             {showService && <span className="flex items-center gap-1"><span className="size-1.5 rounded-full" style={{ background: svc.color }} />{svc.name}{account && ` · ${account}`} ·</span>}
             {m.pinned && <Pin className="size-3" aria-label={t("chat.pinned")} />}
             {m.edited && <span>{t("chat.edited")} ·</span>}
