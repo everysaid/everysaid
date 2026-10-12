@@ -81,8 +81,8 @@ test("a reaction, an edit and a deletion of the user's own message", async ({ pa
   await composer.fill("");
 });
 
-// A right click on a bubble opens its menu, as its ⋮ does; on a link in it, the browser's own (to
-// open or copy the link).
+// A right click on a bubble opens its menu, as its ⋮ does, where the click was; on a link in it,
+// the browser's own (to open or copy the link).
 test("a right click on a bubble: its menu; on a link, the browser's", async ({ page }, info) => {
   test.skip(info.project.name !== "desktop", "a mouse's");
   await signedIn(page, info.project.name);
@@ -94,15 +94,17 @@ test("a right click on a bubble: its menu; on a link, the browser's", async ({ p
   const bubble = page.locator(`#m${found.id}`);
   await bubble.locator("[data-preview]").click({ button: "right" });
   await expect(page.getByRole("menu")).toHaveCount(0);
-  await bubble.getByText("Δες αυτή").click({ button: "right" });
+  const words = bubble.getByText("Δες αυτή");
+  await words.click({ button: "right", position: { x: 6, y: 6 } });
   const menu = page.getByRole("menu");
   await expect(menu).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: /Αντιγραφή|Copy/ }).first()).toBeVisible();
-  // in the ⋮'s place (over it), from the bubble's top (not under the ⋮, at its middle)
-  await expect.poll(async () => Math.abs((await menu.boundingBox())!.y - (await bubble.locator("[data-actions]").locator("..").boundingBox())!.y))
-    .toBeLessThan(3);
-  await expect.poll(async () => Math.abs((await menu.boundingBox())!.x - (await bubble.locator("[data-actions]").boundingBox())!.x))
-    .toBeLessThan(3);
+  // where the click was, as a context menu: its corner there
+  const at = (await words.boundingBox())!;
+  await expect.poll(async () => {
+    const box = (await menu.boundingBox())!;
+    return Math.max(Math.abs(box.x - (at.x + 6)), Math.abs(box.y - (at.y + 6)));
+  }).toBeLessThan(5);
   await page.keyboard.press("Escape");
   await expect(menu).toHaveCount(0);
 });
