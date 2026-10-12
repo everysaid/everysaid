@@ -76,7 +76,7 @@ function Rail() {
           </Link>
         </Tip>
       ))}
-      <Tip label={connected ? "live" : "offline"}>
+      <Tip label={t(connected ? "nav.live" : "nav.offline")}>
         <span className={cn("mt-2 size-2 rounded-full", connected ? "bg-ok" : "bg-muted")} />
       </Tip>
     </nav>
