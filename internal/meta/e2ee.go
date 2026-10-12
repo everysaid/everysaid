@@ -8,12 +8,14 @@ package meta
 // maps to (translator.fbToWA).
 
 import (
+	"cmp"
 	"encoding/json"
 	"strconv"
 	"strings"
 	"time"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/armadilloutil"
 	"go.mau.fi/whatsmeow/proto/waArmadilloApplication"
 	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waConsumerApplication"
@@ -79,6 +81,26 @@ func (t *translator) waMessage(o *ops, evt *events.FBMessage) {
 			Mime: tr.GetAncillary().GetMimetype(), At: time.Now().Unix()})
 		n++
 	}
+	// a link's preview picture: its bytes where the message carries them, else queued to download
+	preview := func(tr *waMediaTransport.ImageTransport) {
+		if msg.Preview == nil || tr == nil {
+			return
+		}
+		t := tr.GetIntegral().GetTransport()
+		if b := t.GetAncillary().GetThumbnail().GetJPEGThumbnail(); len(b) > 0 {
+			msg.Preview.Image = b
+		}
+		if t.GetIntegral().GetDirectPath() == "" {
+			return
+		}
+		integral, err := proto.Marshal(t.GetIntegral())
+		if err != nil {
+			return
+		}
+		blob, _ := json.Marshal(waFile{Type: whatsmeow.MediaImage, Integral: integral})
+		o.files = append(o.files, pendingFile{Thread: key, Message: msg.ID, N: previewN, WA: blob, Name: msg.Preview.URL,
+			Mime: t.GetAncillary().GetMimetype(), At: time.Now().Unix()})
+	}
 	keep := true
 	switch m := evt.Message.(type) {
 	case *waConsumerApplication.ConsumerApplication:
@@ -86,9 +108,9 @@ func (t *translator) waMessage(o *ops, evt *events.FBMessage) {
 			o.deletes = append(o.deletes, msgRef{key, revoke.GetKey().GetID()})
 			return
 		}
-		keep = t.waConsumer(o, &msg, m.GetPayload().GetContent(), file)
+		keep = t.waConsumer(o, &msg, m.GetPayload().GetContent(), file, preview)
 	case *waArmadilloApplication.Armadillo:
-		keep = t.waArmadillo(&msg, m.GetPayload().GetContent(), file)
+		keep = t.waArmadillo(&msg, m.GetPayload().GetContent(), file, preview)
 	default:
 		if evt.Message == nil && evt.FBApplication.GetMetadata().GetChatEphemeralSetting() != nil {
 			s := int64(evt.FBApplication.GetMetadata().GetChatEphemeralSetting().GetEphemeralExpiration())
@@ -106,9 +128,12 @@ func (t *translator) waMessage(o *ops, evt *events.FBMessage) {
 
 type waFileFunc func(kind string, tr *waMediaTransport.WAMediaTransport, mt whatsmeow.MediaType, name string)
 
+// waPreviewFunc takes the picture of the message's link preview (msg.Preview, set first).
+type waPreviewFunc func(tr *waMediaTransport.ImageTransport)
+
 // waConsumer reads a message's content; false: it is not a message of its own (an edit, a reaction).
 func (t *translator) waConsumer(o *ops, msg *importers.MetaMessage, c *waConsumerApplication.ConsumerApplication_Content,
-	file waFileFunc) bool {
+	file waFileFunc, preview waPreviewFunc) bool {
 	caption := func(x interface{ GetCaption() *waCommon.MessageText }) {
 		if s := x.GetCaption().GetText(); s != "" {
 			msg.Text = s
@@ -118,9 +143,16 @@ func (t *translator) waConsumer(o *ops, msg *importers.MetaMessage, c *waConsume
 	case *waConsumerApplication.ConsumerApplication_Content_MessageText:
 		msg.Text = x.MessageText.GetText()
 	case *waConsumerApplication.ConsumerApplication_Content_ExtendedTextMessage:
-		msg.Text = x.ExtendedTextMessage.GetText().GetText()
-		if x.ExtendedTextMessage.GetCanonicalURL() != "" || x.ExtendedTextMessage.GetMatchedText() != "" {
+		e := x.ExtendedTextMessage
+		msg.Text = e.GetText().GetText()
+		if link := cmp.Or(e.GetCanonicalURL(), e.GetMatchedText()); link != "" {
 			msg.Subtype = "link"
+			msg.Preview = linkPreview(link, "", e.GetTitle(), e.GetDescription())
+			if e.GetThumbnail() != nil {
+				if tr, err := e.DecodeThumbnail(); err == nil {
+					preview(tr)
+				}
+			}
 		}
 	case *waConsumerApplication.ConsumerApplication_Content_ImageMessage:
 		caption(x.ImageMessage)
@@ -197,7 +229,8 @@ func (t *translator) waConsumer(o *ops, msg *importers.MetaMessage, c *waConsume
 
 // waArmadillo reads Messenger's own kinds of encrypted message (shared items, galleries, view
 // once).
-func (t *translator) waArmadillo(msg *importers.MetaMessage, c *waArmadilloApplication.Armadillo_Content, file waFileFunc) bool {
+func (t *translator) waArmadillo(msg *importers.MetaMessage, c *waArmadilloApplication.Armadillo_Content, file waFileFunc,
+	preview waPreviewFunc) bool {
 	switch x := c.GetContent().(type) {
 	case *waArmadilloApplication.Armadillo_Content_ExtendedContentMessage:
 		e := x.ExtendedContentMessage
@@ -211,9 +244,27 @@ func (t *translator) waArmadillo(msg *importers.MetaMessage, c *waArmadilloAppli
 				}
 				return true
 			}
-			if strings.HasPrefix(u, "https://") && !strings.Contains(msg.Text, u) {
-				msg.Subtype = "link"
-				msg.Text = strings.TrimSpace(msg.Text + "\n" + u)
+			if !strings.HasPrefix(u, "https://") {
+				continue
+			}
+			msg.Subtype = "link"
+			if msg.Preview != nil { // one preview a message: a further link only in the text
+				if !strings.Contains(msg.Text, u) {
+					msg.Text = strings.TrimSpace(msg.Text + "\n" + u)
+				}
+				continue
+			}
+			if strings.TrimSpace(msg.Text) == "" {
+				msg.Text = u
+			}
+			msg.Preview = linkPreview(u, e.GetHeaderTitle(), e.GetTitleText(), e.GetSubtitleText())
+			for _, p := range e.GetPreviews() {
+				// a preview's picture is an image's transport, as a gallery's are
+				if tr, err := armadilloutil.Unmarshal(&waMediaTransport.ImageTransport{}, p,
+					waArmadilloApplication.RavenImageTransportVersion); err == nil {
+					preview(tr)
+					break
+				}
 			}
 		}
 		if msg.Text == "" {

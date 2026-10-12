@@ -4,7 +4,9 @@ package meta
 // download folder, and from there into the archive's store at once (importers.Store with Move: the
 // download leaves the folder once its link is committed). The list of what is still to download is
 // in keys.db (meta_file), so that a restart goes on with it; a file that cannot be had after a few
-// tries, or whose address is too old, is given up (its message stays, without it).
+// tries, or whose address is too old, is given up (its message stays, without it). A link preview's
+// picture goes the same way, but into the preview (MetaWriter.PreviewImage), not the store, and is
+// had even where files are not downloaded.
 //
 // Downloads from Meta's CDN go as its web client's do (mautrix-meta's pkg/msgconv/mediadl): its
 // browser's headers; a video that redirects to video.xx.fbcdn.net is fetched there in pieces.
@@ -173,7 +175,10 @@ func fetchWhole(ctx context.Context, u, mimeType string, w io.Writer) error {
 
 // fileName is a downloaded file's name in the folder: its message, its place, an extension.
 func fileName(f pendingFile) string {
-	ext := filepath.Ext(f.Name)
+	ext := ""
+	if f.N != previewN {
+		ext = filepath.Ext(f.Name)
+	}
 	if ext == "" && f.Mime != "" {
 		if exts, _ := mime.ExtensionsByType(strings.Split(f.Mime, ";")[0]); len(exts) > 0 {
 			ext = exts[0]
@@ -239,7 +244,8 @@ func (s *liveSession) downloadWA(ctx context.Context, f pendingFile, w io.Writer
 	return err
 }
 
-// link takes downloaded files into the archive's store, linked to their messages; the paths it took.
+// link takes downloaded files into the archive's store, linked to their messages, and preview
+// pictures into their previews; the paths it took.
 func link(c *plugins.Context, service string, files map[string]pendingFile) (map[string]bool, error) {
 	linked := map[string]bool{}
 	_, _, err := sourcekit.RunImporters(c, []sourcekit.Step{{Label: "files", Run: func(a *archive.Archive, out func(string)) error {
@@ -251,6 +257,13 @@ func link(c *plugins.Context, service string, files map[string]pendingFile) (map
 			if mid == 0 {
 				continue // a message the archive does not have (yet)
 			}
+			if f.N == previewN {
+				if b, err := os.ReadFile(path); err == nil {
+					w.PreviewImage(mid, f.Name, b)
+					linked[path] = true
+				}
+				continue
+			}
 			st.LinkNamed(w.SourceName, w.Source, path, filepath.Base(path), mid, f.Name)
 			linked[path] = true
 		}
@@ -261,8 +274,8 @@ func link(c *plugins.Context, service string, files map[string]pendingFile) (map
 	return linked, err
 }
 
-// fetchFiles downloads what is still to download (of one message where given) and links it; it
-// says how many it took.
+// fetchFiles downloads what is still to download (of one message where given; files only where
+// they are downloaded, preview pictures always) and links it; it says how many it took.
 func (s *liveSession) fetchFiles(ctx context.Context, message string) int {
 	pending, err := pendingFiles(s.c.ID, message)
 	if err != nil {
@@ -273,6 +286,9 @@ func (s *liveSession) fetchFiles(ctx context.Context, message string) int {
 	for _, f := range pending {
 		if ctx.Err() != nil {
 			break
+		}
+		if f.N != previewN && message == "" && !s.c.Bool("media") {
+			continue
 		}
 		if time.Since(time.Unix(f.At, 0)) > tooOld || f.Tries >= 5 {
 			s.c.Log("{file}: not downloaded ({e})", map[string]any{"file": fileName(f), "e": "gave up"})
@@ -305,8 +321,11 @@ func (s *liveSession) fetchFiles(ctx context.Context, message string) int {
 	for path, f := range got {
 		if linked[path] {
 			fileDone(s.c.ID, f)
-		} else {
-			os.Remove(path) // its message is not in the archive (yet): downloaded again when asked
+		}
+		// a preview's picture is in its preview now; a file whose message is not in the archive (yet) is
+		// downloaded again when asked
+		if !linked[path] || f.N == previewN {
+			os.Remove(path)
 		}
 	}
 	return len(linked)
@@ -320,9 +339,7 @@ func (s *liveSession) downloader(ctx context.Context) {
 			return
 		case <-s.wake:
 		}
-		if s.c.Bool("media") {
-			s.fetchFiles(ctx, "")
-		}
+		s.fetchFiles(ctx, "")
 	}
 }
 

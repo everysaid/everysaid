@@ -26,7 +26,8 @@ func writer(a *archive.Archive, c *plugins.Context, service string) *importers.M
 }
 
 // applied is what writing ops found: which messages were new to the archive; the files to
-// download, of the messages new to it (or still without them).
+// download, of the messages new to it (or still without them), and the preview pictures, of the
+// messages new to it (or whose preview has none yet).
 type applied struct {
 	isNew map[string]bool
 	files []pendingFile
@@ -103,9 +104,12 @@ func (s *liveSession) apply(o *ops) (out applied, err error) {
 			if added || !hasFile(a, mid) {
 				isNew[m.ID+"\x00file"] = true
 			}
+			if m.Preview != nil && (added || !hasPreviewImage(a, mid)) {
+				isNew[m.ID+"\x00preview"] = true
+			}
 		}
 		for _, f := range o.files {
-			if isNew[f.Message+"\x00file"] {
+			if f.N == previewN && isNew[f.Message+"\x00preview"] || f.N != previewN && isNew[f.Message+"\x00file"] {
 				out.files = append(out.files, f)
 			}
 		}
@@ -152,6 +156,10 @@ func (s *liveSession) apply(o *ops) (out applied, err error) {
 
 func hasFile(a *archive.Archive, mid int64) bool {
 	return a.Exists("SELECT 1 FROM attachment WHERE message_id = ?", mid)
+}
+
+func hasPreviewImage(a *archive.Archive, mid int64) bool {
+	return a.Exists("SELECT 1 FROM link_preview WHERE message_id = ? AND image IS NOT NULL", mid)
 }
 
 func (o *ops) empty() bool {

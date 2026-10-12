@@ -368,8 +368,14 @@ func (t *translator) message(o *ops, m *table.WrappedMessage) (importers.MetaMes
 		}
 		file(kind, u, a.Filename, mime)
 	}
+	preview := func(link, u, mime string) {
+		if u != "" {
+			o.files = append(o.files, pendingFile{Thread: thread, Message: m.MessageId, N: previewN, URL: u, Name: link,
+				Mime: mime, At: time.Now().Unix()})
+		}
+	}
 	for _, x := range m.XMAAttachments {
-		t.xma(&msg, x, file)
+		t.xma(&msg, x, file, preview)
 	}
 	for _, s := range m.Stickers {
 		u, mime := s.PlayableUrl, s.PlayableUrlMimeType
@@ -384,9 +390,11 @@ func (t *translator) message(o *ops, m *table.WrappedMessage) (importers.MetaMes
 	return msg, true
 }
 
-// xma is a shared item (a link with its preview, a post, a place): its link in the text, a place as
-// a location; the preview's picture is not kept.
-func (t *translator) xma(msg *importers.MetaMessage, x *table.WrappedXMA, file func(kind, u, name, mime string)) {
+// xma is a shared item (a link with its preview, a post, a place): a link's preview (its picture
+// queued to download), the link itself in the text only where the message says nothing else; a
+// place as a location.
+func (t *translator) xma(msg *importers.MetaMessage, x *table.WrappedXMA, file func(kind, u, name, mime string),
+	preview func(link, u, mime string)) {
 	if x.CTA != nil && strings.HasPrefix(x.CTA.Type_, "xma_poll_") {
 		msg.Subtype = "poll"
 		return
@@ -408,9 +416,25 @@ func (t *translator) xma(msg *importers.MetaMessage, x *table.WrappedXMA, file f
 		if msg.Subtype == "" {
 			msg.Subtype = "link"
 		}
-		if !strings.Contains(msg.Text, link) {
-			msg.Text = strings.TrimSpace(strings.TrimSpace(msg.Text+"\n"+x.TitleText) + "\n" + link)
+		if msg.Preview != nil { // one preview a message: a further link only in the text
+			if !strings.Contains(msg.Text, link) {
+				msg.Text = strings.TrimSpace(msg.Text + "\n" + link)
+			}
+			return
 		}
+		if strings.TrimSpace(msg.Text) == "" {
+			msg.Text = link
+		}
+		desc := x.SubtitleText
+		if desc == "" {
+			desc = x.DescriptionText
+		}
+		msg.Preview = linkPreview(link, x.SourceText, x.TitleText, desc)
+		u, mime := x.PreviewUrl, x.PreviewUrlMimeType
+		if u == "" {
+			u, mime = x.ImageUrl, ""
+		}
+		preview(link, u, mime)
 		return
 	}
 	// media shared as an XMA (Instagram's reels and posts, a GIF)
@@ -431,6 +455,18 @@ func (t *translator) xma(msg *importers.MetaMessage, x *table.WrappedXMA, file f
 	} else if x.TitleText != "" && msg.Text == "" {
 		msg.Text = x.TitleText
 	}
+}
+
+// linkPreview is a link's preview as the service gives it: a subtitle that is only the link's site
+// is its site.
+func linkPreview(link, site, title, desc string) *archive.Preview {
+	if site == "" && desc != "" {
+		if u, err := url.Parse(link); err == nil && strings.EqualFold(strings.TrimPrefix(u.Hostname(), "www."),
+			strings.TrimPrefix(strings.TrimSpace(desc), "www.")) {
+			site, desc = strings.TrimSpace(desc), ""
+		}
+	}
+	return &archive.Preview{URL: link, Site: site, Title: title, Description: desc}
 }
 
 // attachmentKind is a message's kind by its attachment's type (and its type of file).

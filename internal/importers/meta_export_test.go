@@ -218,3 +218,56 @@ func TestMetaExportKeepsOnceWhatAnAdiumLogHas(t *testing.T) {
 		t.Errorf("the same message twice: %d", n)
 	}
 }
+
+// A shared link's preview from what the export says of it (no more than the link: none); an
+// archive read before previews were kept gets them on the next import, and one the service gave
+// stays.
+func TestMetaExportSharePreviews(t *testing.T) {
+	a, _ := newArchive(t)
+	dir := t.TempDir()
+	act := filepath.Join(dir, "your_instagram_activity")
+	writeJSON(t, filepath.Join(act, "messages", "inbox", "ann_1", "message_1.json"), M{
+		"participants": []M{{"name": "Me Owner"}, {"name": "Ann Roe"}}, "thread_path": "inbox/ann_1",
+		"messages": []M{
+			{"sender_name": "Ann Roe", "timestamp_ms": metaTS1, "content": "",
+				"share": M{"link": "https://example.com/p/1", "share_text": moji("A caption ☀"), "original_content_owner": "someone"}},
+			{"sender_name": "Ann Roe", "timestamp_ms": metaTS2, "content": "",
+				"share": M{"link": "https://example.com/2", "share_text": "Page title"}},
+			{"sender_name": "Ann Roe", "timestamp_ms": metaTS3, "content": "https://example.com/3",
+				"share": M{"link": "https://example.com/3", "share_text": "https://example.com/3"}},
+		}})
+	opts := MetaExportOptions{Dir: dir, Service: "instagram", Owner: "Me Owner"}
+	must(t, MetaExport(a, nil, opts))
+	preview := func(ts int64) (title, desc string) {
+		a.Row("SELECT coalesce(p.title, ''), coalesce(p.description, '') FROM link_preview p JOIN message m ON m.id = p.message_id "+
+			"WHERE m.ts = ?", []any{ts}, &title, &desc)
+		return
+	}
+	if title, desc := preview(metaTS1); title != "someone" || desc != "A caption ☀" {
+		t.Errorf("a post's preview: %q %q", title, desc)
+	}
+	if title, desc := preview(metaTS2); title != "Page title" || desc != "" {
+		t.Errorf("a link's preview: %q %q", title, desc)
+	}
+	if n := a.Int("SELECT count(*) FROM link_preview"); n != 2 {
+		t.Errorf("previews: %d", n)
+	}
+	var text string
+	if a.Row("SELECT text FROM message WHERE ts = ?", []any{metaTS2}, &text); text != "https://example.com/2" {
+		t.Errorf("the text: %q", text)
+	}
+	// read before previews were kept; one of them given by the service since
+	a.Exec("DELETE FROM link_preview")
+	a.SetPreview(a.Int("SELECT id FROM message WHERE ts = ?", metaTS2), &archive.Preview{URL: "https://example.com/2", Title: "The service's"})
+	var lines []string
+	must(t, MetaExport(a, func(s string) { lines = append(lines, s) }, opts))
+	if title, _ := preview(metaTS1); title != "someone" {
+		t.Errorf("not brought back: %q", title)
+	}
+	if title, _ := preview(metaTS2); title != "The service's" {
+		t.Errorf("the service's preview replaced: %q", title)
+	}
+	if !strings.Contains(strings.Join(lines, "\n"), "preview 1") {
+		t.Errorf("not said: %v", lines)
+	}
+}

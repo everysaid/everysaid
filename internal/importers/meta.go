@@ -87,6 +87,7 @@ type MetaMessage struct {
 	Call                       *MetaCall
 	Notice                     *archive.Notice
 	Mentions                   []MetaMention
+	Preview                    *archive.Preview // its link's preview, as the service made it
 }
 
 // MetaMention is someone a text names, and how it names them.
@@ -104,6 +105,11 @@ type MetaWriter struct {
 	Store      *Store // the files' store (nil: files are not linked)
 	// Names are the names known of people by id, for the handles the archive does not have yet.
 	Names map[string]MetaUser
+	// Previews is how many messages already there got their link preview (or a new one).
+	Previews int
+	// WeakPreviews: the source's previews say less than the service's own (the export's): one is
+	// given only to a message without one.
+	WeakPreviews bool
 
 	convs map[string]int64
 }
@@ -271,6 +277,7 @@ func (w *MetaWriter) Add(m MetaMessage) (int64, bool) {
 	var mid int64
 	if a.Row("SELECT message_id FROM message_origin WHERE source_id = ? AND row_key = ?", []any{w.Source, rowKey}, &mid) {
 		w.files(mid, m.Files) // a file sent, its message come back from the service first
+		w.preview(mid, m.Preview)
 		return mid, false
 	}
 	cid := w.conv(m.Thread)
@@ -285,6 +292,7 @@ func (w *MetaWriter) Add(m MetaMessage) (int64, bool) {
 		if id, ok := a.MessageByKey(w.Service, m.ID, cid); ok {
 			a.Exec("INSERT OR IGNORE INTO message_origin VALUES (?, ?, ?)", w.Source, rowKey, id)
 			w.files(id, m.Files)
+			w.preview(id, m.Preview)
 			return id, false
 		}
 	}
@@ -294,6 +302,7 @@ func (w *MetaWriter) Add(m MetaMessage) (int64, bool) {
 		}
 		a.Exec("INSERT OR IGNORE INTO message_origin VALUES (?, ?, ?)", w.Source, rowKey, id)
 		w.files(id, m.Files)
+		w.preview(id, m.Preview)
 		return id, false
 	}
 	var sender int64
@@ -303,7 +312,7 @@ func (w *MetaWriter) Add(m MetaMessage) (int64, bool) {
 	}
 	x := &archive.Extras{Subtype: m.Subtype, SubtypeCode: m.Code, ReplyKey: m.ReplyTo, ReplyText: m.Reply,
 		Forwarded: m.Forwarded, Deleted: m.Deleted, Edited: m.Edited, Lat: m.Lat, Lon: m.Lon, Place: m.Place,
-		Notice: m.Notice}
+		Notice: m.Notice, Preview: m.Preview}
 	for _, r := range m.Reactions {
 		x.Reactions = append(x.Reactions, w.reaction(r))
 	}
@@ -346,6 +355,37 @@ func (w *MetaWriter) files(mid int64, files []MetaFile) {
 		}
 		w.Store.LinkNamed(w.SourceName, w.Source, f.Path, rel, mid, f.Name)
 	}
+}
+
+// preview gives a message already there its link preview, counted where it changed (a weak one
+// only where the message has none).
+func (w *MetaWriter) preview(mid int64, p *archive.Preview) {
+	if p == nil || w.WeakPreviews && w.A.Exists("SELECT 1 FROM link_preview WHERE message_id = ?", mid) {
+		return
+	}
+	if w.A.SetPreview(mid, p) {
+		w.Previews++
+	}
+}
+
+// PreviewImage gives a message's link preview its picture, downloaded after the message was
+// written (the live source's addresses expire); link: the preview's, where none is kept yet (one
+// with no title or description is kept only with its picture).
+func (w *MetaWriter) PreviewImage(mid int64, link string, img []byte) bool {
+	p := archive.Preview{URL: link, Image: img}
+	var u, site, title, desc *string
+	if w.A.Row("SELECT url, site, title, description FROM link_preview WHERE message_id = ?", []any{mid},
+		&u, &site, &title, &desc) {
+		p.URL, p.Site, p.Title, p.Description = deref(u), deref(site), deref(title), deref(desc)
+	}
+	return w.A.SetPreview(mid, &p)
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 func baseName(p string) string {
