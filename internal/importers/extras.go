@@ -21,10 +21,11 @@
 //   - EditsKey: for an edit event (Viber on the iPhone), the key of the message it edited;
 //   - ReactsTo: for a reaction sent as a message of its own (iMessage tapback).
 //
-// Found by reading every field of every source (October 2026); left out on purpose: read and
-// delivery times, the names apps show, link previews (the link is in the text), the sender's time
-// zone, language guesses, and iMessage's reply_to_guid, which iOS sets on ordinary messages too
-// (the previous one in the chat), so it is not a reply (its thread_originator_guid is).
+// Found by reading every field of every source (October 2026); link previews are given apart
+// (Extras.Preview, each source's *_preview.go). Left out on purpose: read and delivery times, the
+// names apps show, the sender's time zone, language guesses, and iMessage's reply_to_guid, which
+// iOS sets on ordinary messages too (the previous one in the chat), so it is not a reply (its
+// thread_originator_guid is).
 package importers
 
 import (

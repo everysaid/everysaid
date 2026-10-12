@@ -37,6 +37,10 @@ var media = []struct {
 	{"viber-media", "AppDomain-com.viber",
 		[]string{"Documents/Attachments/", "Documents/FileMessages/", "Documents/VoiceMessages/"}, "Documents/"},
 	{"whatsapp-media", "AppDomainGroup-group.net.whatsapp.WhatsApp.shared", []string{"Message/Media/"}, "Message/Media/"},
+	// the pictures of links' previews (.thumb files beside the media; not media: the importer puts
+	// them in the previews)
+	{importers.WhatsAppPreviewFolder, "AppDomainGroup-group.net.whatsapp.WhatsApp.shared", []string{"Message/Media/"},
+		"Message/Media/"},
 	// the files of SMS, MMS and iMessage
 	{"sms-media", "MediaDomain", []string{"Library/SMS/Attachments/"}, "Library/SMS/Attachments/"},
 }
@@ -340,8 +344,8 @@ func inside(root, path string) bool {
 }
 
 // messageFiles is, for each media folder, the file paths that belong to a message (what the
-// archive links), read from the databases just extracted: thumbnails, favicons and link previews
-// beside them are not copied.
+// archive links), read from the databases just extracted: thumbnails and favicons beside them are
+// not copied; the pictures of WhatsApp's link previews are, into their own folder.
 func messageFiles(out string) (wanted map[string]map[string]bool, err error) {
 	defer db.Recover(&err)
 	wa, err := db.ReadOnly(filepath.Join(out, "whatsapp.sqlite"))
@@ -355,7 +359,8 @@ func messageFiles(out string) (wanted map[string]map[string]bool, err error) {
 	}
 	defer vb.Close()
 	names := db.Strs(vb, "SELECT ZNAME FROM ZATTACHMENT WHERE ZNAME IS NOT NULL")
-	wanted = map[string]map[string]bool{"whatsapp-media": {}, "viber-media": {}, "sms-media": {}}
+	wanted = map[string]map[string]bool{"whatsapp-media": {}, "viber-media": {}, "sms-media": {},
+		importers.WhatsAppPreviewFolder: importers.WhatsAppPreviewThumbs(filepath.Join(out, "whatsapp.sqlite"))}
 	if sms, err := db.ReadOnly(filepath.Join(out, "sms.db")); err == nil {
 		func() {
 			defer sms.Close()
@@ -365,6 +370,9 @@ func messageFiles(out string) (wanted map[string]map[string]bool, err error) {
 				if rel := importers.SMSAttachment(f); rel != "" {
 					wanted["sms-media"][rel] = true
 				}
+			}
+			for _, rel := range importers.IMessagePreviewFiles(sms) { // the pictures of link previews
+				wanted["sms-media"][rel] = true
 			}
 		}()
 	}

@@ -445,3 +445,42 @@ func TestUnreadIsRecentMessagesFromOthersBySender(t *testing.T) {
 		t.Fatalf("%v %v", got, err)
 	}
 }
+
+// A link's preview is kept as the sender's app made it (its small picture, and where its
+// high-quality one is); a copy of the message seen again (history after live) keeps the
+// high-quality picture downloaded meanwhile.
+func TestLinkPreviewKept(t *testing.T) {
+	s := oldStore(t)
+	msg := &waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{Text: proto.String("see https://x.org/a"),
+		MatchedText: proto.String("https://x.org/a"), Title: proto.String("A page"), Description: proto.String("About it"),
+		JPEGThumbnail: []byte("small"), ThumbnailDirectPath: proto.String("/v/t62/x"), ThumbnailSHA256: []byte("sha"),
+		ThumbnailEncSHA256: []byte("enc"), MediaKey: []byte("key")}}
+	m := StoredMessage{ID: "L", ChatJID: "1@s.whatsapp.net", Sender: "1@s.whatsapp.net", Timestamp: time.Now()}
+	if !describe(&m, msg, nil) || m.Subtype != "link" {
+		t.Fatalf("described: %+v", m)
+	}
+	if err := s.storeMessage(m); err != nil {
+		t.Fatal(err)
+	}
+	s.db.Exec("UPDATE messages SET preview_image = 'large' WHERE id = 'L'")
+	if err := s.storeMessage(m); err != nil {
+		t.Fatal(err)
+	}
+	var url, title, desc, path string
+	var thumb, image, key []byte
+	if err := s.db.QueryRow(`SELECT preview_url, preview_title, preview_description, preview_thumb, preview_direct_path,
+		preview_media_key, preview_image FROM messages WHERE id = 'L'`).Scan(&url, &title, &desc, &thumb, &path, &key, &image); err != nil {
+		t.Fatal(err)
+	}
+	if url != "https://x.org/a" || title != "A page" || desc != "About it" || string(thumb) != "small" || path != "/v/t62/x" ||
+		string(key) != "key" || string(image) != "large" {
+		t.Errorf("got %q %q %q %q %q %q %q", url, title, desc, thumb, path, key, image)
+	}
+	// a link without a preview: nothing
+	m = StoredMessage{}
+	describe(&m, &waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{Text: proto.String("x.org"),
+		MatchedText: proto.String("x.org")}}, nil)
+	if m.Preview.URL != "" || m.Subtype != "link" {
+		t.Errorf("no preview: %+v", m.Preview)
+	}
+}

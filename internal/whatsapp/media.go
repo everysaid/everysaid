@@ -5,7 +5,8 @@ package whatsapp
 // The files of messages: downloaded as messages arrive ([whatsapp] download in config.toml, on by
 // default) or when asked (Bridge.Download), into <store>/media/<chat>/<message id><ext>. messages.media_path records the
 // file (relative to the store), media_error why it could not be had. View-once media are left alone,
-// as the sender meant them.
+// as the sender meant them. A link preview's high-quality picture comes the same way, into
+// messages.preview_image (preview_error: why not).
 
 import (
 	"context"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/proto/waMmsRetry"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -219,6 +221,34 @@ func (store *MessageStore) download(client *whatsmeow.Client, id, chatJID string
 	return filepath.Abs(filepath.Join(store.dir, rel))
 }
 
+// downloadPreview downloads the high-quality picture of a message's link preview into
+// preview_image; one WhatsApp no longer has (or that is not it) is recorded in preview_error.
+func (store *MessageStore) downloadPreview(client *whatsmeow.Client, id, chatJID string) error {
+	var path sql.NullString
+	var sha, encSHA, key []byte
+	if err := store.db.QueryRow(`SELECT preview_direct_path, preview_sha256, preview_enc_sha256, preview_media_key
+		FROM messages WHERE id = ? AND chat_jid = ?`, id, chatJID).Scan(&path, &sha, &encSHA, &key); err != nil {
+		return fmt.Errorf("no such message: %v", err)
+	}
+	data, err := client.DownloadThumbnail(context.Background(), &waE2E.ExtendedTextMessage{ThumbnailDirectPath: &path.String,
+		ThumbnailSHA256: sha, ThumbnailEncSHA256: encSHA, MediaKey: key})
+	if err == nil && len(data) == 0 {
+		err = whatsmeow.ErrTooShortFile
+	}
+	if err != nil {
+		if gone(err) {
+			store.db.Exec("UPDATE messages SET preview_error = ? WHERE id = ? AND chat_jid = ?", err.Error(), id, chatJID)
+		}
+		return err
+	}
+	_, err = store.db.Exec("UPDATE messages SET preview_image = ?, preview_error = NULL WHERE id = ? AND chat_jid = ?",
+		data, id, chatJID)
+	return err
+}
+
+// previewWanted: what downloadPreview downloads, for a WHERE.
+const previewWanted = "coalesce(preview_direct_path, '') != '' AND preview_image IS NULL AND preview_error IS NULL"
+
 type mediaJob struct{ id, chatJID string }
 
 // Downloads fetches files one at a time, in the order messages arrived.
@@ -237,8 +267,11 @@ func startDownloads(client *whatsmeow.Client, store *MessageStore, logger waLog.
 	rows, err := store.db.Query(`SELECT id, chat_jid FROM messages WHERE coalesce(media_type, '') != ''
 		AND coalesce(media_path, '') = '' AND media_error IS NULL AND coalesce(subtype, '') != 'view_once'
 		AND NOT `+channelsSQL+` AND timestamp > ? ORDER BY timestamp`, time.Now().Add(-downloadBackfill))
-	if err == nil {
-		var jobs []mediaJob
+	var jobs []mediaJob
+	take := func(rows *sql.Rows, err error) {
+		if err != nil {
+			return
+		}
 		for rows.Next() {
 			var j mediaJob
 			if rows.Scan(&j.id, &j.chatJID) == nil {
@@ -246,9 +279,13 @@ func startDownloads(client *whatsmeow.Client, store *MessageStore, logger waLog.
 			}
 		}
 		rows.Close()
-		for _, j := range jobs {
-			d.queue(j.id, j.chatJID)
-		}
+	}
+	take(rows, err)
+	// and the previews' pictures of messages with no file
+	take(store.db.Query(`SELECT id, chat_jid FROM messages WHERE coalesce(media_type, '') = '' AND `+previewWanted+`
+		AND NOT `+channelsSQL+` AND timestamp > ? ORDER BY timestamp`, time.Now().Add(-downloadBackfill)))
+	for _, j := range jobs {
+		d.queue(j.id, j.chatJID)
 	}
 	return d
 }
@@ -270,6 +307,13 @@ func (d *Downloads) wanted(j mediaJob) bool {
 	return n > 0
 }
 
+func (d *Downloads) previewWanted(j mediaJob) bool {
+	var n int
+	d.store.db.QueryRow(`SELECT count(*) FROM messages WHERE id = ? AND chat_jid = ? AND `+previewWanted+` AND NOT `+channelsSQL,
+		j.id, j.chatJID).Scan(&n)
+	return n > 0
+}
+
 // stop ends the downloads after the one going on.
 func (d *Downloads) stop() { close(d.done) }
 
@@ -280,6 +324,11 @@ func (d *Downloads) run() {
 		case <-d.done:
 			return
 		case j = <-d.jobs:
+		}
+		if d.previewWanted(j) { // once: a failure not recorded is tried again at the next start
+			if err := d.store.downloadPreview(d.client, j.id, j.chatJID); err != nil {
+				d.logger.Warnf("Link preview of %s not downloaded: %v", j.id, err)
+			}
 		}
 		if !d.wanted(j) {
 			continue
