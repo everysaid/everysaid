@@ -322,6 +322,7 @@ func Hydrate(s *Store, rows []Item, chat *Chat) []M {
 				"keyed":     keyed,                                                    // the service's own id is known: an answer to it can be sent
 				"location":  location,
 				"reactions": []M{}, "attachments": []M{}, "mentions": []M{}, "receipts": nil, "notice": nil,
+				"preview": nil,
 			}
 			ex[mid] = &extra{replyTo: replyTo, conv: conv, ts: ts, outgoing: outgoing}
 		})
@@ -406,6 +407,24 @@ func Hydrate(s *Store, rows []Item, chat *Chat) []M {
 					var args sql.NullString
 					scan(&mid, &code, &args)
 					msgs[mid]["notice"] = noticeOf(ppl, code, args)
+				})
+		}
+		// a link's preview, as its service sent it; its picture by sha256 (/api/previews/{sha}), with
+		// its size so that the bubble keeps its place while it comes
+		if tbl["link_preview"] {
+			db.Each(q, "SELECT p.message_id, p.url, p.site, p.title, p.description, p.image, i.width, i.height "+
+				"FROM link_preview p LEFT JOIN link_preview_image i ON i.sha256 = p.image WHERE p.message_id IN ("+marks+")",
+				db.Args(mids), func(scan func(...any)) {
+					var mid int64
+					var url, site, title, desc, img sql.NullString
+					var w, h sql.NullInt64
+					scan(&mid, &url, &site, &title, &desc, &img, &w, &h)
+					var image any
+					if img.Valid && w.Valid {
+						image = M{"sha256": img.String, "width": w.Int64, "height": h.Int64}
+					}
+					msgs[mid]["preview"] = M{"url": nullString(url), "site": nullString(site), "title": nullString(title),
+						"description": nullString(desc), "image": image}
 				})
 		}
 		var mine []int64
@@ -723,4 +742,14 @@ func Context(s *Store, messageID int64, n int) (M, error) {
 		return nil, err
 	}
 	return M{"chat_id": m["chat_id"], "message": m, "items": page["items"]}, nil
+}
+
+// PreviewImage is a link preview's picture (JPEG), nil when there is none of that sha256.
+func PreviewImage(s *Store, sha string) []byte {
+	if !tables(s)["link_preview_image"] {
+		return nil
+	}
+	var jpg []byte
+	db.Row(s.Read(), "SELECT jpeg FROM link_preview_image WHERE sha256 = ?", []any{sha}, &jpg)
+	return jpg
 }

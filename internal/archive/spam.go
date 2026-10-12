@@ -51,12 +51,14 @@ func PurgeSpam(q db.Querier, only []int64) (out Purged) {
 			shas[s] = true
 		}
 		db.Exec(q, "UPDATE message SET reply_to = NULL WHERE reply_to IN "+marks, ids...)
-		for _, t := range []string{"reaction", "mention", "receipt", "attachment", "notice"} {
+		for _, t := range []string{"reaction", "mention", "receipt", "attachment", "notice", "link_preview"} {
 			db.Exec(q, "DELETE FROM "+t+" WHERE message_id IN "+marks, ids...)
 		}
 		db.Exec(q, "DELETE FROM message_fts WHERE rowid IN "+marks, ids...)
 		db.Exec(q, "DELETE FROM message WHERE id IN "+marks, ids...)
 	})
+	// the previews' pictures no message has any more
+	db.Exec(q, "DELETE FROM link_preview_image WHERE sha256 NOT IN (SELECT image FROM link_preview WHERE image IS NOT NULL)")
 	chunked(calls, func(marks string, ids []any) {
 		db.Exec(q, "DELETE FROM call_member WHERE call_id IN "+marks, ids...)
 		db.Exec(q, "DELETE FROM call_origin WHERE call_id IN "+marks, ids...)

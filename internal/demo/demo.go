@@ -547,6 +547,9 @@ func BuildArchive(seed int64) (path string, err error) {
 	if err := photos(a, store, people, pics, seed, nowSec); err != nil {
 		return "", err
 	}
+	if err := previews(a, source, people, pics, seed, now); err != nil {
+		return "", err
+	}
 	a.Resolve()
 	a.Exec("INSERT OR REPLACE INTO setting VALUES ('unread_since', ?)", pyjson.Dumps(ms(now.Add(-days(2))), true))
 	a.Commit()

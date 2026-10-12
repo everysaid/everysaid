@@ -700,6 +700,7 @@ type Extras struct {
 	ForwardFrom          string // who a forwarded message first came from, as the service names them
 	Album                string // the service's key of the files sent together
 	Pinned               int64  // pinned until (Unix milliseconds), -1 for ever; 0: not pinned
+	Preview              *Preview
 }
 
 // Notice is what a notice says, its code and values (the `notice` table), for the interface to put
@@ -790,6 +791,9 @@ func (a *Archive) AddMessage(sourceID int64, rowKey string, m Message) int64 {
 	}
 	if x.Notice != nil {
 		a.SetNotice(mid, x.Notice)
+	}
+	if x.Preview != nil {
+		a.SetPreview(mid, x.Preview)
 	}
 	a.AddReactions(mid, x.Reactions)
 	if x.EditsKey != "" {

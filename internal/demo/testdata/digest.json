@@ -93,6 +93,14 @@
    "rows": 0,
    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   },
+  "link_preview": {
+   "rows": 3,
+   "sha256": "b14211a2d5dbc0aa19a4d80253f1bedae426a7d575b210f5676ad1e870728c16"
+  },
+  "link_preview_image": {
+   "rows": 2,
+   "sha256": "f5ea2e4028bf2a8d1d34e0136cd12731e331e3e6526f1f463c388043b2c0f20d"
+  },
   "media": {
    "rows": 323,
    "sha256": "91dc445600303998cc427cde2a02aa25c6ccebd8d9f64aa2943509970c2d0451"
@@ -114,36 +122,36 @@
    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   },
   "message": {
-   "rows": 10582,
-   "sha256": "5e9128c3dc05fbe9ffa2da2473f04d76207c98f70ad09b2deab41a8c43049109"
+   "rows": 10585,
+   "sha256": "e17eee642be8d54b2edf24f79858ab2659afc1c9e67ea3ff1975fdfebeaca935"
   },
   "message_fts": {
-   "rows": 10415,
-   "sha256": "b15a8c1fed6c60732542cb68d79123553c8dd2fd762d68967ecc3fd2604a0a6e"
+   "rows": 10418,
+   "sha256": "14eb4a8c18f23707b82446de36b724a69e112643876fb3cde4e9cde19a929d61"
   },
   "message_fts_config": {
    "rows": 1,
    "sha256": "c68b280c665f8d9e2b0d637a470379de0c2acef1ab2ebd6c3e5a39dac37b9d72"
   },
   "message_fts_data": {
-   "rows": 22,
-   "sha256": "5ad5a2e5873f181f0a82ebd3322caf49763013a002a1c49d5ecfb075e62f2006"
+   "rows": 25,
+   "sha256": "ec9bf268ba0b4ee2ce797a83285cce87cc589e4d08c0cf7c3282a66f0ae4b935"
   },
   "message_fts_docsize": {
-   "rows": 10415,
-   "sha256": "e49cbb46fab36d7709815e16f1168e9af707bc906566153491440c397d43ea03"
+   "rows": 10418,
+   "sha256": "a05f3fe505f7a0007612f6a69aeefc6382d3f90cd5401e750706c263a9e46633"
   },
   "message_fts_idx": {
-   "rows": 20,
-   "sha256": "ebd7c78491d261fa96bc44e81c90385ee3a72ad6ee758f3db79a554284865479"
+   "rows": 23,
+   "sha256": "bd17440d4ce458d40811ff83dd95acdedde95b597c8b5f863b76c572f5b1bd09"
   },
   "message_kind": {
    "rows": 11,
    "sha256": "e103004f0037c754663a3c73131af9aa2380f6422dc79a39505f8be4b41ac1dd"
   },
   "message_origin": {
-   "rows": 10582,
-   "sha256": "7e66a91e8f5ab18347f3c145d5d7939d490d02b09c80ef8793b2632172070fe4"
+   "rows": 10585,
+   "sha256": "c89eca4e009186834f92d567fffa8eb93fe9c158cddef2b5ff503065d11a6d24"
   },
   "name_guess": {
    "rows": 0,
@@ -202,8 +210,8 @@
    "sha256": "461e3ac6e8e83c2510fb0d55e5cdb6b80f62ecf9da61506aa31bcc5124e8693e"
   },
   "term": {
-   "rows": 187,
-   "sha256": "b36503a6ace1665595b75c699f0a2e2db18acc4b4e5226351d39cedde738a834"
+   "rows": 201,
+   "sha256": "6a13c5b33461d66670414c152d2c1fca7a52d49c2a656759fc647034c95128eb"
   },
   "viber_member": {
    "rows": 0,

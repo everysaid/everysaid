@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Check, CheckCheck, Copy, CornerUpLeft, EllipsisVertical, FileText, Forward, ImageOff, MapPin, Pencil, Phone, Pin, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Plus, Trash2, Video } from "lucide-react";
-import { thumbUrl, type Attachment, type Local, type CallItem, type Mention, type MessageItem, type Receipts } from "@/lib/api";
+import { thumbUrl, type Attachment, type LinkPreview, type Local, type CallItem, type Mention, type MessageItem, type Receipts } from "@/lib/api";
 import { bytes, duration, time } from "@/lib/format";
 import { service } from "@/lib/services";
 import { noticeLines, pollOf } from "@/lib/notice";
@@ -481,6 +481,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
               {m.deleted && !m.text ? t("chat.deleted") : m.text ? <RichText text={m.text} marks={m.highlight} mentions={m.mentions} /> : <span className="opacity-70">{label}</span>}
             </div>
           )}
+          {m.preview && !m.deleted && <PreviewCard p={m.preview} out={out} />}
           {m.deleted && <div className="mt-0.5 text-xs opacity-70">{t("chat.deleted")}</div>}
           </>}
           <div className={cn("mt-0.5 flex items-center justify-end gap-1 text-[11px] leading-none", out ? "text-bubble-out-fg/70" : "text-muted", onlyMedia && "absolute bottom-2 right-2.5 rounded-full bg-black/45 px-1.5 py-1 text-white")}>
@@ -535,6 +536,36 @@ function nameColor(name: string) {
   let h = 0;
   for (const c of name) h = (h * 31 + c.charCodeAt(0)) | 0;
   return NAME_COLORS[Math.abs(h) % NAME_COLORS.length];
+}
+
+// A link's preview, as its service sent it: the site, the title, the description, and its picture
+// across the card (a wide one) or beside the words (a small one); a picture that fails is left out.
+// Its size is known, so the bubble keeps its place while it comes.
+function PreviewCard({ p, out }: { p: LinkPreview; out: boolean }) {
+  const [broken, setBroken] = useState(false);
+  const img = p.image && !broken ? p.image : null;
+  const wide = !!img && img.width >= 300 && img.width >= img.height;
+  const picture = img && (
+    <img src={`/api/previews/${img.sha256}`} alt="" loading="lazy" onError={() => setBroken(true)}
+      width={img.width} height={img.height} style={wide ? { aspectRatio: `${img.width} / ${img.height}` } : undefined}
+      className={wide ? "max-h-52 w-full object-cover" : "size-14 shrink-0 rounded-md object-cover"} />
+  );
+  const words = (
+    <div className="min-w-0 flex-1 px-2 py-1.5">
+      {p.site && <div className="truncate text-xs font-semibold opacity-80">{p.site}</div>}
+      {p.title && <div className="line-clamp-2 text-sm font-semibold">{p.title}</div>}
+      {p.description && <div className="line-clamp-3 text-xs opacity-80">{p.description}</div>}
+    </div>
+  );
+  const cls = cn("mt-1.5 block w-full overflow-hidden rounded-lg border-l-[3px]", wide && "min-w-[min(18rem,60vw)]",
+    out ? "border-white/70 bg-white/15" : "border-accent bg-accent/8");
+  const body = wide ? <>{picture}{words}</> : <div className="flex items-center gap-1 pr-1.5">{words}{picture}</div>;
+  // a link of the web only (what the sender put there may be anything, javascript: too)
+  return p.url && /^https?:\/\//i.test(p.url) ? (
+    <a data-preview href={p.url} target="_blank" rel="noopener noreferrer" className={cls}>{body}</a>
+  ) : (
+    <div data-preview className={cls}>{body}</div>
+  );
 }
 
 // The tail of a run's last bubble, at its lower corner on the sender's side, as the bubble's own

@@ -137,6 +137,10 @@ func buildFixture(path string) (err error) {
 	}
 	a.Exec("INSERT INTO media (sha256, size, mime, path) VALUES (?, ?, 'image/jpeg', ?)", sha, len(data), filepath.ToSlash(rel))
 	a.Exec("INSERT INTO attachment (message_id, sha256, source_id, source_path) VALUES (?, ?, ?, 'pic.jpg')", pic, sha, src)
+	// a link, with the preview WhatsApp sent
+	link := msg("whatsapp", wa, false, maria, "text", "https://example.org/a")
+	a.SetPreview(link, &archive.Preview{URL: "https://example.org/a", Site: "Example", Title: "A page",
+		Description: "What it is about", Image: tinyJPEG()})
 
 	// a WhatsApp group of three; a mention, the user's message with receipts
 	group := a.Conversation("whatsapp", []archive.Handle{maria, nick, bob, me}, "group-1@g.us", "Friends")
