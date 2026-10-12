@@ -328,6 +328,7 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 		srcOrder = append(srcOrder, "desktop")
 	}
 	added, skipped := map[string]int{}, map[string]int{}
+	var links viberLinks
 	viberID := a.Service.ID("viber")
 
 	add := func(source, rowKey string, m viberMsg) {
@@ -496,6 +497,10 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 				edits = append(edits, viberEdit{extra.EditsKey, str(r["ZTEXT"])})
 				continue
 			}
+			// a GIF from Viber's panel is shown itself: no card of its first frame beside it
+			if l := viberPreview(jsonObj(r["ZMETADATA"])); l != nil && key != "" && conv != 0 && extra.Subtype != "gif" {
+				extra.Preview = &links.add(key, l).preview // the desktop's copy may fill it in
+			}
 			iphoneRecs[pk] = viberMsg{extra, conv, tokenTime(r["ZDATE"], toInt(r["ZTOKEN"])),
 				outgoing, sender, kind, str(r["ZTEXT"]), key}
 			iphoneOrder = append(iphoneOrder, pk)
@@ -631,6 +636,9 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 			if truthy(obj(info["desktop_info"])["edit_token"]) {
 				extra.Edited = true
 			}
+			if l := viberPreview(info); l != nil && !deleted && key != "" && conv != 0 && extra.Subtype != "gif" {
+				extra.Preview = &links.add(key, l).preview
+			}
 			var by map[string]any
 			if outgoing {
 				by = map[string]any{"self": true}
@@ -712,6 +720,7 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 	if desktop != nil && columns(desktop, "ChatInfo")["LastReadMessageToken"] { // an Android export has not
 		desktopMarks(a, desktop, src["desktop"], desktopChats, desktopMembers, int64(mtime(desktopDB)*1000))
 	}
+	previews := links.apply(a)
 	a.Resolve()
 	ApplyPins(a, "viber")
 	for _, s := range srcOrder {
@@ -728,6 +737,10 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 			say(out, "new:     {n} {source}", p)
 		}
 	}
+	if previews > 0 {
+		say(out, "link previews on messages already here: {n}", map[string]any{"n": previews})
+	}
+	viberPictures(a, out, &links)
 	return nil
 }
 

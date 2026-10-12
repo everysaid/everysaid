@@ -67,6 +67,9 @@ func init() {
 		"Viber Desktop {version}, missing: {what}":                                                           "Viber Desktop {version}, λείπουν: {what}",
 		"Receiving live from Viber Desktop does not work: new messages come only with the check every {every} seconds": "Η ζωντανή λήψη από το Viber Desktop δεν λειτουργεί: τα νέα μηνύματα έρχονται μόνο με τον έλεγχο κάθε {every} δευτερόλεπτα",
 		"Receiving live from Viber Desktop works again":                                                                "Η ζωντανή λήψη από το Viber Desktop λειτουργεί ξανά",
+		// the importer's (internal/importers/viber*.go)
+		"link previews on messages already here: {n}":                                                        "προεπισκοπήσεις συνδέσμων σε μηνύματα που υπήρχαν ήδη: {n}",
+		"link preview pictures: {kept} kept, {failed} could not be fetched, {left} left for the next import": "εικόνες προεπισκόπησης συνδέσμων: {kept} κρατήθηκαν, {failed} δεν ήταν δυνατό να ληφθούν, {left} μένουν για την επόμενη εισαγωγή",
 	} {
 		EL[k] = v
 	}

@@ -40,6 +40,7 @@ import (
 	"everysaid/internal/core"
 	"everysaid/internal/db"
 	"everysaid/internal/i18n"
+	"everysaid/internal/netsafe"
 )
 
 // kindLabel is what a message without text shows as (said through i18n).
@@ -70,23 +71,13 @@ func pushClient() *http.Client {
 	tr.Proxy = nil
 	dialer := &net.Dialer{Timeout: 15 * time.Second, Control: func(network, address string, _ syscall.RawConn) error {
 		ap, err := netip.ParseAddrPort(address)
-		if err != nil || !publicIP(ap.Addr()) {
+		if err != nil || !netsafe.PublicIP(ap.Addr()) {
 			return fmt.Errorf("push: %s is not an address on the internet", address)
 		}
 		return nil
 	}}
 	tr.DialContext = dialer.DialContext
 	return &http.Client{Timeout: 30 * time.Second, Transport: tr}
-}
-
-// cgnat is the carriers' shared space (and Tailscale's): not the internet either.
-var cgnat = netip.MustParsePrefix("100.64.0.0/10")
-
-// publicIP says whether an address is one on the internet: not this machine, a private network,
-// link-local, multicast or unspecified.
-func publicIP(a netip.Addr) bool {
-	a = a.Unmap()
-	return a.IsGlobalUnicast() && !a.IsPrivate() && !a.IsLoopback() && !a.IsLinkLocalUnicast() && !cgnat.Contains(a)
 }
 
 // pushEndpointOK is pushEndpoint (a variable: the tests' push service is on this machine).
@@ -99,7 +90,7 @@ func pushEndpoint(ctx context.Context, endpoint string) bool {
 		return false
 	}
 	if a, err := netip.ParseAddr(u.Hostname()); err == nil {
-		return publicIP(a)
+		return netsafe.PublicIP(a)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -108,7 +99,7 @@ func pushEndpoint(ctx context.Context, endpoint string) bool {
 		return false
 	}
 	for _, a := range addrs {
-		if !publicIP(a) {
+		if !netsafe.PublicIP(a) {
 			return false
 		}
 	}
