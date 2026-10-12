@@ -848,8 +848,10 @@ func (c *client) deliver(ctx context.Context, cli *signalmeow.Client, x converte
 const maxLongText = 64 * 1024
 
 // files fetches an event's files into the media folder (where download), named by attachmentName;
-// a long message's text (fetched whatever the setting) becomes its text, and leaves its files.
+// a long message's text (fetched whatever the setting) becomes its text, and leaves its files. The
+// picture of its link preview comes too (previewFile).
 func (c *client) files(ctx context.Context, x converted, download bool) {
+	c.previewFile(ctx, x.ev)
 	list, _ := x.ev["attachments"].([]M)
 	if len(list) == 0 || len(list) != len(x.atts) {
 		return
@@ -914,6 +916,42 @@ func (c *client) files(ctx context.Context, x converted, download bool) {
 	// name of its place among the message's, also when fetched again or kept by an edit
 	if long >= 0 {
 		delete(list[long], "error")
+	}
+}
+
+// previewFile fetches the picture of a message's (first) link preview into the media folder,
+// whatever the setting (it is how the message looks, not a file of it), as "preview-" and its
+// attachmentName; the importer takes it into the message's preview, never as a file.
+func (c *client) previewFile(ctx context.Context, ev M) {
+	ps, _ := ev["previews"].([]M)
+	if len(ps) == 0 {
+		return
+	}
+	img, _ := ps[0]["image"].(M)
+	text, _ := img["pointer"].(string)
+	ptr := pointerOf(text)
+	if ptr == nil {
+		return
+	}
+	author, _ := ev["sender"].(string)
+	name := "preview-" + attachmentName(toU64(ev["ts"]), author, 0, ptr.GetContentType(), ptr.GetFileName())
+	path := filepath.Join(c.cfg.Media, name)
+	switch {
+	case isFile(path):
+		img["file"] = name
+	case ptr.GetCdnKey() == "" && ptr.GetCdnId() == 0:
+		img["error"] = "not on Signal's server"
+	default:
+		var hash []byte // nil where the digest is the check
+		if h, _ := img["hash"].(string); h != "" {
+			hash, _ = base64.StdEncoding.DecodeString(h)
+		}
+		os.MkdirAll(c.cfg.Media, 0o700)
+		if err := c.fetch(ctx, ptr, hash, path); err != nil {
+			img["error"] = err.Error()
+		} else {
+			img["file"] = name
+		}
 	}
 }
 

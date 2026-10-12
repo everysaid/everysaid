@@ -358,3 +358,51 @@ func TestTransferItems(t *testing.T) {
 		t.Fatalf("%v", names)
 	}
 }
+
+// A link's preview keeps its description, date and picture (its pointer, fetched as a file of the
+// preview, not of the message), from a message and from the transfer archive.
+func TestPreviewEvents(t *testing.T) {
+	img := &signalpb.AttachmentPointer{ContentType: proto.String("image/jpeg"),
+		AttachmentIdentifier: &signalpb.AttachmentPointer_CdnKey{CdnKey: "pic"}, Key: []byte{1}}
+	x := testConv().convert(metaFrom(anna), data(&signalpb.DataMessage{Body: proto.String("see https://example.org/a"),
+		Timestamp: proto.Uint64(1000), Preview: []*signalpb.Preview{{Url: proto.String("https://example.org/a"),
+			Title: proto.String("A page"), Description: proto.String("About it"), Date: proto.Uint64(900), Image: img}}}))
+	if len(x) != 1 || len(x[0].atts) != 0 || x[0].ev["attachments"] != nil {
+		t.Fatalf("%+v", x)
+	}
+	p := js(t, x[0])["previews"].([]any)[0].(map[string]any)
+	if p["url"] != "https://example.org/a" || p["title"] != "A page" || p["description"] != "About it" || p["date"].(float64) != 900 {
+		t.Fatalf("%v", p)
+	}
+	if ptr := pointerOf(p["image"].(map[string]any)["pointer"].(string)); ptr == nil || ptr.GetCdnKey() != "pic" {
+		t.Fatalf("%v", p["image"])
+	}
+
+	u := uuid.MustParse(anna)
+	a := &transferArchive{own: me, recipients: map[uint64]*backuppb.Recipient{
+		2: {Id: 2, Destination: &backuppb.Recipient_Contact{Contact: &backuppb.Contact{Aci: u[:]}}},
+	}}
+	key := "pic"
+	it := &backuppb.ChatItem{AuthorId: 2, DateSent: 1200, Item: &backuppb.ChatItem_StandardMessage{StandardMessage: &backuppb.StandardMessage{
+		Text: &backuppb.Text{Body: "see https://example.org/b"},
+		LinkPreview: []*backuppb.LinkPreview{{Url: "https://example.org/b", Title: proto.String("B"), Description: proto.String("Bee"),
+			Image: &backuppb.FilePointer{ContentType: proto.String("image/png"), LocatorInfo: &backuppb.FilePointer_LocatorInfo{
+				Key: []byte{2}, TransitCdnKey: &key,
+				IntegrityCheck: &backuppb.FilePointer_LocatorInfo_PlaintextHash{PlaintextHash: []byte{3}}}}}}}},
+		DirectionalDetails: &backuppb.ChatItem_Incoming{Incoming: &backuppb.ChatItem_IncomingMessageDetails{DateReceived: 1250}}}
+	found := false
+	for _, x := range a.item(contactChat(anna), it) {
+		if x.name != "message" {
+			continue
+		}
+		found = true
+		p := js(t, x)["previews"].([]any)[0].(map[string]any)
+		im, _ := p["image"].(map[string]any)
+		if len(x.atts) != 0 || p["url"] != "https://example.org/b" || p["description"] != "Bee" || im == nil || im["hash"] != "Aw==" {
+			t.Fatalf("%v %v", p, x.atts)
+		}
+	}
+	if !found {
+		t.Fatal("no message")
+	}
+}

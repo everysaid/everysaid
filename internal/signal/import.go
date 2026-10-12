@@ -21,6 +21,7 @@ package signal
 import (
 	"cmp"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -300,7 +301,35 @@ func asEdited(e *event, edit string) bool {
 	if len(ed.Attachments) > 0 {
 		e.Attachments = ed.Attachments
 	}
+	if len(ed.Previews) > 0 { // the new text's links
+		e.Previews = ed.Previews
+	}
 	return true
+}
+
+// previewOf is a message's link preview (its first, as Signal shows it), its picture read from the
+// file the client fetched into mediaDir, and that file's path ("": none), to remove once the archive
+// has it (the picture kept stays when it is read again without it).
+func previewOf(e event, mediaDir string) (*archive.Preview, string) {
+	if len(e.Previews) == 0 {
+		return nil, ""
+	}
+	p := e.Previews[0]
+	out := &archive.Preview{URL: deref(p.URL), Title: deref(p.Title), Description: deref(p.Description)}
+	if p.Image == nil {
+		return out, ""
+	}
+	f := deref(p.Image.File)
+	if f == "" || f != filepath.Base(f) || f == "." || f == ".." {
+		return out, "" // only files within the client's folder
+	}
+	path := filepath.Join(mediaDir, f)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return out, ""
+	}
+	out.Image = b
+	return out, path
 }
 
 // describe is a message's kind, extras and text, from the helper's event.
@@ -566,6 +595,8 @@ func Import(a *archive.Archive, s *Store, mediaDir string, iid int64, skip map[s
 		}
 	}
 	var imported []ref // the messages the archive has (each of them, once this import is committed)
+	// the pictures of link previews: removed once the archive has them
+	var previewFiles []string
 	for _, r := range rows {
 		if skip[r.chat] {
 			continue
@@ -579,11 +610,24 @@ func Import(a *archive.Archive, s *Store, mediaDir string, iid int64, skip map[s
 		}
 		key := Key(r.author, r.ts)
 		if a.HasOrigin(src, key, "") {
-			// the names of its files, linked before names were kept
-			if strings.Contains(r.js, `"filename":"`) {
+			// the names of its files, linked before names were kept; its link preview, kept before
+			// previews were
+			names, preview := strings.Contains(r.js, `"filename":"`), strings.Contains(r.js, `"previews":[{`)
+			if names || preview {
 				var e event
 				if mid, ok := a.MessageByKey(Service, key, cid); ok && json.Unmarshal([]byte(r.js), &e) == nil {
-					linkFiles(mid, e.Attachments)
+					if names {
+						linkFiles(mid, e.Attachments)
+					}
+					asEdited(&e, edits[key])
+					if p, f := previewOf(e, mediaDir); p != nil {
+						if a.SetPreview(mid, p) {
+							n.Changes++
+						}
+						if f != "" {
+							previewFiles = append(previewFiles, f)
+						}
+					}
 				}
 			}
 			continue
@@ -608,6 +652,10 @@ func Import(a *archive.Archive, s *Store, mediaDir string, iid int64, skip map[s
 			x.ReplyKey = root(x.ReplyKey)
 		}
 		x.Edited, x.Deleted = edited, deleted[key]
+		var f string
+		if x.Preview, f = previewOf(e, mediaDir); f != "" {
+			previewFiles = append(previewFiles, f)
+		}
 		text, toks := withMentions(text, e.Mentions, p.mentionName)
 		var sender int64
 		if !r.outgoing {
@@ -722,6 +770,9 @@ func Import(a *archive.Archive, s *Store, mediaDir string, iid int64, skip map[s
 	a.Imported(src)
 	a.Commit()
 	files.Release()
+	for _, f := range previewFiles {
+		os.Remove(f)
+	}
 	if err := s.Prune(imported, skip); err != nil {
 		return n, err
 	}

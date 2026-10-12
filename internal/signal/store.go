@@ -256,6 +256,16 @@ type attachmentEv struct {
 	Hash string `json:"hash"`
 }
 
+// previewEv is a link's preview (the description and picture since October 2026; date: the page's,
+// Unix ms): its picture as an attachment, its file once fetched.
+type previewEv struct {
+	URL         *string       `json:"url"`
+	Title       *string       `json:"title"`
+	Description *string       `json:"description"`
+	Date        *int64        `json:"date"`
+	Image       *attachmentEv `json:"image"`
+}
+
 type contactEv struct {
 	ACI         string  `json:"aci"`
 	Phone       *string `json:"phone"`
@@ -310,7 +320,7 @@ type event struct {
 	Quote         *quoteEv        `json:"quote"`
 	Attachments   []attachmentEv  `json:"attachments"`
 	Contacts      []sharedContact `json:"contacts"`
-	Previews      []any           `json:"previews"`
+	Previews      []previewEv     `json:"previews"`
 	Poll          *pollEv         `json:"poll"`
 	GroupChange   bool            `json:"group_change"`
 	GroupCall     bool            `json:"group_call"`
