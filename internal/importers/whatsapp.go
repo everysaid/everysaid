@@ -753,14 +753,16 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 		srcOrder = append(srcOrder, "bridge")
 	}
 	added, skipped := map[string]int{}, map[string]int{}
+	previews := 0 // of messages the archive had
 
+	// add adds a message; false: it was there (or is a channel's)
 	add := func(source, rowKey string, extra *archive.Extras, conv int64, ts int64, outgoing bool, sender *archive.Handle,
-		kind, text string, key any) {
+		kind, text string, key any) bool {
 		if conv == 0 { // a channel
-			return
+			return false
 		}
 		if a.HasOrigin(src[source], rowKey, "") {
-			return
+			return false
 		}
 		k, isStr := key.(string)
 		if isStr {
@@ -770,7 +772,7 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 				a.Exec("INSERT OR IGNORE INTO message_origin (source_id, row_key, message_id) VALUES (?, ?, ?)",
 					src[source], rowKey, mid)
 				skipped[source]++
-				return
+				return false
 			}
 		}
 		if extra != nil && len(extra.Reactions) > 0 { // the reactors are jids: people, or the owner
@@ -795,6 +797,7 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 		a.AddMessage(src[source], rowKey, archive.Message{Service: "whatsapp", ConversationID: conv, TS: ts,
 			Outgoing: outgoing, SenderID: senderID, Kind: kind, Text: text, Key: k, Extras: extra})
 		added[source]++
+		return true
 	}
 
 	// iPhone
@@ -822,6 +825,7 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 			}
 			sessions[pk] = session{str(s["ZCONTACTJID"]), waConversation(a, person, jid, s["ZPARTNERNAME"], groupMembers[pk])}
 		}
+		linkPreviews := iphonePreviews(iphone, filepath.Join(filepath.Dir(iphoneDB), WhatsAppPreviewFolder))
 		metadata := map[int64][]byte{}
 		for _, r := range maps(iphone, "SELECT m.Z_PK, i.ZMETADATA FROM ZWAMESSAGE m JOIN ZWAMEDIAITEM i ON i.Z_PK = m.ZMEDIAITEM "+
 			"WHERE m.ZMESSAGETYPE IN "+metadataText) {
@@ -873,8 +877,14 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 					}
 				}
 			}
-			add("iphone", pyStr(r["Z_PK"]), x, s.conv, appleMS(toFloat(r["ZMESSAGEDATE"])), outgoing, sender, kind, text,
-				r["ZSTANZAID"])
+			x.Preview = linkPreviews[toInt(r["Z_PK"])]
+			if !add("iphone", pyStr(r["Z_PK"]), x, s.conv, appleMS(toFloat(r["ZMESSAGEDATE"])), outgoing, sender, kind, text,
+				r["ZSTANZAID"]) && x.Preview != nil { // imported before there were previews
+				if mid, ok := a.IntOK("SELECT message_id FROM message_origin WHERE source_id = ? AND row_key = ?",
+					src["iphone"], pyStr(r["Z_PK"])); ok && setPreview(a, mid, x.Preview, true) {
+					previews++
+				}
+			}
 		})
 	}
 
@@ -929,8 +939,14 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 			if !ok {
 				panic(&db.Error{Query: "fromisoformat", Err: errBadTime(str(r["timestamp"]))})
 			}
-			add("bridge", jid+"/"+pyStr(r["id"]), whatsappBridgeExtras(r, reactions[reactionKey{jid, str(r["id"])}]), convs[jid],
-				tsMS(t), outgoing, sender, kind, str(r["content"]), r["id"])
+			x := whatsappBridgeExtras(r, reactions[reactionKey{jid, str(r["id"])}])
+			x.Preview = bridgePreview(r)
+			if !add("bridge", jid+"/"+pyStr(r["id"]), x, convs[jid], tsMS(t), outgoing, sender, kind, str(r["content"]), r["id"]) &&
+				x.Preview != nil && convs[jid] != 0 { // there already (from the iPhone, or before its picture came)
+				if mid, ok := a.MessageByKey("whatsapp", str(r["id"]), convs[jid]); ok && mid != 0 && setPreview(a, mid, x.Preview, false) {
+					previews++
+				}
+			}
 		})
 		if hasTable(bridge, "group_event") { // a group's changes, as notices
 			eachMap(bridge, "SELECT "+selectAll(bridge, "group_event", "")+" FROM group_event ORDER BY timestamp", nil, func(r row) {
@@ -1089,6 +1105,9 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 		bridgeBlocked(a, bridge, person, own)
 	} else {
 		updated = map[string]int{}
+	}
+	if previews > 0 {
+		updated["preview"] += previews
 	}
 
 	// The names WhatsApp shows, for the handles in the archive (the core orders them against an

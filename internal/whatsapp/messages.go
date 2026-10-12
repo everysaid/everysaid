@@ -41,6 +41,16 @@ type StoredMessage struct {
 	Lat, Lon                             *float64
 	Place                                string
 	Poll                                 string // a poll's question, options, multiple (JSON)
+	Preview                              LinkPreview
+}
+
+// LinkPreview is a link's preview as the sender's app made it: the small picture the message
+// carries, and where its high-quality one is on WhatsApp's servers (downloaded later, media.go).
+type LinkPreview struct {
+	URL, Title, Description string
+	Thumb                   []byte // JPEGThumbnail
+	DirectPath              string
+	SHA256, EncSHA256, Key  []byte
 }
 
 // migrate adds what this version keeps to a store made by an older one. Nothing is removed.
@@ -64,6 +74,17 @@ func (store *MessageStore) migrate() error {
 		"poll":         "TEXT",      // a poll's question, options and whether several may be chosen (JSON)
 		"forward_from": "TEXT",      // the channel a forwarded message came from
 		"album":        "TEXT",      // the album's message id, for files sent together
+		// a link's preview, as the sender's app made it (one per message: the first link's)
+		"preview_url":         "TEXT", // the link as the text has it
+		"preview_title":       "TEXT",
+		"preview_description": "TEXT",
+		"preview_thumb":       "BLOB", // the small picture the message carries (JPEG)
+		"preview_direct_path": "TEXT", // where its high-quality picture is on WhatsApp's servers
+		"preview_sha256":      "BLOB",
+		"preview_enc_sha256":  "BLOB",
+		"preview_media_key":   "BLOB",
+		"preview_image":       "BLOB", // that picture, downloaded
+		"preview_error":       "TEXT", // why it could not be had
 	}
 	have := map[string]bool{}
 	rows, err := store.db.Query("PRAGMA table_info(messages)")
@@ -187,8 +208,9 @@ func (store *MessageStore) storeMessage(m StoredMessage) error {
 	_, err := store.db.Exec(`
 		INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me, media_type, filename, url,
 			media_key, file_sha256, file_enc_sha256, file_length, kind, subtype, reply_to, reply_text, forwarded,
-			lat, lon, place, direct_path, mentions, forward_from, album)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			lat, lon, place, direct_path, mentions, forward_from, album, preview_url, preview_title, preview_description,
+			preview_thumb, preview_direct_path, preview_sha256, preview_enc_sha256, preview_media_key)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id, chat_jid) DO UPDATE SET
 			sender = excluded.sender,
 			content = CASE WHEN messages.edited THEN messages.content ELSE excluded.content END,
@@ -205,11 +227,21 @@ func (store *MessageStore) storeMessage(m StoredMessage) error {
 				THEN NULL ELSE messages.media_error END,
 			mentions = CASE WHEN messages.edited THEN messages.mentions ELSE excluded.mentions END,
 			forward_from = coalesce(excluded.forward_from, messages.forward_from),
-			album = coalesce(excluded.album, messages.album)`,
+			album = coalesce(excluded.album, messages.album),
+			preview_url = coalesce(excluded.preview_url, messages.preview_url),
+			preview_title = coalesce(excluded.preview_title, messages.preview_title),
+			preview_description = coalesce(excluded.preview_description, messages.preview_description),
+			preview_thumb = coalesce(excluded.preview_thumb, messages.preview_thumb),
+			preview_direct_path = coalesce(excluded.preview_direct_path, messages.preview_direct_path),
+			preview_sha256 = coalesce(excluded.preview_sha256, messages.preview_sha256),
+			preview_enc_sha256 = coalesce(excluded.preview_enc_sha256, messages.preview_enc_sha256),
+			preview_media_key = coalesce(excluded.preview_media_key, messages.preview_media_key)`,
 		m.ID, m.ChatJID, m.Sender, m.Content, m.Timestamp, m.IsFromMe, m.MediaType, m.Filename, m.URL,
 		m.MediaKey, m.FileSHA256, m.FileEncSHA256, m.FileLength, m.Kind, m.Subtype, m.ReplyTo, m.ReplyText,
 		m.Forwarded, m.Lat, m.Lon, m.Place, nullable(m.DirectPath), nullable(strings.Join(m.Mentions, ",")),
-		nullable(m.ForwardFrom), nullable(m.Album))
+		nullable(m.ForwardFrom), nullable(m.Album), nullable(m.Preview.URL), nullable(m.Preview.Title),
+		nullable(m.Preview.Description), blob(m.Preview.Thumb), nullable(m.Preview.DirectPath), blob(m.Preview.SHA256),
+		blob(m.Preview.EncSHA256), blob(m.Preview.Key))
 	return err
 }
 
@@ -303,8 +335,14 @@ func describe(m *StoredMessage, msg *waE2E.Message, evt *events.Message) bool {
 		m.Kind = "text"
 	case msg.GetExtendedTextMessage() != nil:
 		m.Kind = "text"
-		if msg.GetExtendedTextMessage().GetMatchedText() != "" {
+		x := msg.GetExtendedTextMessage()
+		if x.GetMatchedText() != "" {
 			m.Subtype = "link"
+		}
+		if x.GetTitle() != "" || x.GetDescription() != "" || len(x.GetJPEGThumbnail()) > 0 || x.GetThumbnailDirectPath() != "" {
+			m.Preview = LinkPreview{URL: x.GetMatchedText(), Title: x.GetTitle(), Description: x.GetDescription(),
+				Thumb: x.GetJPEGThumbnail(), DirectPath: x.GetThumbnailDirectPath(), SHA256: x.GetThumbnailSHA256(),
+				EncSHA256: x.GetThumbnailEncSHA256(), Key: x.GetMediaKey()}
 		}
 	case msg.GetImageMessage() != nil:
 		m.Kind = "image"
@@ -465,6 +503,14 @@ func nullable(s string) interface{} {
 		return nil
 	}
 	return s
+}
+
+// blob is b, NULL where empty.
+func blob(b []byte) interface{} {
+	if len(b) == 0 {
+		return nil
+	}
+	return b
 }
 
 // isChannel: channels (newsletters) and status (everyone's, status@broadcast) are never kept: not
