@@ -259,9 +259,10 @@ export interface BubbleProps {
 
 /** The actions of a message: its service's quick reactions, any other it takes, copy, edit,
  * delete for everyone, answer. Opened by its button, or by a long press on a touch screen (open). */
-function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange }: {
+function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange, offset }: {
   m: MessageItem; react?: BubbleProps["react"]; onReply?: (m: MessageItem) => void; onEdit?: (m: MessageItem) => void;
   onDelete?: (m: MessageItem) => void; open: boolean; onOpenChange: (o: boolean) => void;
+  offset?: number | null;     // opened by a right click: beside its button, from the bubble's top (this far above the button's)
 }) {
   const { t } = useTranslation();
   const [more, setMore] = useState(false);
@@ -283,7 +284,8 @@ function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange }: {
           <EllipsisVertical className="size-4" strokeWidth={3} />
         </button>
       </MenuTrigger>
-      <MenuContent align={m.outgoing ? "end" : "start"} className="w-72"
+      <MenuContent align={offset != null ? "start" : m.outgoing ? "end" : "start"} className="w-72"
+        side={offset != null ? (m.outgoing ? "left" : "right") : undefined} alignOffset={offset ?? undefined}
         onCloseAutoFocus={(e) => { if (toComposer.current) { e.preventDefault(); toComposer.current = false; } }}>
         {react && (
           <div data-reactions className="flex items-center gap-0.5 px-1 py-1">
@@ -349,6 +351,7 @@ function useMeasured(id: number) {
 export const Bubble = memo(function Bubble({ m, group, first, last, above, below, showService, account, highlight, onOpen, onJump, onReply, onInfo, react, onEdit, onDelete }: BubbleProps) {
   const { t } = useTranslation();
   const [menu, setMenu] = useState(false);
+  const [menuAt, setMenuAt] = useState<number | null>(null);     // a right click's: the menu at the bubble's top
   // deleted for everyone: the notice, as the service shows it; what it was, on a tap
   const [reveal, setReveal] = useState(false);
   const hidden = m.deleted && !reveal;
@@ -381,7 +384,8 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
     onPointerMove: unpress, onPointerUp: unpress, onPointerCancel: unpress,
   } : {};
   const actions = hasActions && (
-    <Actions m={m} react={react} onReply={onReply} onEdit={onEdit} onDelete={onDelete} open={menu} onOpenChange={setMenu} />
+    <Actions m={m} react={react} onReply={onReply} onEdit={onEdit} onDelete={onDelete} open={menu} offset={menuAt}
+      onOpenChange={(o) => { setMenu(o); if (!o) setMenuAt(null); }} />
   );
   const out = m.outgoing;
   const svc = service(m.service);
@@ -421,6 +425,9 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
             const sel = window.getSelection();
             if ((sel && !sel.isCollapsed && e.currentTarget.contains(sel.anchorNode)) || (e.target as HTMLElement).closest("a")) return;
             e.preventDefault();
+            // beside the bubble from its top (the ⋮'s menu begins under the ⋮, at its middle)
+            const button = e.currentTarget.querySelector("[data-actions]");
+            if (button) setMenuAt(e.currentTarget.getBoundingClientRect().top - button.getBoundingClientRect().top);
             setMenu(true);
           } : undefined}
           className={cn(
