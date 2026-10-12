@@ -3,7 +3,7 @@ import { initReactI18next } from "react-i18next";
 
 const el = {
   app: { name: "Everysaid", tagline: "Όλες οι συνομιλίες σου, από όλες τις υπηρεσίες, σε ένα μέρος." },
-  nav: { chats: "Συνομιλίες", calls: "Κλήσεις", media: "Πολυμέσα", search: "Αναζήτηση", people: "Πρόσωπα",
+  nav: { live: "Συνδεδεμένο: τα νέα έρχονται αμέσως", offline: "Χωρίς σύνδεση με τον server", chats: "Συνομιλίες", calls: "Κλήσεις", media: "Πολυμέσα", search: "Αναζήτηση", people: "Πρόσωπα",
     sources: "Πηγές", settings: "Ρυθμίσεις", overview: "Επισκόπηση" },
   common: { error: "Κάτι πήγε στραβά", retry: "Ξανά", cancel: "Άκυρο", save: "Αποθήκευση",
     close: "Κλείσιμο", back: "Πίσω", previous: "Προηγούμενο", next: "Επόμενο", delete: "Διαγραφή", add: "Προσθήκη", edit: "Επεξεργασία", done: "Έτοιμο",
@@ -283,7 +283,7 @@ const el = {
 type Shape<T> = { [K in keyof T]: T[K] extends string ? string : Shape<T[K]> };
 const en: Shape<typeof el> = {
   app: { name: "Everysaid", tagline: "All your conversations, from every service, in one place." },
-  nav: { chats: "Chats", calls: "Calls", media: "Media", search: "Search", people: "People", sources: "Sources",
+  nav: { live: "Connected: new messages come at once", offline: "Not connected to the server", chats: "Chats", calls: "Calls", media: "Media", search: "Search", people: "People", sources: "Sources",
     settings: "Settings", overview: "Overview" },
   common: { error: "Something went wrong", retry: "Retry", cancel: "Cancel", save: "Save",
     close: "Close", back: "Back", previous: "Previous", next: "Next", delete: "Delete", add: "Add", edit: "Edit", done: "Done", copy: "Copy",
