@@ -28,9 +28,9 @@
   --line: #e2e5ec;
   --fg: #12141a;
   --muted: #6a7182;
-  /* the main colour: the user's (--accent-light, set by lib/theme.ts), else the icon's dark brown */
-  --accent: var(--accent-light, #5e4428);
-  --accent-fg: var(--accent-light-fg, #ffffff);
+  /* the main colour: the user's (--accent-user, set by lib/theme.ts), else the icon's dark brown */
+  --accent: var(--accent-user, #5e4428);
+  --accent-fg: var(--accent-user-fg, #ffffff);
   --bubble-in: #ffffff;
   --bubble-out: var(--accent);
   --bubble-out-fg: var(--accent-fg);
@@ -46,9 +46,10 @@
   --line: #242a37;
   --fg: #e8eaf0;
   --muted: #8a92a6;
-  /* the user's (--accent-dark), else the icon's light brown; the outgoing bubble a darker shade of it */
-  --accent: var(--accent-dark, #c29c62);
-  --accent-fg: var(--accent-dark-fg, #0b0d12);
+  /* the same colour lighter, to be seen on the dark (the icon's brown becomes about its light brown),
+     with dark text on it; the outgoing bubble a darker shade of that */
+  --accent: oklch(from var(--accent-user, #5e4428) max(l, 0.72) calc(c * 1.6) h);
+  --accent-fg: #0b0d12;
   --bubble-in: #1b2030;
   --bubble-out: color-mix(in oklab, var(--accent) 60%, #000);
   --bubble-out-fg: #ffffff;

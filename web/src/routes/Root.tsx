@@ -29,11 +29,11 @@ export function Root() {
   const services = useQuery({ queryKey: ["services", i18n.language], queryFn: () => loadServices(i18n.language),
     enabled: !!auth.data?.logged_in, staleTime: Infinity });
 
-  // each theme's main colour, as chosen (on any device)
+  // the main colour, as chosen (on any device)
   const settings = useQuery({ queryKey: ["settings"], queryFn: () => api.get<Record<string, unknown>>("/api/settings"),
     enabled: !!auth.data?.logged_in });
   useEffect(() => {
-    if (settings.data) applyAccent((settings.data.accent_light as string) ?? null, (settings.data.accent_dark as string) ?? null);
+    if (settings.data) applyAccent((settings.data.accent as string) ?? null);
   }, [settings.data]);
 
   useEffect(() => {

@@ -301,8 +301,8 @@ func (s *Server) miscRoutes() {
 				ok = allOf(v, func(x any) bool { _, isStr := x.(string); return isStr })
 			case k == "hidden_accounts":
 				ok = allOf(v, func(x any) bool { _, isInt := x.(int64); return isInt })
-			case k == "accent_light" || k == "accent_dark":
-				// a theme's main colour, #rrggbb; null: the default
+			case k == "accent":
+				// the main colour, #rrggbb; null: the default
 				str, isStr := v.(string)
 				ok = v == nil || isStr && isHexColor(str)
 			case k == "name_order":

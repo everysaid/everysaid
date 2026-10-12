@@ -15,31 +15,29 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
   if (getTheme() === "system") applyTheme("system");
 });
 
-/** Each theme's main colour by default: the icon's dark brown, and its light one on the dark theme. */
-export const ACCENT = { light: "#5e4428", dark: "#c29c62" } as const;
+/** The main colour by default: the icon's dark brown. The dark theme takes a lighter shade of it
+ * (index.css). */
+export const ACCENT = "#5e4428";
 
-/** Each theme's main colour as the user chose it (null: the default), kept on this device too, so
- * that the next visit starts with it (theme-boot). */
-export function applyAccent(light: string | null, dark: string | null) {
-  localStorage.setItem("accent", JSON.stringify({ light, dark }));
+/** The main colour as the user chose it (null: the default), kept on this device too, so that the
+ * next visit starts with it (theme-boot). */
+export function applyAccent(c: string | null) {
+  if (c) localStorage.setItem("accent", c);
+  else localStorage.removeItem("accent");
   paintAccent();
 }
 
-/** The colours kept on this device put on the page: each theme's main colour, and the text on it
- * (white, or dark on a light colour). */
+/** The colour kept on this device put on the page, with the text on it (white, or dark on a light
+ * colour). */
 export function paintAccent() {
-  let kept: { light?: string | null; dark?: string | null } = {};
-  try { kept = JSON.parse(localStorage.getItem("accent") || "{}"); } catch { /* none */ }
+  const c = localStorage.getItem("accent");
   const style = document.documentElement.style;
-  for (const mode of ["light", "dark"] as const) {
-    const c = kept[mode];
-    if (c) {
-      style.setProperty(`--accent-${mode}`, c);
-      style.setProperty(`--accent-${mode}-fg`, light(c) ? "#12141a" : "#ffffff");
-    } else {
-      style.removeProperty(`--accent-${mode}`);
-      style.removeProperty(`--accent-${mode}-fg`);
-    }
+  if (c && /^#[0-9a-f]{6}$/i.test(c)) {
+    style.setProperty("--accent-user", c);
+    style.setProperty("--accent-user-fg", light(c) ? "#12141a" : "#ffffff");
+  } else {
+    style.removeProperty("--accent-user");
+    style.removeProperty("--accent-user-fg");
   }
 }
 

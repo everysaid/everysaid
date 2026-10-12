@@ -258,12 +258,12 @@ func TestPluginsDeclareNamesServicesAndSending(t *testing.T) {
 	must(t, c.do("PUT", "/api/settings", M{"name_order": []string{"no-such-source"}}, H).status == 200, "refused quietly")
 	must(t, slices.Equal(ids(c.getJSON("/api/names")), mine), "refused, kept")
 	c.do("PUT", "/api/settings", M{"name_order": nil}, H)
-	// a theme's main colour: #rrggbb or null, nothing else
-	c.do("PUT", "/api/settings", M{"accent_light": "#123abc", "accent_dark": "red"}, H)
-	set := c.getJSON("/api/settings")
-	must(t, set["accent_light"] == "#123abc" && set["accent_dark"] == nil, "accents: %v", set)
-	c.do("PUT", "/api/settings", M{"accent_light": nil}, H)
-	must(t, c.getJSON("/api/settings")["accent_light"] == nil, "accent back to the default")
+	// the main colour: #rrggbb or null, nothing else
+	c.do("PUT", "/api/settings", M{"accent": "#123abc"}, H)
+	c.do("PUT", "/api/settings", M{"accent": "red"}, H)
+	must(t, c.getJSON("/api/settings")["accent"] == "#123abc", "accent: %v", c.getJSON("/api/settings"))
+	c.do("PUT", "/api/settings", M{"accent": nil}, H)
+	must(t, c.getJSON("/api/settings")["accent"] == nil, "accent back to the default")
 	back := c.getJSON("/api/names")
 	must(t, back["custom"] == false && slices.Equal(ids(back), order), "back to the plugins' order: %v", back)
 	var chat string

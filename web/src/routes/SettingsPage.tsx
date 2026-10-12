@@ -27,30 +27,26 @@ window.addEventListener("beforeinstallprompt", (e) => {
   installEvent = e;
 });
 
-// A theme's main colour: any, tried on the page as it is picked, kept once the picking stops; back to
-// the default with a click.
-function AccentPicker({ mode, settings }: { mode: "light" | "dark"; settings?: Record<string, unknown> }) {
+// The main colour: any, tried on the page as it is picked, kept once the picking stops; back to the
+// default with a click.
+function AccentPicker({ chosen }: { chosen: string | null }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const key = `accent_${mode}`;
-  const chosen = (settings?.[key] as string | undefined) ?? null;
   const [value, setValue] = useState<string | null>(chosen);
   useEffect(() => setValue(chosen), [chosen]);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
   const set = (c: string | null) => {
     setValue(c);
-    const other = (settings?.[`accent_${mode === "light" ? "dark" : "light"}`] as string | undefined) ?? null;
-    applyAccent(mode === "light" ? c : other, mode === "light" ? other : c);
+    applyAccent(c);
     clearTimeout(timer.current);
-    timer.current = setTimeout(() => api.put("/api/settings", { [key]: c })
+    timer.current = setTimeout(() => api.put("/api/settings", { accent: c })
       .then(() => qc.invalidateQueries({ queryKey: ["settings"] }), (e) => toast.error(e.message)), c ? 400 : 0);
   };
   return (
     <div className="flex items-center gap-2">
       {value && <Button size="sm" variant="ghost" onClick={() => set(null)}>{t("settings.accentDefault")}</Button>}
-      <input type="color" aria-label={t(mode === "light" ? "settings.accentLight" : "settings.accentDark")}
-        value={value ?? ACCENT[mode]} onChange={(e) => set(e.target.value)}
+      <input type="color" aria-label={t("settings.accent")} value={value ?? ACCENT} onChange={(e) => set(e.target.value)}
         className="h-8 w-12 cursor-pointer rounded-md border border-line bg-transparent p-0.5" />
     </div>
   );
@@ -213,11 +209,9 @@ export function SettingsPage() {
                   { value: "system", label: <span className="flex items-center gap-1"><Monitor className="size-3.5" />{t("settings.system")}</span> },
                 ]} />
               </Line>
-              {(["light", "dark"] as const).map((mode) => (
-                <Line key={mode} label={t(mode === "light" ? "settings.accentLight" : "settings.accentDark")}>
-                  <AccentPicker mode={mode} settings={settings.data} />
-                </Line>
-              ))}
+              <Line label={t("settings.accent")} hint={t("settings.accentHint")}>
+                <AccentPicker chosen={(settings.data?.accent as string | undefined) ?? null} />
+              </Line>
               <Line label={t("settings.language")}>
                 <Segmented value={i18n.language} onChange={(l) => setLanguage(l)} options={[{ value: "el", label: "Ελληνικά" }, { value: "en", label: "English" }]} />
               </Line>
