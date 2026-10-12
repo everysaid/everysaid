@@ -6,7 +6,7 @@ import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import * as Popover from "@radix-ui/react-popover";
 import { ArrowDown, ArrowLeft, BellOff, CalendarDays, Check, ChevronDown, ChevronRight, CornerUpLeft, Archive, ArchiveRestore, FileText, Info, Lock, MoreVertical, Paperclip, Pencil, Pin, PinOff, Search, SendHorizontal, Smile, X } from "lucide-react";
 import { toast } from "sonner";
-import { api, qs, type Attachment, type ChatDetail, type Local, type Member, type MessageItem, type StreamItem, type StreamPage } from "@/lib/api";
+import { api, ApiError, qs, type Attachment, type ChatDetail, type Local, type Member, type MessageItem, type StreamItem, type StreamPage } from "@/lib/api";
 import { useBack } from "@/lib/back";
 import { bytes, dateOnly, dayLabel, isoDay, sameDay } from "@/lib/format";
 import { onEvent } from "@/lib/events";
@@ -238,7 +238,8 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   // elsewhere), from the first unread, wherever the user was before
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    let again: ReturnType<typeof setTimeout> | undefined;
+    const load = async () => {
       try {
         // fetched here, not by fetchQuery: an invalidation meanwhile (a live event) would cancel it
         const info = await api.get<ChatDetail>(`/api/chats/${chatId}`);
@@ -272,12 +273,17 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
         setHasNewer(at ? page.has_newer : false);
         setReady(true);
       } catch (e: any) {
-        if (!cancelled) setError(e.message);
+        if (cancelled) return;
+        // the server not reached (restarting, the network gone): tried again until it is
+        if (!(e instanceof ApiError)) { again = setTimeout(load, 2000); return; }
+        setError(e.message);
         keepLastChat(null);                 // gone (merged, perhaps): the Chats tab no longer comes back to it
       }
-    })();
+    };
+    load();
     return () => {
       cancelled = true;
+      clearTimeout(again);
     };
   }, [chatId, jumpTo, around, generation]);
 
