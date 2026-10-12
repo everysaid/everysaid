@@ -56,7 +56,7 @@ function Rail() {
         <Link to="/" className="relative mb-3" aria-label="Everysaid">
           <Logo className="size-10" />
           <span data-connected={connected || undefined}
-            className={cn("absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full ring-2 ring-panel", connected ? "bg-ok" : "bg-muted")} />
+            className={cn("absolute -right-0.5 -top-0.5 size-2.5 rounded-full ring-2 ring-panel", connected ? "bg-ok" : "bg-muted")} />
         </Link>
       </Tip>
       {NAV.map(({ to, icon: Icon, key }) => (
