@@ -416,7 +416,9 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
         ))}
         <div ref={bubbleRef}
           className={cn(
-            "relative rounded-bubble text-[15px] leading-snug shadow-sm",
+            "relative rounded-bubble text-[15px] leading-snug",
+            // its shadow the shape's, the tail's too (a box-shadow stopped where the tail begins)
+            "[filter:drop-shadow(0_1px_1.5px_rgb(0_0_0/0.13))]",
             out ? "bg-bubble-out text-bubble-out-fg" : "border border-line/60 bg-bubble-in",
             // a run of one sender's messages held together: the corners toward the next and the one
             // before, on the sender's side, tighter; the run's outer corners round (one alone: all)
