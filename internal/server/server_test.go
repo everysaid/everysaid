@@ -1061,3 +1061,25 @@ func TestReadUntil(t *testing.T) {
 	must(t, c.post("/api/chats/"+chat+"/read", M{}).status == 200, "all read")
 	must(t, unread(chat) == 0, "none left: %v", unread(chat))
 }
+
+// A link's preview in the stream, its picture's size with it, the picture itself from the archive
+// (small, JPEG); none for a picture the archive does not have.
+func TestLinkPreview(t *testing.T) {
+	c := newServer(t)
+	c.login()
+	var preview M
+	for _, x := range items(c.getJSON("/api/chats?limit=100")) {
+		for _, i := range items(c.getJSON("/api/chats/" + x["id"].(string) + "/stream?limit=200")) {
+			if p, ok := i["preview"].(map[string]any); ok {
+				preview = p
+			}
+		}
+	}
+	must(t, preview != nil && preview["title"] == "A page" && preview["site"] == "Example" &&
+		preview["url"] == "https://example.org/a", "preview: %v", preview)
+	img := preview["image"].(map[string]any)
+	must(t, num(img["width"]) == 480 && num(img["height"]) == 360, "picture's size: %v", img)
+	r := c.get("/api/previews/" + img["sha256"].(string))
+	must(t, r.status == 200 && r.header.Get("Content-Type") == "image/jpeg" && len(r.body) > 0, "picture: %d %v", r.status, r.header)
+	must(t, c.get("/api/previews/"+strings.Repeat("0", 64)).status == 404, "a picture not there")
+}

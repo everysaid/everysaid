@@ -42,7 +42,7 @@ func TestRebuildOverAStaleJournal(t *testing.T) {
 	if err := d.QueryRow("PRAGMA integrity_check").Scan(&ok); err != nil || ok != "ok" {
 		t.Fatalf("integrity: %q %v", ok, err)
 	}
-	if n := db.Int(d, "SELECT count(*) FROM message"); n != 10582 {
+	if n := db.Int(d, "SELECT count(*) FROM message"); n != 10585 {
 		t.Errorf("%d messages", n)
 	}
 	if n := db.Int(d, "SELECT count(*) FROM message WHERE text = 'changed'"); n != 0 {

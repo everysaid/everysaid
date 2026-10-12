@@ -190,6 +190,23 @@ func (s *Server) miscRoutes() {
 		return done, nil
 	})
 
+	// a link preview's picture (kept small in the archive, JPEG)
+	h("GET /api/previews/{sha}", bodyNone, func(q *req) (any, error) {
+		sha := q.r.PathValue("sha")
+		if !isAlnum(sha) {
+			return nil, notFound("")
+		}
+		jpg := core.PreviewImage(s.Store, sha)
+		if jpg == nil {
+			return nil, notFound("")
+		}
+		q.w.Header().Set("Content-Type", "image/jpeg")
+		q.w.Header().Set("Cache-Control", cacheImmutable)
+		inert(q.w.Header(), "image/jpeg")
+		q.w.Write(jpg)
+		return done, nil
+	})
+
 	h("GET /api/stats", bodyNone, func(q *req) (any, error) {
 		archived, err := q.boolQ("archived", false)
 		if err != nil {

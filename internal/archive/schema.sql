@@ -151,6 +151,20 @@ CREATE TABLE IF NOT EXISTS notice (     -- what a notice says (a group's change,
     code TEXT NOT NULL,                 -- what it is: group, timer, pin, unpin, unreadable, story_reply...
     args TEXT NOT NULL                  -- its values, JSON; a person {"address": id}, the owner {"self": true}
 );
+CREATE TABLE IF NOT EXISTS link_preview (   -- a link's preview, as its service sent it (the sender's
+    message_id INTEGER PRIMARY KEY REFERENCES message,  -- app or the service made it): for the first
+    url TEXT,                           -- link of the message
+    site TEXT,                          -- the site's name, as the preview says it
+    title TEXT,
+    description TEXT,
+    image TEXT REFERENCES link_preview_image    -- its picture, NULL: none
+);
+CREATE TABLE IF NOT EXISTS link_preview_image (  -- a preview's picture, small (JPEG, at most 480 px):
+    sha256 TEXT PRIMARY KEY,            -- not the owner's media (kept apart from them), of the JPEG
+    jpeg BLOB NOT NULL,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS reaction (
     message_id INTEGER NOT NULL REFERENCES message,
     emoji TEXT,                         -- NULL where only the service's code is known

@@ -79,7 +79,8 @@ func build(t *testing.T) fixture {
 	f.groupNote = a.AddMessage(src, "4", archive.Message{Service: "whatsapp", ConversationID: group, TS: t0 + 3*minute,
 		SenderID: ma, Kind: "text", Text: "Καλημέρα σε όλους", Key: "G4"})
 	a.AddMessage(src, "5", archive.Message{Service: "whatsapp", ConversationID: group, TS: t0 + 4*minute, SenderID: na,
-		Kind: "text", Text: "Γεια!", Key: "G5"})
+		Kind: "text", Text: "Γεια!", Key: "G5", Extras: &archive.Extras{Preview: &archive.Preview{URL: "https://example.org/hi",
+			Site: "Example", Title: "Hello page", Description: "Says hello", Image: []byte("not a picture")}}})
 	a.AddMessage(src, "6", archive.Message{Service: "whatsapp", ConversationID: group, TS: t0 + 86_400_000, SenderID: na,
 		Kind: "image", Key: "G6"}) // a picture never downloaded: no file in the archive
 	a.AddCall(src, "c1", archive.Call{Service: "phone", AddressID: ma, TS: t0 + 5*minute, Answered: true, Duration: 65})
@@ -606,5 +607,18 @@ func TestLibraryCache(t *testing.T) {
 		if exists(p) != want {
 			t.Errorf("%s: there %v", filepath.Base(p), !want)
 		}
+	}
+}
+
+// A link's preview reaches the assistant as what the page is: its address, site, title and
+// description, not its picture.
+func TestLinkPreview(t *testing.T) {
+	f := build(t)
+	cs := connect(t, Env{Store: f.store})
+	r := obj(call(t, cs, "search_messages", map[string]any{"query": "Γεια", "limit": 3}))
+	link, ok := obj(list(r["items"])[0])["link"].(map[string]any)
+	if !ok || link["title"] != "Hello page" || link["url"] != "https://example.org/hi" || link["site"] != "Example" ||
+		link["description"] != "Says hello" || link["image"] != nil {
+		t.Fatalf("the link: %v", obj(list(r["items"])[0]))
 	}
 }

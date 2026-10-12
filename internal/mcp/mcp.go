@@ -296,6 +296,16 @@ func slim(item core.M) core.M {
 	if truthy(item["location"]) {
 		out["location"] = item["location"]
 	}
+	// a link's preview as its service sent it: what the page is (its picture left out)
+	if p, ok := item["preview"].(core.M); ok {
+		link := core.M{}
+		for _, k := range []string{"url", "site", "title", "description"} {
+			if truthy(p[k]) {
+				link[k] = p[k]
+			}
+		}
+		out["link"] = link
+	}
 	if truthy(item["chat_id"]) {
 		out["chat"] = item["chat_id"]
 	}

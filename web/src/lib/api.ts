@@ -281,6 +281,15 @@ export interface Reaction {
   who: string | null;
 }
 
+/** A link's preview, as its service sent it; its picture from /api/previews/{sha256}. */
+export interface LinkPreview {
+  url: string | null;
+  site: string | null;
+  title: string | null;
+  description: string | null;
+  image: { sha256: string; width: number; height: number } | null;
+}
+
 export interface MessageItem {
   type: "message";
   id: number;
@@ -308,6 +317,7 @@ export interface MessageItem {
   status: string | null;
   keyed?: boolean;          // the service's own id is known: an answer to it can be sent
   location: { lat: number | null; lon: number | null; place: string | null } | null;
+  preview?: LinkPreview | null;
   reactions: Reaction[];
   attachments: Attachment[];
   mentions?: Mention[];
