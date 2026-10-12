@@ -59,7 +59,8 @@ type fake struct {
 	users    []tg.UserClass // all users the answers carry
 	calls    []string
 	requests []bin.Encoder
-	files    map[int64][]byte // document id -> its bytes
+	files    map[int64][]byte  // document id -> its bytes
+	photos   map[string][]byte // a photo's size (photo id/size type) -> its bytes
 	nextID   int
 	noPhotos bool                             // sendMedia refuses photos (PHOTO_INVALID_DIMENSIONS)
 	refused  string                           // a reaction sendReaction refuses (REACTION_INVALID)
@@ -222,8 +223,14 @@ func (f *fake) answer(input bin.Encoder) (bin.Encoder, error) {
 		return &tg.MessagesMessagesBox{Messages: &tg.MessagesMessages{Messages: out, Users: f.users}}, nil
 	case *tg.UploadGetFileRequest:
 		f.calls = append(f.calls, "getFile")
-		loc := r.Location.(*tg.InputDocumentFileLocation)
-		data, ok := f.files[loc.ID]
+		var data []byte
+		var ok bool
+		switch loc := r.Location.(type) {
+		case *tg.InputDocumentFileLocation:
+			data, ok = f.files[loc.ID]
+		case *tg.InputPhotoFileLocation: // a photo's size: its id and size's type, "77/x"
+			data, ok = f.photos[fmt.Sprintf("%d/%s", loc.ID, loc.ThumbSize)]
+		}
 		if !ok {
 			return nil, &tgerr.Error{Code: 400, Type: "FILE_ID_INVALID"}
 		}

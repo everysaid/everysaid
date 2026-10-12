@@ -660,6 +660,14 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 			}
 			if a.HasOrigin(src, rowKey, "") {
 				telegramChanges(a, src, rowKey, m, person, own, updated, deleted[mid])
+				// its link's preview, also of rows imported before there were previews, and its
+				// picture once downloaded
+				if p := telegramPreview(d, c.id, mid, m); p != nil {
+					if id, ok := a.IntOK("SELECT message_id FROM message_origin WHERE source_id = ? AND row_key = ?",
+						src, rowKey); ok && a.SetPreview(id, p) {
+						updated["preview"]++
+					}
+				}
 				// notices of rows imported before there were notices, and a poll's results as they are
 				// now (a later fetch of the message, or a vote's update, has them)
 				n := telegramNotice(a, m, person, own, noticeFrom, noticeOK)
@@ -709,6 +717,7 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 				x.Reactions = tgReactions(m, person, own)
 			}
 			x.Notice = telegramNotice(a, m, person, own, noticeFrom, noticeOK)
+			x.Preview = telegramPreview(d, c.id, mid, m)
 			var senderID int64
 			if !outgoing {
 				who, whoOK := from, fromOK && from != 0
@@ -786,7 +795,7 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 	say(out, "calls: {n}", map[string]any{"n": fmt.Sprintf("%7d", calls)})
 	if len(updated) > 0 {
 		var parts []string
-		for _, k := range []string{"text", "edited", "deleted", "reactions"} {
+		for _, k := range []string{"text", "edited", "deleted", "reactions", "preview"} {
 			if updated[k] > 0 {
 				parts = append(parts, fmt.Sprintf("%s %d", k, updated[k]))
 			}
@@ -975,6 +984,8 @@ func telegramPrune(a *archive.Archive, d *sql.DB, src int64) {
 	defer tx.Rollback()
 	for _, k := range gone {
 		db.Exec(tx, "DELETE FROM telegram_message WHERE chat_id = ? AND id = ?", k[0], k[1])
+		// its preview's picture, in the archive now (the row stays: looked at)
+		db.Exec(tx, "UPDATE telegram_webpage_photo SET data = NULL WHERE chat_id = ? AND id = ?", k[0], k[1])
 	}
 	if err := tx.Commit(); err != nil {
 		panic(err)

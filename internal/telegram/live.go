@@ -757,6 +757,14 @@ func live(ctx context.Context, c *plugins.Context) error {
 		go queue.run(ctx, c, cn)
 		go files.run(ctx, c, cn)
 		go photos(ctx, c, cn)
+		pics := make(chan struct{}, 1)
+		go previews(ctx, c, cn, pics)
+		cn.previews = func() {
+			select {
+			case pics <- struct{}{}:
+			default:
+			}
+		}
 		cn.readers = func(chat int64) { askReaders(ctx, c, cn, chat) }
 		go func() { // one chat after another: not all asked at once
 			for _, chat := range recentGroups() {
@@ -903,6 +911,9 @@ func handlers(c *plugins.Context, cn *conn, d tg.UpdateDispatcher, members func(
 		}
 		if n > 0 && carries(m) && downloads(c) {
 			files.add(chatID, m.GetID())
+		}
+		if n > 0 && webpagePhoto(m) != nil && cn.previews != nil {
+			cn.previews()
 		}
 		if n > 0 {
 			c.Log("new message in {chat}", map[string]any{"chat": chatLabel(chat)})
