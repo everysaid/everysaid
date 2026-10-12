@@ -172,6 +172,15 @@ changes in place).
   writes needs no custom function; `term` is checked against the index (fts5vocab) when the
   server starts and after an import from the command line (a live connection's import adds its words
   as it indexes and leaves the rest to the next start). The snippet is made from the original text.
+- **Link previews** (`link_preview`, `link_preview_image`) are what the services sent with a link,
+  never fetched from the page: Telegram's web page, WhatsApp's (the iPhone's data items and
+  thumbnails, the live connection's), Signal's, iMessage's rich links, Viber's (its picture, on the
+  linked site, the one thing fetched, through a client that reaches only public addresses), and
+  Messenger's and Instagram's shares (their title no longer in the text). An importer gives
+  `Extras.Preview`, or `Archive.SetPreview` for a message already there, so that importing again
+  brings them to old messages; the picture is kept small (JPEG, 480 px) in the archive, served by
+  `GET /api/previews/{sha}`, and the stream gives `preview` (its picture's size with it). SMS and
+  MMS have none.
 - **Notices** (`notice`: a message's code and values, JSON) say what a notice or a message's context
   is in a form the interface puts in the user's language, whatever the source: the importers write
   the codes below, and the UI and the MCP read them without knowing the service. A person in the

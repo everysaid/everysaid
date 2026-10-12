@@ -414,6 +414,9 @@ Schema (`internal/archive`):
   `forwarded`, `starred`, `lat`/`lon`/`place` (a shared location, or on Viber messages of other
   kinds the sender's position). `reaction`: emoji (Viber codes 1-5 as ❤️😂😮😢😡, others `viber:N`),
   count, who, and whether it was the user's own; iMessage tapbacks become reactions.
+  `link_preview`: a link's preview as its service sent it (the sender's app or the service made it;
+  nothing is fetched from the page): `url`, `site`, `title`, `description`, and its picture in
+  `link_preview_image` (small JPEG, at most 480 px, kept in the archive apart from the media).
 - Calls also carry `detail` (missed, unanswered, rejected, blocked, busy, and WhatsApp's outcomes 4
   and 5 by code), `video`, `attempts`, `conversation_id` (group calls) and, in `call_member`, who
   took part and how.

@@ -251,6 +251,7 @@ The media `iphone-sync` copies:
 | `viber-media/` | `AppDomain-com.viber` | `Documents/Attachments/`, `Documents/FileMessages/`, `Documents/VoiceMessages/` | `Documents/` |
 | `whatsapp-media/` | `AppDomainGroup-group.net.whatsapp.WhatsApp.shared` | `Message/Media/` | `Message/Media/` |
 | `sms-media/` | `MediaDomain` | `Library/SMS/Attachments/` (the files of SMS, MMS and iMessage) | `Library/SMS/Attachments/` |
+| `whatsapp-previews/` | `AppDomainGroup-group.net.whatsapp.WhatsApp.shared` | `Message/Media/`: only the `.thumb` of a link's preview (`ZWAMESSAGEDATAITEM.ZTHUMBNAILPATH`), not media | `Message/Media/` |
 
 How a refresh works:
 
@@ -617,7 +618,11 @@ any device; its `Events.IsRead` stays 0).
     - in `messages`: `kind` (text, image, video, audio, voice, document, sticker, location, contact,
       poll), `subtype` (gif, video_note, link, live_location, view_once), `reply_to` and
       `reply_text` (the stanza id and text quoted), `forwarded`, `edited`, `deleted` (marked when the
-      sender edits or deletes it later; `content` is the last version), `lat`, `lon`, `place`. A
+      sender edits or deletes it later; `content` is the last version), `lat`, `lon`, `place`;
+      a link's preview: `preview_url`, `preview_title`, `preview_description`, `preview_thumb`
+      (the small picture in the message), `preview_direct_path`, `preview_sha256`,
+      `preview_enc_sha256`, `preview_media_key` (its larger picture, downloaded into
+      `preview_image`, `preview_error` when WhatsApp no longer has it). A
       shared contact's `content` is "name, number"; a poll's is the question and its options.
     - `mentions`: the jids the text names with `@<user part>`, comma-separated; `read_at`: when the
       owner read a message from others, on any device; `forward_from`: the channel a forwarded
@@ -997,6 +1002,7 @@ person; a new address starts as a person of its own, until the user merges it.
 | `conversation_member` | conversation × address |
 | `message` | `status` (a message sent from the app: sending, sent, failed), `id`, `service_id`, `conversation_id`, `ts` (Unix ms UTC), `outgoing`, `sender_id` (NULL when outgoing), `kind_id`, `text`, `key`, `key_scope` (the conversation, for services whose keys are per chat); unique on (service, key, key_scope) where there is a key; and the extras: `subtype`, `subtype_code`, `reply_to`, `reply_key`, `reply_text`, `edited`, `deleted`, `forwarded`, `starred`, `lat`, `lon`, `place` (a location shared), `sender_lat`, `sender_lon` (where the sender was, older Viber), `forward_from` (who a forwarded message first came from), `album` (the service's key of files sent together), `pinned` (pinned until, Unix ms; -1 for ever) |
 | `reaction` | `message_id`, `emoji` (NULL where only a code is known), `code`, `count`, `address_id`, `outgoing` |
+| `link_preview` | a link's preview as its service sent it: `message_id` PK, `url`, `site`, `title`, `description`, `image` (in `link_preview_image`: `sha256` of a small JPEG, at most 480 px, `jpeg`, `width`, `height`; not `media`). Brought by Telegram (`media.webpage` of the stored message; its picture downloaded by the live connection into `telegram_webpage_photo` in `keys.db`), WhatsApp (the iPhone's `ZWAMESSAGEDATAITEM` and `whatsapp-previews/`; the live store's `preview_*`), Signal (the message's previews, the picture downloaded with its files), iMessage (`payload_data`, its payload file), Viber (`ZMETADATA`, the desktop's `Info`; the picture fetched from the linked site through `internal/netsafe`, failures in `<cache>/link-preview-failed.tsv`), Messenger and Instagram (shared links, the picture through `meta_file`) and their data export (shared text) |
 | `receipt` | message × address: `delivered_at`, `read_at`, `played_at` (Unix ms; 0 so but when not known; NULL not yet), for the owner's messages |
 | `mention` | message × address: whom its text names with @, and `token`, how the text names them (WhatsApp `@<number or LID's user part>`, Telegram `@username` or the name itself, Viber `@Name`) |
 | `message_origin` | (`source_id`, `row_key`) PK, `message_id` (WITHOUT ROWID) |
@@ -1125,7 +1131,7 @@ source is gone).
 |---|---|---|
 | `MediaWhatsApp` | `whatsapp-media/<ZMEDIALOCALPATH minus "Media/">` | stanza id → `message.key` |
 | `MediaViberIphone` | `viber-media/{Attachments,FileMessages,VoiceMessages}/<ZATTACHMENT.ZNAME>` | token → `message.key`, else `Z_PK` → `message_origin` |
-| `MediaSMSIphone` | `sms-media/<attachment.filename minus "~/Library/SMS/Attachments/">` (not `*.pluginPayloadAttachment`, a link's preview) | `message.guid` → `message_origin` (`iphone/sms`) |
+| `MediaSMSIphone` | `sms-media/<attachment.filename minus "~/Library/SMS/Attachments/">` (not `*.pluginPayloadAttachment`, a link's preview: a URL balloon's `payload_data`, an NSKeyedArchiver `LPLinkMetadata`, gives `link_preview` its link, site, title and summary; its `image` names one of these files by its place among the message's, which the sync copies and the SMS importer reads into the preview, never a file of the message) | `message.guid` → `message_origin` (`iphone/sms`) |
 | `MediaMMSAndroid` | `<export folder>/mms-parts/<part _id>` (empty ones skipped) | MMS `_id` → `message_origin`; if the iPhone's copy was kept instead, the single SMS/MMS message with the same direction within ±2 s |
 | `TelegramMedia` | `<cache>/telegram/media/<chat>/<message><ext>` | `<chat>/<id>` → `message_origin` |
 | `MediaWhatsAppBridge` | `<store>/<messages.media_path>` (only files within the store) | `<chat_jid>/<id>` → `message_origin`, else the id → `message.key` (the iPhone's copy) |
@@ -1377,7 +1383,7 @@ Signal's name for a message) and `server_ts`.
 | `contact` | `aci, phone, name, profile_name`: someone seen in a message (their profile), or in the storage service or the transfer |
 | `ids` | `aci`, `pni`, `phone` (each may be null): one person's ids as Signal told them (see Ids above) |
 | `group` | as one of `groups`, before the first message of a group at a new revision |
-| `message` | `text` (a long message's whole text, `long_text`), `mentions`, `quote`, `attachments` (`content_type, filename, size, width, height, caption, voice, gif, borderless, sticker, emoji, file` or `error`, and `pointer`: where Signal keeps the file and its key), `contacts`, `previews`, `poll`, `group_change`, `group_changes` (`{editor, actions}`), `group_revision`, `group_call`, `expire_timer_update`, `expire_timer`, `forwarded`, `view_once`, `pin`, `unpin`, `poll_end`, `payment`, `gift`, `story_reply`, `story_reaction`, `unsupported` |
+| `message` | `text` (a long message's whole text, `long_text`), `mentions`, `quote`, `attachments` (`content_type, filename, size, width, height, caption, voice, gif, borderless, sticker, emoji, file` or `error`, and `pointer`: where Signal keeps the file and its key), `contacts`, `previews` (`url, title, description, date`, `image` as an attachment: the first's picture fetched whatever the setting as `preview-<name>`, taken into the archive's `link_preview` and removed, never a file of the message), `poll`, `group_change`, `group_changes` (`{editor, actions}`), `group_revision`, `group_call`, `expire_timer_update`, `expire_timer`, `forwarded`, `view_once`, `pin`, `unpin`, `poll_end`, `payment`, `gift`, `story_reply`, `story_reaction`, `unsupported` |
 | `poll_vote` | `target_author`, `target_ts`, `options`, `vote_count` |
 | `edit` | `target_ts` and the message's new fields |
 | `delete` | `target_author`, `target_ts`; `admin` for a group admin's deletion, kept only when the sender is an admin of the group |
