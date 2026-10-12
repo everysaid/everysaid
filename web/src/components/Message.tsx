@@ -318,12 +318,13 @@ function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange, at }
             )}
           </div>
         )}
+        {/* the answer first, under the reactions: what is done most */}
+        {onReply && <MenuItem icon={<CornerUpLeft className="size-4" />} onSelect={() => { toComposer.current = true; onReply(m); }}>{t("chat.reply")}</MenuItem>}
         {mine && react && <MenuItem onSelect={() => react.on(m, "")}><span className="w-5 text-center">{mine}</span>{t("chat.removeReaction")}</MenuItem>}
         {m.text && <MenuItem icon={<Copy className="size-4" />} onSelect={() => copy(copyText(m.text!))}>{t("common.copy")}</MenuItem>}
         {file && <MenuItem icon={<Copy className="size-4" />} onSelect={() => copy(copyFile(file))}>{t("chat.copyFile")}</MenuItem>}
         {onEdit && <MenuItem icon={<Pencil className="size-4" />} onSelect={() => { toComposer.current = true; onEdit(m); }}>{t("chat.edit")}</MenuItem>}
         {onDelete && <MenuItem danger icon={<Trash2 className="size-4" />} onSelect={() => onDelete(m)}>{t("chat.deleteForAll")}</MenuItem>}
-        {onReply && <MenuItem icon={<CornerUpLeft className="size-4" />} onSelect={() => { toComposer.current = true; onReply(m); }}>{t("chat.reply")}</MenuItem>}
       </MenuContent>
     </Menu>
   );
