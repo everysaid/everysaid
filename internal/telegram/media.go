@@ -88,8 +88,9 @@ func num(v any) int64 {
 	return 0
 }
 
-// fileOf is Telethon's Message.file: the photo or document a message carries (also in a link's
-// preview), nil and nil if none.
+// fileOf is the photo or document a message carries, nil and nil if none. Not a link preview's
+// (Telethon's Message.file gave it): that is the preview's picture, never the message's file
+// (webpagePhoto).
 func fileOf(m tg.MessageClass) (*tg.Photo, *tg.Document) {
 	msg, ok := m.(*tg.Message)
 	if !ok {
@@ -108,14 +109,6 @@ func fileOf(m tg.MessageClass) (*tg.Photo, *tg.Document) {
 	case *tg.MessageMediaDocument:
 		d, _ := media.Document.(*tg.Document)
 		return nil, d
-	case *tg.MessageMediaWebPage:
-		if w, ok := media.Webpage.(*tg.WebPage); ok {
-			p, _ := w.Photo.(*tg.Photo)
-			d, _ := w.Document.(*tg.Document)
-			if p != nil || d != nil {
-				return p, d
-			}
-		}
 	}
 	return nil, nil
 }

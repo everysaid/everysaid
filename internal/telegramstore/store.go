@@ -96,6 +96,14 @@ CREATE TABLE IF NOT EXISTS telegram_photo_fail (     -- a photo whose download f
     at INTEGER NOT NULL,                    -- Unix s
     PRIMARY KEY (peer_id, photo_id)
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS telegram_webpage_photo (  -- the picture of a message's link preview (never the message's file),
+    chat_id INTEGER NOT NULL,               -- downloaded by the live connection for the importer: a row for each
+    id INTEGER NOT NULL,                    -- message looked at
+    photo_id INTEGER NOT NULL,              -- the preview's photo; 0: it has none (or the message is gone)
+    data BLOB,                              -- the picture (a size of at most 800 px); NULL once the store lets the
+    failed_at INTEGER,                      -- message go (the archive has it), or when it failed (Unix s)
+    PRIMARY KEY (chat_id, id)
+);
 CREATE TRIGGER IF NOT EXISTS telegram_message_poll_insert AFTER INSERT ON telegram_message
     WHEN json_extract(new.json, '$.media.poll.id') IS NOT NULL BEGIN
     INSERT OR IGNORE INTO telegram_poll VALUES (json_extract(new.json, '$.media.poll.id'), new.chat_id, new.id); END;
