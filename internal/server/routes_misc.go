@@ -301,6 +301,10 @@ func (s *Server) miscRoutes() {
 				ok = allOf(v, func(x any) bool { _, isStr := x.(string); return isStr })
 			case k == "hidden_accounts":
 				ok = allOf(v, func(x any) bool { _, isInt := x.(int64); return isInt })
+			case k == "accent_light" || k == "accent_dark":
+				// a theme's main colour, #rrggbb; null: the default
+				str, isStr := v.(string)
+				ok = v == nil || isStr && isHexColor(str)
 			case k == "name_order":
 				if v == nil {
 					ok = true // back to the plugins' defaults
@@ -834,3 +838,16 @@ func (s *Server) pluginRoutes() {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// isHexColor tells whether s is a colour as #rrggbb.
+func isHexColor(s string) bool {
+	if len(s) != 7 || s[0] != '#' {
+		return false
+	}
+	for _, c := range s[1:] {
+		if !strings.ContainsRune("0123456789abcdefABCDEF", c) {
+			return false
+		}
+	}
+	return true
+}
