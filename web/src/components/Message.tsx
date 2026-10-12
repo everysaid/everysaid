@@ -259,12 +259,15 @@ export interface BubbleProps {
 
 /** The actions of a message: its service's quick reactions, any other it takes, copy, edit,
  * delete for everyone, answer. Opened by its button, or by a long press on a touch screen (open). */
-function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange, offset }: {
+// The menu's button when it is what the menu opens from; else the button alone.
+function Trigger({ as, children }: { as: boolean; children: React.ReactElement }) {
+  return as ? <MenuTrigger asChild>{children}</MenuTrigger> : children;
+}
+
+function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange, at }: {
   m: MessageItem; react?: BubbleProps["react"]; onReply?: (m: MessageItem) => void; onEdit?: (m: MessageItem) => void;
   onDelete?: (m: MessageItem) => void; open: boolean; onOpenChange: (o: boolean) => void;
-  // opened by a right click: in the button's place (over it: its width), from the bubble's top (this
-  // far above the button's)
-  offset?: { up: number; width: number } | null;
+  at?: { x: number; y: number } | null;     // opened by a right click: where (in the bubble), the menu there
 }) {
   const { t } = useTranslation();
   const [more, setMore] = useState(false);
@@ -278,18 +281,19 @@ function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange, offs
   const copy = (p: Promise<void>) => p.then(() => toast.success(t("common.copied")), () => toast.error(t("chat.actionFailed")));
   return (
     <Menu open={open} onOpenChange={onOpenChange}>
-      <MenuTrigger asChild>
-        <button data-actions aria-label={label} title={label}
+      {/* the menu opens from its button, or from where the right click was (as a context menu does: its
+          corner there, turned up or left where it does not fit) */}
+      {at && <MenuTrigger asChild><span aria-hidden className="pointer-events-none absolute size-0" style={{ left: at.x, top: at.y }} /></MenuTrigger>}
+      <Trigger as={!at}>
+        <button data-actions aria-label={label} title={label} onClick={at ? () => onOpenChange(false) : undefined}
           className={cn("absolute top-1/2 -translate-y-1/2 rounded-full p-1.5 text-fg/70 opacity-0 transition hover:bg-fg/12 hover:text-fg focus:opacity-100 group-hover/msg:opacity-100 data-[state=open]:bg-fg/12 data-[state=open]:opacity-100",
             // beside the bubble, at the middle of the bubble itself (not of its sender's name and reactions)
-            m.outgoing ? "right-full mr-1.5" : "left-full ml-1.5",
-            offset && "invisible")}>{/* a right click's menu is in its place */}
+            m.outgoing ? "right-full mr-1.5" : "left-full ml-1.5")}>
           <EllipsisVertical className="size-4" strokeWidth={3} />
         </button>
-      </MenuTrigger>
-      <MenuContent align={offset ? "start" : m.outgoing ? "end" : "start"} className="w-72"
-        side={offset ? (m.outgoing ? "left" : "right") : undefined} alignOffset={offset?.up} sideOffset={offset ? -offset.width : undefined}
-        onCloseAutoFocus={(e) => { if (toComposer.current) { e.preventDefault(); toComposer.current = false; } }}>
+      </Trigger>
+      <MenuContent align={at || !m.outgoing ? "start" : "end"} className="w-72" sideOffset={at ? 2 : undefined}
+        onCloseAutoFocus={(e) => { if (at || toComposer.current) { e.preventDefault(); toComposer.current = false; } }}>
         {react && (
           <div data-reactions className="flex items-center gap-0.5 px-1 py-1">
             {react.quick.slice(0, 6).map((e) => (
@@ -354,7 +358,7 @@ function useMeasured(id: number) {
 export const Bubble = memo(function Bubble({ m, group, first, last, above, below, showService, account, highlight, onOpen, onJump, onReply, onInfo, react, onEdit, onDelete }: BubbleProps) {
   const { t } = useTranslation();
   const [menu, setMenu] = useState(false);
-  const [menuAt, setMenuAt] = useState<{ up: number; width: number } | null>(null);     // a right click's: the menu at the bubble's top
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);     // a right click's: where, in the bubble
   // deleted for everyone: the notice, as the service shows it; what it was, on a tap
   const [reveal, setReveal] = useState(false);
   const hidden = m.deleted && !reveal;
@@ -387,7 +391,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
     onPointerMove: unpress, onPointerUp: unpress, onPointerCancel: unpress,
   } : {};
   const actions = hasActions && (
-    <Actions m={m} react={react} onReply={onReply} onEdit={onEdit} onDelete={onDelete} open={menu} offset={menuAt}
+    <Actions m={m} react={react} onReply={onReply} onEdit={onEdit} onDelete={onDelete} open={menu} at={menuAt}
       onOpenChange={(o) => { setMenu(o); if (!o) setMenuAt(null); }} />
   );
   const out = m.outgoing;
@@ -428,12 +432,9 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
             const sel = window.getSelection();
             if ((sel && !sel.isCollapsed && e.currentTarget.contains(sel.anchorNode)) || (e.target as HTMLElement).closest("a")) return;
             e.preventDefault();
-            // beside the bubble from its top (the ⋮'s menu begins under the ⋮, at its middle)
-            const button = e.currentTarget.querySelector("[data-actions]");
-            if (button) {
-              const b = button.getBoundingClientRect();
-              setMenuAt({ up: e.currentTarget.getBoundingClientRect().top - b.top, width: b.width });
-            }
+            // where the click was, from the bubble's inside (within its border)
+            const el = e.currentTarget, r = el.getBoundingClientRect();
+            setMenuAt({ x: e.clientX - r.left - el.clientLeft, y: e.clientY - r.top - el.clientTop });
             setMenu(true);
           } : undefined}
           className={cn(
