@@ -81,9 +81,9 @@ test("a reaction, an edit and a deletion of the user's own message", async ({ pa
   await composer.fill("");
 });
 
-// A right click on a bubble opens its menu, as its ⋮ does, where the click was; on a link in it,
-// the browser's own (to open or copy the link).
-test("a right click on a bubble: its menu; on a link, the browser's", async ({ page }, info) => {
+// A right click on a bubble opens its menu, as its ⋮ does, where the click was; on a link in it
+// too, with the link to copy.
+test("a right click on a bubble: its menu; on a link, with the link to copy", async ({ page }, info) => {
   test.skip(info.project.name !== "desktop", "a mouse's");
   await signedIn(page, info.project.name);
   const found = await page.evaluate(async () => {
@@ -93,12 +93,15 @@ test("a right click on a bubble: its menu; on a link, the browser's", async ({ p
   await page.goto(`/chat/${found.chat}?m=${found.id}`);
   const bubble = page.locator(`#m${found.id}`);
   await bubble.locator("[data-preview]").click({ button: "right" });
+  await expect(page.getByRole("menu").getByRole("menuitem", { name: /Αντιγραφή συνδέσμου|Copy the link/ })).toBeVisible();
+  await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).toHaveCount(0);
   const words = bubble.getByText("Δες αυτή");
   await words.click({ button: "right", position: { x: 6, y: 6 } });
   const menu = page.getByRole("menu");
   await expect(menu).toBeVisible();
   await expect(menu.getByRole("menuitem", { name: /Αντιγραφή|Copy/ }).first()).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: /Αντιγραφή συνδέσμου|Copy the link/ })).toHaveCount(0);
   // where the click was, as a context menu: its corner there
   const at = (await words.boundingBox())!;
   await expect.poll(async () => {

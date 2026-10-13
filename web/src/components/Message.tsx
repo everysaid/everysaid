@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { Check, CheckCheck, Copy, CornerUpLeft, EllipsisVertical, FileText, Forward, ImageOff, MapPin, Pencil, Phone, Pin, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Plus, Trash2, Video } from "lucide-react";
+import { Check, CheckCheck, Copy, CornerUpLeft, EllipsisVertical, FileText, Forward, ImageOff, Link2, MapPin, Pencil, Phone, Pin, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Plus, Trash2, Video } from "lucide-react";
 import { thumbUrl, type Attachment, type LinkPreview, type Local, type CallItem, type Mention, type MessageItem, type Receipts } from "@/lib/api";
 import { bytes, duration, time } from "@/lib/format";
 import { service } from "@/lib/services";
@@ -270,7 +270,7 @@ function Trigger({ as, children }: { as: boolean; children: React.ReactElement }
 function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange, at }: {
   m: MessageItem; react?: BubbleProps["react"]; onReply?: (m: MessageItem) => void; onEdit?: (m: MessageItem) => void;
   onDelete?: (m: MessageItem) => void; open: boolean; onOpenChange: (o: boolean) => void;
-  at?: { x: number; y: number } | null;     // opened by a right click: where (in the bubble), the menu there
+  at?: { x: number; y: number; link?: string } | null;     // opened by a right click: where (in the bubble), the menu there; on a link, which
 }) {
   const { t } = useTranslation();
   const [more, setMore] = useState(false);
@@ -324,6 +324,7 @@ function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange, at }
         {/* the answer first, under the reactions: what is done most */}
         {onReply && <MenuItem icon={<CornerUpLeft className="size-4" />} onSelect={() => { toComposer.current = true; onReply(m); }}>{t("chat.reply")}</MenuItem>}
         {mine && react && <MenuItem onSelect={() => react.on(m, "")}><span className="w-5 text-center">{mine}</span>{t("chat.removeReaction")}</MenuItem>}
+        {at?.link && <MenuItem icon={<Link2 className="size-4" />} onSelect={() => copy(copyText(at.link!))}>{t("chat.copyLink")}</MenuItem>}
         {m.text && <MenuItem icon={<Copy className="size-4" />} onSelect={() => copy(copyText(m.text!))}>{t("common.copy")}</MenuItem>}
         {file && <MenuItem icon={<Copy className="size-4" />} onSelect={() => copy(copyFile(file))}>{t("chat.copyFile")}</MenuItem>}
         {onEdit && <MenuItem icon={<Pencil className="size-4" />} onSelect={() => { toComposer.current = true; onEdit(m); }}>{t("chat.edit")}</MenuItem>}
@@ -379,7 +380,7 @@ function useMeasured(id: number) {
 export const Bubble = memo(function Bubble({ m, group, first, last, above, below, showService, account, highlight, onOpen, onJump, onReply, onInfo, react, onEdit, onDelete }: BubbleProps) {
   const { t } = useTranslation();
   const [menu, setMenu] = useState(false);
-  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);     // a right click's: where, in the bubble
+  const [menuAt, setMenuAt] = useState<{ x: number; y: number; link?: string } | null>(null);     // a right click's: where, in the bubble, and on which link
   // deleted for everyone: the notice, as the service shows it; what it was, on a tap
   const [reveal, setReveal] = useState(false);
   const hidden = m.deleted && !reveal;
@@ -449,15 +450,17 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
             title={m.sender_self_named ? t("people.selfNamed") : undefined}>{m.sender_self_named && "~ "}{m.sender}</span>
         ))}
         <div ref={bubbleRef} data-emoji={emoji || undefined} data-bare={bare || undefined}
-          // a right click: its menu, as the ⋮ beside it; the browser's own on text selected in it (to
-          // copy that) and on a link (to open or copy it)
+          // a right click: its menu, as the ⋮ beside it, on a link too (with the link to copy, one of the
+          // web: not a file of the archive's, copied as a file); the browser's own on text selected in it (to copy that)
           onContextMenu={hasActions ? (e) => {
             const sel = window.getSelection();
-            if ((sel && !sel.isCollapsed && e.currentTarget.contains(sel.anchorNode)) || (e.target as HTMLElement).closest("a")) return;
+            if (sel && !sel.isCollapsed && e.currentTarget.contains(sel.anchorNode)) return;
             e.preventDefault();
+            const a = (e.target as HTMLElement).closest("a");
+            const link = a?.href && a.origin !== location.origin ? a.href : undefined;
             // where the click was, from the bubble's inside (within its border)
             const el = e.currentTarget, r = el.getBoundingClientRect();
-            setMenuAt({ x: e.clientX - r.left - el.clientLeft, y: e.clientY - r.top - el.clientTop });
+            setMenuAt({ x: e.clientX - r.left - el.clientLeft, y: e.clientY - r.top - el.clientTop, link });
             setMenu(true);
           } : undefined}
           className={cn(
