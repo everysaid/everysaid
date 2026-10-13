@@ -282,7 +282,15 @@ func signal(ch chan struct{}) {
 
 // event is one of the client's events, as it comes. An error: it was not kept (what Signal sent
 // is then not acknowledged, and comes again).
-func (n *conn) event(name string, raw []byte) error {
+func (n *conn) event(name string, raw []byte) (err error) {
+	// an event that fails (the archive locked too long by another) is said in the log, not the end
+	// of the server
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%s: %v", name, r)
+			n.c.Logf("%s", err)
+		}
+	}()
 	switch name {
 	case "link_url":
 		var e struct {

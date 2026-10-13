@@ -3,6 +3,7 @@ package signal
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"image"
 	"image/color"
@@ -1669,5 +1670,19 @@ func TestPreviewImport(t *testing.T) {
 	}
 	if n, _ := Import(a, s, media, 0, nil); n != (Counts{}) {
 		t.Fatalf("again: %+v", n)
+	}
+}
+
+// An event whose handling fails (the archive not writable: another holding it too long) is an error
+// said in the log, not a panic that ends the server.
+func TestEventThatFailsIsAnError(t *testing.T) {
+	c, h, _ := newPlugin(t, nil)
+	n := &conn{c: c, k: instanceOf(c.ID)}
+	h.store.MustWrite(func(tx *sql.Tx) { // the instance's state cannot be written
+		db.Exec(tx, "CREATE TRIGGER no_state BEFORE UPDATE ON plugin_instance BEGIN SELECT RAISE(ABORT, 'locked'); END")
+	})
+	err := n.event("queue_empty", nil)
+	if err == nil || !strings.Contains(err.Error(), "queue_empty") {
+		t.Fatalf("event: %v", err)
 	}
 }
