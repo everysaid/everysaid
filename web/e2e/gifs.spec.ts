@@ -152,3 +152,20 @@ test("@gif's emoji as the button's: all of them by category, ↓ a row down, the
   await expect(field).toBeFocused();
   await field.press("Escape");
 });
+
+test("@gif's window gives way to what '@' offers with the caret back in '@gif'", async ({ page }, info) => {
+  await signedIn(page, info.project.name);
+  const chat = await sendableChat(page);
+  test.skip(!chat, "no chat to send to");
+  const field = page.locator("[data-composer-body] textarea");
+  const results = page.locator("[data-gif-results]");
+  await field.fill("");
+  await field.pressSequentially("@gif ");
+  await expect(results).toBeVisible();
+  await field.press("ArrowLeft");                                               // the caret in "@gif": one list only
+  await expect(page.locator("[data-command-option='gif']")).toBeVisible();
+  await expect(results).toHaveCount(0);
+  await field.press("End");
+  await expect(results).toBeVisible();
+  await field.press("Escape");
+});

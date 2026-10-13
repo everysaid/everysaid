@@ -2,6 +2,7 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Search } from "lucide-react";
 import { toast } from "sonner";
 import { EmojiPicker, recentEmoji } from "@/components/EmojiPicker";
 import { MoreOnScroll, Segmented, Spinner } from "@/components/ui";
@@ -277,7 +278,7 @@ function SearchGrid({ instance, wait = 1000, pick, busy, query, go, cursor = -1,
           }}
           className="mx-2 mb-2 h-8 rounded-lg border border-line bg-panel-2 px-2 text-sm outline-none focus:border-accent" />
       )}
-      {!dq ? <div data-gif-waiting className="grid flex-1 place-items-center px-6 text-center text-sm text-muted">{t("gif.typeToSearch")}</div> : (
+      {!dq ? <div data-gif-waiting className="grid flex-1 place-items-center text-muted/40"><Search className="size-10" /></div> : (
       <Grid loading={res.isPending} error={res.error?.message} empty={t("gif.none")} more={!!res.hasNextPage}
         moreLoading={res.isFetchingNextPage} onMore={() => res.fetchNextPage()}>
         {items.map((g, i) => (

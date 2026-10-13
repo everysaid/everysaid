@@ -1013,8 +1013,9 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   // files go), more to come
   const gifAble = !editing && fileable.includes(via) && (replyTo ? replyable : sendable).includes(via);
   const commands = useMemo(() => [{ id: "gif", label: t("gif.command"), able: gifAble }].filter((c) => c.able), [gifAble, t]);
-  // "@gif" and words: GIFs for them, shown above the text as it is written
-  const gifQuery = gifAble && !noList ? /^@gif\s([\s\S]*)$/u.exec(text)?.[1] ?? null : null;
+  // "@gif" and words: GIFs for them, shown above the text as it is written (the caret past "@gif ":
+  // within it, what "@" offers instead)
+  const gifQuery = gifAble && !noList && caret > 4 ? /^@gif\s([\s\S]*)$/u.exec(text)?.[1] ?? null : null;
   const results = useRef<ResultsKeys>(null);
   // "@" and what follows it, up to the caret: whom to name, or what to do
   const asked = useMemo(() => {
