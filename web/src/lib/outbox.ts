@@ -16,6 +16,7 @@ export interface Unsent {
   mentions: { start: number; length: number; address_id: number }[];
   file: Blob | null;
   fileName: string | null;
+  animated?: boolean;               // the file sent as a GIF
   createdAt: number;
   state: "waiting" | "failed";      // waiting: for the server; failed: refused by it (error)
   error: string | null;
@@ -115,6 +116,7 @@ function postUnsent(u: Unsent): Promise<Went> {
     if (u.conversationId) form.append("conversation_id", String(u.conversationId));
     if (u.replyTo) form.append("reply_to", String(u.replyTo));
     if (u.mentions.length) form.append("mentions", JSON.stringify(u.mentions));
+    if (u.animated) form.append("animated", "1");
     form.append("file", u.file, u.fileName ?? "file");
     return api.form(`/api/chats/${u.chatId}/send`, form);
   }

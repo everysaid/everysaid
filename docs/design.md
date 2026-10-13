@@ -95,8 +95,12 @@ source at once when the user looks for a person elsewhere, each answer reaching 
 `reach` event as it comes, and a first message then sent to the key found), `Chats` (the
 chats it can see, with kind and size, for the user's choice of what to import and whose media to
 fetch; Telegram and Signal have it), `Asks` (what the user types for one run only, such as a backup
-password not kept), `Action`, `Check`; a library `Find`, `Store`, `Fetch`; a contacts plugin
-`Sync`.
+password not kept), `Action`, `Check`, `SearchGIFs` (GIFs to send, from any service: Telegram's
+through its @gif bot, an inline query that sends nothing; the composer's GIF tab, beside the GIFs
+already in the archive, with a tab greyed and saying why where one cannot now); a library `Find`,
+`Store`, `Fetch`; a contacts plugin `Sync`. A file sent as a GIF (`animated`) is a video without
+sound that each source sends as its service's GIF (WhatsApp and Messenger's encrypted chats with
+GIF playback, Telegram as an animation, Signal with its GIF flag), else as the video it is.
 
 The source plugins run the extraction and the importers: an import extracts what is new (an iPhone
 backup, adb, Telegram's API) and runs the importers on it, which write through `internal/archive`;
