@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { keepListPlace, listPlace } from "@/lib/memory";
+import { markList } from "@/lib/back";
 import { Link, useParams } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -61,7 +62,7 @@ function ChatRow({ c, active }: { c: ChatSummary; active: boolean }) {
   });
   return (
     <div data-chat={c.id} className={cn("group relative mx-2 my-0.5 rounded-2xl", active ? "bg-accent/12" : "hover:bg-panel-2")}>
-      <Link to="/chat/$chatId" params={{ chatId: c.id }} className="flex items-center gap-3 px-3 py-2.5">
+      <Link to="/chat/$chatId" params={{ chatId: c.id }} onClick={markList} className="flex items-center gap-3 px-3 py-2.5">
         <Avatar name={c.title} src={avatarUrl(c)} group={c.type === "group"} size={50} />
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">

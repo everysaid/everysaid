@@ -3,19 +3,21 @@ import { useCanGoBack, useLocation, useNavigate, useRouter, type AnyRouter } fro
 // Where each page of the session was reached from: the path of the page before it, or "nav" when
 // it was opened from the app's own menu (the rail, the tabs), which is itself the way to go on.
 const cameFrom = new Map<string, string>();
-let viaNav = false;
+let via: string | null = null;
 
 /** The next navigation is the menu's. */
-export const markNav = () => { viaNav = true; };
+export const markNav = () => { via = "nav"; };
+/** The next navigation is from the list of chats ("/"), which a wide screen keeps beside each chat. */
+export const markList = () => { via = "/"; };
 
 const keyOf = (loc: { state: Record<string, unknown>; href: string }) => String(loc.state.__TSR_key ?? loc.href);
 
 export function watchNavigation(router: AnyRouter) {
   router.subscribe("onBeforeNavigate", ({ fromLocation, toLocation }) => {
     const key = keyOf(toLocation as never);
-    if (viaNav) cameFrom.set(key, "nav");
+    if (via) cameFrom.set(key, via);
     else if (fromLocation && !cameFrom.has(key)) cameFrom.set(key, fromLocation.pathname);
-    viaNav = false;
+    via = null;
   });
 }
 

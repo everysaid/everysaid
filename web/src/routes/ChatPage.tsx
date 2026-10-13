@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useLocation, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
@@ -899,11 +899,12 @@ function ChatHeader({ chat, wide, onInfo, onJumpDate, hidden, onHide }: {
     },
   });
   const back = useBack("/");
+  const here = useLocation().pathname;
   const title = chat?.title ?? "";
   const subtitle = chat?.type === "group" ? `${chat.members?.length ?? 0} ${t("chat.members")}` : null;
   return (
     <header className="flex items-center gap-2 border-b border-line bg-panel/95 px-2 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))] backdrop-blur md:px-4">
-      {(!wide || (back.from && back.from !== "/" && !back.from.startsWith("/chat/"))) && (
+      {(!wide || (back.from && back.from !== "/" && back.from !== here)) && (
         <button type="button" onClick={back.go} className="grid size-10 shrink-0 place-items-center rounded-full hover:bg-panel-2"
           aria-label={t("common.back")} title={t("common.back")} data-back>
           <ArrowLeft className="size-5" />
