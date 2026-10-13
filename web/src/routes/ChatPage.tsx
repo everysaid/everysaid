@@ -1015,6 +1015,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   const commands = useMemo(() => [{ id: "gif", label: t("gif.command"), able: gifAble }].filter((c) => c.able), [gifAble, t]);
   // "@gif" and words: GIFs for them, shown above the text as it is written
   const gifQuery = gifAble && !noList ? /^@gif\s([\s\S]*)$/u.exec(text)?.[1] ?? null : null;
+  const [gifGo, setGifGo] = useState(0);
   // "@" and what follows it, up to the caret: whom to name, or what to do
   const asked = useMemo(() => {
     if ((!mentionable.includes(via) && !commands.length) || noList) return null;
@@ -1181,7 +1182,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
       )}
       {gifQuery !== null && (
         <div className="absolute bottom-full left-3 right-3 z-20 mb-1 overflow-hidden rounded-2xl border border-line bg-panel shadow-xl md:right-auto md:w-96">
-          <GifResults query={gifQuery} onPick={(gif) => { setText(""); sendGif(gif); }} />
+          <GifResults query={gifQuery} go={gifGo} onPick={(gif) => { setText(""); sendGif(gif); }} />
         </div>
       )}
       {atCount > 0 && (
@@ -1321,6 +1322,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
                 }
                 if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
+                  setGifGo((n) => n + 1);              // the words asked for now, not a second later
                   return;
                 }
               }
