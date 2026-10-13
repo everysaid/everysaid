@@ -301,7 +301,7 @@ function Actions({ m, react, onReply, onEdit, onDelete, onForward, open, onOpenC
       <MenuContent align={at || !m.outgoing ? "start" : "end"} className="w-72" sideOffset={at ? 2 : undefined}
         onCloseAutoFocus={(e) => { if (at || toComposer.current) { e.preventDefault(); toComposer.current = false; } }}>
         {react && (
-          <div data-reactions className="flex items-center gap-0.5 px-1 py-1">
+          <div data-reactions className="flex items-center gap-0.5 px-1 pb-2 pt-1">
             {react.quick.slice(0, 6).map((e) => (
               <button key={e} data-react={e} onClick={() => put(e)} aria-label={`${t("chat.react")} ${e}`}
                 className={cn("grid size-9 place-items-center rounded-full text-xl hover:bg-panel-2", e === mine && "bg-accent/15")}>{e}</button>
