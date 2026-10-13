@@ -66,7 +66,8 @@ test("a person's services, all on at first: one turned off leaves its messages o
   expect(shown).not.toContain(off);
   // the last one on stays on
   for (const s of chat.services.slice(1, -1)) await page.locator(`[data-service-toggle="${s}"]`).click();
-  await expect(page.locator(`[data-service-toggle="${chat.services.at(-1)}"]`)).toBeDisabled();
+  await page.locator(`[data-service-toggle="${chat.services.at(-1)}"]`).click();
+  await expect(page.locator(`[data-service-toggle="${chat.services.at(-1)}"]`)).toHaveAttribute("aria-pressed", "true");
   for (const s of chat.services.slice(0, -1)) await page.locator(`[data-service-toggle="${s}"]`).click();   // all back on
   await expect(page).not.toHaveURL(/hide=/);
   // Ctrl+click: that one alone; again on it, all back

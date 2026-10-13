@@ -813,7 +813,7 @@ function ChatHeader({ chat, wide, onInfo, onJumpDate, hidden, onHide }: {
                   const off = hidden.includes(s);
                   const last = !off && hidden.length === chat.services.length - 1;     // one stays on
                   return (                                                              // Ctrl+click: this one alone (all again where it is already)
-                    <button key={s} data-service-toggle={s} aria-pressed={!off} aria-disabled={last}
+                    <button key={s} data-service-toggle={s} aria-pressed={!off}
                       title={t(off ? "chat.showService" : "chat.hideService", { service: service(s).name })}
                       onClick={(e) => e.ctrlKey || e.metaKey ? onHide(last ? [] : chat.services.filter((x) => x !== s))
                         : !last && onHide(off ? hidden.filter((x) => x !== s) : [...hidden, s])}
