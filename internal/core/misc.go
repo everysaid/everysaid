@@ -157,17 +157,17 @@ func Media(s *Store, o MediaOptions) (M, error) {
 	// gone when only those there are asked for), and to the end of the last instant it has: the
 	// next page starts before that time
 	more := false
-	rows := db.Query(q, "SELECT m.id, m.ts, m.conversation_id, md.sha256, md.mime, md.size, md.path, "+
+	rows := db.Query(q, "SELECT m.id, m.ts, m.conversation_id, m.service_id, md.sha256, md.mime, md.size, md.path, "+
 		"(SELECT count(*) FROM library_link l WHERE l.sha256 = md.sha256), d.decision "+
 		"FROM message m JOIN attachment a ON a.message_id = m.id JOIN media md ON md.sha256 = a.sha256 "+
 		"LEFT JOIN media_decision d ON d.sha256 = md.sha256 "+
 		"WHERE "+strings.Join(where, " AND ")+" ORDER BY m.ts DESC, m.id DESC, a.id", args...)
 	defer rows.Close()
 	for rows.Next() {
-		var mid, ts, conv, size, linked int64
+		var mid, ts, conv, sid, size, linked int64
 		var sha, path string
 		var mime, decision sql.NullString
-		rows.Scan(&mid, &ts, &conv, &sha, &mime, &size, &path, &linked, &decision)
+		rows.Scan(&mid, &ts, &conv, &sid, &sha, &mime, &size, &path, &linked, &decision)
 		if seen[sha] {
 			continue
 		}
@@ -185,7 +185,7 @@ func Media(s *Store, o MediaOptions) (M, error) {
 			chat = c
 		}
 		out = append(out, M{"sha256": sha, "mime": nullString(mime), "size": size, "available": available,
-			"message_id": mid, "ts": ts, "chat_id": chat, "decision": nullString(decision)})
+			"message_id": mid, "ts": ts, "chat_id": chat, "service": lk.Service[sid], "decision": nullString(decision)})
 	}
 	return M{"items": out, "has_more": more}, nil
 }

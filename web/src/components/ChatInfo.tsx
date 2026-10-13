@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { api, qs, thumbUrl, type ChatDetail, type MediaItem, type NameSources, type StateField } from "@/lib/api";
 import { dateOnly, number } from "@/lib/format";
 import { service } from "@/lib/services";
-import { Avatar, Button, Input, Segmented, ServiceBadge, Textarea } from "./ui";
+import { Avatar, Button, Input, Segmented, ServiceBadge, ServiceIcon, Textarea } from "./ui";
 import { avatarUrl } from "./ChatList";
 import { GroupParts } from "./GroupMerge";
 import { ChatLabels } from "./Labels";
@@ -138,8 +138,11 @@ export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => 
           <Link to="/media" search={{ chat: chat.id }} className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted"><Images className="size-3.5" />{caps(t("nav.media"))}</Link>
           <div className="grid grid-cols-3 gap-1">
             {media.data!.items.map((m) => (
-              <Link key={m.sha256} to="/chat/$chatId" params={{ chatId: chat.id }} search={{ m: m.message_id }} className="aspect-square overflow-hidden rounded-lg bg-panel-2">
+              <Link key={m.sha256} to="/chat/$chatId" params={{ chatId: chat.id }} search={{ m: m.message_id }} title={service(m.service).name}
+                className="relative aspect-square overflow-hidden rounded-lg bg-panel-2">
                 <img src={thumbUrl(m.sha256)} alt="" loading="lazy" className="size-full object-cover" />
+                {/* the service it came by */}
+                <span className="absolute bottom-1 right-1 grid size-5 place-items-center rounded-full bg-white/90 shadow"><ServiceIcon id={m.service} className="size-3.5" /></span>
               </Link>
             ))}
           </div>
