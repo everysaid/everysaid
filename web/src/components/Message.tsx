@@ -258,20 +258,21 @@ export interface BubbleProps {
   react?: { quick: string[]; all: string[] | null; free: boolean; on: (m: MessageItem, emoji: string) => void };
   onEdit?: (m: MessageItem) => void;
   onDelete?: (m: MessageItem) => void;
+  onForward?: (m: MessageItem) => void;  // sent on to other chats
   // one waiting to be sent (or refused): why, said under it, and to send it again or let it go
   waiting?: { why: string | null; again: () => void; discard: () => void };
 }
 
 /** The actions of a message: its service's quick reactions, any other it takes, copy, edit,
- * delete for everyone, answer. Opened by its button, or by a long press on a touch screen (open). */
+ * forward, delete for everyone, answer. Opened by its button, or by a long press on a touch screen (open). */
 // The menu's button when it is what the menu opens from; else the button alone.
 function Trigger({ as, children }: { as: boolean; children: React.ReactElement }) {
   return as ? <MenuTrigger asChild>{children}</MenuTrigger> : children;
 }
 
-function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange, at }: {
+function Actions({ m, react, onReply, onEdit, onDelete, onForward, open, onOpenChange, at }: {
   m: MessageItem; react?: BubbleProps["react"]; onReply?: (m: MessageItem) => void; onEdit?: (m: MessageItem) => void;
-  onDelete?: (m: MessageItem) => void; open: boolean; onOpenChange: (o: boolean) => void;
+  onDelete?: (m: MessageItem) => void; onForward?: (m: MessageItem) => void; open: boolean; onOpenChange: (o: boolean) => void;
   at?: { x: number; y: number; link?: string } | null;     // opened by a right click: where (in the bubble), the menu there; on a link, which
 }) {
   const { t } = useTranslation();
@@ -329,6 +330,7 @@ function Actions({ m, react, onReply, onEdit, onDelete, open, onOpenChange, at }
         {at?.link && <MenuItem icon={<Link2 className="size-4" />} onSelect={() => copy(copyText(at.link!))}>{t("chat.copyLink")}</MenuItem>}
         {m.text && <MenuItem icon={<Copy className="size-4" />} onSelect={() => copy(copyText(m.text!))}>{t("common.copy")}</MenuItem>}
         {file && <MenuItem icon={<Copy className="size-4" />} onSelect={() => copy(copyFile(file))}>{t("chat.copyFile")}</MenuItem>}
+        {onForward && <MenuItem icon={<Forward className="size-4" />} onSelect={() => onForward(m)}>{t("chat.forward")}</MenuItem>}
         {onEdit && <MenuItem icon={<Pencil className="size-4" />} onSelect={() => { toComposer.current = true; onEdit(m); }}>{t("chat.edit")}</MenuItem>}
         {onDelete && <MenuItem danger icon={<Trash2 className="size-4" />} onSelect={() => onDelete(m)}>{t("chat.deleteForAll")}</MenuItem>}
       </MenuContent>
@@ -379,14 +381,14 @@ function useMeasured(id: number) {
   return ref;
 }
 
-export const Bubble = memo(function Bubble({ m, group, first, last, above, below, showService, account, highlight, onOpen, onJump, onReply, onInfo, react, onEdit, onDelete, waiting }: BubbleProps) {
+export const Bubble = memo(function Bubble({ m, group, first, last, above, below, showService, account, highlight, onOpen, onJump, onReply, onInfo, react, onEdit, onDelete, onForward, waiting }: BubbleProps) {
   const { t } = useTranslation();
   const [menu, setMenu] = useState(false);
   const [menuAt, setMenuAt] = useState<{ x: number; y: number; link?: string } | null>(null);     // a right click's: where, in the bubble, and on which link
   // deleted for everyone: the notice, as the service shows it; what it was, on a tap
   const [reveal, setReveal] = useState(false);
   const hidden = m.deleted && !reveal;
-  const hasActions = m.id > 0 && !m.deleted && !!(react || onEdit || onDelete || onReply || m.text || m.attachments.some((a) => a.available !== "gone"));
+  const hasActions = m.id > 0 && !m.deleted && !!(react || onEdit || onDelete || onForward || onReply || m.text || m.attachments.some((a) => a.available !== "gone"));
   const press = useRef<ReturnType<typeof setTimeout> | null>(null);   // a long press opens the actions
   const unpress = () => { if (press.current) clearTimeout(press.current); press.current = null; };
   // a swipe to the right on a touch screen answers the message (as in the messaging apps)
@@ -415,7 +417,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
     onPointerMove: unpress, onPointerUp: unpress, onPointerCancel: unpress,
   } : {};
   const actions = hasActions && (
-    <Actions m={m} react={react} onReply={onReply} onEdit={onEdit} onDelete={onDelete} open={menu} at={menuAt}
+    <Actions m={m} react={react} onReply={onReply} onEdit={onEdit} onDelete={onDelete} onForward={onForward} open={menu} at={menuAt}
       onOpenChange={(o) => { setMenu(o); if (!o) setMenuAt(null); }} />
   );
   const out = m.outgoing;
