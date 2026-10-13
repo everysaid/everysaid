@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS device (
 CREATE TABLE IF NOT EXISTS plugin_instance (
     id INTEGER PRIMARY KEY,
     plugin TEXT NOT NULL,               -- the plugin's id, e.g. 'iphone-backup', 'telegram', 'immich'
-    kind TEXT NOT NULL CHECK (kind IN ('source', 'library', 'contacts', 'analysis')),
+    kind TEXT NOT NULL CHECK (kind IN ('source', 'library', 'contacts', 'analysis', 'gifs')),
     label TEXT NOT NULL,                -- the user's name for it, e.g. 'iPhone', 'Old phone'
     settings TEXT NOT NULL DEFAULT '{}',    -- JSON, as the plugin's settings schema says
     state TEXT NOT NULL DEFAULT '{}',   -- JSON: the plugin's own cursors

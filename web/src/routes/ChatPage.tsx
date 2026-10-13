@@ -22,8 +22,8 @@ import { Lightbox, type LightboxItem } from "@/components/Lightbox";
 import { ChatInfo } from "@/components/ChatInfo";
 import { MessageInfo } from "@/components/MessageInfo";
 import { DateField } from "@/components/DateField";
-import { EmojiPicker, keepRecent, recentEmoji } from "@/components/EmojiPicker";
-import { GifPicker } from "@/components/GifPicker";
+import { keepRecent, recentEmoji } from "@/components/EmojiPicker";
+import { Expressions, GifResults } from "@/components/Expressions";
 import { byCode, emoticonAt, ENDS, findEmoji, shortcodes } from "@/lib/emoji";
 import { Pending } from "@/components/Pending";
 import { dropUnsent, flying, keepUnsent, sendUnsent, unreached, type Unsent, type Went } from "@/lib/outbox";
@@ -1009,18 +1009,26 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   const viaName = account ? `${service(via).name} · ${short(account)}` : service(via).name;
   // whom a message there may name: of the group it goes to
   const there = (m: Member) => m.services.includes(via) && (!account || !m.conversations || m.conversations.includes(account.conversation_id));
-  // "@" and what follows it, up to the caret: whom to name
+  // what "@" offers besides the members of a group: commands, each where it can be done (GIFs where
+  // files go), more to come
+  const gifAble = !editing && fileable.includes(via) && (replyTo ? replyable : sendable).includes(via);
+  const commands = useMemo(() => [{ id: "gif", label: t("gif.command"), able: gifAble }].filter((c) => c.able), [gifAble, t]);
+  // "@gif" and words: GIFs for them, shown above the text as it is written
+  const gifQuery = gifAble && !noList ? /^@gif\s([\s\S]*)$/u.exec(text)?.[1] ?? null : null;
+  // "@" and what follows it, up to the caret: whom to name, or what to do
   const asked = useMemo(() => {
-    if (!mentionable.includes(via) || noList) return null;
+    if ((!mentionable.includes(via) && !commands.length) || noList) return null;
     const m = /(?:^|\s)@([^\s@]{0,30})$/u.exec(text.slice(0, caret));
     return m ? { query: m[1], at: caret - m[1].length - 1 } : null;
-  }, [text, caret, via, mentionable.join(), noList]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [text, caret, via, mentionable.join(), noList, commands.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const options = useMemo(() => {
-    if (!asked) return [];
+    if (!asked || !mentionable.includes(via)) return [];
     const q = plain(asked.query);
     return members.filter((m) => there(m) && m.name && plain(m.name).split(/\s+/).some((w) => w.startsWith(q)))
       .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "")).slice(0, 8);
   }, [asked, members, via, account?.conversation_id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const orders = useMemo(() => (asked ? commands.filter((c) => c.id.startsWith(plain(asked.query))) : []), [asked, commands]);
+  const atCount = options.length + orders.length;
   // ":" and two letters or more of a shortcode, up to the caret: an emoji to put there
   const coded = useMemo(() => {
     if (noList || asked) return null;
@@ -1033,7 +1041,6 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   useEffect(() => setPick(0), [asked?.query, coded?.query]);
   // an emoji where the caret is (or in place of what is selected); the picker stays open for more
   const [emojiOpen, setEmojiOpen] = useState(false);
-  const [gifOpen, setGifOpen] = useState(false);
   const insert = (e: string) => {
     const el = ref.current;
     const from = el?.selectionStart ?? text.length, to = el?.selectionEnd ?? text.length;
@@ -1119,6 +1126,22 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
     setCaret(at);
     requestAnimationFrame(() => { ref.current?.focus(); ref.current?.setSelectionRange(at, at); });
   };
+  // a command chosen: "@" and its name, the words then written after it
+  const command = (c: { id: string }) => {
+    if (!asked) return;
+    const label = `@${c.id} `;
+    const next = text.slice(0, asked.at) + label + text.slice(caret);
+    const at = asked.at + label.length;
+    setText(next);
+    setCaret(at);
+    requestAnimationFrame(() => { ref.current?.focus(); ref.current?.setSelectionRange(at, at); });
+  };
+  const sendGif = (gif: File) => {
+    setEmojiOpen(false);
+    onSend("", svc, replyTo, [], gif, account?.conversation_id ?? null, true);
+    onCancelReply();
+    ref.current?.focus();
+  };
   const go = () => {
     const body = finished(text.trim());
     kept.current = turned.current = null;
@@ -1136,8 +1159,8 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
     onCancelReply();
     ref.current?.focus();
   };
-  const listOpen = options.length > 0 || emojiOptions.length > 0;
-  const choices = options.length || emojiOptions.length;
+  const listOpen = atCount > 0 || emojiOptions.length > 0;
+  const choices = atCount || emojiOptions.length;
   return (
     <div data-composer className="relative border-t border-line bg-panel px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
       {emojiOptions.length > 0 && (
@@ -1154,7 +1177,12 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
           ))}
         </ul>
       )}
-      {options.length > 0 && (
+      {gifQuery !== null && (
+        <div className="absolute bottom-full left-3 right-3 z-20 mb-1 overflow-hidden rounded-2xl border border-line bg-panel shadow-xl md:right-auto md:w-96">
+          <GifResults query={gifQuery} onPick={(gif) => { setText(""); sendGif(gif); }} />
+        </div>
+      )}
+      {atCount > 0 && (
         <ul data-mention-list role="listbox" aria-label={t("chat.mention")}
           className="absolute bottom-full left-3 right-3 z-20 mb-1 max-h-72 overflow-y-auto rounded-2xl border border-line bg-panel p-1 shadow-xl md:right-auto md:w-80">
           {options.map((m, i) => (
@@ -1163,6 +1191,15 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
                 className={cn("flex w-full items-center gap-3 rounded-xl px-2 py-1.5 text-left text-sm", i === pick ? "bg-panel-2" : "hover:bg-panel-2")}>
                 <Avatar name={m.name || "?"} size={28} />
                 <span className="truncate">{m.name}</span>
+              </button>
+            </li>
+          ))}
+          {orders.map((c, j) => (
+            <li key={c.id} role="option" aria-selected={options.length + j === pick}>
+              <button data-command-option={c.id} onMouseDown={(e) => e.preventDefault()} onClick={() => command(c)}
+                className={cn("flex w-full items-center gap-3 rounded-xl px-2 py-1.5 text-left text-sm", options.length + j === pick ? "bg-panel-2" : "hover:bg-panel-2")}>
+                <span className="grid size-7 shrink-0 place-items-center rounded-full bg-panel-2 text-[10px] font-bold text-muted">@{c.id}</span>
+                <span className="truncate">{c.label}</span>
               </button>
             </li>
           ))}
@@ -1274,6 +1311,17 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
             }}
             onSelect={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
             onKeyDown={(e) => {
+              if (gifQuery !== null && !listOpen) {     // "@gif" and words: a GIF is picked above, not sent as text
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setNoList(true);
+                  return;
+                }
+                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault();
+                  return;
+                }
+              }
               if (listOpen) {
                 if (e.key === "ArrowDown" || e.key === "ArrowUp") {
                   e.preventDefault();
@@ -1282,8 +1330,11 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
                 }
                 if ((e.key === "Enter" || e.key === "Tab") && !e.nativeEvent.isComposing) {
                   e.preventDefault();
-                  if (options.length) choose(options[pick] ?? options[0]);
-                  else chooseEmoji((emojiOptions[pick] ?? emojiOptions[0]).emoji);
+                  if (atCount) {
+                    const i = pick % atCount;
+                    if (i < options.length) choose(options[i]);
+                    else command(orders[i - options.length]);
+                  } else chooseEmoji((emojiOptions[pick] ?? emojiOptions[0]).emoji);
                   return;
                 }
                 if (e.key === "Escape") {
@@ -1316,7 +1367,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
           {can && (
             <Popover.Root open={emojiOpen} onOpenChange={setEmojiOpen}>
               <Popover.Trigger asChild>
-                <button data-emoji aria-label={t("emoji.choose")} title={t("emoji.choose")}
+                <button data-emoji aria-label={canFile && !editing ? t("emoji.andGifs") : t("emoji.choose")} title={canFile && !editing ? t("emoji.andGifs") : t("emoji.choose")}
                   className="mb-1 grid size-9 shrink-0 place-items-center rounded-full text-muted hover:bg-panel hover:text-fg data-[state=open]:bg-panel">
                   <Smile className="size-5" />
                 </button>
@@ -1324,27 +1375,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
               <Popover.Portal>
                 <Popover.Content align="end" side="top" sideOffset={8} onCloseAutoFocus={(e) => { e.preventDefault(); ref.current?.focus(); }}
                   className="z-50 overflow-hidden rounded-2xl border border-line bg-panel shadow-xl">
-                  <EmojiPicker onPick={insert} />
-                </Popover.Content>
-              </Popover.Portal>
-            </Popover.Root>
-          )}
-          {canFile && !editing && (
-            <Popover.Root open={gifOpen} onOpenChange={setGifOpen}>
-              <Popover.Trigger asChild>
-                <button data-gif aria-label={t("gif.choose")} title={t("gif.choose")}
-                  className="mb-1 grid h-9 shrink-0 place-items-center rounded-full px-1.5 text-xs font-bold text-muted hover:bg-panel hover:text-fg data-[state=open]:bg-panel">
-                  {t("gif.choose")}
-                </button>
-              </Popover.Trigger>
-              <Popover.Portal>
-                <Popover.Content align="end" side="top" sideOffset={8} onCloseAutoFocus={(e) => { e.preventDefault(); ref.current?.focus(); }}
-                  className="z-50 overflow-hidden rounded-2xl border border-line bg-panel shadow-xl">
-                  <GifPicker onPick={(gif) => {
-                    setGifOpen(false);
-                    onSend("", svc, replyTo, [], gif, account?.conversation_id ?? null, true);
-                    onCancelReply();
-                  }} />
+                  <Expressions onEmoji={insert} onGif={sendGif} gifs={canFile && !editing} />
                 </Popover.Content>
               </Popover.Portal>
             </Popover.Root>

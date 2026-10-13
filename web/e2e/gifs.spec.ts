@@ -1,11 +1,12 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { signedIn } from "./demo";
 
-// GIFs: the demo's searcher finds its invented ones by name, a tap sends one as a GIF, which is then
-// among those of the archive ("Mine"); a searcher that cannot now is there, greyed, saying why.
+// GIFs, behind the emoji's button: the demo's searcher finds its invented ones by name, a tap sends
+// one as a GIF, which is then in the History; a searcher that cannot now is there, greyed, saying
+// why. "@gif" and words find them above the text as it is written.
 
-async function sendableChat(page: import("@playwright/test").Page) {
-  return page.evaluate(async () => {
+async function sendableChat(page: Page) {
+  const chat = await page.evaluate(async () => {
     const h = { "X-Everysaid": "1" };
     const chats = (await (await fetch("/api/chats", { headers: h })).json()).items;
     for (const c of chats) {
@@ -14,37 +15,46 @@ async function sendableChat(page: import("@playwright/test").Page) {
     }
     return null;
   });
+  if (chat) {
+    await page.goto(`/chat/${chat}`);
+    await page.locator("[data-via]").click();                 // through WhatsApp, which takes files
+    await page.getByRole("menuitem", { name: "WhatsApp" }).click();
+  }
+  return chat;
 }
 
-test("a GIF found, sent with a tap, then among those of the archive", async ({ page }, info) => {
-  await signedIn(page, info.project.name);
-  const chat = await sendableChat(page);
-  test.skip(!chat, "no chat to send to");
-  await page.goto(`/chat/${chat}`);
-  await page.locator("[data-via]").click();                 // through WhatsApp, which takes files
-  await page.getByRole("menuitem", { name: "WhatsApp" }).click();
-  await page.locator("[data-gif]").click();
-  const picker = page.locator("[data-gif-picker]");
-  await expect(picker.locator("[data-gif-option]")).toHaveCount(3);     // the searcher's tab first, all of them
-  await picker.locator("[data-gif-search]").fill("par");
-  await expect(picker.locator("[data-gif-option]")).toHaveCount(1);
-  await expect(picker.locator("[data-gif-option] video")).toHaveCount(1);
-
-  const sent = page.waitForResponse((r) => r.url().includes(`/api/chats/${chat}/send`) && r.request().method() === "POST");
-  await picker.locator("[data-gif-option]").click();
-  expect((await sent).ok()).toBe(true);
-  // it went as a GIF (the form's body cannot be read here: the archive says it)
+// the last message the user sent in the chat went as a GIF
+async function lastWentAsGif(page: Page, chat: string) {
   await expect.poll(() => page.evaluate(async (id) => {
     const r = await (await fetch(`/api/chats/${id}/stream?limit=5`, { headers: { "X-Everysaid": "1" } })).json();
     const mine = r.items.filter((i: { type: string; outgoing: boolean }) => i.type === "message" && i.outgoing);
     return mine[mine.length - 1]?.subtype;
   }, chat)).toBe("gif");
-  await expect(picker).toHaveCount(0);                                     // closed once picked
+}
+
+test("a GIF found, sent with a tap, then in the History", async ({ page }, info) => {
+  await signedIn(page, info.project.name);
+  const chat = await sendableChat(page);
+  test.skip(!chat, "no chat to send to");
+  await page.locator("[data-emoji]").click();
+  const box = page.locator("[data-expressions]");
+  await expect(box.locator("[data-emoji-picker]")).toBeVisible();      // the emoji first
+  await box.locator("[data-gif-tab]:not([data-gif-tab='history'])").first().click();
+  await expect(box.locator("[data-gif-option]")).toHaveCount(3);
+  await box.locator("[data-gif-search]").fill("par");
+  await expect(box.locator("[data-gif-option]")).toHaveCount(1);
+  await expect(box.locator("[data-gif-option] video")).toHaveCount(1);
+
+  const sent = page.waitForResponse((r) => r.url().includes(`/api/chats/${chat}/send`) && r.request().method() === "POST");
+  await box.locator("[data-gif-option]").click();
+  expect((await sent).ok()).toBe(true);
+  await lastWentAsGif(page, chat!);
+  await expect(box).toHaveCount(0);                                    // closed once picked
   await expect(page.locator('[id^="m"]').last().locator("video")).toBeVisible();
 
-  await page.locator("[data-gif]").click();
-  await picker.getByRole("tab", { name: "Mine" }).or(picker.getByRole("tab", { name: "Δικά μου" })).click();
-  await expect(picker.locator("[data-gif-option]").first()).toBeVisible();
+  await page.locator("[data-emoji]").click();
+  await box.locator("[data-gif-tab='history']").click();
+  await expect(box.locator("[data-gif-option]").first()).toBeVisible();
 });
 
 test("a searcher that cannot now: greyed, saying why", async ({ page }, info) => {
@@ -52,10 +62,30 @@ test("a searcher that cannot now: greyed, saying why", async ({ page }, info) =>
   await page.route("**/api/gifs", (r) => r.fulfill({ json: { items: [{ instance: 999, name: "Telegram", why: "Not signed in to Telegram yet" }] } }));
   const chat = await sendableChat(page);
   test.skip(!chat, "no chat to send to");
-  await page.goto(`/chat/${chat}`);
-  await page.locator("[data-gif]").click();
-  const picker = page.locator("[data-gif-picker]");
-  await expect(picker.locator("[data-gif-tab='999']")).toHaveClass(/opacity-50/);
-  await picker.locator("[data-gif-tab='999']").click();
-  await expect(picker.locator("[data-gif-unavailable]")).toContainText("Not signed in to Telegram yet");
+  await page.locator("[data-emoji]").click();
+  const box = page.locator("[data-expressions]");
+  await expect(box.locator("[data-gif-tab='999']")).toHaveClass(/opacity-50/);
+  await box.locator("[data-gif-tab='999']").click();
+  await expect(box.locator("[data-gif-unavailable]")).toContainText("Not signed in to Telegram yet");
+});
+
+test("@gif and words: GIFs above the text, one sent with a tap, the text gone", async ({ page }, info) => {
+  await signedIn(page, info.project.name);
+  const chat = await sendableChat(page);
+  test.skip(!chat, "no chat to send to");
+  const field = page.locator("[data-composer-body] textarea");
+  await field.fill("");
+  await field.pressSequentially("@g");
+  await expect(page.locator("[data-command-option='gif']")).toBeVisible();     // among what @ offers
+  await field.press("Enter");
+  await expect(field).toHaveValue("@gif ");
+  await field.pressSequentially("dog");
+  const results = page.locator("[data-gif-results]");
+  await expect(results.locator("[data-gif-option]")).toHaveCount(1);
+  await field.press("Enter");                                                  // not sent as text
+  await expect(field).toHaveValue("@gif dog");
+  await results.locator("[data-gif-option]").click();
+  await lastWentAsGif(page, chat!);
+  await expect(field).toHaveValue("");
+  await expect(results).toHaveCount(0);
 });

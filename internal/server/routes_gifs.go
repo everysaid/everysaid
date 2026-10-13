@@ -46,6 +46,20 @@ func (s *Server) gifRoutes() {
 		return M{"items": found, "next": next}, nil
 	})
 
+	// a GIF found was sent: the searcher told, where it asks to be (it does not change what went)
+	h("POST /api/gifs/{instance}/{id}/sent", bodyNone, func(q *req) (any, error) {
+		g, c, err := s.gifSearcher(q)
+		if err != nil {
+			return nil, err
+		}
+		if sh, ok := g.(plugins.GIFSharer); ok {
+			if err := sh.SentGIF(q.r.Context(), c, q.r.PathValue("id")); err != nil {
+				s.log.Warn("a GIF's sending not told", "instance", c.ID, "error", err)
+			}
+		}
+		return M{"ok": true}, nil
+	})
+
 	h("GET /api/gifs/{instance}/{id}", bodyNone, func(q *req) (any, error) {
 		g, c, err := s.gifSearcher(q)
 		if err != nil {
