@@ -205,6 +205,19 @@ test("messages sent one after another: one bubble each", async ({ page }, info) 
   }
   await expect(page.locator("[data-pending-item]")).toHaveCount(0);
   expect(await counts()).toEqual([1, 1, 1]);
+
+  // one slow to go says it is being sent all the while, never that it waits
+  const slow = `quiet: late: ${info.project.name} ${Date.now()}`;
+  await field.fill(slow);
+  await page.locator("[data-send]").click();
+  const going = page.locator("[data-pending-item]").filter({ hasText: slow });
+  await expect(going.locator("[data-sending]")).toBeVisible();
+  for (const end = Date.now() + 1000; Date.now() < end;) {
+    expect(await going.getAttribute("data-pending-item", { timeout: 100 }).catch(() => "") ?? "").not.toMatch(/waiting|queued/);
+    await page.waitForTimeout(50);
+  }
+  await expect(page.locator("[data-pending-item]")).toHaveCount(0);
+  await expect(stream.filter({ hasText: slow })).toHaveCount(1);
 });
 
 // In a group, a sender's name opens their own chat (to write to them alone).
