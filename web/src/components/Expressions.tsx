@@ -6,7 +6,6 @@ import { toast } from "sonner";
 import { EmojiPicker } from "@/components/EmojiPicker";
 import { MoreOnScroll, Segmented, Spinner } from "@/components/ui";
 import { api, qs } from "@/lib/api";
-import { useDebounced } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 
 // What goes into a message besides words, behind one button, a tab each: the emoji first, then the
@@ -75,7 +74,7 @@ export function Expressions({ onEmoji, onGif, gifs }: { onEmoji: (emoji: string)
 }
 
 /** What "@gif <words>" finds, above the text being written: the first plugin that can, the others a tap away. */
-export function GifResults({ query, onPick }: { query: string; onPick: (file: File) => void }) {
+export function GifResults({ query, go, onPick }: { query: string; go: number; onPick: (file: File) => void }) {
   const { t } = useTranslation();
   const searchers = useQuery(searchersQuery);
   const able = (searchers.data?.items ?? []).filter((s) => !s.why && !s.history);
@@ -90,15 +89,27 @@ export function GifResults({ query, onPick }: { query: string; onPick: (file: Fi
       )}
       {searchers.isPending ? <div className="grid flex-1 place-items-center"><Spinner /></div>
         : !searcher ? <div className="grid flex-1 place-items-center px-6 text-center text-sm text-muted">{t("gif.noSearcher")}</div>
-        : <div className="flex min-h-0 flex-1 flex-col pt-2"><SearchGrid key={searcher.instance} instance={searcher.instance} pick={pick} busy={busy} query={query} /></div>}
+        : <div className="flex min-h-0 flex-1 flex-col pt-2"><SearchGrid key={searcher.instance} instance={searcher.instance} pick={pick} busy={busy} query={query} go={go} /></div>}
     </div>
   );
 }
 
-function SearchGrid({ instance, pick, busy, query }: { instance: number; pick: (url: string) => void; busy: string | null; query?: string }) {
+// the words are asked for a second after the last typed, or at once with Enter (go: the composer's
+// Enter, for "@gif"): a plugin may count each search (Klipy's limit an hour)
+const ASK_AFTER = 1000;
+
+function SearchGrid({ instance, pick, busy, query, go }: {
+  instance: number; pick: (url: string) => void; busy: string | null; query?: string; go?: number;
+}) {
   const { t } = useTranslation();
   const [q, setQ] = useState("");
-  const dq = useDebounced((query ?? q).trim(), 400);
+  const words = (query ?? q).trim();
+  const [dq, setAsked] = useState(words);
+  useEffect(() => {
+    const timer = setTimeout(() => setAsked(words), ASK_AFTER);
+    return () => clearTimeout(timer);
+  }, [words]);
+  useEffect(() => { if (go) setAsked(words); }, [go]); // eslint-disable-line react-hooks/exhaustive-deps
   const res = useInfiniteQuery({
     queryKey: ["gif-search", instance, dq],
     initialPageParam: "",
@@ -110,7 +121,10 @@ function SearchGrid({ instance, pick, busy, query }: { instance: number; pick: (
     <>
       {query === undefined && (
         <input data-gif-search value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("gif.search")} autoFocus
-          onKeyDown={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Enter" && !e.nativeEvent.isComposing) setAsked(words);
+          }}
           className="mx-2 mb-2 h-8 rounded-lg border border-line bg-panel-2 px-2 text-sm outline-none focus:border-accent" />
       )}
       <Grid loading={res.isPending} error={res.error?.message} empty={t("gif.none")} more={!!res.hasNextPage}
