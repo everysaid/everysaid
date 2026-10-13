@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { Check, CheckCheck, Copy, CornerUpLeft, EllipsisVertical, FileText, Forward, ImageOff, Link2, MapPin, Pencil, Phone, Pin, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Plus, Trash2, Video } from "lucide-react";
+import { Check, CheckCheck, Clock, Copy, CornerUpLeft, EllipsisVertical, FileText, Forward, ImageOff, Link2, MapPin, Pencil, Phone, Pin, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Plus, RotateCw, Trash2, Video, X } from "lucide-react";
 import { thumbUrl, type Attachment, type LinkPreview, type Local, type CallItem, type Mention, type MessageItem, type Receipts } from "@/lib/api";
 import { bytes, duration, time } from "@/lib/format";
 import { service } from "@/lib/services";
@@ -258,6 +258,8 @@ export interface BubbleProps {
   react?: { quick: string[]; all: string[] | null; free: boolean; on: (m: MessageItem, emoji: string) => void };
   onEdit?: (m: MessageItem) => void;
   onDelete?: (m: MessageItem) => void;
+  // one waiting to be sent (or refused): why, said under it, and to send it again or let it go
+  waiting?: { why: string | null; again: () => void; discard: () => void };
 }
 
 /** The actions of a message: its service's quick reactions, any other it takes, copy, edit,
@@ -377,7 +379,7 @@ function useMeasured(id: number) {
   return ref;
 }
 
-export const Bubble = memo(function Bubble({ m, group, first, last, above, below, showService, account, highlight, onOpen, onJump, onReply, onInfo, react, onEdit, onDelete }: BubbleProps) {
+export const Bubble = memo(function Bubble({ m, group, first, last, above, below, showService, account, highlight, onOpen, onJump, onReply, onInfo, react, onEdit, onDelete, waiting }: BubbleProps) {
   const { t } = useTranslation();
   const [menu, setMenu] = useState(false);
   const [menuAt, setMenuAt] = useState<{ x: number; y: number; link?: string } | null>(null);     // a right click's: where, in the bubble, and on which link
@@ -435,7 +437,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
   const tightBottom = width > 0 && widthBelow > 0 && widthBelow >= width - REACH;
   const label = m.kind !== "text" && !m.attachments.length && !local && !m.text && !m.location ? t(`kind.${m.kind}`, { defaultValue: m.kind }) : null;
   return (
-    <div id={`m${m.id}`} className={cn("group/msg flex gap-2 px-3 md:px-6", out ? "justify-end" : "justify-start", first ? "mt-2" : "mt-0.5")}>
+    <div id={`m${m.id}`} data-pending-item={m.outbox ? m.status ?? undefined : undefined} className={cn("group/msg flex gap-2 px-3 md:px-6", out ? "justify-end" : "justify-start", first ? "mt-2" : "mt-0.5")}>
       {group && !out && (
         <div className="w-8 shrink-0 self-end">{last && <Avatar name={m.sender || "?"} size={32} />}</div>
       )}
@@ -538,8 +540,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
             {showService && <span className="flex items-center gap-1"><span className="size-1.5 rounded-full" style={{ background: svc.color }} />{svc.name}{account && ` · ${account}`} ·</span>}
             {m.pinned && <Pin className="size-3" aria-label={t("chat.pinned")} />}
             {m.edited && <span>{t("chat.edited")} ·</span>}
-            {m.status === "sending" && !onlyMedia && <span><Sending /> ·</span>}
-            {m.status === "failed" && !onlyMedia && <span className="text-danger">{t("chat.sendFailed")} ·</span>}
+            {!onlyMedia && <SendState status={m.status} />}
             <span title={account ? `${svc.name} · ${account}` : svc.name}>{time(m.ts)}</span>
             {out && m.receipts && <Ticks r={m.receipts} onInfo={onInfo && (() => onInfo(m))} />}
           </div>
@@ -563,16 +564,36 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
             })}
           </div>
         )}
-        {onlyMedia && (m.status === "sending" || m.status === "failed") && (
+        {onlyMedia && m.status && ["sending", "queued", "waiting", "failed"].includes(m.status) && (
           // a picture alone: what becomes of it said under it (on it, beside the time, there is no room)
-          <div data-status className={cn("mt-0.5 rounded-full bg-panel/90 px-1.5 py-1 text-[11px] leading-none shadow-sm", m.status === "failed" ? "text-danger" : "text-muted")}>
-            {m.status === "sending" ? <Sending /> : t("chat.sendFailed")}
+          <div data-status className="mt-0.5 flex rounded-full bg-panel/90 px-1.5 py-1 text-[11px] leading-none text-muted shadow-sm">
+            <SendState status={m.status} />
+          </div>
+        )}
+        {waiting && (
+          <div className={cn("mt-1 flex flex-wrap items-center justify-end gap-x-2 gap-y-1 text-xs", m.status === "failed" ? "text-danger" : "text-muted")}>
+            {waiting.why && <span>{waiting.why}</span>}
+            <button data-resend onClick={waiting.again} className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 font-medium text-accent hover:bg-panel-2">
+              <RotateCw className="size-3.5" />{t("chat.resend")}
+            </button>
+            <button data-discard onClick={waiting.discard} className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-muted hover:bg-panel-2 hover:text-fg">
+              <X className="size-3.5" />{t("chat.discard")}
+            </button>
           </div>
         )}
       </div>
     </div>
   );
 });
+
+// What became of a message sent from here, beside its time: being sent, waiting, or not sent.
+function SendState({ status }: { status: string | null }) {
+  const { t } = useTranslation();
+  if (status === "sending") return <span><Sending /> ·</span>;
+  if (status === "queued" || status === "waiting") return <span className="flex items-center gap-1"><Clock className="size-3" />{t("chat.queued")} ·</span>;
+  if (status === "failed") return <span className="text-danger">{t("chat.sendFailed")} ·</span>;
+  return null;
+}
 
 function groupReactions(m: MessageItem) {
   const out = new Map<string, { key: string; emoji: string; count: number; mine: boolean; who: string }>();

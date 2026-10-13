@@ -528,14 +528,15 @@ func TestOutbox(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 
-	// one written while another is being sent waits for it and goes after it, not kept apart
+	// one written while another is being sent goes at once, not kept behind it
 	first := make(chan resp, 1)
 	go func() { first <- send("s", "slow: first") }()
 	time.Sleep(150 * time.Millisecond)
 	r = send("t", "write: second")
-	f := <-first
-	must(t, f.status == 200 && r.status == 200 && len(kept()) == 0, "behind one being sent: %d %d %s %v", f.status, r.status, r.body, kept())
+	must(t, r.status == 200 && len(first) == 0, "beside one being sent: %d %s", r.status, r.body)
 	must(t, next(t).text == "write: second", "sent")
+	f := <-first
+	must(t, f.status == 200 && len(kept()) == 0, "the first: %d %v", f.status, kept())
 
 	busy.Store(true)
 	r = send("b", "write: later")

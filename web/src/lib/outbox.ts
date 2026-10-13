@@ -4,6 +4,7 @@
 // user's word; one the server refused stays, with its reason, to be sent again or discarded.
 // Once the server has a message it keeps it itself, if it cannot go yet (GET /api/chats/{id}/outbox).
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { api, ApiError } from "./api";
 
 export interface Unsent {
@@ -48,7 +49,26 @@ async function tx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBReq
 const listeners = new Set<() => void>();
 const changed = () => listeners.forEach((f) => f());
 
-// those being sent from the chat now (shown there as they are sent, not here)
+/** One the server keeps, to send when it can (GET /api/chats/{id}/outbox). */
+export interface Kept {
+  id: string;
+  text: string;
+  service: string;
+  file_name: string;
+  file_type?: string;
+  created_at: number;
+  state: "queued" | "sending" | "failed";
+  error: { code?: string; text?: string; params?: Record<string, unknown> } | null;
+}
+
+/** What the server keeps of a chat to send, asked again every 5 s while something is on its way: not
+ *  only when the server's events say so (they may not come, on a connection that died without saying). */
+export function useKept(chatId: string) {
+  return useQuery({ queryKey: ["outbox", chatId], queryFn: () => api.get<{ items: Kept[] }>(`/api/chats/${chatId}/outbox`),
+    refetchInterval: (q) => (q.state.data?.items.some((k) => k.state !== "failed") ? 5000 : false) });
+}
+
+// those being sent from the chat now (not sent again from here meanwhile)
 const inFlight = new Set<string>();
 export const isFlying = (id: string) => inFlight.has(id);
 export function flying(id: string, on: boolean) {
@@ -76,7 +96,7 @@ export function useUnsent(chatId: string): Unsent[] {
   const [list, setList] = useState<Unsent[]>([]);
   useEffect(() => {
     let live = true;
-    const load = () => allUnsent().then((all) => { if (live) setList(all.filter((u) => u.chatId === chatId && !inFlight.has(u.id))); }).catch(() => {});
+    const load = () => allUnsent().then((all) => { if (live) setList(all.filter((u) => u.chatId === chatId)); }).catch(() => {});
     load();
     listeners.add(load);
     return () => { live = false; listeners.delete(load); };

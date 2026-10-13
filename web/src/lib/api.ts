@@ -327,6 +327,7 @@ export interface MessageItem {
   highlight?: [string, boolean][];
   loose?: boolean;          // a message being sent whose text the service may write otherwise (mentions, a file)
   local?: Local;            // the picture or video this device sent, shown until the server has its own
+  outbox?: string;          // a message waiting to be sent: its id in the outbox (status: sending, waiting, queued, failed)
   notice?: Notice | null;   // what a notice (or the message's context) says, for noticeLines
 }
 

@@ -25,8 +25,7 @@ import { DateField } from "@/components/DateField";
 import { keepRecent, recentEmoji } from "@/components/EmojiPicker";
 import { Expressions, GifResults, type ResultsKeys } from "@/components/Expressions";
 import { byCode, emoticonAt, ENDS, findEmoji, shortcodes } from "@/lib/emoji";
-import { Pending } from "@/components/Pending";
-import { dropUnsent, flying, keepUnsent, sendUnsent, unreached, type Unsent, type Went } from "@/lib/outbox";
+import { dropUnsent, flushUnsent, flying, isFlying, keepUnsent, sendUnsent, unreached, useKept, useUnsent, type Kept, type Unsent, type Went } from "@/lib/outbox";
 import { avatarUrl } from "@/components/ChatList";
 import { isFileLink, pastedFile } from "@/lib/clip";
 
@@ -62,6 +61,16 @@ function withoutSent(items: StreamItem[], real: StreamItem[], since = Infinity, 
   return gone.size ? items.filter((i) => !(i.type === "message" && gone.has(i.id))) : items;
 }
 
+/** The bubble of a message waiting to be sent, from before (kept by the server or on this device). */
+function waitingBubble(outbox: string, ts: number, text: string, svc: string, status: string, type: string | undefined, url: string | null): MessageItem {
+  const id = -ts - Math.random();
+  const kind = !type ? "text" : type.startsWith("image/") ? "image" : type.startsWith("video/") ? "video" : "file";
+  return { type: "message", id, ts, cursor: `tmp:${id}`, service: svc, conversation_id: 0, outgoing: true, kind, subtype: null, text,
+    sender_id: null, sender: null, reply_to: null, reply_text: null, edited: false, deleted: false, forwarded: false, starred: false,
+    status, location: null, reactions: [], attachments: [], loose: !!type, outbox,
+    local: url && type ? { url, video: type.startsWith("video/") } : undefined };
+}
+
 /** The message with this device's picture or video of it, while the server has none of its own. */
 function withLocal(i: StreamItem, local: Local | undefined): StreamItem {
   if (!local || i.type !== "message" || i.attachments.some((a) => a.mime?.startsWith("image/") || a.mime?.startsWith("video/"))) return i;
@@ -72,11 +81,6 @@ export function ChatPage() {
   const { chatId } = chatRoute.useParams();
   const { m, ts, hide } = chatRoute.useSearch();
   return <ChatView key={`${chatId}:${m ?? ""}:${ts ?? ""}:${hide ?? ""}`} chatId={chatId} jumpTo={m} around={ts} hide={hide} />;
-}
-
-// what waits to be sent, after the latest messages (not while newer ones are still to load)
-function PendingFooter({ context }: { context?: { chatId: string; hasNewer: boolean } }) {
-  return context && !context.hasNewer ? <Pending chatId={context.chatId} /> : null;
 }
 
 function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: number; around?: number; hide?: string }) {
@@ -334,6 +338,74 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
     }
   }, [chatId, hasNewer]);
 
+  // What waits to be sent is a bubble of the chat, the one it had when written here (or one made for
+  // it, kept by the server or on this device from before): what it says follows what becomes of it,
+  // and it goes once the message itself is here, never shown twice.
+  const kept = useKept(chatId);
+  const unsentHere = useUnsent(chatId);
+  const placed = useRef(new Set<string>());      // the outbox ids given a bubble here (gone ones too: not again)
+  const settling = useRef(new Set<string>());    // sent, their messages awaited
+  const dropPlaced = useCallback((outbox: string) =>
+    setItems((prev) => prev.filter((i) => !(i.type === "message" && i.outbox === outbox))), []);
+  useEffect(() => {
+    if (!ready) return;
+    const keptOf = new Map((kept.data?.items ?? []).map((k) => [k.id, k]));
+    const localOf = new Map(unsentHere.map((u) => [u.id, u]));
+    const stateOf = (id: string) => keptOf.get(id)?.state ?? localOf.get(id)?.state;
+    const made: MessageItem[] = [];
+    if (!hasNewer) {          // at the end of the chat only (where they go)
+      for (const k of keptOf.values()) if (!placed.current.has(k.id)) made.push(waitingBubble(k.id, k.created_at, k.text, k.service, k.state,
+        k.file_type, k.file_type ? `/api/outbox/${k.id}/file` : null));
+      for (const u of localOf.values()) if (!placed.current.has(u.id) && !keptOf.has(u.id)) {
+        let url: string | null = null;
+        if (u.file && (u.file.type.startsWith("image/") || u.file.type.startsWith("video/"))) {
+          url = URL.createObjectURL(u.file);
+          localUrls.current.push(url);
+        }
+        made.push(waitingBubble(u.id, u.createdAt, u.text, u.service ?? "", u.state, u.file?.type, url));
+      }
+    }
+    made.forEach((m) => placed.current.add(m.outbox!));
+    const sent: string[] = [];
+    setItems((prev) => {
+      let changed = made.length > 0;
+      const next = prev.map((i) => {
+        if (i.type !== "message" || !i.outbox) return i;
+        const st = stateOf(i.outbox);
+        if (!st && !isFlying(i.outbox)) sent.push(i.outbox);
+        if (!st || st === i.status) return i;
+        changed = true;
+        return { ...i, status: st };
+      });
+      return changed ? inOrder([...next, ...made]) : prev;
+    });
+    // gone from both and not on its way from here: it went; its bubble stays until its message comes
+    // (taking its place), at most a while
+    for (const o of sent) {
+      if (settling.current.has(o)) continue;
+      settling.current.add(o);
+      loadNewer(true);
+      setTimeout(() => dropPlaced(o), 10_000);
+    }
+  }, [kept.data, unsentHere, ready, hasNewer]); // eslint-disable-line react-hooks/exhaustive-deps
+  // what a waiting bubble says under it, and what can be done with it
+  const said = (e: Kept["error"]) => !e ? null : e.text ?? t(`errors.${e.code}`, { ...e.params, defaultValue: e.code });
+  const refreshKept = () => qc.invalidateQueries({ queryKey: ["outbox", chatId] });
+  const failKept = (e: unknown) => toast.error((e as Error).message);
+  const waitingOf = (m: MessageItem) => {
+    if (!m.outbox || m.status === "sending") return undefined;
+    const o = m.outbox;
+    const k = kept.data?.items.find((x) => x.id === o);
+    if (k) return { why: said(k.error) ?? (k.state === "queued" ? t("chat.waitingService") : null),
+      again: () => { api.post(`/api/outbox/${o}/retry`).then(refreshKept, failKept); },
+      discard: () => { api.del(`/api/outbox/${o}`).then(() => { dropPlaced(o); refreshKept(); }, failKept); } };
+    const u = unsentHere.find((x) => x.id === o);
+    if (u) return { why: u.error ?? (u.state === "waiting" ? t("chat.waitingServer") : null),
+      again: () => { flushUnsent(o).then(refreshKept); },
+      discard: () => { dropUnsent(o).then(() => dropPlaced(o)); } };
+    return undefined;
+  };
+
   // after the user sends: to the end, wherever they were (the latest page first, if it is not loaded)
   const toEnd = useRef(false);
   // to the scroller's very end, and again once the new rows are measured
@@ -363,39 +435,41 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       local = { url: URL.createObjectURL(file), video: kind === "video" };
       localUrls.current.push(local.url);
     }
+    // kept on this device until the server has it: if it cannot be reached, it waits there
+    const unsent: Unsent = { id: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`, chatId, text: body,
+      service: answered ? answered.service : service, conversationId: answered ? null : conversationId, replyTo: answered?.id ?? null,
+      mentions: mentions.map((m) => ({ start: m.start, length: m.length, address_id: m.address_id })),
+      file, fileName: file?.name ?? null, animated, createdAt: Date.now(), state: "waiting", error: null };
+    placed.current.add(unsent.id);
+    flying(unsent.id, true);
     toEnd.current = true;
     setItems((prev) => [...prev, {
       type: "message", id, ts: Date.now(), cursor: `tmp:${id}`, service: service ?? "", conversation_id: 0, outgoing: true,
       kind, subtype: animated ? "gif" : null, text: body, sender_id: null, sender: null, reply_to: null, reply_text: null, edited: false,
       deleted: false, forwarded: false, starred: false, status: "sending", location: null, reactions: [], attachments: [],
-      loose: mentions.length > 0 || !!file, local,
+      loose: mentions.length > 0 || !!file, local, outbox: unsent.id,
       reply: answered ? { id: answered.id, text: answered.text ?? "", outgoing: answered.outgoing, sender: answered.sender, kind: answered.kind } : undefined,
     }]);
-    // kept on this device until the server has it: if it cannot be reached, it waits there (Pending)
-    const unsent: Unsent = { id: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`, chatId, text: body,
-      service: answered ? answered.service : service, conversationId: answered ? null : conversationId, replyTo: answered?.id ?? null,
-      mentions: mentions.map((m) => ({ start: m.start, length: m.length, address_id: m.address_id })),
-      file, fileName: file?.name ?? null, animated, createdAt: Date.now(), state: "waiting", error: null };
-    const gone = () => setItems((prev) => prev.filter((i) => !(i.type === "message" && i.id === id)));
-    flying(unsent.id, true);
     try {
       await keepUnsent(unsent).catch(() => {});      // no IndexedDB (a private window): sent all the same
       let went: Went;
       try {
         went = await sendUnsent(unsent);
       } catch (e) {
-        gone();
+        // the same bubble says it waits here, or that it was refused (to be sent again or discarded)
         if (unreached(e)) {
+          mark("waiting");
           toast(t("chat.waitingServerHint"));
         } else {
           await keepUnsent({ ...unsent, state: "failed", error: (e as Error).message }).catch(() => {});
+          mark("failed");
           toast.error(`${t("chat.sendFailed")}: ${(e as Error).message}`);
         }
         return;
       }
       await dropUnsent(unsent.id).catch(() => {});
-      if (went.queued) {                                 // the server keeps it, and sends it when it can
-        gone();
+      if (went.queued) {                                 // the server keeps it, and sends it when it can: the same bubble says so
+        mark("queued");
         qc.invalidateQueries({ queryKey: ["outbox", chatId] });
         return;
       }
@@ -660,7 +734,8 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
         onInfo={item.outgoing && item.receipts ? setInfoOf : undefined}
         react={reactWith}
         onEdit={own && item.text && within(editable?.[svc]) ? startEdit : undefined}
-        onDelete={own && within(deletable?.[svc]) ? setDeleting : undefined} />;
+        onDelete={own && within(deletable?.[svc]) ? setDeleting : undefined}
+        waiting={waitingOf(item)} />;
     }
     const unread = item.cursor === newFrom ? (
       <div data-new-from className="my-2 flex items-center gap-3 px-4 text-xs font-medium text-accent">
@@ -668,7 +743,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       </div>
     ) : null;
     return <div data-cursor={item.cursor} data-ts={item.ts} className={cn(next ? "" : "pb-3")}>{sep}{unread}{body}</div>;
-  }, [newFrom, t, first, items, isGroup, highlight, openMedia, jump, replyable.join(), answer, detail.data, react, startEdit]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [newFrom, t, first, items, isGroup, highlight, openMedia, jump, replyable.join(), answer, detail.data, react, startEdit, kept.data, unsentHere]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (error) return <Center><div className="space-y-2"><div className="font-semibold">{t("common.error")}</div><div className="text-sm text-muted">{error}</div></div></Center>;
 
@@ -704,9 +779,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
               isScrolling={(on) => { if (!on && ready) remember(); }}
               atBottomThreshold={120}
               increaseViewportBy={{ top: 800, bottom: 400 }}
-              context={{ chatId, hasNewer }}
               components={{
-                Footer: PendingFooter,
                 Header: () => (
                   <div className="flex justify-center py-4">
                     {hasOlder ? <Spinner /> : <span className="rounded-full bg-panel/80 px-3 py-1 text-xs text-muted">{t("chat.start")}</span>}

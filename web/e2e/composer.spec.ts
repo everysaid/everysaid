@@ -109,9 +109,9 @@ test("a person found on another service, and a first message there", async ({ pa
     (await (await fetch(`/api/chats/${id}`, { headers: { "X-Everysaid": "1" } })).json()).services.includes("viber"), chat!.id)).toBe(true);
 });
 
-// What cannot go now waits after the chat's messages: the server's (a limit of pace: "busy:" is refused
-// once by the demo's source), sent again on a word; this device's, when the server cannot be reached,
-// sent once it can. Nothing is lost, nothing goes twice.
+// What cannot go now waits, its own bubble saying so: the server's (a limit of pace: "busy:" is
+// refused once by the demo's source), sent again on a word; this device's, when the server cannot be
+// reached, sent once it can. Nothing is lost, nothing goes or shows twice.
 test("a message that cannot go now waits, and goes", async ({ page }, info) => {
   await signedIn(page, info.project.name);
   const chat = await page.evaluate(async () => {
@@ -144,6 +144,7 @@ test("a message that cannot go now waits, and goes", async ({ page }, info) => {
   const kept = page.locator("[data-pending-item]").filter({ hasText: busy });
   await expect(kept).toBeVisible();
   await expect(kept).toHaveAttribute("data-pending-item", /queued|sending/);
+  await expect(stream.filter({ hasText: busy })).toHaveCount(1);
   await loaded(kept);
   await kept.locator("[data-resend]").click();
   await expect(kept).toHaveCount(0);
@@ -158,6 +159,7 @@ test("a message that cannot go now waits, and goes", async ({ page }, info) => {
   await page.locator("[data-send]").click();
   const waiting = page.locator('[data-pending-item="waiting"]').filter({ hasText: away });
   await expect(waiting).toBeVisible();
+  await expect(stream.filter({ hasText: away })).toHaveCount(1);
   await loaded(waiting);
   await page.reload();                                  // kept on the device
   await expect(waiting).toBeVisible();
@@ -167,6 +169,42 @@ test("a message that cannot go now waits, and goes", async ({ page }, info) => {
   await expect(waiting).toHaveCount(0);
   await expect(stream.filter({ hasText: away })).toHaveCount(1);
   await expect(stream.filter({ hasText: away }).locator("button img")).toBeVisible();
+});
+
+// Messages written one after another go at once, each its one bubble from being sent to sent (one
+// written while another is on its way is not kept apart).
+test("messages sent one after another: one bubble each", async ({ page }, info) => {
+  await signedIn(page, info.project.name);
+  const chat = await page.evaluate(async () => {
+    const h = { "X-Everysaid": "1" };
+    const chats = (await (await fetch("/api/chats", { headers: h })).json()).items;
+    for (const c of chats) {
+      const d = await (await fetch(`/api/chats/${c.id}`, { headers: h })).json();
+      if (c.type === "person" && d.sendable.includes("whatsapp")) return c.id as string;
+    }
+    return null;
+  });
+  test.skip(!chat, "no chat to send to");
+  await page.goto(`/chat/${chat}`);
+  const via = page.locator("[data-via]");
+  if ((await via.getAttribute("data-via")) !== "whatsapp") {
+    await via.click();
+    await page.getByRole("menuitem", { name: "WhatsApp" }).click();
+  }
+  const field = page.locator("[data-composer-body] textarea");
+  const stream = page.locator('[id^="m"]');
+  const texts = [1, 2, 3].map((n) => `quiet: quick ${n} ${info.project.name} ${Date.now()}`);
+  for (const text of texts) {
+    await field.fill(text);
+    await page.locator("[data-send]").click();
+  }
+  const counts = () => Promise.all(texts.map((x) => stream.filter({ hasText: x }).count()));
+  for (const end = Date.now() + 3000; Date.now() < end;) {
+    expect((await counts()).every((n) => n <= 1)).toBe(true);
+    await page.waitForTimeout(50);
+  }
+  await expect(page.locator("[data-pending-item]")).toHaveCount(0);
+  expect(await counts()).toEqual([1, 1, 1]);
 });
 
 // In a group, a sender's name opens their own chat (to write to them alone).
