@@ -812,11 +812,12 @@ function ChatHeader({ chat, wide, onInfo, onJumpDate, hidden, onHide }: {
               ? chat.services.map((s) => {
                   const off = hidden.includes(s);
                   const last = !off && hidden.length === chat.services.length - 1;     // one stays on
-                  return (
-                    <button key={s} data-service-toggle={s} aria-pressed={!off} disabled={last}
+                  return (                                                              // Ctrl+click: this one alone (all again where it is already)
+                    <button key={s} data-service-toggle={s} aria-pressed={!off} aria-disabled={last}
                       title={t(off ? "chat.showService" : "chat.hideService", { service: service(s).name })}
-                      onClick={() => onHide(off ? hidden.filter((x) => x !== s) : [...hidden, s])}
-                      className={cn("shrink-0 rounded-full transition disabled:cursor-default", off && "opacity-40 grayscale hover:opacity-70")}>
+                      onClick={(e) => e.ctrlKey || e.metaKey ? onHide(last ? [] : chat.services.filter((x) => x !== s))
+                        : !last && onHide(off ? hidden.filter((x) => x !== s) : [...hidden, s])}
+                      className={cn("shrink-0 rounded-full transition", last && "cursor-default", off && "opacity-40 grayscale hover:opacity-70")}>
                       <ServiceBadge id={s} className="px-1.5 py-0" compact />
                     </button>
                   );
