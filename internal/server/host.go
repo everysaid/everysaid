@@ -631,7 +631,7 @@ func (h *Host) Start(ctx context.Context) {
 	h.wg.Add(2)
 	go h.dispatch(ctx)
 	go h.runOutbox(ctx)
-	for _, row := range h.sourcesAndAnalysis() {
+	for _, row := range plugins.Instances(h.store, "") { // sources, analysis, address books
 		h.AutoLive(row.ID)
 	}
 }
