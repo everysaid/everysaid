@@ -23,6 +23,7 @@ import { ChatInfo } from "@/components/ChatInfo";
 import { MessageInfo } from "@/components/MessageInfo";
 import { DateField } from "@/components/DateField";
 import { EmojiPicker, keepRecent, recentEmoji } from "@/components/EmojiPicker";
+import { GifPicker } from "@/components/GifPicker";
 import { byCode, emoticonAt, ENDS, findEmoji, shortcodes } from "@/lib/emoji";
 import { Pending } from "@/components/Pending";
 import { dropUnsent, flying, keepUnsent, sendUnsent, unreached, type Unsent, type Went } from "@/lib/outbox";
@@ -349,7 +350,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   // one); it is replaced by itself when it arrives, or by what the answer says went, or marked as
   // not sent
   const send = useCallback(async (body: string, service: string | null, answered: MessageItem | null, mentions: Mentioned[], file: File | null,
-    conversationId: number | null) => {
+    conversationId: number | null, animated = false) => {
     if (hasNewer) navigate({ to: "/chat/$chatId", params: { chatId }, search: { hide } });
     setNewFrom(null);                                  // answered: what was new is seen
     const id = -Date.now() - Math.random();
@@ -365,7 +366,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
     toEnd.current = true;
     setItems((prev) => [...prev, {
       type: "message", id, ts: Date.now(), cursor: `tmp:${id}`, service: service ?? "", conversation_id: 0, outgoing: true,
-      kind, subtype: null, text: body, sender_id: null, sender: null, reply_to: null, reply_text: null, edited: false,
+      kind, subtype: animated ? "gif" : null, text: body, sender_id: null, sender: null, reply_to: null, reply_text: null, edited: false,
       deleted: false, forwarded: false, starred: false, status: "sending", location: null, reactions: [], attachments: [],
       loose: mentions.length > 0 || !!file, local,
       reply: answered ? { id: answered.id, text: answered.text ?? "", outgoing: answered.outgoing, sender: answered.sender, kind: answered.kind } : undefined,
@@ -374,7 +375,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
     const unsent: Unsent = { id: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`, chatId, text: body,
       service: answered ? answered.service : service, conversationId: answered ? null : conversationId, replyTo: answered?.id ?? null,
       mentions: mentions.map((m) => ({ start: m.start, length: m.length, address_id: m.address_id })),
-      file, fileName: file?.name ?? null, createdAt: Date.now(), state: "waiting", error: null };
+      file, fileName: file?.name ?? null, animated, createdAt: Date.now(), state: "waiting", error: null };
     const gone = () => setItems((prev) => prev.filter((i) => !(i.type === "message" && i.id === id)));
     flying(unsent.id, true);
     try {
@@ -907,7 +908,8 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   accounts: NonNullable<ChatDetail["accounts"]>;
   members: Member[]; missing: Record<string, string>;
   preferred?: string | null;
-  onSend: (text: string, service: string | null, replyTo: MessageItem | null, mentions: Mentioned[], file: File | null, conversationId: number | null) => void;
+  onSend: (text: string, service: string | null, replyTo: MessageItem | null, mentions: Mentioned[], file: File | null, conversationId: number | null,
+    animated?: boolean) => void;
   take: React.MutableRefObject<Taker | null>;          // set here: where a dropped or pasted file goes
   replyTo: MessageItem | null; onCancelReply: () => void;
   editing: MessageItem | null; onEdit: (m: MessageItem, text: string) => void; onCancelEdit: () => void;
@@ -1031,6 +1033,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   useEffect(() => setPick(0), [asked?.query, coded?.query]);
   // an emoji where the caret is (or in place of what is selected); the picker stays open for more
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [gifOpen, setGifOpen] = useState(false);
   const insert = (e: string) => {
     const el = ref.current;
     const from = el?.selectionStart ?? text.length, to = el?.selectionEnd ?? text.length;
@@ -1322,6 +1325,26 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
                 <Popover.Content align="end" side="top" sideOffset={8} onCloseAutoFocus={(e) => { e.preventDefault(); ref.current?.focus(); }}
                   className="z-50 overflow-hidden rounded-2xl border border-line bg-panel shadow-xl">
                   <EmojiPicker onPick={insert} />
+                </Popover.Content>
+              </Popover.Portal>
+            </Popover.Root>
+          )}
+          {canFile && !editing && (
+            <Popover.Root open={gifOpen} onOpenChange={setGifOpen}>
+              <Popover.Trigger asChild>
+                <button data-gif aria-label={t("gif.choose")} title={t("gif.choose")}
+                  className="mb-1 grid h-9 shrink-0 place-items-center rounded-full px-1.5 text-xs font-bold text-muted hover:bg-panel hover:text-fg data-[state=open]:bg-panel">
+                  {t("gif.choose")}
+                </button>
+              </Popover.Trigger>
+              <Popover.Portal>
+                <Popover.Content align="end" side="top" sideOffset={8} onCloseAutoFocus={(e) => { e.preventDefault(); ref.current?.focus(); }}
+                  className="z-50 overflow-hidden rounded-2xl border border-line bg-panel shadow-xl">
+                  <GifPicker onPick={(gif) => {
+                    setGifOpen(false);
+                    onSend("", svc, replyTo, [], gif, account?.conversation_id ?? null, true);
+                    onCancelReply();
+                  }} />
                 </Popover.Content>
               </Popover.Portal>
             </Popover.Root>
