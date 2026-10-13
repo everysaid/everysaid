@@ -538,8 +538,8 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
             {showService && <span className="flex items-center gap-1"><span className="size-1.5 rounded-full" style={{ background: svc.color }} />{svc.name}{account && ` · ${account}`} ·</span>}
             {m.pinned && <Pin className="size-3" aria-label={t("chat.pinned")} />}
             {m.edited && <span>{t("chat.edited")} ·</span>}
-            {m.status === "sending" && <span><Sending /> ·</span>}
-            {m.status === "failed" && <span className="text-danger">{t("chat.sendFailed")} ·</span>}
+            {m.status === "sending" && !onlyMedia && <span><Sending /> ·</span>}
+            {m.status === "failed" && !onlyMedia && <span className="text-danger">{t("chat.sendFailed")} ·</span>}
             <span title={account ? `${svc.name} · ${account}` : svc.name}>{time(m.ts)}</span>
             {out && m.receipts && <Ticks r={m.receipts} onInfo={onInfo && (() => onInfo(m))} />}
           </div>
@@ -561,6 +561,12 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
                 <span key={r.key} title={r.who} data-reaction className={cls}>{body}</span>
               );
             })}
+          </div>
+        )}
+        {onlyMedia && (m.status === "sending" || m.status === "failed") && (
+          // a picture alone: what becomes of it said under it (on it, beside the time, there is no room)
+          <div data-status className={cn("mt-0.5 rounded-full bg-panel/90 px-1.5 py-1 text-[11px] leading-none shadow-sm", m.status === "failed" ? "text-danger" : "text-muted")}>
+            {m.status === "sending" ? <Sending /> : t("chat.sendFailed")}
           </div>
         )}
       </div>
