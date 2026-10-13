@@ -5,6 +5,7 @@ package i18n
 func init() {
 	for k, v := range map[string]string{
 		"contacts changed: {n}, gone: {gone}, addresses found in the archive: {linked}": "επαφές που άλλαξαν: {n}, που αφαιρέθηκαν: {gone}, διευθύνσεις που βρέθηκαν στο αρχείο: {linked}",
+		"people merged as one contact lists them: {n}":                                  "πρόσωπα που ενώθηκαν γιατί μία επαφή τα περιέχει: {n}",
 		"Backup":                            "Backup",
 		"UDID":                              "UDID",
 		"SMS, iMessage":                     "SMS, iMessage",

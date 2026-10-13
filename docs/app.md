@@ -122,7 +122,10 @@ live connection. Each instance shows whether it is ready, what it needs, and its
   Signal, the carriers' missed-call notices, Adium and Pidgin logs.
 - **Photo libraries:** a folder, or immich.
 - **Names and photos:** a CardDAV address book (kept up to date on its own: at the server's start,
-  then every 15 minutes, only what changed; its live switch turns that off), or a .vcf file.
+  then every 15 minutes, only what changed; its live switch turns that off), or a .vcf file. A
+  contact that lists handles of several people merges them (not the user, nor people turned down
+  as not the same or split apart); one deleted from the address book is kept, and still names its
+  person.
 - **Local analysis:** Ollama.
 
 The live services: Telegram and WhatsApp run inside `everysaid serve` (WhatsApp as a device linked

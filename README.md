@@ -431,7 +431,8 @@ Schema (`internal/archive`):
   final sigma as sigma), so `καλημερα` finds `Καλημέρα`; written by the archive as it adds a message.
 - The app's tables: `plugin_instance` (every source, library and address book in use, with its
   settings and state; `source.instance_id`, `library_link.instance_id` point to it), `contact` and
-  `contact_address` (an address book's people, joined to the addresses they list), `handle_name`
+  `contact_address` (an address book's people, joined to the addresses they list; one deleted from
+  the address book is kept, in `contact_gone`, its name still its person's), `handle_name`
   (every name a service has shown for a handle, of a kind, with when it was seen), `state_report`
   (what each source says about a chat: hidden, muted, pinned, read up to) and `chat_state` (what the
   user chose), `setting` (the user's, shared by every device), `media_decision` (keep, remove, to the

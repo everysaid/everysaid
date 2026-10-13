@@ -155,9 +155,12 @@ changes in place).
   `call_origin`) but the Adium and Pidgin logs', which have no ids.
 - **People**: `address` (one handle), `person`, `person_address` (`auto`, or `manual` when the
   user merged), `account` (the user's own handles), `handle_name` (every name a service showed for a
-  handle). Suggested merges are shown to the user, never applied by themselves; the same phone
-  number on two services is one address, so one person. Contacts from an address book (`contact`,
-  `contact_address`) are linked by `contact_uid`/`contact_url`; the services' photos of handles and groups are kept with their history (`handle_photo`, `chat_photo`), and a person's photo is chosen as their name is (the order of names, or the user's pin `photo_source`), an address book's at the place of `contacts`, a service's at that of `<service>/profile`;
+  handle). Suggested merges are shown to the user, never applied by themselves, but for one
+  contact of an address book that lists handles of several people: the user's own word, merged at
+  each sync of the address book (not into the user, nor people the user turned down or split
+  apart); the same phone number on two services is one address, so one person. Contacts from an
+  address book (`contact`, `contact_address`; one deleted there is kept in `contact_gone`, its name
+  and photo still its person's where no contact still there lists the number) are linked by `contact_uid`/`contact_url`; the services' photos of handles and groups are kept with their history (`handle_photo`, `chat_photo`), and a person's photo is chosen as their name is (the order of names, or the user's pin `photo_source`), an address book's at the place of `contacts`, a service's at that of `<service>/profile`;
   else initials. Viber member ids are kept in `viber_member`.
 - **Media**: `media` (by content), `attachment`, `library_link` (pointing to a library instance),
   `media_same` (a copy linked to the kept one), `media_decision` (5).
@@ -310,8 +313,8 @@ UI (planned); on an iPhone that is not possible at all, and the backup stays.
 - **Names**: the plugins weigh them, the user orders them (Settings → Names, which can go back to
   the weights) or pins one source or handle for a person; every name seen is kept, with when ("also
   known as"). Self-chosen names are marked (~) in groups.
-- **Merge suggestions**: names shared across people (a contact listing both, the same name in a
-  service's address book copy, the same rare name, or names that sound the same whatever the
+- **Merge suggestions**: names shared across people (a contact listing both, where it was kept
+  apart: one of them the user, or two the user turned down; the same name in a service's address book copy, the same rare name, or names that sound the same whatever the
   accents, word order or alphabet), never applied by themselves: the user sees them side by side
   with a little of each one's history and ticks who is one, one suggestion at a time or all of them
   on a page of their own (ticked, but for names that only sound alike; applied together). Who is

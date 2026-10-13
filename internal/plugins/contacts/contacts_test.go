@@ -2,6 +2,7 @@ package contacts
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -147,20 +148,70 @@ func TestVcardFileSync(t *testing.T) {
 	if b, err := os.ReadFile(filepath.Join(Avatars(), photo)); err != nil || string(b) != "picture" {
 		t.Fatal(err, string(b))
 	}
-	if !strings.Contains(strings.Join(c.LastLines(1), ""), "contacts: 2, addresses found in the archive: 2") {
-		t.Fatal(c.LastLines(1))
+	if lines := strings.Join(c.LastLines(2), "\n"); !strings.Contains(lines, "contacts: 2, addresses found in the archive: 2") ||
+		!strings.Contains(lines, "people merged as one contact lists them: 1") {
+		t.Fatal(lines)
 	}
-	// a card gone from the file goes from the archive, with its addresses; the other keeps its id
+	// the card lists the number and the email, each a person of its own until now: one person
+	people := func() int64 {
+		return db.Int(s.Read(), "SELECT count(DISTINCT person_id) FROM person_address pa JOIN address a ON a.id = pa.address_id "+
+			"WHERE a.value IN ('+306940000001', 'katerina@example.com')")
+	}
+	if n := people(); n != 1 {
+		t.Fatal(n, "people")
+	}
+	// a card gone from the file is kept, marked gone, with its addresses; the other is still there
 	id := db.Int(s.Read(), "SELECT id FROM contact WHERE uid = 'bf486a06bef67373b278d12a9e765f0c993ee175'")
+	x := db.Int(s.Read(), "SELECT id FROM contact WHERE uid = 'x'")
 	os.WriteFile(vcf, []byte(card30), 0o600)
 	if err := (VcardFile{}).RunImport(c); err != nil {
 		t.Fatal(err)
 	}
-	if ids := db.Ints(s.Read(), "SELECT id FROM contact"); !reflect.DeepEqual(ids, []int64{id}) {
+	if ids := db.Ints(s.Read(), "SELECT id FROM contact ORDER BY id"); !reflect.DeepEqual(ids, []int64{id, x}) {
 		t.Fatalf("%v", ids)
+	}
+	if ids := db.Ints(s.Read(), "SELECT contact_id FROM contact_gone"); !reflect.DeepEqual(ids, []int64{x}) {
+		t.Fatalf("%v gone", ids)
 	}
 	if n := db.Int(s.Read(), "SELECT count(*) FROM contact_address"); n != 2 {
 		t.Fatal(n)
+	}
+	// split by the user: not merged again by the card
+	email := db.Int(s.Read(), "SELECT id FROM address WHERE value = 'katerina@example.com'")
+	if _, err := core.SplitAddress(s, email); err != nil {
+		t.Fatal(err)
+	}
+	if err := (VcardFile{}).RunImport(c); err != nil {
+		t.Fatal(err)
+	}
+	if n := people(); n != 2 {
+		t.Fatal(n, "people after the split")
+	}
+	// back in the file: no longer gone
+	os.WriteFile(vcf, []byte(card30+"BEGIN:VCARD\nFN:Nobody\nUID:x\nTEL:+1 555 0100\nEND:VCARD\n"), 0o600)
+	if err := (VcardFile{}).RunImport(c); err != nil {
+		t.Fatal(err)
+	}
+	if n := db.Int(s.Read(), "SELECT count(*) FROM contact_gone"); n != 0 {
+		t.Fatal(n, "gone")
+	}
+}
+
+// One contact listing the user's own number and another's (their home's) leaves them apart: the
+// user is never merged into someone.
+func TestNotMergedIntoTheUser(t *testing.T) {
+	vcf := filepath.Join(t.TempDir(), "all.vcf")
+	os.WriteFile(vcf, []byte(card30), 0o600)
+	s, c := archiveWith(t, "vcard-file", M{"path": vcf})
+	s.Write(func(tx *sql.Tx) error {
+		db.Exec(tx, "INSERT INTO account (address_id) SELECT id FROM address WHERE value = '+306940000001'")
+		return nil
+	})
+	if err := (VcardFile{}).Sync(c); err != nil {
+		t.Fatal(err)
+	}
+	if n := db.Int(s.Read(), "SELECT count(DISTINCT person_id) FROM person_address"); n != 2 {
+		t.Fatal(n, "people")
 	}
 }
 
@@ -372,7 +423,7 @@ func TestCardDavSyncToken(t *testing.T) {
 	defer srv.Close()
 	s, c := archiveWith(t, "carddav", M{"url": srv.URL + "/c/", "username": "me"})
 	names := func() string {
-		return strings.Join(db.Strs(s.Read(), "SELECT name FROM contact ORDER BY name"), ",")
+		return strings.Join(db.Strs(s.Read(), "SELECT name FROM contact WHERE id NOT IN (SELECT contact_id FROM contact_gone) ORDER BY name"), ",")
 	}
 	set := func(f func(token string) ([]entry, []string, string, bool)) {
 		mu.Lock()
@@ -461,4 +512,38 @@ func TestCardDavLive(t *testing.T) {
 	if n := db.Strs(s.Read(), "SELECT name FROM contact"); len(n) != 1 || n[0] != "Alpha" {
 		t.Fatal(n)
 	}
+}
+
+// A contact deleted from the address book still names its person, as it did; one still there that
+// lists the same number comes first.
+func TestAGoneContactStillNames(t *testing.T) {
+	vcf := filepath.Join(t.TempDir(), "all.vcf")
+	one := func(uid, name string) string {
+		return "BEGIN:VCARD\nVERSION:3.0\nUID:" + uid + "\nFN:" + name + "\nTEL:+306940000001\nEND:VCARD\n"
+	}
+	s, c := archiveWith(t, "vcard-file", M{"path": vcf})
+	pid := db.Int(s.Read(), "SELECT person_id FROM person_address pa JOIN address a ON a.id = pa.address_id WHERE a.value = '+306940000001'")
+	named := func(want string, gone bool) {
+		t.Helper()
+		ppl := core.NewPeople(s.Read())
+		if name, from := ppl.Info(pid); name != want || from != "contacts" {
+			t.Fatalf("%q from %s, want %q", name, from, want)
+		}
+		if g := ppl.Contact(pid).Gone; g != gone {
+			t.Fatalf("gone %v", g)
+		}
+	}
+	sync := func(cards string) {
+		t.Helper()
+		os.WriteFile(vcf, []byte(cards), 0o600)
+		if err := (VcardFile{}).Sync(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sync(one("a", "Old"))
+	named("Old", false)
+	sync("")
+	named("Old", true)
+	sync(one("b", "New"))
+	named("New", false)
 }

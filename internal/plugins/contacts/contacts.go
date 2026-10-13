@@ -22,6 +22,7 @@ import (
 
 	"everysaid/internal/archive"
 	"everysaid/internal/config"
+	"everysaid/internal/core"
 	"everysaid/internal/db"
 	"everysaid/internal/plugins"
 )
@@ -40,8 +41,9 @@ func SaveCards(c *plugins.Context, cards []Card) (int, int, error) {
 	return saveCards(c, cards, true, nil, nil)
 }
 
-// saveCards saves the cards; with replace, every other contact of the instance goes, else only
-// those at the addresses (urls) that changed and are not among the cards, and those gone.
+// saveCards saves the cards; with replace, every other contact of the instance is gone from the
+// address book, else only those at the addresses (urls) that changed and are not among the cards,
+// and those gone. One gone is kept (contact_gone), as it was: its person keeps its name and photo.
 func saveCards(c *plugins.Context, cards []Card, replace bool, changed, gone []string) (int, int, error) {
 	if err := os.MkdirAll(Avatars(), 0o700); err != nil {
 		return 0, 0, err
@@ -79,6 +81,7 @@ func saveCards(c *plugins.Context, cards []Card, replace bool, changed, gone []s
 				return fmt.Errorf("contact %s not saved", card.UID)
 			}
 			keep[cid] = true
+			db.Exec(tx, "DELETE FROM contact_gone WHERE contact_id = ?", cid) // back, where it was gone
 			db.Exec(tx, "DELETE FROM contact_address WHERE contact_id = ?", cid)
 			for _, v := range append(append([]Value{}, card.Phones...), card.Emails...) {
 				kind, value := archive.Address(v.Value, config.Region)
@@ -103,8 +106,7 @@ func saveCards(c *plugins.Context, cards []Card, replace bool, changed, gone []s
 		}
 		for _, cid := range old {
 			if !keep[cid] {
-				db.Exec(tx, "DELETE FROM contact_address WHERE contact_id = ?", cid)
-				db.Exec(tx, "DELETE FROM contact WHERE id = ?", cid)
+				db.Exec(tx, "INSERT OR IGNORE INTO contact_gone (contact_id, gone_at) VALUES (?, ?)", cid, now)
 			}
 		}
 		return nil
@@ -135,9 +137,20 @@ func saved(c *plugins.Context, cards []Card) error {
 	if err != nil {
 		return err
 	}
-	c.Emit(plugins.M{"type": "changed"})
 	c.Log("contacts: {n}, addresses found in the archive: {linked}", map[string]any{"n": n, "linked": linked})
-	return nil
+	_, err = merged(c)
+	c.Emit(plugins.M{"type": "changed"})
+	return err
+}
+
+// merged merges the people a contact lists handles of (core.MergeByContacts): after each sync, the
+// changes of the address book's and the handles new in the archive since; it says how many.
+func merged(c *plugins.Context) (int, error) {
+	n, err := core.MergeByContacts(c.Store())
+	if n > 0 {
+		c.Log("people merged as one contact lists them: {n}", map[string]any{"n": n})
+	}
+	return n, err
 }
 
 // VcardFile is the `vcard-file` contacts plugin: a .vcf file.
@@ -410,17 +423,22 @@ func (CardDav) Sync(c *plugins.Context) error {
 }
 
 func savedSince(c *plugins.Context, cards []Card, changed, gone []string) error {
-	if len(changed) == 0 && len(gone) == 0 {
-		return nil // nothing changed: no line every quarter of an hour
+	if len(changed) == 0 && len(gone) == 0 { // nothing changed: no line every quarter of an hour
+		if n, err := merged(c); n == 0 || err != nil {
+			return err
+		}
+		c.Emit(plugins.M{"type": "changed"})
+		return nil
 	}
 	n, linked, err := saveCards(c, cards, false, changed, gone)
 	if err != nil {
 		return err
 	}
-	c.Emit(plugins.M{"type": "changed"})
 	c.Log("contacts changed: {n}, gone: {gone}, addresses found in the archive: {linked}",
 		map[string]any{"n": n, "gone": len(gone), "linked": linked})
-	return nil
+	_, err = merged(c)
+	c.Emit(plugins.M{"type": "changed"})
+	return err
 }
 
 func (p CardDav) RunImport(c *plugins.Context) error { return p.Sync(c) }

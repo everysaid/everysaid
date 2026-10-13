@@ -115,7 +115,7 @@ export interface Person {
   note: string | null;
   handles: Handle[];
   me: boolean;
-  contact: { id: number; name: string; organization: string | null } | null;
+  contact: { id: number; name: string; organization: string | null; gone: boolean } | null;   // gone: no longer in the address book
   contacts: { id: number; name: string }[];      // more than one contact lists their handles
   name_from: string;                             // user, contacts, <service>/<kind>, handle
   name_source: string | null;                    // where the user pinned it to come from

@@ -57,6 +57,10 @@
    "rows": 20,
    "sha256": "f29c6b0155e7096e2ed4228e5b655f199c4c879ef66da69eebd771f411c18793"
   },
+  "contact_gone": {
+   "rows": 0,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
   "conversation": {
    "rows": 64,
    "sha256": "0e62935e13141622d0069c835433ab640eb83c4af7045f38ad7928292f254b64"

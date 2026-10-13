@@ -349,6 +349,7 @@ func Remove(s *core.Store, iid int64) error {
 		db.Exec(tx, "UPDATE library_link SET instance_id = NULL WHERE instance_id = ?", iid)
 		for _, cid := range db.Ints(tx, "SELECT id FROM contact WHERE instance_id = ?", iid) {
 			db.Exec(tx, "DELETE FROM contact_address WHERE contact_id = ?", cid)
+			db.Exec(tx, "DELETE FROM contact_gone WHERE contact_id = ?", cid)
 		}
 		db.Exec(tx, "DELETE FROM contact WHERE instance_id = ?", iid)
 		db.Exec(tx, "DELETE FROM plugin_instance WHERE id = ?", iid)
