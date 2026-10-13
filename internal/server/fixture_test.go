@@ -178,6 +178,7 @@ func buildFixture(path string) (err error) {
 	a.HandleName(katPap, "whatsapp", "Κατερίνα Σοφία", "book", 0)
 	a.HandleName(giannis, "whatsapp", "Θανάσης Οικονόμου", "book", 0)
 	a.Exec("INSERT INTO plugin_instance (plugin, kind, label, created_at) VALUES ('test-sender', 'source', 'Sender', 0)")
+	a.Exec("INSERT INTO plugin_instance (plugin, kind, label, created_at) VALUES ('test-gifs', 'gifs', 'Finder', 0)")
 	a.Resolve()
 	a.Commit()
 	return nil
@@ -270,24 +271,30 @@ func (testSource) MarkRead(ctx context.Context, c *plugins.Context, conv plugins
 	return 1, nil
 }
 
-// noGIFs: the test source cannot find GIFs now.
+// noGIFs: the test GIFs plugin cannot find GIFs now.
 var noGIFs atomic.Bool
 
-func (testSource) NotSearching(c *plugins.Context) string {
+type testGIFs struct{}
+
+func (testGIFs) Info() *plugins.Info {
+	return &plugins.Info{ID: "test-gifs", Name: "Test GIFs", Kind: "gifs"}
+}
+
+func (testGIFs) NotSearching(c *plugins.Context) string {
 	if noGIFs.Load() {
 		return "Not signed in"
 	}
 	return ""
 }
 
-func (testSource) SearchGIFs(ctx context.Context, c *plugins.Context, query, offset string) ([]plugins.GIF, string, error) {
+func (testGIFs) SearchGIFs(ctx context.Context, c *plugins.Context, query, offset string) ([]plugins.GIF, string, error) {
 	if offset == "" {
 		return []plugins.GIF{{ID: query + "-1", Width: 2, Height: 1}}, "2", nil
 	}
 	return []plugins.GIF{{ID: query + "-" + offset}}, "", nil
 }
 
-func (testSource) GIF(ctx context.Context, c *plugins.Context, id string) (*plugins.File, error) {
+func (testGIFs) GIF(ctx context.Context, c *plugins.Context, id string) (*plugins.File, error) {
 	if id == "gone" {
 		return nil, errs.Plugin("That GIF is no longer in the results: search again", 404)
 	}
@@ -414,6 +421,7 @@ func registerTestPlugins() {
 	plugins.Register(testBroken{})
 	plugins.Register(testLive{})
 	plugins.Register(testSource{})
+	plugins.Register(testGIFs{})
 	plugins.Register(testLibrary{})
 	plugins.Register(testAnalysis{})
 }

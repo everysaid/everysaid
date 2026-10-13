@@ -1,6 +1,7 @@
 package telegram
 
-// GIFs found by Telegram's own @gif bot (an inline query: nothing is sent), for any service to send.
+// GIFs found by Telegram's own @gif bot (an inline query: nothing is sent), for any service to send:
+// a GIFs plugin of its own, through the account the Telegram source has linked.
 
 import (
 	"bytes"
@@ -79,14 +80,35 @@ func gifOf(r tg.BotInlineResultClass) (plugins.GIF, gifAt, bool) {
 	return g, at, true
 }
 
-func (Plugin) NotSearching(c *plugins.Context) string {
+// GIFs is the `telegram-gif` plugin.
+type GIFs struct{}
+
+func init() { plugins.Register(GIFs{}) }
+
+func (GIFs) Info() *plugins.Info {
+	return &plugins.Info{
+		ID: "telegram-gif", Name: "Telegram (@gif)", Kind: "gifs",
+		Description: "GIFs found by Telegram's @gif bot, through the Telegram account linked here: an inline query, " +
+			"nothing is sent. Telegram sees the words searched for, as in its own apps.",
+		Needs: []string{"The Telegram account linked (its source)"},
+	}
+}
+
+func (GIFs) Check(c *plugins.Context) (bool, string) {
+	if why := (GIFs{}).NotSearching(c); why != "" {
+		return false, why
+	}
+	return true, "ready"
+}
+
+func (GIFs) NotSearching(c *plugins.Context) string {
 	if _, _, ok := credentials(); !ok || !hasSession() {
 		return notSignedIn
 	}
 	return ""
 }
 
-func (Plugin) SearchGIFs(ctx context.Context, c *plugins.Context, query, offset string) (out []plugins.GIF, next string, err error) {
+func (GIFs) SearchGIFs(ctx context.Context, c *plugins.Context, query, offset string) (out []plugins.GIF, next string, err error) {
 	err = withConn(ctx, func(ctx context.Context, cn *conn) error {
 		bot, err := gifBotOf(ctx, cn)
 		if err != nil {
@@ -109,7 +131,7 @@ func (Plugin) SearchGIFs(ctx context.Context, c *plugins.Context, query, offset 
 	return out, next, err
 }
 
-func (Plugin) GIF(ctx context.Context, c *plugins.Context, id string) (*plugins.File, error) {
+func (GIFs) GIF(ctx context.Context, c *plugins.Context, id string) (*plugins.File, error) {
 	data, found, err := gifs.File(id, func(at gifAt) (data []byte, err error) {
 		if at.doc == nil && !at.proxied {
 			return netsafe.Video(ctx, at.url, "Everysaid")

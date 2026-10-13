@@ -52,3 +52,33 @@ func TestWriteAfterAnotherCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A new archive has the History of GIFs as a GIFs plugin, once: taken away, it is not put back.
+func TestGIFHistorySeededOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "a.db")
+	count := func() int64 {
+		a, err := archive.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer a.Close()
+		defer a.Commit()
+		return a.Int("SELECT count(*) FROM plugin_instance WHERE plugin = 'gif-history' AND kind = 'gifs'")
+	}
+	if n := count(); n != 1 {
+		t.Fatalf("%d at first", n)
+	}
+	if n := count(); n != 1 {
+		t.Fatalf("%d opened again", n)
+	}
+	a, err := archive.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Exec("DELETE FROM plugin_instance WHERE plugin = 'gif-history'")
+	a.Commit()
+	a.Close()
+	if n := count(); n != 0 {
+		t.Fatalf("%d after it was taken away", n)
+	}
+}

@@ -275,6 +275,11 @@ func (a *Archive) seed() {
 			a.Exec("INSERT OR IGNORE INTO vocabulary VALUES (?, ?)", f, n)
 		}
 	}
+	// the GIFs of the archive, a tab of the composer's GIFs from the start (taken away, not put back)
+	if n, _ := a.Exec("INSERT OR IGNORE INTO setting VALUES ('gifs_seeded', 'true')").RowsAffected(); n > 0 {
+		a.Exec("INSERT OR IGNORE INTO plugin_instance (plugin, kind, label, created_at) VALUES ('gif-history', 'gifs', 'History', ?)",
+			time.Now().Unix())
+	}
 	if n, _ := a.Exec("INSERT OR IGNORE INTO setting VALUES ('labels_seeded', 'true')").RowsAffected(); n > 0 {
 		for i, l := range Labels {
 			a.Exec("INSERT OR IGNORE INTO label (kind, key, sensitive, position) VALUES (?, ?, ?, ?)", l.Kind, l.Key, l.Sensitive, i)

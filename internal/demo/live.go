@@ -331,5 +331,6 @@ func (Sender) MarkRead(ctx context.Context, c *plugins.Context, conv plugins.Con
 func RegisterIfDemo() {
 	if os.Getenv("EVERYSAID_DEMO") != "" {
 		plugins.Register(Sender{})
+		plugins.Register(GIFs{})
 	}
 }

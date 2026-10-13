@@ -9,24 +9,35 @@ import (
 	"everysaid/internal/plugins"
 )
 
-// The GIFs to send: the plugins that find them (each instance one, as it says whether it can now),
-// what one finds, and a GIF's file, which the app shows and sends back as a file (animated).
+// The GIFs to send: the GIFs plugins, in the order added (each instance a tab: the archive's own,
+// History, or one that finds them, as it says whether it can now), what one finds, and a GIF's file,
+// which the app shows and sends back as a file (animated).
 func (s *Server) gifRoutes() {
 	h := s.handle
 
 	h("GET /api/gifs", bodyNone, func(q *req) (any, error) {
 		items := []M{}
-		for _, r := range plugins.Instances(s.Store, "") {
+		for _, r := range plugins.Instances(s.Store, "gifs") {
 			p := plugins.Get(r.Plugin)
-			g, ok := p.(plugins.GIFSearcher)
-			if !r.Enabled || !ok {
+			if !r.Enabled || p == nil {
 				continue
 			}
-			why := any(nil)
-			if w := g.NotSearching(plugins.NewContext(s.Host, r)); w != "" {
-				why = i18n.Tr(w, q.lang())
+			name := r.Label // the plugin's own name, where the user gave none, in the user's language
+			if name == p.Info().Name {
+				name = i18n.Tr(name, q.lang())
 			}
-			items = append(items, M{"instance": r.ID, "name": r.Label, "why": why})
+			it := M{"instance": r.ID, "name": name, "why": nil}
+			switch g := p.(type) {
+			case plugins.GIFHistory:
+				it["history"] = true
+			case plugins.GIFSearcher:
+				if w := g.NotSearching(plugins.NewContext(s.Host, r)); w != "" {
+					it["why"] = i18n.Tr(w, q.lang())
+				}
+			default:
+				continue
+			}
+			items = append(items, it)
 		}
 		return M{"items": items}, nil
 	})

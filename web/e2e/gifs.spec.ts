@@ -40,7 +40,7 @@ test("a GIF found, sent with a tap, then in the History", async ({ page }, info)
   await page.locator("[data-emoji]").click();
   const box = page.locator("[data-expressions]");
   await expect(box.locator("[data-emoji-picker]")).toBeVisible();      // the emoji first
-  await box.locator("[data-gif-tab]:not([data-gif-tab='history'])").first().click();
+  await box.locator("[data-gif-tab]:not([data-gif-history])").first().click();
   await expect(box.locator("[data-gif-option]")).toHaveCount(3);
   await box.locator("[data-gif-search]").fill("par");
   await expect(box.locator("[data-gif-option]")).toHaveCount(1);
@@ -54,7 +54,7 @@ test("a GIF found, sent with a tap, then in the History", async ({ page }, info)
   await expect(page.locator('[id^="m"]').filter({ has: page.locator("video") }).last()).toBeVisible();   // the demo answers after it
 
   await page.locator("[data-emoji]").click();
-  await box.locator("[data-gif-tab='history']").click();
+  await box.locator("[data-gif-history]").click();
   await expect(box.locator("[data-gif-option]").first()).toBeVisible();
 });
 
