@@ -18,7 +18,7 @@ func init() {
 		"API key":                           "API key",
 		"History":                           "Ιστορικό",
 		"The GIFs already in the archive, sent or received before: each once, however many copies the services made of it. Nothing leaves this computer.": "Τα GIF που υπάρχουν ήδη στο αρχείο, όσα έστειλες ή έλαβες: το καθένα μία φορά, όσα αντίγραφα κι αν έφτιαξαν οι υπηρεσίες. Τίποτα δεν φεύγει από αυτόν τον υπολογιστή.",
-		"Telegram (@gif)": "Telegram (@gif)",
+		"Telegram": "Telegram",
 		"GIFs found by Telegram's @gif bot, through the Telegram account linked here: an inline query, nothing is sent. Telegram sees the words searched for, as in its own apps.": "GIF που βρίσκει το bot @gif του Telegram, μέσω του λογαριασμού Telegram που είναι συνδεδεμένος εδώ: μια αναζήτηση inline, δεν στέλνεται τίποτα. Το Telegram βλέπει τις λέξεις που ψάχνεις, όπως και στις δικές του εφαρμογές.",
 		"The Telegram account linked (its source)": "Ο λογαριασμός Telegram συνδεδεμένος (η πηγή του)",
 		"Klipy": "Klipy",

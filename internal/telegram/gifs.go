@@ -88,7 +88,7 @@ func init() { plugins.Register(GIFs{}) }
 
 func (GIFs) Info() *plugins.Info {
 	return &plugins.Info{
-		ID: "telegram-gif", Name: "Telegram (@gif)", Kind: "gifs",
+		ID: "telegram-gif", Name: "Telegram", Kind: "gifs",
 		Description: "GIFs found by Telegram's @gif bot, through the Telegram account linked here: an inline query, " +
 			"nothing is sent. Telegram sees the words searched for, as in its own apps.",
 		Needs: []string{"The Telegram account linked (its source)"},
