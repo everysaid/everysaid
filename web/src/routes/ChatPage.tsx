@@ -216,7 +216,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
     }
   }, [t]);
   const react = useCallback((m: MessageItem, emoji: string) => {
-    setNewFrom(null);                                  // answered with a reaction: what was new is seen
+    renew.current();                                   // answered with a reaction: the line past what was seen
     return act(m, () => api.post(`/api/messages/${m.id}/reaction`, { emoji }), (i) => ({
       ...i, reactions: [...i.reactions.filter((r) => !r.mine), ...(emoji ? [{ emoji, code: null, count: 1, mine: true, who: null }] : [])],
     }));
@@ -250,6 +250,9 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
 
   // the first unread message when the chat was opened (its cursor): the line "new messages" before it
   const [newFrom, setNewFrom] = useState<string | null>(null);
+  // the line put again before the first message not seen yet (none, if all were): on coming back,
+  // and on answering (the field taken, a reaction, a message sent), which makes nothing else seen
+  const renew = useRef(() => {});
   const told = useRef(0);               // how far the server was told the chat was read (ms)
   const readBefore = useRef(0);         // how far it was read when it was opened (the messages' time, ms)
   const toLatest = useRef(false);       // the latest asked for: not the first unread
@@ -438,7 +441,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   const send = useCallback(async (body: string, service: string | null, answered: MessageItem | null, mentions: Mentioned[], file: File | null,
     conversationId: number | null, animated = false) => {
     if (hasNewer) navigate({ to: "/chat/$chatId", params: { chatId }, search: { hide } });
-    setNewFrom(null);                                  // answered: what was new is seen
+    renew.current();                                   // answered: the line past what was seen
     const id = -Date.now() - Math.random();
     const mark = (status: string, conversation_id = 0) => setItems((prev) => prev.map((i) => (i.type === "message" && i.id === id
       ? { ...i, status, conversation_id: conversation_id || i.conversation_id } : i)));
@@ -599,6 +602,12 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   }, [chatId, qc]);
   useEffect(() => () => clearTimeout(tellTimer.current), []);
 
+  renew.current = () => {
+    const base = Math.max(seen.current, readBefore.current);
+    const first = itemsRef.current.find((i) => i.type === "message" && i.id > 0 && !i.outgoing && i.kind !== "system" && i.ts > base);
+    setNewFrom(first?.cursor ?? null);
+  };
+
   // back from away (another tab or service, the window hidden, asleep): the line "new
   // messages" put again as on opening the chat, before the first message not seen yet, wherever
   // the user had read to (none, if all was); while they look, it stays where it is
@@ -610,9 +619,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
     }
     if (!wasAway.current) return;
     wasAway.current = false;
-    const base = Math.max(seen.current, readBefore.current);
-    const first = itemsRef.current.find((i) => i.type === "message" && i.id > 0 && !i.outgoing && i.kind !== "system" && i.ts > base);
-    setNewFrom(first?.cursor ?? null);
+    renew.current();
   }, [looking]);
   useEffect(() => {
     const el = scroller.current;
@@ -842,7 +849,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
             accounts={detail.data.accounts ?? []}
             mentionable={isGroup ? detail.data.mentionable ?? [] : []} fileable={detail.data.fileable ?? []} members={detail.data.members ?? []}
             chatId={chatId} onSend={send} take={take} replyTo={replyTo} onCancelReply={() => setReplyTo(null)}
-            editing={editing} onEdit={edit} onCancelEdit={() => setEditing(null)} onFocus={() => setNewFrom(null)}
+            editing={editing} onEdit={edit} onCancelEdit={() => setEditing(null)} onFocus={() => renew.current()}
             preferred={(!hasNewer && [...items].reverse().find((i) => i.type === "message")?.service) || detail.data.last_service} />
         )}
       </div>

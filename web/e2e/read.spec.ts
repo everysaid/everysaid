@@ -40,6 +40,12 @@ test("a chat opens at its first unread, which are read as they are seen", async 
   await expect.poll(() => unread(page, chat), { timeout: 5000 }).toBeLessThan(40);
   expect(await unread(page, chat)).toBeGreaterThan(0);
 
+  // the field taken to answer makes nothing more seen: the line past what was, not gone
+  await page.locator("[data-composer-body] textarea").focus();
+  await expect(page.locator("[data-cursor]", { has: line }).getByText("unread 0", { exact: true })).toHaveCount(0);
+  await expect(line).toHaveCount(1);
+  await page.locator("[data-composer-body] textarea").blur();
+
   // to the end: all read; the line stays while the chat is open
   for (let i = 0; i < 20; i++) {
     await page.evaluate((s) => { const el = document.querySelector(s)!; el.scrollTop = el.scrollHeight; }, SCROLLER);
