@@ -220,6 +220,7 @@ decrypted on its own.
 | `whatsapp.sqlite` | `AppDomainGroup-group.net.whatsapp.WhatsApp.shared` | `ChatStorage.sqlite` |
 | `whatsapp-contacts.sqlite` | same | `ContactsV2.sqlite` |
 | `whatsapp-calls.sqlite` | same | `CallHistory.sqlite` (WhatsApp's call log) |
+| `acrobits.sqlite` | `AppDomain-cz.acrobits.%` | `Library/Application Support/eventHistory.db` (an Acrobits softphone's call log; left out where the phone has none) |
 
 `--only NAME...` decrypts only the named databases and stops before the media (e.g.
 `everysaid iphone-sync --no-backup --only whatsapp-calls.sqlite`); a name not in the table is
@@ -918,6 +919,7 @@ Phones carry the same history, copied from phone to phone at each change.
 | `iphone/whatsapp` | call bubbles in the chats (`ZMESSAGETYPE` 59; metadata field 87: 1.1 video, 1.2 outcome, 1.3 duration, 1.5 participants) | the bubble's `Z_PK` |
 | `whatsapp-bridge/calls`, `whatsapp-bridge/call-events` | the WhatsApp store's `calls` (`source` 'log' and 'event') and `call_participants` | its call id |
 | `iphone/viber-calls` | `viber.sqlite` `ZRECENT` (recents), the number in `ZRECENTSLINE` | its `Z_PK` |
+| `iphone/sip-calls` | `acrobits.sqlite`, an Acrobits softphone's (SIP) call log: `Events` of `legacy:calls` (direction 1 in, 2 out), the number in `RemoteUsers.transportUri` (`anonymous` hidden), the rest in `EventAttributes` (`callResult`, `callDuration`, `callId`) | its `eventId` |
 | `sms-alerts` | the carrier's missed-call SMS in the archive itself, read by the parsers enabled in `[import] carrier_notices` (`internal/importers/carriers.go`; `gr`: Greek carriers, Latin look-alike letters normalised, Athens time) | `<message_id>/<i>` |
 
 - The WhatsApp log and the bubbles describe the same calls: they are matched by time window and
@@ -931,7 +933,8 @@ Phones carry the same history, copied from phone to phone at each change.
 - **Video.** The log (`ZVIDEO`) and the bubbles (field 1.1) agree on whether a call was a video
   call wherever both describe it.
 - Calls get `detail` (missed, unanswered, busy, failed; WhatsApp's outcome 4 is missed and 5
-  failed) with the source's code in `detail_code` (`whatsapp:4`, `viber:missed`, `carrier:gr`),
+  failed; Acrobits' `callResult` 1 and 16 answered, 2 missed, 4 rejected, 64 unanswered) with the
+  source's code in `detail_code` (`whatsapp:4`, `viber:missed`, `acrobits:2`, `carrier:gr`),
   `video`, `attempts`, `conversation_id` for group calls, and `call_member` (who, outcome, code).
 - **Not recoverable:** app calls older than the apps' own logs (WhatsApp's log and Viber's recents
   on the iPhone start roughly when the app came to that phone), and phone calls older than any

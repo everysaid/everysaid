@@ -40,7 +40,7 @@ history); nothing in the tracked documentation depends on it.
 | Messenger and Instagram live, through mautrix-meta's clients linked in, logged in with the browser's cookies | written, tested on fakes only (`internal/meta`, `third_party/mautrix-meta`) |
 | Unified archive, deduplicated across sources | working (`everysaid import`, `internal/importers`) |
 | Replies, reactions, edits, locations, call outcomes | working (`internal/importers/extras.go`) |
-| WhatsApp and Viber calls, carrier missed-call notices | working (`internal/importers/voip.go`) |
+| WhatsApp, Viber and SIP (Acrobits) calls, carrier missed-call notices | working (`internal/importers/voip.go`) |
 | Chat media matched against a photo library (immich) and uploaded with the right date | separate tools, not part of the app (see "Media") |
 | The core: chats, a person's stream across services, search ignoring accents, people, calls, media, statistics | working (`internal/core/`) |
 | Plugins: sources, photo libraries (folder, immich), contacts (CardDAV, .vcf), as instances | working (`internal/plugins/`) |

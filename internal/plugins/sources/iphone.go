@@ -200,7 +200,7 @@ func iphoneSteps() []sourcekit.Step {
 			_, err := importers.WhatsApp(a, out, importers.WhatsAppOptions{NoBridge: true, NoStore: true})
 			return err
 		}},
-		{Label: "WhatsApp and Viber calls", Run: func(a *archive.Archive, out func(string)) error {
+		{Label: "WhatsApp, Viber and SIP calls", Run: func(a *archive.Archive, out func(string)) error {
 			return importers.VoIP(a, out, importers.VoIPOptions{NoBridge: true})
 		}},
 		{Label: "files", Run: func(a *archive.Archive, out func(string)) error {

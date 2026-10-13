@@ -16,15 +16,23 @@ import (
 	"everysaid/internal/phones"
 )
 
-// files: output name, relative path, domain ("" for any), in the order they are extracted.
-var files = []struct{ name, rel, domain string }{
-	{"sms.db", "Library/SMS/sms.db", ""},
-	{"CallHistory.storedata", "Library/CallHistoryDB/CallHistory.storedata", ""},
-	{"viber.sqlite", "com.viber/database/Contacts.data", "AppDomainGroup-group.viber.share.container"},
-	{"whatsapp.sqlite", "ChatStorage.sqlite", "AppDomainGroup-group.net.whatsapp.WhatsApp.shared"},
-	{"whatsapp-contacts.sqlite", "ContactsV2.sqlite", "AppDomainGroup-group.net.whatsapp.WhatsApp.shared"},
+// files: output name, relative path, domain ("" for any), in the order they are extracted; an
+// optional one (an app not every phone has) is left out where the backup has none.
+type file struct {
+	name, rel, domain string
+	optional          bool
+}
+
+var files = []file{
+	{"sms.db", "Library/SMS/sms.db", "", false},
+	{"CallHistory.storedata", "Library/CallHistoryDB/CallHistory.storedata", "", false},
+	{"viber.sqlite", "com.viber/database/Contacts.data", "AppDomainGroup-group.viber.share.container", false},
+	{"whatsapp.sqlite", "ChatStorage.sqlite", "AppDomainGroup-group.net.whatsapp.WhatsApp.shared", false},
+	{"whatsapp-contacts.sqlite", "ContactsV2.sqlite", "AppDomainGroup-group.net.whatsapp.WhatsApp.shared", false},
 	// WhatsApp's call log, kept apart from its chats (Viber's calls are in viber.sqlite, ZRECENT)
-	{"whatsapp-calls.sqlite", "CallHistory.sqlite", "AppDomainGroup-group.net.whatsapp.WhatsApp.shared"},
+	{"whatsapp-calls.sqlite", "CallHistory.sqlite", "AppDomainGroup-group.net.whatsapp.WhatsApp.shared", false},
+	// the Acrobits softphones' (SIP) call log: the iPhone's own has only the calls of late
+	{"acrobits.sqlite", "Library/Application Support/eventHistory.db", "AppDomain-cz.acrobits.%", true},
 }
 
 // Media, copied incrementally: each file has a unique name and never changes once written; files
@@ -95,7 +103,7 @@ func (o *SyncOptions) defaults() {
 func (o *SyncOptions) resolve() (*syncRun, error) {
 	o.defaults()
 	for _, name := range o.Only { // a name mistyped would decrypt nothing, and say done
-		if !slices.ContainsFunc(files, func(f struct{ name, rel, domain string }) bool { return f.name == name }) {
+		if !slices.ContainsFunc(files, func(f file) bool { return f.name == name }) {
 			var names []string
 			for _, f := range files {
 				names = append(names, f.name)
@@ -195,6 +203,9 @@ func (r *syncRun) extract(b *Backup) (err error) {
 		dest := filepath.Join(r.Out, f.name)
 		tmp := dest + ".part"
 		if err := b.ExtractFile(f.rel, f.domain, tmp, info(tmp)); err != nil {
+			if errors.Is(err, ErrNotFound) && f.optional {
+				continue
+			}
 			if errors.Is(err, ErrNotFound) {
 				return phones.Fail("Not in the backup: {name}", map[string]any{"name": f.name})
 			}

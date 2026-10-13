@@ -33,7 +33,7 @@ var EL = map[string]string{
 	"new messages: {m}, new calls: {c}":            "νέα μηνύματα: {m}, νέες κλήσεις: {c}",
 	"== {label}":                                   "== {label}",
 	"calls":                                        "κλήσεις",
-	"WhatsApp and Viber calls":                     "κλήσεις WhatsApp και Viber",
+	"WhatsApp, Viber and SIP calls":                "κλήσεις WhatsApp, Viber και SIP",
 	"files":                                        "αρχεία",
 	"WhatsApp (bridge)":                            "WhatsApp (γέφυρα)",
 	"app and carrier calls":                        "κλήσεις εφαρμογών και παρόχου",

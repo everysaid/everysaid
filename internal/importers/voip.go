@@ -7,6 +7,8 @@
 //     87: 1.1 video, 1.2 outcome, 1.3 duration in seconds, 1.5 participants). Both describe the same
 //     calls for the months they overlap; a call is kept once, the log's id as its key.
 //   - Viber: the iPhone's recents (ZRECENT, with the number in ZRECENTSLINE).
+//   - SIP: the call log of an Acrobits softphone (its eventHistory.db, extracted as acrobits.sqlite;
+//     the iPhone's own call log has only its calls of late, those it gave to CallKit).
 //   - The carrier's missed-call notices, read from the archive's SMS by the parsers config
 //     [import] carrier_notices enables ("gr" for the Greek ones): calls that came while the phone
 //     was off or busy, each with how many times the number called. Those a call log already has
@@ -23,6 +25,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -33,6 +36,9 @@ import (
 
 // WhatsAppCallsDB is where the iPhone's WhatsApp call log is.
 func WhatsAppCallsDB() string { return filepath.Join(archive.IphoneData(), "whatsapp-calls.sqlite") }
+
+// AcrobitsDB is where the iPhone's Acrobits softphone (SIP) call log is.
+func AcrobitsDB() string { return filepath.Join(archive.IphoneData(), "acrobits.sqlite") }
 
 const sameCallMS = 60_000
 
@@ -518,6 +524,51 @@ func viberCalls(a *archive.Archive, calls *CallSet) {
 	}
 }
 
+// Acrobits' callResult: incoming 1 answered, 2 missed, 4 rejected; outgoing 16 answered, 64 not.
+var acrobitsResults = map[string]string{"2": "missed", "4": "rejected", "64": "unanswered"}
+
+// sipCalls: the calls of an Acrobits softphone's log (Events, direction 1 in, 2 out), the other
+// side in RemoteUsers ("anonymous" for a hidden number), the rest in EventAttributes.
+func sipCalls(a *archive.Archive, calls *CallSet) {
+	if !exists(AcrobitsDB()) {
+		return
+	}
+	d := ro(AcrobitsDB())
+	defer d.Close()
+	src := a.Source(archive.Iphone()+"/sip-calls", AcrobitsDB(), archive.Iphone(), "")
+	attrs := map[any]map[string]string{}
+	for _, r := range maps(d, "SELECT eventId, key, value FROM EventAttributes") {
+		if attrs[r["eventId"]] == nil {
+			attrs[r["eventId"]] = map[string]string{}
+		}
+		attrs[r["eventId"]][str(r["key"])] = str(r["value"])
+	}
+	for _, r := range maps(d, "SELECT e.eventId, e.timestamp, e.direction, u.transportUri FROM Events e "+
+		"LEFT JOIN RemoteUsers u ON u.eventId = e.eventId WHERE e.streamKey = 'legacy:calls' AND e.eventType = 1 "+
+		"GROUP BY e.eventId") {
+		at := attrs[r["eventId"]]
+		outgoing := toInt(r["direction"]) == 2
+		var aid int64
+		if n := str(r["transportUri"]); n != "" && n != "anonymous" {
+			if sip, ok := strings.CutPrefix(n, "sip:"); ok {
+				n, _, _ = strings.Cut(sip, "@")
+			}
+			aid = a.Address(address(n))
+		}
+		result := at["callResult"]
+		detail, code := acrobitsResults[result], ""
+		if detail != "" {
+			code = "acrobits:" + result
+		}
+		duration, _ := strconv.ParseFloat(at["callDuration"], 64)
+		calls.add(src, []string{pyStr(r["eventId"])}, archive.Call{Service: "sip", AddressID: aid,
+			TS: appleMS(toFloat(r["timestamp"])), Outgoing: outgoing, Answered: result == "1" || result == "16",
+			Duration: roundEven(duration), Key: at["callId"], Detail: detail, DetailCode: code,
+			Video: at["incomingVideo"] == "1" || at["outgoingVideo"] == "1"})
+	}
+	a.Imported(src)
+}
+
 // carrierAlerts: the calls a carrier's notices tell of.
 func carrierAlerts(a *archive.Archive, calls *CallSet, carrier Carrier) {
 	src := a.Source(carrier.Source, "the archive's SMS", "", "")
@@ -588,6 +639,7 @@ func VoIP(a *archive.Archive, out func(string), opt VoIPOptions) (err error) {
 		bridgeCalls(a, calls, BridgeDB(), Devices())
 	}
 	viberCalls(a, calls)
+	sipCalls(a, calls)
 	for _, c := range enabled {
 		carrierAlerts(a, calls, c)
 	}
