@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"everysaid/internal/core"
@@ -107,11 +108,16 @@ func errOf(s string) *errs.UserError {
 
 // SendKept sends as Send does, keeping the message in the outbox where it cannot go now for a passing
 // reason (a *queued error then) or where the chat has others waiting before it. id: the app's own id
-// of the message ("" for none: not kept); one already sent with it is not sent again.
+// of the message ("" for none: not kept); one already sent with it is not sent again. One written
+// while another of the chat is being sent waits for it and goes after it, as it would have alone (not
+// kept for that: the app would show it apart, as waiting, while it goes).
 func (h *Host) SendKept(ctx context.Context, chatID, id string, r SendRequest) (M, error) {
 	if id == "" {
 		return h.Send(ctx, chatID, r)
 	}
+	lock := h.chatLock(chatID)
+	lock.Lock()
+	defer lock.Unlock()
 	o := h.outboxDB()
 	var state string
 	var result sql.NullString
@@ -133,7 +139,7 @@ func (h *Host) SendKept(ctx context.Context, chatID, id string, r SendRequest) (
 	}
 	req, _ := json.Marshal(kept)
 	now := time.Now().UnixMilli()
-	// behind others of the chat still waiting: after them, in order
+	// behind others of the chat still waiting (for a passing reason): after them, in order
 	if db.Exists(o, "SELECT 1 FROM outbox WHERE chat = ? AND state IN ('queued', 'sending')", chatID) {
 		db.Exec(o, "INSERT INTO outbox (id, chat, request, file, created_at, state) VALUES (?, ?, ?, ?, ?, 'queued')",
 			id, chatID, string(req), file, now)
@@ -161,6 +167,21 @@ func (h *Host) SendKept(ctx context.Context, chatID, id string, r SendRequest) (
 		db.Exec(o, "DELETE FROM outbox WHERE id = ?", id) // refused: said now, kept by the app if it wants
 		return nil, err
 	}
+}
+
+// chatLock is held while a message of the chat is being sent: one at a time, in the order written.
+func (h *Host) chatLock(chatID string) *sync.Mutex {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.sending == nil {
+		h.sending = map[string]*sync.Mutex{}
+	}
+	l := h.sending[chatID]
+	if l == nil {
+		l = &sync.Mutex{}
+		h.sending[chatID] = l
+	}
+	return l
 }
 
 // outboxChanged tells the apps a chat's outbox changed, and wakes the outbox.
@@ -304,11 +325,18 @@ func (h *Host) sendKept(ctx context.Context) {
 		if k.FileName != "" || len(r.file) > 0 {
 			req.File = &plugins.File{Data: r.file, Filename: k.FileName, MimeType: k.FileType, Animated: k.Animated}
 		}
-		db.Exec(o, "UPDATE outbox SET state = 'sending', attempts = attempts + 1 WHERE id = ?", r.id)
+		lock := h.chatLock(r.chat)
+		lock.Lock()
+		// still waiting once its chat's turn came (not discarded meanwhile)
+		if db.Changed(o, "UPDATE outbox SET state = 'sending', attempts = attempts + 1 WHERE id = ? AND state = 'queued'", r.id) == 0 {
+			lock.Unlock()
+			continue
+		}
 		h.outboxChanged(r.chat)
 		sctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		out, err := h.Send(sctx, r.chat, req)
 		cancel()
+		lock.Unlock()
 		switch {
 		case err == nil:
 			b, _ := json.Marshal(out)

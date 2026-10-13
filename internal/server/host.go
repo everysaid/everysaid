@@ -54,6 +54,7 @@ type Host struct {
 	bars      map[int64]string
 	marking   map[[2]int64]bool            // (instance, conversation) being told it was read now
 	reach     map[string]map[string]*reach // chat -> service -> where a person was looked for (find.go)
+	sending   map[string]*sync.Mutex       // chat -> held while one of its messages is being sent (outbox.go)
 
 	outbox     *sql.DB // what waits to be sent (outbox.go)
 	outboxOnce sync.Once
