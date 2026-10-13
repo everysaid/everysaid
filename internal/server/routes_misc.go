@@ -33,6 +33,7 @@ func (s *Server) routes() {
 	s.spamRoutes()
 	s.miscRoutes()
 	s.pluginRoutes()
+	s.gifRoutes()
 	s.mux.HandleFunc("GET /api/events", s.events)
 	// the MCP server over HTTP, for an assistant on another machine: its own token (`everysaid user
 	// mcp-token`, or Settings), no cookie, no origin
@@ -83,12 +84,16 @@ func (s *Server) miscRoutes() {
 		if err != nil {
 			return nil, err
 		}
+		gifs, err := q.boolQ("gif", false)
+		if err != nil {
+			return nil, err
+		}
 		kind := "all"
 		if q.has("kind") {
 			kind = q.str("kind")
 		}
 		out, err := core.Media(s.Store, core.MediaOptions{ChatID: q.str("chat"), Kind: kind, Before: before,
-			Limit: clampLimit(limit, 200), AvailableOnly: available})
+			Limit: clampLimit(limit, 200), AvailableOnly: available, GIFs: gifs})
 		if err != nil {
 			return nil, is404(err, nil)
 		}

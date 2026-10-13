@@ -311,6 +311,22 @@ type SendingChecker interface {
 	NotSending(c *Context) string
 }
 
+// GIFSearcher finds GIFs to send (from any service: each sends the file as its GIF). NotSearching:
+// why it cannot now ("" when it can). SearchGIFs: those for the words, from offset ("" the first),
+// and the next page's offset ("" none). GIF: one of those found, the video it is.
+type GIFSearcher interface {
+	NotSearching(c *Context) string
+	SearchGIFs(ctx context.Context, c *Context, query, offset string) ([]GIF, string, error)
+	GIF(ctx context.Context, c *Context, id string) (*File, error)
+}
+
+// GIF is one found: its id with the searcher, its size where known.
+type GIF struct {
+	ID     string `json:"id"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+}
+
 // ReadMarker tells the service the user read a conversation up to `until` (Unix ms), if the
 // instance's settings allow; it returns how many messages were marked.
 type ReadMarker interface {
