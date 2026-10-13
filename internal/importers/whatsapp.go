@@ -1213,6 +1213,7 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 		}
 	}
 	if len(updated) > 0 {
+		a.Changed = true
 		var ks []string
 		for k := range updated {
 			ks = append(ks, k)

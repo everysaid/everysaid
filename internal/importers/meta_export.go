@@ -400,6 +400,7 @@ func MetaExport(a *archive.Archive, out func(string), o MetaExportOptions) (err 
 	say(out, "{service}: {n} new messages ({calls} calls) from {threads} chats of the export", map[string]any{
 		"service": o.Service, "n": added, "calls": calls, "threads": len(threads)})
 	if w.Previews > 0 {
+		a.Changed = true
 		say(out, "changes to what was there: {list}", map[string]any{"list": fmt.Sprintf("preview %d", w.Previews)})
 	}
 	w.Store.report(a, out)

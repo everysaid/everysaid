@@ -66,6 +66,7 @@ func ImportLock(c *plugins.Context) sync.Locker {
 // RunImporters runs the steps, in the archive; the sources they bring are then tied to this
 // instance. It returns the ids of the new messages and calls ([before, after]).
 func RunImporters(c *plugins.Context, steps []Step) (msgs, calls [2]int64, err error) {
+	changed := false
 	l := ImportLock(c)
 	l.Lock()
 	func() {
@@ -100,6 +101,7 @@ func RunImporters(c *plugins.Context, steps []Step) (msgs, calls [2]int64, err e
 		a.Commit()
 		msgs[1] = a.Int("SELECT ifnull(max(id), 0) FROM message")
 		calls[1] = a.Int("SELECT ifnull(max(id), 0) FROM call")
+		changed = a.Changed
 	}()
 	if err != nil {
 		return
@@ -110,6 +112,9 @@ func RunImporters(c *plugins.Context, steps []Step) (msgs, calls [2]int64, err e
 	})
 	if msgs[1] > msgs[0] || calls[1] > calls[0] {
 		c.Emit(plugins.M{"type": "new", "messages": []int64{msgs[0], msgs[1]}, "calls": []int64{calls[0], calls[1]}})
+	}
+	if changed { // a message deleted, edited or given its preview where it is shown
+		c.Emit(plugins.M{"type": "changed"})
 	}
 	c.Log("new messages: {m}, new calls: {c}", map[string]any{"m": msgs[1] - msgs[0], "c": calls[1] - calls[0]})
 	return
