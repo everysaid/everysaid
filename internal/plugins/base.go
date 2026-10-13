@@ -320,6 +320,12 @@ type GIFSearcher interface {
 	GIF(ctx context.Context, c *Context, id string) (*File, error)
 }
 
+// GIFSharer is told a GIF it found was sent (a searcher whose terms ask for it): nothing of who
+// sent it, nor where.
+type GIFSharer interface {
+	SentGIF(ctx context.Context, c *Context, id string) error
+}
+
 // GIF is one found: its id with the searcher, its size where known.
 type GIF struct {
 	ID     string `json:"id"`

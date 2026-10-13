@@ -2,7 +2,7 @@ import { Fragment, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
-import { BookUser, ChevronDown, Images, ListChecks, Pause, Play, Plus, Radio, Settings2, Smartphone, Sparkles, Trash2 } from "lucide-react";
+import { BookUser, ChevronDown, Film, Images, ListChecks, Pause, Play, Plus, Radio, Settings2, Smartphone, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api, type PluginChat, type PluginInstance, type PluginManifest, type SettingField } from "@/lib/api";
 import { bytes, dateOnly, isoDay, number, relative } from "@/lib/format";
@@ -21,6 +21,7 @@ const KINDS = [
   { kind: "library", icon: Images },
   { kind: "contacts", icon: BookUser },
   { kind: "analysis", icon: Sparkles },
+  { kind: "gifs", icon: Film },
 ] as const;
 
 export function SourcesPage() {

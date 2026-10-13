@@ -62,9 +62,10 @@ lock of their own while they write.
 
 ## 3. Plugins
 
-Plugins are of four kinds under one system (manifest, instances, settings, secrets, actions,
-logs): **source**, **library** (where kept pictures and videos go, 5), **contacts** (address books)
-and **analysis** (local models, 6). They are Go packages compiled into the binary, each registering
+Plugins are of five kinds under one system (manifest, instances, settings, secrets, actions,
+logs): **source**, **library** (where kept pictures and videos go, 5), **contacts** (address books),
+**analysis** (local models, 6) and **gifs** (GIFs to send, found where the sources do not: Klipy,
+with the user's own key). They are Go packages compiled into the binary, each registering
 itself, all loaded by `internal/all`; there are no plugins from others (they would need isolation,
 a subprocess with a narrow protocol).
 
@@ -77,6 +78,7 @@ backup" and "WhatsApp live" are two plugins. The plugins today:
 | library | `folder`, `immich` (`internal/plugins/libraries`) |
 | contacts | `carddav`, `vcard-file` (`internal/plugins/contacts`) |
 | analysis | `ollama` (`internal/plugins/analysis`) |
+| gifs | `klipy` (`internal/plugins/gifs`) |
 
 Each plugin declares a manifest (`plugins.Info`, `internal/plugins/base.go`): id, name, kind,
 services, description; `modes` (`import`: runs, brings what is new, stops; `live`: stays
@@ -96,8 +98,12 @@ source at once when the user looks for a person elsewhere, each answer reaching 
 chats it can see, with kind and size, for the user's choice of what to import and whose media to
 fetch; Telegram and Signal have it), `Asks` (what the user types for one run only, such as a backup
 password not kept), `Action`, `Check`, `SearchGIFs` (GIFs to send, from any service: Telegram's
-through its @gif bot, an inline query that sends nothing; the composer's GIF tab, beside the GIFs
-already in the archive, with a tab greyed and saying why where one cannot now); a library `Find`,
+through its @gif bot, an inline query that sends nothing, Klipy's through its API; in the composer
+behind the emoji's button, a tab each after the emoji and the History of GIFs already in the
+archive, each once however many copies the services made of it (a look of its frame), with a tab
+greyed and saying why where one cannot now; also "@gif" and words, the GIFs then shown above the
+text, "@" offering commands beside a group's members), `SentGIF` (a searcher told its GIF was sent,
+as Klipy's terms ask); a library `Find`,
 `Store`, `Fetch`; a contacts plugin `Sync`. A file sent as a GIF (`animated`) is a video without
 sound that each source sends as its service's GIF (WhatsApp and Messenger's encrypted chats with
 GIF playback, Telegram as an animation, Signal with its GIF flag), else as the video it is.

@@ -16,9 +16,18 @@ func init() {
 		"adb":                               "adb",
 		"libimobiledevice (idevicebackup2)": "libimobiledevice (idevicebackup2)",
 		"API key":                           "API key",
-		"immich":                            "immich",
-		"Unknown action":                    "Άγνωστη ενέργεια",
-		"no model answered":                 "κανένα μοντέλο δεν απάντησε",
+		"Klipy":                             "Klipy",
+		"GIFs from Klipy, to send through any service. Klipy sees the words searched for, from this server's address.": "GIF από το Klipy, για αποστολή από οποιαδήποτε υπηρεσία. Το Klipy βλέπει τις λέξεις που ψάχνεις, από τη διεύθυνση αυτού του server.",
+		"An API key from partner.klipy.com": "Ένα API key από το partner.klipy.com",
+		"partner.klipy.com → API Keys":      "Στο partner.klipy.com, στα API Keys",
+		"the API key":                       "το API key",
+		"Klipy needs its API key":           "Το Klipy θέλει το API key του",
+		"Klipy did not answer":              "Το Klipy δεν απάντησε",
+		"Klipy refused the API key":         "Το Klipy δεν δέχτηκε το API key",
+		"Klipy's limit of searches for now is reached: try again later": "Έφτασε το όριο αναζητήσεων του Klipy για τώρα: δοκίμασε ξανά αργότερα",
+		"immich":            "immich",
+		"Unknown action":    "Άγνωστη ενέργεια",
+		"no model answered": "κανένα μοντέλο δεν απάντησε",
 	} {
 		EL[k] = v
 	}

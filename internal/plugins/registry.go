@@ -41,7 +41,7 @@ func Get(id string) Plugin {
 // analysis); one not in it comes after them, in the order it was registered. Between equal name
 // weights, this order decides.
 var Order = []string{"iphone-backup", "android-adb", "viber-desktop", "whatsapp-bridge", "telegram", "signal",
-	"messenger", "instagram", "carrier-notices", "im-logs", "folder", "immich", "carddav", "vcard-file", "ollama"}
+	"messenger", "instagram", "carrier-notices", "im-logs", "folder", "immich", "carddav", "vcard-file", "ollama", "klipy"}
 
 // All is every plugin, in their Order.
 func All() []Plugin {

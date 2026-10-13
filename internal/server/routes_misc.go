@@ -97,6 +97,9 @@ func (s *Server) miscRoutes() {
 		if err != nil {
 			return nil, is404(err, nil)
 		}
+		if gifs {
+			s.addLooks(out["items"].([]M))
+		}
 		return out, nil
 	})
 
