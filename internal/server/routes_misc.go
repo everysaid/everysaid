@@ -296,7 +296,7 @@ func (s *Server) miscRoutes() {
 	})
 
 	h("PUT /api/settings", bodyRequired, func(q *req) (any, error) {
-		simple := map[string]bool{"theme": true, "language": true, "push_preview": true, "density": true, "send_enter": true,
+		simple := map[string]bool{"theme": true, "language": true, "push_preview": true, "density": true, "send_enter": true, "emoticons": true,
 			"unread_since": true, "show_tone": true, "mcp": true, "mcp_labels": true, "hide_empty_groups": true,
 			"show_short_numbers": true}
 		weights := map[string]bool{}

@@ -17,7 +17,7 @@ export function recentEmoji(): string[] {
   }
 }
 
-function keepRecent(e: string) {
+export function keepRecent(e: string) {
   localStorage.setItem(RECENT, JSON.stringify([e, ...recentEmoji().filter((x) => x !== e)].slice(0, 24)));
 }
 

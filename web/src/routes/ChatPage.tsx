@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -22,7 +22,8 @@ import { Lightbox, type LightboxItem } from "@/components/Lightbox";
 import { ChatInfo } from "@/components/ChatInfo";
 import { MessageInfo } from "@/components/MessageInfo";
 import { DateField } from "@/components/DateField";
-import { EmojiPicker } from "@/components/EmojiPicker";
+import { EmojiPicker, keepRecent, recentEmoji } from "@/components/EmojiPicker";
+import { byCode, emoticonAt, ENDS, findEmoji, shortcodes } from "@/lib/emoji";
 import { Pending } from "@/components/Pending";
 import { dropUnsent, flying, keepUnsent, sendUnsent, unreached, type Unsent, type Went } from "@/lib/outbox";
 import { avatarUrl } from "@/components/ChatList";
@@ -946,7 +947,19 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   }, [take, t]);
   const [caret, setCaret] = useState(0);
   const [pick, setPick] = useState(0);              // the person marked in the @ list
-  const [noList, setNoList] = useState(false);       // the @ list closed with Esc, until the text changes
+  const [noList, setNoList] = useState(false);       // the @ (or :) list closed with Esc, until the text changes
+  const emoticons = (settings.data?.emoticons as boolean | undefined) ?? true;
+  // an emoticon just turned into its emoji (a Backspace right after turns it back), and one turned back
+  // (not turned again where it is)
+  const turned = useRef<{ from: number; emoticon: string; emoji: string; end: string } | null>(null);
+  const kept = useRef<{ from: number; emoticon: string } | null>(null);
+  // the caret where the text was changed under it (an emoji in place of what was typed), as soon as the
+  // field has the new text (not a frame later: by then more may have been typed)
+  const caretTo = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (caretTo.current !== null) ref.current?.setSelectionRange(caretTo.current, caretTo.current);
+    caretTo.current = null;
+  }, [text]);
   const enterSends = (settings.data?.send_enter as boolean | undefined) ?? wide;
   const picked = useRef(false);
   // Esc lets go of the message being answered or edited, wherever the focus is (unless it closed the @ list)
@@ -1006,7 +1019,16 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
     return members.filter((m) => there(m) && m.name && plain(m.name).split(/\s+/).some((w) => w.startsWith(q)))
       .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "")).slice(0, 8);
   }, [asked, members, via, account?.conversation_id]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => setPick(0), [asked?.query]);
+  // ":" and two letters or more of a shortcode, up to the caret: an emoji to put there
+  const coded = useMemo(() => {
+    if (noList || asked) return null;
+    const m = /(?:^|\s):([\w+-]{2,30})$/u.exec(text.slice(0, caret));
+    return m ? { query: m[1], at: caret - m[1].length - 1 } : null;
+  }, [text, caret, noList, asked]);
+  const [codes, setCodes] = useState<Awaited<ReturnType<typeof shortcodes>> | null>(null);
+  useEffect(() => { if (coded && !codes) shortcodes().then(setCodes, () => {}); }, [coded, codes]);
+  const emojiOptions = useMemo(() => (coded && codes ? findEmoji(codes, coded.query, recentEmoji()) : []), [coded, codes]);
+  useEffect(() => setPick(0), [asked?.query, coded?.query]);
   // an emoji where the caret is (or in place of what is selected); the picker stays open for more
   const [emojiOpen, setEmojiOpen] = useState(false);
   const insert = (e: string) => {
@@ -1049,6 +1071,42 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   const why = () => toast(t("chat.cannotSend", { service: service(via).name }), {
     description: missing[via] ?? t("chat.cannotSendHint"), action: { label: t("nav.sources"), onClick: () => navigate({ to: "/sources" }) },
   });
+  const chooseEmoji = (e: string) => {
+    if (!coded) return;
+    keepRecent(e);
+    const at = coded.at + e.length;
+    setText(text.slice(0, coded.at) + e + text.slice(caret));
+    setCaret(at);
+    caretTo.current = at;
+    ref.current?.focus();
+  };
+  // what was typed, with an emoticon turned that a space or a mark has just ended (or a whole ":code:"
+  // just closed), and where the caret is then
+  const typed = (next: string, at: number): [string, number] => {
+    turned.current = null;
+    if (next.length !== text.length + 1 || at < 1) return [next, at];
+    const ch = next[at - 1], before = next.slice(0, at - 1), after = next.slice(at);
+    if (ch === ":" && codes) {
+      const m = /(?:^|\s):([\w+-]{2,30})$/u.exec(before);
+      const e = m && byCode(codes, m[1]);
+      if (e) {
+        keepRecent(e);
+        const from = before.length - m[1].length - 1;
+        return [next.slice(0, from) + e + after, from + e.length];
+      }
+    }
+    if (!emoticons || !ENDS.test(ch)) return [next, at];
+    const hit = emoticonAt(before);
+    if (!hit || (kept.current?.from === hit.from && kept.current.emoticon === hit.emoticon)) return [next, at];
+    turned.current = { from: hit.from, emoticon: hit.emoticon, emoji: hit.emoji, end: ch };
+    const head = before.slice(0, hit.from) + hit.emoji + ch;
+    return [head + after, head.length];
+  };
+  // an emoticon at the very end, as the message goes
+  const finished = (body: string) => {
+    const hit = emoticons ? emoticonAt(body) : null;
+    return hit && !(kept.current?.from === hit.from && kept.current.emoticon === hit.emoticon) ? body.slice(0, hit.from) + hit.emoji : body;
+  };
   const choose = (m: Member) => {
     if (!asked) return;
     const label = `@${m.name}`;
@@ -1059,7 +1117,8 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
     requestAnimationFrame(() => { ref.current?.focus(); ref.current?.setSelectionRange(at, at); });
   };
   const go = () => {
-    const body = text.trim();
+    const body = finished(text.trim());
+    kept.current = turned.current = null;
     if (editing) {
       if (body && body !== (editing.text ?? "").trim()) onEdit(editing, body);
       onCancelEdit();
@@ -1074,10 +1133,25 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
     onCancelReply();
     ref.current?.focus();
   };
-  const listOpen = options.length > 0;
+  const listOpen = options.length > 0 || emojiOptions.length > 0;
+  const choices = options.length || emojiOptions.length;
   return (
     <div data-composer className="relative border-t border-line bg-panel px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-      {listOpen && (
+      {emojiOptions.length > 0 && (
+        <ul data-emoji-list role="listbox" aria-label={t("emoji.choose")}
+          className="absolute bottom-full left-3 right-3 z-20 mb-1 max-h-72 overflow-y-auto rounded-2xl border border-line bg-panel p-1 shadow-xl md:right-auto md:w-80">
+          {emojiOptions.map((o, i) => (
+            <li key={o.emoji} role="option" aria-selected={i === pick}>
+              <button data-emoji-suggestion={o.emoji} onMouseDown={(e) => e.preventDefault()} onClick={() => chooseEmoji(o.emoji)}
+                className={cn("flex w-full items-center gap-3 rounded-xl px-2 py-1.5 text-left text-sm", i === pick ? "bg-panel-2" : "hover:bg-panel-2")}>
+                <span className="w-7 text-center text-xl leading-none">{o.emoji}</span>
+                <span className="truncate text-muted">:{o.code}:</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {options.length > 0 && (
         <ul data-mention-list role="listbox" aria-label={t("chat.mention")}
           className="absolute bottom-full left-3 right-3 z-20 mb-1 max-h-72 overflow-y-auto rounded-2xl border border-line bg-panel p-1 shadow-xl md:right-auto md:w-80">
           {options.map((m, i) => (
@@ -1187,18 +1261,26 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
             disabled={!can}                      // nothing to write where it cannot go
             role={listOpen ? "combobox" : undefined}
             aria-expanded={listOpen || undefined}
-            onChange={(e) => { setText(e.target.value); setCaret(e.target.selectionStart ?? e.target.value.length); setNoList(false); }}
+            onChange={(e) => {
+              const el = e.target;
+              const [next, at] = typed(el.value, el.selectionStart ?? el.value.length);
+              setText(next);
+              setCaret(at);
+              setNoList(false);
+              if (next !== el.value) caretTo.current = at;
+            }}
             onSelect={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
             onKeyDown={(e) => {
               if (listOpen) {
                 if (e.key === "ArrowDown" || e.key === "ArrowUp") {
                   e.preventDefault();
-                  setPick((p) => (p + (e.key === "ArrowDown" ? 1 : options.length - 1)) % options.length);
+                  setPick((p) => (p + (e.key === "ArrowDown" ? 1 : choices - 1)) % choices);
                   return;
                 }
                 if ((e.key === "Enter" || e.key === "Tab") && !e.nativeEvent.isComposing) {
                   e.preventDefault();
-                  choose(options[pick] ?? options[0]);
+                  if (options.length) choose(options[pick] ?? options[0]);
+                  else chooseEmoji((emojiOptions[pick] ?? emojiOptions[0]).emoji);
                   return;
                 }
                 if (e.key === "Escape") {
@@ -1206,6 +1288,19 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
                   setNoList(true);
                   return;
                 }
+              }
+              // a Backspace right after an emoticon was turned: the emoticon back, as typed (not turned again there)
+              const w = turned.current, el = e.currentTarget;
+              if (e.key === "Backspace" && w && el.selectionStart === el.selectionEnd
+                && text.slice(w.from, el.selectionStart) === w.emoji + w.end) {
+                e.preventDefault();
+                const at = w.from + w.emoticon.length;
+                setText(text.slice(0, w.from) + w.emoticon + text.slice(el.selectionStart));
+                setCaret(at);
+                kept.current = { from: w.from, emoticon: w.emoticon };
+                turned.current = null;
+                caretTo.current = at;
+                return;
               }
               if (e.key === "Enter" && !e.shiftKey && enterSends && !e.nativeEvent.isComposing) {
                 e.preventDefault();
