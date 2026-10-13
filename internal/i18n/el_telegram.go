@@ -28,7 +28,7 @@ func init() {
 		"waiting: Telegram is connected by another Everysaid (telegram-sync run by hand?)":                                          "αναμονή: το Telegram είναι συνδεδεμένο από άλλο Everysaid (το telegram-sync με το χέρι;)",
 		"Telegram live": "Telegram ζωντανά",
 		"That GIF is no longer in the results: search again": "Αυτό το GIF δεν είναι πια στα αποτελέσματα: ψάξε ξανά",
-		"Telegram did not give its @gif bot":                 "Το Telegram δεν έδωσε το bot του, το @gif",
+		"Telegram did not find its @gif bot":                 "Το Telegram δεν βρήκε το bot @gif",
 		"Of the messages that arrive, and of those of the last week when it connects. A chat's whole history: its Media column in the chats": "Των μηνυμάτων που φτάνουν, και της τελευταίας εβδομάδας όταν συνδέεται. Όλο το ιστορικό μιας συνομιλίας: η στήλη «Πολυμέσα» στις συνομιλίες",
 		"Not signed in to Telegram yet (everysaid telegram-sync --save-credentials, --login)":                                                "Δεν έχει γίνει ακόμα σύνδεση στο Telegram (everysaid telegram-sync --save-credentials, --login)",
 		"The Telegram sign-in has expired: everysaid telegram-sync --login":                                                                  "Η σύνδεση στο Telegram έληξε: everysaid telegram-sync --login",

@@ -21,7 +21,7 @@ var EL = map[string]string{
 	"Demo (sends into the demo archive)":     "Demo (στέλνει στο αρχείο του demo)",
 	"Invented: what is sent is only written into the demo archive.": "Επινοημένη: ό,τι στέλνεται γράφεται μόνο στο αρχείο του demo.",
 	"Demo GIFs": "GIF του demo",
-	"Invented: three GIFs that move, found by their names.": "Επινοημένα: τρία GIF που κινούνται, που βρίσκονται με το όνομά τους.",
+	"Invented: three GIFs that move, found by their names.": "Επινοημένα: τρία κινούμενα GIF, που βρίσκονται με το όνομά τους.",
 	"Serial": "Σειριακός αριθμός",
 	"e.g. https://cloud.example.org/remote.php/dav/addressbooks/users/NAME/contacts/": "π.χ. https://cloud.example.org/remote.php/dav/addressbooks/users/NAME/contacts/",
 	"unknown plugin":                     "άγνωστο plugin",

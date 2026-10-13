@@ -3,6 +3,7 @@ package i18n
 // The server's own words (internal/server): its command line and console.
 func init() {
 	for k, v := range map[string]string{
+		"The GIF source did not answer":                    "Η πηγή GIF δεν απάντησε",
 		"First setup: open {url}":                          "Πρώτη ρύθμιση: άνοιξε {url}",
 		"(valid for one hour)":                             "(ισχύει μία ώρα)",
 		"Everysaid: {origin} (listening on {host}:{port})": "Everysaid: {origin} (ακούει στο {host}:{port})",

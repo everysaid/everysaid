@@ -5,6 +5,9 @@ import { signedIn } from "./demo";
 // one as a GIF, which is then in the History; a searcher that cannot now is there, greyed, saying
 // why. "@gif" and words find them above the text as it is written.
 
+// the tab of the plugin that finds GIFs (not the History's, nor the emoji's)
+const searcherTab = "[data-results-tab]:not([data-results-history]):not([data-results-tab='emoji'])";
+
 async function sendableChat(page: Page) {
   const chat = await page.evaluate(async () => {
     const h = { "X-Everysaid": "1" };
@@ -41,7 +44,9 @@ test("a GIF found, sent with a tap, then in the History", async ({ page }, info)
   const box = page.locator("[data-expressions]");
   await expect(box.locator("[data-emoji-picker]")).toBeVisible();      // the emoji first
   await box.locator("[data-gif-tab]:not([data-gif-history])").first().click();
-  await expect(box.locator("[data-gif-option]")).toHaveCount(3);
+  await expect(box.locator("[data-gif-waiting]")).toBeVisible();        // nothing asked for before words
+  await box.locator("[data-gif-search]").fill("a");                    // a second after them
+  await expect(box.locator("[data-gif-option]")).toHaveCount(2);
   await box.locator("[data-gif-search]").fill("par");
   await expect(box.locator("[data-gif-option]")).toHaveCount(1);
   await expect(box.locator("[data-gif-option] video")).toHaveCount(1);
@@ -82,6 +87,7 @@ test("@gif and words: GIFs above the text, one sent with a tap, the text gone", 
   await expect(field).toHaveValue("@gif ");
   await field.pressSequentially("dog");
   const results = page.locator("[data-gif-results]");
+  await results.locator(searcherTab).click();                                  // the plugin's (the History comes first)
   await expect(results.locator("[data-gif-option]")).toHaveCount(1);
   await field.press("Enter");                                                  // not sent as text
   await expect(field).toHaveValue("@gif dog");
@@ -98,6 +104,7 @@ test("@gif by keys: a tab a plugin's and one the emoji's, the one chosen last op
   const field = page.locator("[data-composer-body] textarea");
   const results = page.locator("[data-gif-results]");
   await field.fill("@gif cat");
+  await results.locator(searcherTab).click();
   await expect(results.locator("[data-gif-option]")).toHaveCount(1);
   await field.press("ArrowDown");                                              // the first marked, the caret still in the text
   await expect(results.locator("[data-gif-option][data-active]")).toHaveCount(1);

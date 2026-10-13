@@ -320,6 +320,12 @@ type GIFSearcher interface {
 	GIF(ctx context.Context, c *Context, id string) (*File, error)
 }
 
+// GIFPacer says how long after the last letter typed a searcher is asked (each search counting with
+// one, or one asked at every letter refusing for a while); without it, a second.
+type GIFPacer interface {
+	SearchWait() time.Duration
+}
+
 // GIFHistory marks the GIFs plugin of the archive's own GIFs, which the app shows itself.
 type GIFHistory interface{ GIFHistory() }
 
