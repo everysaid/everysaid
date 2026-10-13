@@ -68,6 +68,7 @@ type SendRequest struct {
 	Media    []byte   `json:"media"` // a file to send, base64 in the JSON
 	Filename string   `json:"filename"`
 	MimeType string   `json:"mime_type"`
+	Animated bool     `json:"animated"` // a video sent as a GIF
 	// First: a first message to a number WhatsApp has, in a chat not there yet (the owner found them)
 	First bool `json:"first"`
 }
@@ -506,6 +507,10 @@ func (s *Sender) mediaMessage(req SendRequest, caption string, quote *waE2E.Cont
 		ReplyTo: stored.ReplyTo, ReplyText: stored.ReplyText, Kind: kind, MediaType: kind, Filename: filename,
 		URL: up.URL, DirectPath: up.DirectPath, MediaKey: up.MediaKey, FileSHA256: up.FileSHA256,
 		FileEncSHA256: up.FileEncSHA256, FileLength: up.FileLength}
+	var gif *bool // played by itself, in a loop
+	if req.Animated && kind == "video" {
+		gif, stored.Subtype = proto.Bool(true), "gif"
+	}
 	var text *string
 	if caption != "" {
 		text = proto.String(caption)
@@ -521,7 +526,7 @@ func (s *Sender) mediaMessage(req SendRequest, caption string, quote *waE2E.Cont
 		return &waE2E.Message{VideoMessage: &waE2E.VideoMessage{Caption: text, Mimetype: proto.String(mimeType),
 			URL: proto.String(up.URL), DirectPath: proto.String(up.DirectPath), MediaKey: up.MediaKey,
 			FileEncSHA256: up.FileEncSHA256, FileSHA256: up.FileSHA256, FileLength: proto.Uint64(up.FileLength),
-			ContextInfo: quote}}, nil
+			GifPlayback: gif, ContextInfo: quote}}, nil
 	case "audio":
 		return &waE2E.Message{AudioMessage: &waE2E.AudioMessage{Mimetype: proto.String(mimeType),
 			URL: proto.String(up.URL), DirectPath: proto.String(up.DirectPath), MediaKey: up.MediaKey,

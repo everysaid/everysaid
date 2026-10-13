@@ -271,7 +271,8 @@ func (s *Server) chatRoutes() {
 	})
 
 	// A JSON body {text, conversation_id, service, reply_to, mentions}, or a form with the same
-	// fields (mentions as JSON) and a `file`, sent with the text as its caption.
+	// fields (mentions as JSON) and a `file`, sent with the text as its caption (`animated`: as a
+	// GIF, a video without sound).
 	h("POST /api/chats/{chat_id}/send", bodyNone, func(q *req) (any, error) {
 		var file *plugins.File
 		if strings.HasPrefix(q.r.Header.Get("Content-Type"), "multipart/form-data") {
@@ -283,6 +284,9 @@ func (s *Server) chatRoutes() {
 				return nil, err
 			}
 			q.body, file = body, f
+			if file != nil {
+				file.Animated = truthy(q.get("animated"))
+			}
 		} else {
 			b, err := io.ReadAll(http.MaxBytesReader(q.w, q.r.Body, 10<<20))
 			if err != nil {
