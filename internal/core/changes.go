@@ -218,8 +218,13 @@ func SplitAddress(s *Store, addressID int64) (int64, error) {
 		}
 		out = db.LastID(tx, "INSERT INTO person DEFAULT VALUES")
 		db.Exec(tx, "UPDATE person_address SET person_id = ?, how = 'manual' WHERE address_id = ?", out, addressID)
-		// not the same, in the user's word: not merged again (by a contact that lists both, nor suggested)
-		db.Exec(tx, "INSERT OR REPLACE INTO merge_dismissed VALUES (?, ?, ?)", min(pid, out), max(pid, out), time.Now().Unix())
+		// where a contact still there lists it and one of the others, not the same in the user's word:
+		// not merged again by the next sync (MergeByContacts), nor suggested
+		if db.Exists(tx, "SELECT 1 FROM contact_address ca JOIN contact_address cb ON cb.contact_id = ca.contact_id "+
+			"JOIN person_address pb ON pb.address_id = cb.address_id WHERE ca.address_id = ? AND pb.person_id = ? "+
+			"AND ca.contact_id NOT IN (SELECT contact_id FROM contact_gone)", addressID, pid) {
+			db.Exec(tx, "INSERT OR REPLACE INTO merge_dismissed VALUES (?, ?, ?)", min(pid, out), max(pid, out), time.Now().Unix())
+		}
 		db.Exec(tx, "DELETE FROM analysis WHERE person_id = ?", pid) // read again, without it
 		// its chat is new, but not newly seen: archived as the chat it left
 		db.Exec(tx, "INSERT INTO chat_state SELECT ?, field, value, set_at, always FROM chat_state "+
