@@ -146,6 +146,9 @@ test("a message that cannot go now waits, and goes", async ({ page }, info) => {
   await expect(kept).toHaveAttribute("data-pending-item", /queued|sending/);
   await expect(stream.filter({ hasText: busy })).toHaveCount(1);
   await loaded(kept);
+  // in the bubble, beside its time: a sign (why, on it) and the two things to do, nothing under it
+  await expect(kept.locator("[data-send-warning]")).toBeVisible();
+  await expect(kept.getByText(/Σε αναμονή|Waiting/)).toHaveCount(0);
   await kept.locator("[data-resend]").click();
   await expect(kept).toHaveCount(0);
   await expect(stream.filter({ hasText: busy })).toHaveCount(1);
@@ -169,6 +172,17 @@ test("a message that cannot go now waits, and goes", async ({ page }, info) => {
   await expect(waiting).toHaveCount(0);
   await expect(stream.filter({ hasText: away })).toHaveCount(1);
   await expect(stream.filter({ hasText: away }).locator("button img")).toBeVisible();
+
+  // discarded: gone, never sent
+  const drop = `quiet: dropped ${info.project.name} ${Date.now()}`;
+  await page.route("**/api/chats/*/send", (r) => r.abort("connectionrefused"));
+  await field.fill(drop);
+  await page.locator("[data-send]").click();
+  const dropped = page.locator('[data-pending-item="waiting"]').filter({ hasText: drop });
+  await expect(dropped.locator("[data-send-warning]")).toBeVisible();
+  await page.unroute("**/api/chats/*/send");
+  await dropped.locator("[data-discard]").click();
+  await expect(stream.filter({ hasText: drop })).toHaveCount(0);
 });
 
 // Messages written one after another go at once, each its one bubble from being sent to sent (one

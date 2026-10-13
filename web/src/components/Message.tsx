@@ -2,7 +2,7 @@ import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { Check, CheckCheck, Clock, Copy, CornerUpLeft, EllipsisVertical, FileText, Forward, ImageOff, Link2, MapPin, Pencil, Phone, Pin, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Plus, RotateCw, Trash2, Video, X } from "lucide-react";
+import { Check, CheckCheck, Clock, Copy, CornerUpLeft, EllipsisVertical, FileText, Forward, ImageOff, Link2, MapPin, Pencil, Phone, Pin, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Plus, Trash2, TriangleAlert, Video } from "lucide-react";
 import { thumbUrl, type Attachment, type LinkPreview, type Local, type CallItem, type Mention, type MessageItem, type Receipts } from "@/lib/api";
 import { bytes, duration, time } from "@/lib/format";
 import { service } from "@/lib/services";
@@ -261,7 +261,7 @@ export interface BubbleProps {
   onDelete?: (m: MessageItem) => void;
   deleteFor?: DeleteFor;
   onForward?: (m: MessageItem) => void;  // sent on to other chats
-  // one waiting to be sent (or refused): why, said under it, and to send it again or let it go
+  // one waiting to be sent (or refused): why (on its sign), and to send it again or let it go
   waiting?: { why: string | null; again: () => void; discard: () => void };
 }
 
@@ -547,7 +547,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
             {showService && <span className="flex items-center gap-1"><span className="size-1.5 rounded-full" style={{ background: svc.color }} />{svc.name}{account && ` · ${account}`} ·</span>}
             {m.pinned && <Pin className="size-3" aria-label={t("chat.pinned")} />}
             {m.edited && <span>{t("chat.edited")} ·</span>}
-            {!onlyMedia && <SendState status={m.status} />}
+            {!onlyMedia && <SendState status={m.status} waiting={waiting} />}
             <span title={account ? `${svc.name} · ${account}` : svc.name}>{time(m.ts)}</span>
             {out && m.receipts && <Ticks r={m.receipts} onInfo={onInfo && (() => onInfo(m))} />}
           </div>
@@ -574,18 +574,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
         {onlyMedia && m.status && ["sending", "queued", "waiting", "failed"].includes(m.status) && (
           // a picture alone: what becomes of it said under it (on it, beside the time, there is no room)
           <div data-status className="mt-0.5 flex rounded-full bg-panel/90 px-1.5 py-1 text-[11px] leading-none text-muted shadow-sm">
-            <SendState status={m.status} />
-          </div>
-        )}
-        {waiting && (
-          <div className={cn("mt-1 flex flex-wrap items-center justify-end gap-x-2 gap-y-1 text-xs", m.status === "failed" ? "text-danger" : "text-muted")}>
-            {waiting.why && <span>{waiting.why}</span>}
-            <button data-resend onClick={waiting.again} className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 font-medium text-accent hover:bg-panel-2">
-              <RotateCw className="size-3.5" />{t("chat.resend")}
-            </button>
-            <button data-discard onClick={waiting.discard} className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-muted hover:bg-panel-2 hover:text-fg">
-              <X className="size-3.5" />{t("chat.discard")}
-            </button>
+            <SendState status={m.status} waiting={waiting} />
           </div>
         )}
       </div>
@@ -593,10 +582,21 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
   );
 });
 
-// What became of a message sent from here, beside its time: being sent, waiting, or not sent.
-function SendState({ status }: { status: string | null }) {
+// What became of a message sent from here, beside its time: being sent, waiting, or not sent. One
+// that waits or was refused has a sign (why, on it) and the two things to do with it.
+function SendState({ status, waiting }: { status: string | null; waiting?: BubbleProps["waiting"] }) {
   const { t } = useTranslation();
   if (status === "sending") return <span><Sending /> ·</span>;
+  if (waiting && (status === "queued" || status === "waiting" || status === "failed")) {
+    const why = waiting.why ?? t(status === "failed" ? "chat.sendFailed" : "chat.queued");
+    return (
+      <span className="flex items-center gap-1">
+        <span data-send-warning title={why} aria-label={why} className={status === "failed" ? "text-danger" : "text-amber-400"}><TriangleAlert className="size-3.5" /></span>
+        <button data-resend onClick={waiting.again} className="font-semibold underline underline-offset-2 hover:opacity-80">{t("chat.resend")}</button> ·
+        <button data-discard onClick={waiting.discard} className="underline underline-offset-2 hover:opacity-80">{t("chat.discard")}</button> ·
+      </span>
+    );
+  }
   if (status === "queued" || status === "waiting") return <span className="flex items-center gap-1"><Clock className="size-3" />{t("chat.queued")} ·</span>;
   if (status === "failed") return <span className="text-danger">{t("chat.sendFailed")} ·</span>;
   return null;

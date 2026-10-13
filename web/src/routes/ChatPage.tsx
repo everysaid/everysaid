@@ -413,11 +413,11 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
     if (!m.outbox || m.status === "sending") return undefined;
     const o = m.outbox;
     const k = kept.data?.items.find((x) => x.id === o);
-    if (k) return { why: said(k.error) ?? (k.state === "queued" ? t("chat.waitingService") : null),
+    if (k) return { why: said(k.error),
       again: () => { api.post(`/api/outbox/${o}/retry`).then(refreshKept, failKept); },
       discard: () => { api.del(`/api/outbox/${o}`).then(() => { dropPlaced(o); refreshKept(); }, failKept); } };
     const u = unsentHere.find((x) => x.id === o);
-    if (u) return { why: u.error ?? (u.state === "waiting" ? t("chat.waitingServer") : null),
+    if (u) return { why: u.error,
       again: () => { flushUnsent(o).then(refreshKept); },
       discard: () => { dropUnsent(o).then(() => dropPlaced(o)); } };
     return undefined;
