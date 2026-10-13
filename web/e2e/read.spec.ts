@@ -78,16 +78,25 @@ test("a chat opens at its first unread, which are read as they are seen", async 
   await back();
   await expect(line).toHaveCount(0);
 
-  // and once the user answers
+  // one that comes while the user looks at the end is seen: away and back, still no line
+  await page.request.post("/api/demo/incoming", { data: { chat, text: "while here" }, headers: h });
+  await expect(page.getByText("while here", { exact: true })).toBeVisible();
+  await page.waitForTimeout(1500);
+  await away();
+  await back();
+  await expect(line).toHaveCount(0);
+
+  // and once the user takes the field to answer
   await away();
   await page.request.post("/api/demo/incoming", { data: { chat, text: "while away again" }, headers: h });
   await page.waitForTimeout(1500);
   await back();
   await toEnd();
   await expect(page.locator("[data-cursor]", { has: line }).getByText("while away again", { exact: true })).toHaveCount(1);
+  await page.locator("[data-composer-body] textarea").focus();
+  await expect(line).toHaveCount(0);
   await page.locator("[data-composer-body] textarea").fill(`quiet: answered ${info.project.name}`);
   await page.locator("[data-send]").click();
-  await expect(line).toHaveCount(0);
 
   // opened again with nothing unread: at its end, no line
   await page.reload();

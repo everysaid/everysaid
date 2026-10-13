@@ -215,9 +215,12 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       if (waitingOn.current.get(m.id) === shown) waitingOn.current.delete(m.id);
     }
   }, [t]);
-  const react = useCallback((m: MessageItem, emoji: string) => act(m, () => api.post(`/api/messages/${m.id}/reaction`, { emoji }), (i) => ({
-    ...i, reactions: [...i.reactions.filter((r) => !r.mine), ...(emoji ? [{ emoji, code: null, count: 1, mine: true, who: null }] : [])],
-  })), [act]);
+  const react = useCallback((m: MessageItem, emoji: string) => {
+    setNewFrom(null);                                  // answered with a reaction: what was new is seen
+    return act(m, () => api.post(`/api/messages/${m.id}/reaction`, { emoji }), (i) => ({
+      ...i, reactions: [...i.reactions.filter((r) => !r.mine), ...(emoji ? [{ emoji, code: null, count: 1, mine: true, who: null }] : [])],
+    }));
+  }, [act]);
   const startEdit = useCallback((m: MessageItem) => {
     setReplyTo(null);
     setEditing(m);
@@ -577,6 +580,9 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       const r = body.getBoundingClientRect();
       if (r.bottom > view.top && r.bottom - r.height * 0.05 <= view.bottom) latest = Math.max(latest, Number(row.dataset.ts));
     }
+    // at the very end of the latest: all of it seen, whatever is drawn under the view's edge
+    const cur = itemsRef.current.filter((i) => !(i.type === "message" && i.id < 0));
+    if (!hasNewerRef.current && cur.length && el.scrollHeight - el.scrollTop - el.clientHeight <= 2) latest = Math.max(latest, cur[cur.length - 1].ts);
     if (latest <= seen.current) return;
     seen.current = latest;
     clearTimeout(tellTimer.current);
@@ -836,7 +842,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
             accounts={detail.data.accounts ?? []}
             mentionable={isGroup ? detail.data.mentionable ?? [] : []} fileable={detail.data.fileable ?? []} members={detail.data.members ?? []}
             chatId={chatId} onSend={send} take={take} replyTo={replyTo} onCancelReply={() => setReplyTo(null)}
-            editing={editing} onEdit={edit} onCancelEdit={() => setEditing(null)}
+            editing={editing} onEdit={edit} onCancelEdit={() => setEditing(null)} onFocus={() => setNewFrom(null)}
             preferred={(!hasNewer && [...items].reverse().find((i) => i.type === "message")?.service) || detail.data.last_service} />
         )}
       </div>
@@ -996,7 +1002,7 @@ type Taker = { ok: () => boolean; put: (f: File) => void };
  * closed, with a lock for Send. accounts: the conversations a message may go to (a person's handles,
  * the groups merged into one); a service with more than one opens a menu of them, by name, the last
  * active picked until the user picks another. */
-function Composer({ chatId, services, sendable, replyable, mentionable, fileable, members, missing, preferred, findable, reach, accounts, onSend, take, replyTo, onCancelReply, editing, onEdit, onCancelEdit }: {
+function Composer({ chatId, services, sendable, replyable, mentionable, fileable, members, missing, preferred, findable, reach, accounts, onSend, take, replyTo, onCancelReply, editing, onEdit, onCancelEdit, onFocus }: {
   chatId: string; services: string[]; sendable: string[]; replyable: string[]; mentionable: string[]; fileable: string[];
   findable: boolean; reach: Record<string, string>;
   accounts: NonNullable<ChatDetail["accounts"]>;
@@ -1007,6 +1013,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   take: React.MutableRefObject<Taker | null>;          // set here: where a dropped or pasted file goes
   replyTo: MessageItem | null; onCancelReply: () => void;
   editing: MessageItem | null; onEdit: (m: MessageItem, text: string) => void; onCancelEdit: () => void;
+  onFocus: () => void;                                 // the field taken: what was new is seen
 }) {
   const { t } = useTranslation();
   const settings = useSettings();
@@ -1402,6 +1409,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
             ref={ref}
             rows={1}
             value={text}
+            onFocus={onFocus}
             disabled={!can}                      // nothing to write where it cannot go
             role={listOpen ? "combobox" : undefined}
             aria-expanded={listOpen || undefined}
