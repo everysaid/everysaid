@@ -30,7 +30,7 @@ var callServices = [][2]string{{"com.apple.Telephony", "phone"}, {"com.apple.Fac
 	{"com.microsoft.skype.teams", "teams"}, {"com.skype.skype", "skype"}, {"com.skype.SkypeForiPhone", "skype"},
 	{"us.zoom.videomeetings", "zoom"}, {"com.google.Duo", "meet"}, {"com.google.meetings", "meet"},
 	{"com.hammerandchisel.discord", "discord"}, {"com.tinyspeck.chatlyio", "slack"},
-	{"jp.naver.line", "line"}, {"com.tencent.xin", "wechat"}}
+	{"jp.naver.line", "line"}, {"com.tencent.xin", "wechat"}, {"cz.acrobits", "sip"}}
 
 const androidOutgoing = "2"
 

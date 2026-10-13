@@ -35,7 +35,7 @@ func init() {
 	plugins.Register(ImLogs{})
 }
 
-var iphoneServices = []string{"sms", "imessage", "rcs", "phone", "facetime", "whatsapp", "viber"}
+var iphoneServices = []string{"sms", "imessage", "rcs", "phone", "facetime", "sip", "whatsapp", "viber"}
 
 func (IphoneBackup) Info() *plugins.Info {
 	return &plugins.Info{
