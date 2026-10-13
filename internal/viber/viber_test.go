@@ -196,7 +196,7 @@ func (b *bridge) serve(c net.Conn) {
 	case "check":
 		b.mu.Lock()
 		out := "version " + b.version + "\n"
-		for _, n := range []string{"read", "live", "send", "file", "compose", "react", "delete", "read-receipts"} {
+		for _, n := range []string{"read", "live", "send", "file", "compose", "react", "delete", "read-receipts", "forward"} {
 			if slices.Contains(b.missing, n) {
 				out += "missing " + n + " Something::gone/1\n"
 			} else {
@@ -418,12 +418,13 @@ func TestViberDesktop(t *testing.T) {
 	must(t, (Plugin{}).React(ctx, c, group, ref("9001"), ""))
 	must(t, (Plugin{}).Edit(ctx, c, group, ref("9002"), "mine, fixed"))
 	must(t, (Plugin{}).Delete(ctx, c, group, ref("9002")))
+	must(t, (Plugin{}).Forward(ctx, c, group, []plugins.Ref{ref("9001")}, []plugins.Conversation{group}))
 	n, err := (Plugin{}).MarkRead(ctx, c, group, 0)
 	must(t, err)
 	eq(t, "read, as opening it in Viber", n, 1)
 	eq(t, "marked deleted here", db.Int(q, "SELECT deleted FROM message WHERE key = '9002'"), int64(1))
 	eq(t, "actions", b.take(), []string{"react 10 1", "react 10 1", "react 10 🙏", "unreact 10",
-		`compose {"chat":2,"edit":11,"parts":[{"text":"mine, fixed"}]}`, "delete 11", "read 2"})
+		`compose {"chat":2,"edit":11,"parts":[{"text":"mine, fixed"}]}`, "delete 11", "forward 10 2", "read 2"})
 
 	// what the bridge refuses, said
 	b.fail = "send-disabled"

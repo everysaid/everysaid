@@ -48,6 +48,7 @@ Reads come from the SQLite connections Viber has already opened and unlocked (no
 | Edit | `Chat::editMessage(EventID)` puts the message in the input, then compose |
 | Compose and send | `InputBoxArea::forceActiveFocus`, `replaceTextWith`, `insertEmoticon`, `mentionSelected(contact)` after an "@", then `InputBoxArea::accept()` (a synthetic Return to the window only where `accept` is missing) |
 | Delete for everyone | `MessageActions::deleteMessageForAll(EventID)` |
+| Forward | `Chat::forwardMessages(QList<EventID>)` opens the forward popup; its `QmlPopup::RecepientsSelector` is given the chats (`initCheckedItems(QList<ChatID>)`), and `QmlPopup::Forward::forward(QList<CheckedItem>)` sends to those it checked (`checkedRecepients()`, never made by hand); the popup is closed (`popupVisible`), and the new outgoing events awaited in each chat |
 | Reaction | heart: `MessageActions::like(EventID, bool)` (false takes it back); a quick one: `ReactionsFeature::getReactionFromQuickType(int)`, any emoji: `getReactionFromEmojiCode(QString)`, then `MessageActions::react(EventID, Reaction, prev)` |
 | Mark read | `setRead(ChatID, bool)` on the object that has it |
 | Receive, instant | connect `EventsStorage::eventsAdded(QList<EventData>)` |
@@ -166,7 +167,7 @@ Desktop").
 Viber is updated as any other package, not held back: the bridge says itself what an update broke.
 Its `check` command looks up, on the classes Viber has (nothing is called), everything each command
 uses (the table above), and answers with Viber's version and, per capability (`read`, `live`,
-`send`, `file`, `compose`, `react`, `delete`, `read-receipts`), `ok` or what is missing. It runs
+`send`, `file`, `compose`, `react`, `delete`, `read-receipts`, `forward`), `ok` or what is missing. It runs
 once at Viber's start (its summary in Viber's output: `viber.log`, above, or the journal of
 `viber-bridge.service` where it is started by hand) and whenever the source connects. The source then:
 

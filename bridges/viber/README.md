@@ -75,7 +75,7 @@ Every action answers `ok` or `error <what>` (`error send-disabled` without `VIBE
 | `subscribe` | `subscribed`, then the same event rows live as they arrive | — |
 | `snapshot PATH` | a plain copy of `viber.db` at PATH (absolute; mode 600, moved into place when whole) | — |
 | `input` | `edit=on/off`, a tab, then the focused input's text (to check what `compose` typed) | — |
-| `check` | `version V`, then per capability (`read`, `live`, `send`, `file`, `compose`, `react`, `delete`, `read-receipts`) `ok NAME [note]` or `missing NAME WHAT,…`: whether this Viber still has what each command calls (nothing is called; My Notes may be opened, as `compose` opens a chat) | — |
+| `check` | `version V`, then per capability (`read`, `live`, `send`, `file`, `compose`, `react`, `delete`, `read-receipts`, `forward`) `ok NAME [note]` or `missing NAME WHAT,…`: whether this Viber still has what each command calls (nothing is called; My Notes may be opened, as `compose` opens a chat) | — |
 | `quit` | `ok`, and Viber quits cleanly | — |
 | `send CHATID TEXT` | TEXT with `\n`, `\t` and `\\` escaped | yes |
 | `file CHATID PATH` | sends the file | yes |
@@ -84,6 +84,7 @@ Every action answers `ok` or `error <what>` (`error send-disabled` without `VIBE
 | `react TARGET CODE` | CODE: `like`, a quick reaction number (1-5 = ❤️😂😮😢😡), or any emoji | yes |
 | `unreact TARGET` | takes the user's reaction back | yes |
 | `delete TARGET` | the user's own message, deleted for everyone | yes |
+| `forward EVENTS CHATS` | messages (EventIDs, comma-separated, of one chat, none deleted) forwarded to chats (ChatIDs, comma-separated, at most Viber's 8 at once) as Viber's Forward does; `ok` once each chat has them as new outgoing events, `error unconfirmed-N` where N did not show them within 10 s | yes |
 | `read CHATID` | marks the chat read | yes |
 
 `compose` opens the chat, types into its input (`InputBoxArea::replaceTextWith`/`insertEmoticon`,
@@ -132,7 +133,7 @@ says Viber added events, and every `interval` seconds (default 60) for what chan
 deletion); a stopped Viber is waited for. Sending maps the archive's conversation to a `ChatID` (a
 group's or the notes' token, a person's number) and a message to its `EventID` (by token), on the
 last copy, or a fresh one where it is not there. It uses `send`, `file`, `compose`, `react`/`unreact`,
-`delete` and `read`, gated by the source's "Sending messages" (and, for `read`, "Send read
+`delete`, `forward` and `read`, gated by the source's "Sending messages" (and, for `read`, "Send read
 receipts"); a Viber started by hand also by `VIBER_ALLOW_SEND=1` here (the source starts it with
 it). Viber Desktop itself is started, kept running and stopped by the source (`launch.go`).
 

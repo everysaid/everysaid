@@ -29,6 +29,8 @@
 //                                typed into the chat's input and sent: a reply, an edit of the user's
 //                                own message, mentions (any of reply/edit 0 or left out)  [needs VIBER_ALLOW_SEND]
 //   delete TARGET             -> delete the user's own message for everyone      [needs VIBER_ALLOW_SEND]
+//   forward EVENTS CHATS      -> messages (EventIDs, comma-separated, of one chat) forwarded to chats
+//                                (ChatIDs, comma-separated), as Viber's Forward does  [needs VIBER_ALLOW_SEND]
 //   snapshot PATH             -> a plain (decrypted) copy of viber.db at PATH (mode 600), for the importer
 //   input                     -> the text in the focused input (to check what compose typed)
 //   check                     -> "version V", then per capability "ok NAME [note]" or "missing NAME WHAT":
@@ -448,6 +450,109 @@ static QString actDelete(qlonglong target) {
     return "ok\n";
 }
 
+// Messages forwarded as Viber's own "Forward" does them (marked forwarded, files not uploaded again):
+// Chat::forwardMessages opens the forward popup with them, its recipients' selector
+// (QmlPopup::RecepientsSelector) is given the chats, and QmlPopup::Forward::forward sends to those it
+// has checked. Their CheckedItems come from the selector, never made by hand.
+static QString forwardTo(const QList<qlonglong> &events, const QList<qlonglong> &chats) {
+    if (events.isEmpty() || chats.isEmpty()) return "error bad-forward\n";
+    QSqlDatabase db = viberDb();
+    if (!db.isOpen()) return "error not-open\n";
+    QSqlQuery q(db);
+    QStringList marks;
+    for (qsizetype i = 0; i < events.size(); ++i) marks << "?";
+    // each one there, of one chat, and not deleted (Messages.Type 72: Viber forwards it empty, or not)
+    q.prepare("SELECT e.ChatID, IFNULL(m.Type, 0) FROM Events e LEFT JOIN Messages m ON m.EventID = e.EventID "
+              "WHERE e.EventID IN (" + marks.join(',') + ")");
+    for (qlonglong e : events) q.addBindValue(e);
+    if (!q.exec()) return "error " + esc(q.lastError().text()) + "\n";
+    QList<qlonglong> from;
+    int found = 0;
+    while (q.next()) {
+        ++found;
+        if (q.value(1).toInt() == 72) return "error deleted\n";
+        if (!from.contains(q.value(0).toLongLong())) from << q.value(0).toLongLong();
+    }
+    if (found != events.size()) return "error no-event\n";
+    if (from.size() != 1) return "error events-of-several-chats\n";
+    // what is there before it, to see it go: the forwarded ones are new outgoing events of each chat
+    if (!q.exec("SELECT IFNULL(MAX(EventID), 0) FROM Events") || !q.next()) return "error " + esc(q.lastError().text()) + "\n";
+    const qlonglong top = q.value(0).toLongLong();
+    QList<QObject *> ps = objectsOf("QmlPopup::Forward");
+    if (ps.size() != 1) return QString("error forward-popup-count-%1\n").arg(ps.size());
+    QObject *popup = ps.first();
+    QObject *chat = chatObject(from.first());
+    if (!chat) return "error chat-not-open\n";
+    int fi = chat->metaObject()->indexOfMethod("forwardMessages(QList<EventID::type>)");
+    if (fi < 0) return "error no-forwardMessages\n";
+    QList<QObject *> before = objectsOf("QmlPopup::RecepientsSelector");
+    QList<qlonglong> ids = events;
+    void *fv[] = {nullptr, &ids};
+    QMetaObject::metacall(chat, QMetaObject::InvokeMetaMethod, fi, fv);
+    // the popup's QML makes its selector once it shows: a new one, or the one of a popup still open
+    QObject *sel = nullptr;
+    QElapsedTimer t;
+    t.start();
+    do {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        QList<QObject *> now = objectsOf("QmlPopup::RecepientsSelector");
+        for (QObject *s : now)
+            if (!before.contains(s)) sel = s;
+        if (!sel && now.size() == 1 && popup->property("popupVisible").toBool()) sel = now.first();
+    } while (!sel && t.elapsed() < 2000);
+    auto close = [&]() { popup->setProperty("popupVisible", false); };
+    if (!sel) { close(); return "error no-selector\n"; }
+    rememberClasses();  // the selector's class, for check
+    int limit = sel->property("limit").toInt();
+    if (limit > 0 && chats.size() > limit) { close(); return QString("error too-many-chats-%1\n").arg(limit); }
+    int ii = sel->metaObject()->indexOfMethod("initCheckedItems(QList<ChatID::type>)");
+    int ci = sel->metaObject()->indexOfMethod("checkedRecepients()");
+    int wi = popup->metaObject()->indexOfMethod("forward(QList<CheckedItem>)");
+    QMetaType lt = QMetaType::fromName("QList<CheckedItem>");
+    if (ii < 0 || ci < 0 || wi < 0 || !lt.isValid()) { close(); return "error no-forward\n"; }
+    QList<qlonglong> to = chats;
+    void *iv[] = {nullptr, &to};
+    QMetaObject::metacall(sel, QMetaObject::InvokeMetaMethod, ii, iv);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    // a chat the selector does not offer (not one Viber forwards to) is not checked: nothing goes
+    if (sel->property("checkedCount").toInt() != chats.size()) { close(); return "error chat-not-offered\n"; }
+    if (getenv("VIBER_BRIDGE_DRY")) { close(); return "ok dry\n"; }
+    void *items = lt.create();
+    void *cv[] = {items};
+    QMetaObject::metacall(sel, QMetaObject::InvokeMetaMethod, ci, cv);
+    void *wv[] = {nullptr, items};
+    QMetaObject::metacall(popup, QMetaObject::InvokeMetaMethod, wi, wv);
+    lt.destroy(items);
+    close();
+    // sent once each chat has them all, as new outgoing events (Viber writes them as it sends)
+    QSqlQuery w(db);
+    w.prepare("SELECT COUNT(*) FROM Events WHERE EventID > ? AND ChatID = ? AND Direction = 1");
+    QList<qlonglong> waiting = chats;
+    t.restart();
+    while (!waiting.isEmpty() && t.elapsed() < 10000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+        for (qsizetype i = waiting.size() - 1; i >= 0; --i) {
+            w.addBindValue(top);
+            w.addBindValue(waiting[i]);
+            if (w.exec() && w.next() && w.value(0).toLongLong() >= events.size()) waiting.removeAt(i);
+        }
+    }
+    if (!waiting.isEmpty()) return QString("error unconfirmed-%1\n").arg(waiting.size());
+    return "ok\n";
+}
+
+static QString actForward(const QString &events, const QString &chats) {
+    auto ids = [](const QString &s) {
+        QList<qlonglong> out;
+        for (const QString &p : s.split(',', Qt::SkipEmptyParts)) out << p.toLongLong();
+        return out;
+    };
+    g_busy = true;
+    QString out = forwardTo(ids(events), ids(chats));
+    g_busy = false;
+    return out;
+}
+
 // A plain copy of viber.db through Viber's own (unlocked) connection, written beside PATH and moved
 // into place only when whole, so the importer never reads half a copy.
 static QString snapshot(const QString &path) {
@@ -684,6 +789,26 @@ static QString check() {
     del.signature(cls("MessageActions"), "MessageActions", {"deleteMessageForAll(EventID::type)", "deleteMessageForAll(EventID)"});
     say("delete", del);
 
+    // the recipients' selector exists only while a forward popup is open: known by its type, else
+    // once a forward was made
+    Need fwd;
+    const QMetaObject *selector = cls("QmlPopup::RecepientsSelector");
+    if (!selector) selector = QMetaType::fromName("QmlPopup::RecepientsSelector*").metaObject();
+    fwd.cls(cls("Chat"), "Chat");
+    fwd.cls(cls("QmlPopup::Forward"), "QmlPopup::Forward");
+    fwd.signature(cls("Chat"), "Chat", {"forwardMessages(QList<EventID::type>)"});
+    fwd.signature(cls("QmlPopup::Forward"), "QmlPopup::Forward", {"forward(QList<CheckedItem>)"});
+    if (cls("QmlPopup::Forward") && cls("QmlPopup::Forward")->indexOfProperty("popupVisible") < 0)
+        fwd.missing << "QmlPopup::Forward.popupVisible";
+    if (!QMetaType::fromName("QList<CheckedItem>").isValid()) fwd.missing << "QList<CheckedItem>(type)";
+    if (selector) {
+        fwd.signature(selector, "QmlPopup::RecepientsSelector", {"initCheckedItems(QList<ChatID::type>)"});
+        fwd.signature(selector, "QmlPopup::RecepientsSelector", {"checkedRecepients()"});
+        for (const char *p : {"checkedCount", "limit"})
+            if (selector->indexOfProperty(p) < 0) fwd.missing << QString("QmlPopup::RecepientsSelector.") + p;
+    }
+    say("forward", fwd, selector ? QString() : "selector-unchecked");
+
     Need receipts;
     bool any = false;
     for (auto &[name, mo] : g_classes) any = any || mo->indexOfMethod("setRead(ChatID,bool)") >= 0;
@@ -767,7 +892,7 @@ static QString runCommand(const QString &line, int fd, bool *keepOpen) {
     }
     // --- actions ---
     if (cmd == "send" || cmd == "file" || cmd == "reply" || cmd == "react" || cmd == "unreact" || cmd == "read" ||
-        cmd == "compose" || cmd == "delete") {
+        cmd == "compose" || cmd == "delete" || cmd == "forward") {
         if (!sendAllowed()) return "error send-disabled\n";
         if (cmd == "send") return actSend(rest.section(' ', 0, 0).toLongLong(), unesc(rest.section(' ', 1)));
         if (cmd == "file") return actFile(rest.section(' ', 0, 0).toLongLong(), rest.section(' ', 1));
@@ -778,6 +903,7 @@ static QString runCommand(const QString &line, int fd, bool *keepOpen) {
         }
         if (cmd == "compose") return actCompose(rest);
         if (cmd == "delete") return actDelete(rest.toLongLong());
+        if (cmd == "forward") return actForward(rest.section(' ', 0, 0), rest.section(' ', 1, 1));
         if (cmd == "react") return actReact(rest.section(' ', 0, 0).toLongLong(), rest.section(' ', 1, 1));
         if (cmd == "unreact") return actUnreact(rest.toLongLong());
         if (cmd == "read") return actRead(rest.toLongLong());
@@ -808,7 +934,7 @@ struct Runner : QObject {
         auto *c = static_cast<Command *>(e);
         // inside a compose or a check (their Qt events run commands waiting): one that acts, or
         // copies the database, waits for it to end
-        static const QStringList waits{"send", "file", "reply", "compose", "react", "unreact", "delete", "read",
+        static const QStringList waits{"send", "file", "reply", "compose", "react", "unreact", "delete", "read", "forward",
                                        "snapshot", "check"};
         if (g_busy && waits.contains(c->line.section(' ', 0, 0))) {
             QCoreApplication::postEvent(g_runner, new Command(c->line, c->fd));

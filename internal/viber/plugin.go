@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -171,7 +172,7 @@ const (
 var capabilities = []struct{ name, label string }{
 	{"read", "reading"}, {"live", "receiving live"}, {"send", "sending"}, {"file", "files"},
 	{"compose", "replies and edits"}, {"react", "reactions"}, {"delete", "deleting for everyone"},
-	{"read-receipts", "read receipts"},
+	{"read-receipts", "read receipts"}, {"forward", "forwarding"},
 }
 
 // lacks is what of the named capabilities (all, with none named) this Viber is missing, as the user
@@ -665,6 +666,12 @@ func failed(err error) error {
 		return errs.Plugin("Viber Desktop did not take the text as written: nothing was sent", 0)
 	case errors.As(err, &be) && be.What == "not-editable":
 		return errs.Plugin("Viber does not let this message be edited", 0)
+	case errors.As(err, &be) && be.What == "deleted":
+		return errs.Plugin("This message was deleted in Viber: there is nothing to forward", 0)
+	case errors.As(err, &be) && be.What == "chat-not-offered":
+		return errs.Plugin("Viber does not offer one of these chats to forward to: nothing was sent", 0)
+	case errors.As(err, &be) && strings.HasPrefix(be.What, "unconfirmed-"):
+		return errs.Plugin("Viber Desktop was asked to forward it, but it has not shown up in every chat yet", 0)
 	case errors.As(err, &be):
 		return &errs.UserError{Code: "plugin", Status: 409, Text: "Viber Desktop could not do it: {what}",
 			Params: map[string]any{"what": be.What}}
@@ -1031,6 +1038,43 @@ func (Plugin) Delete(ctx context.Context, c *plugins.Context, conv plugins.Conve
 	// from the history too, on any device), which an import cannot tell from history it never had
 	if err := markDeleted(c, msg.ID); err != nil {
 		return err
+	}
+	settle(ctx, c)
+	return nil
+}
+
+// forwardAtOnce is how many chats Viber's forward takes at once (its selector's limit).
+const forwardAtOnce = 8
+
+// Forward forwards as Viber's own "Forward" does, in turns of as many chats as it takes at once.
+func (Plugin) Forward(ctx context.Context, c *plugins.Context, from plugins.Conversation, msgs []plugins.Ref, to []plugins.Conversation) error {
+	if err := gate(c); err != nil {
+		return err
+	}
+	if err := able(c, "forward"); err != nil {
+		return err
+	}
+	var events, chats []string
+	for _, m := range msgs {
+		ev, err := eventOf(ctx, c, m)
+		if err != nil {
+			return err
+		}
+		events = append(events, strconv.FormatInt(ev, 10))
+	}
+	for _, conv := range to {
+		id, err := chatOf(ctx, c, conv)
+		if err != nil {
+			return err
+		}
+		chats = append(chats, strconv.FormatInt(id, 10))
+	}
+	for len(chats) > 0 {
+		n := min(len(chats), forwardAtOnce)
+		if err := act(ctx, socket(c), fmt.Sprintf("forward %s %s", strings.Join(events, ","), strings.Join(chats[:n], ","))); err != nil {
+			return failed(err)
+		}
+		chats = chats[n:]
 	}
 	settle(ctx, c)
 	return nil
