@@ -7,6 +7,9 @@ package whatsapp
 // messages and its deletion for everyone, under the gates of sending (send.go): sending allowed, no
 // block, a human pace. WhatsApp does not give a device back what it sent itself, so each is stored
 // as it would have been had it come from the phone (processMessage), and the import brings it.
+// A deletion for the user alone (any message) is no message but a change of the account's app
+// state, which the phone and the other devices follow; stored as a deletion, as the archive keeps
+// both alike.
 
 import (
 	"context"
@@ -17,7 +20,9 @@ import (
 	"time"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/appstate"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/proto/waSyncAction"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
@@ -32,7 +37,7 @@ const (
 
 // ChangeRequest is what is done to a message already in a chat.
 type ChangeRequest struct {
-	Kind      string // react, edit, delete
+	Kind      string // react, edit, delete, delete_me
 	Recipient string // the chat, as for sending: a number's digits, or a jid
 	ID        string // the message's id
 	// for a message the bridge does not have (from before it was linked): whether it is the
@@ -41,6 +46,7 @@ type ChangeRequest struct {
 	Sender string
 	Emoji  string // "" takes the account's reaction back
 	Text   string // an edit's new text (a caption, for a file)
+	TS     int64  // when it was sent (Unix ms), as the archive has it: for a deletion for the user alone
 }
 
 // Change does it (an HTTP status and the answer, as Send gives them).
@@ -155,6 +161,9 @@ func (s *Sender) change(req ChangeRequest) (int, SendResponse) {
 	if err != nil {
 		return fail(http.StatusBadRequest, "%v", err)
 	}
+	if req.Kind == "delete_me" {
+		return s.deleteForMe(chat, author, fromMe, known, req)
+	}
 	if req.Kind == "edit" || req.Kind == "delete" {
 		// what the bridge does not have it could not store as changed, nor tell whose it is
 		if !known {
@@ -209,4 +218,40 @@ func (s *Sender) change(req ChangeRequest) (int, SendResponse) {
 			req.Emoji, time.UnixMilli(msg.GetReactionMessage().GetSenderTimestampMS()), chat.String(), req.ID, own.ToNonAD().String())
 	}
 	return http.StatusOK, SendResponse{Success: true, Message: "sent", ID: resp.ID, ChatJID: chat.String(), Timestamp: resp.Timestamp}
+}
+
+// deleteForMe deletes a message for the account alone, as the phone's "Delete for me" does: in the
+// app state, which the account's devices follow (its files too). A group's message of another names
+// its author; any other, none ("0").
+func (s *Sender) deleteForMe(chat, author types.JID, fromMe, known bool, req ChangeRequest) (int, SendResponse) {
+	at := time.UnixMilli(req.TS)
+	if known {
+		var stored time.Time
+		if s.store.db.QueryRow("SELECT timestamp FROM messages WHERE id = ? AND chat_jid = ?", req.ID, chat.String()).Scan(&stored) == nil {
+			at = stored
+		}
+	}
+	own, participant := "0", "0"
+	if fromMe {
+		own = "1"
+	} else if chat.Server == types.GroupServer {
+		participant = author.String()
+	}
+	patch := appstate.PatchInfo{Type: appstate.WAPatchRegularHigh, Mutations: []appstate.MutationInfo{{
+		Index:   []string{appstate.IndexDeleteMessageForMe, chat.String(), req.ID, own, participant},
+		Version: 3,
+		Value: &waSyncAction.SyncActionValue{DeleteMessageForMeAction: &waSyncAction.DeleteMessageForMeAction{
+			DeleteMedia: proto.Bool(true), MessageTimestamp: proto.Int64(at.Unix())}},
+	}}}
+	var err error
+	if s.patch != nil {
+		err = s.patch(patch)
+	} else {
+		err = s.client.SendAppState(context.Background(), patch)
+	}
+	if err != nil {
+		return http.StatusInternalServerError, SendResponse{Message: fmt.Sprintf("deleting failed: %v", err)}
+	}
+	s.store.deletedForMe([]string{chat.String()}, req.ID, ownJID(s.client), at)
+	return http.StatusOK, SendResponse{Success: true, Message: "deleted", ChatJID: chat.String()}
 }

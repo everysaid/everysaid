@@ -26,6 +26,7 @@ import (
 	"unicode/utf8"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/appstate"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	waLog "go.mau.fi/whatsmeow/util/log"
@@ -53,6 +54,8 @@ type Sender struct {
 	// transmit stands in for WhatsApp in tests of reactions, edits and deletions (changes.go): nil
 	// sends through the client
 	transmit func(chat types.JID, msg *waE2E.Message) (whatsmeow.SendResponse, error)
+	// patch stands in for WhatsApp's app state in tests of deletions for the user alone
+	patch func(p appstate.PatchInfo) error
 }
 
 type SendRequest struct {

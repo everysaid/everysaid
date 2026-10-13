@@ -195,7 +195,8 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   // what is done to a message shows at once; the service's answer then comes in its place (or it
   // goes back as it was, said why)
   const [editing, setEditing] = useState<MessageItem | null>(null);
-  const [deleting, setDeleting] = useState<MessageItem | null>(null);
+  // the message to delete, and whether for everyone or for the user alone (asked first)
+  const [deleting, setDeleting] = useState<{ m: MessageItem; forMe: boolean } | null>(null);
   const [forwarding, setForwarding] = useState<MessageItem | null>(null);
   const patch = (id: number, f: (m: MessageItem) => MessageItem) =>
     setItems((prev) => prev.map((i) => (i.type === "message" && i.id === id ? f(i) : i)));
@@ -217,7 +218,8 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
     requestAnimationFrame(() => (document.querySelector("[data-composer-body] textarea") as HTMLElement | null)?.focus());
   }, []);
   const edit = useCallback((m: MessageItem, text: string) => act(m, () => api.post(`/api/messages/${m.id}/edit`, { text }), (i) => ({ ...i, text, edited: true })), [act]);
-  const remove = useCallback((m: MessageItem) => act(m, () => api.post(`/api/messages/${m.id}/delete`, {}), (i) => ({ ...i, deleted: true })), [act]);
+  const remove = useCallback((m: MessageItem, forMe: boolean) => act(m, () => api.post(`/api/messages/${m.id}/delete`, forMe ? { for_me: true } : {}),
+    (i) => ({ ...i, deleted: true })), [act]);
 
   // groups merged into this chat or split off it: its stream is another, loaded again
   const made = detail.data?.conversations.join();
@@ -645,7 +647,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
 
   const isGroup = detail.data?.type === "group";
   const reactable = detail.data?.reactions, freeReactions = detail.data?.free_reactions;
-  const editable = detail.data?.editable, deletable = detail.data?.deletable;
+  const editable = detail.data?.editable, deletable = detail.data?.deletable, deletableForMe = detail.data?.deletable_for_me;
   const title = detail.data?.title ?? "";
   // a time asked for: the item nearest to it (the day may have nothing: then the nearest day's)
   const nearest = useMemo(() => {
@@ -718,6 +720,8 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       const svc = item.service;
       const within = (secs: number | undefined) => secs !== undefined && (secs === 0 || Date.now() - item.ts < secs * 1000);
       const own = item.outgoing && item.keyed && !item.deleted;
+      // for everyone where the service still allows it, else for the user alone where it can
+      const deleteFor = own && within(deletable?.[svc]) ? "all" : item.keyed && !item.deleted && deletableForMe?.[svc] ? "me" : undefined;
       const r = item.keyed && reactable && svc in reactable ? reactable[svc] : undefined;
       const reactWith = r !== undefined ? { quick: r ?? ["👍", "❤️", "😂", "😮", "😢", "🙏"], all: r, free: !!freeReactions?.[svc], on: react } : undefined;
       const same = (a: StreamItem | null) => a && a.type === "message" && a.kind !== "system" && a.outgoing === item.outgoing &&
@@ -737,7 +741,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
         onInfo={item.outgoing && item.receipts ? setInfoOf : undefined}
         react={reactWith}
         onEdit={own && item.text && within(editable?.[svc]) ? startEdit : undefined}
-        onDelete={own && within(deletable?.[svc]) ? setDeleting : undefined}
+        onDelete={deleteFor ? (m) => setDeleting({ m, forMe: deleteFor === "me" }) : undefined} deleteFor={deleteFor}
         onForward={item.text || item.attachments.some((a) => a.available !== "gone") ? setForwarding : undefined}
         waiting={waitingOf(item)} />;
     }
@@ -838,11 +842,11 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       <Lightbox items={media} index={lightbox} onIndex={setLightbox} onClose={() => setLightbox(null)} />
       <MessageInfo m={infoOf} onClose={() => setInfoOf(null)} />
       <ForwardDialog m={forwarding} onClose={() => setForwarding(null)} />
-      <Dialog open={!!deleting} onOpenChange={(o) => { if (!o) setDeleting(null); }} title={t("chat.deleteForAll")}
-        description={t("chat.deleteConfirm", { service: deleting ? service(deleting.service).name : "" })}>
+      <Dialog open={!!deleting} onOpenChange={(o) => { if (!o) setDeleting(null); }} title={t(deleting?.forMe ? "chat.deleteForMe" : "chat.deleteForAll")}
+        description={t(deleting?.forMe ? "chat.deleteForMeConfirm" : "chat.deleteConfirm", { service: deleting ? service(deleting.m.service).name : "" })}>
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="ghost" onClick={() => setDeleting(null)}>{t("common.cancel")}</Button>
-          <Button data-confirm-delete variant="danger" onClick={() => { const m = deleting; setDeleting(null); if (m) remove(m); }}>{t("chat.deleteConfirmButton")}</Button>
+          <Button data-confirm-delete variant="danger" onClick={() => { const d = deleting; setDeleting(null); if (d) remove(d.m, d.forMe); }}>{t("chat.deleteConfirmButton")}</Button>
         </div>
       </Dialog>
     </div>

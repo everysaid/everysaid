@@ -284,6 +284,14 @@ func (c *client) Call(ctx context.Context, cmd string, args map[string]any) (jso
 		if err = json.Unmarshal(raw, &r); err == nil {
 			result, err = c.delete(ctx, r.Chat, r.TargetTS)
 		}
+	case "delete_me":
+		var r struct {
+			Chat   chatRef `json:"chat"`
+			Target ref     `json:"target"`
+		}
+		if err = json.Unmarshal(raw, &r); err == nil {
+			result, err = c.deleteForMe(ctx, r.Chat, r.Target)
+		}
 	case "mark_read":
 		r := struct {
 			Messages []ref `json:"messages"`
@@ -1491,6 +1499,45 @@ func (c *client) delete(ctx context.Context, chat chatRef, target uint64) (any, 
 		return nil, err
 	}
 	c.sayBack(cli, chat, content, ts, 0, 0)
+	return M{"ts": ts}, nil
+}
+
+// deleteForMe deletes a message (anyone's) for the owner alone, as Signal's apps do: said to the
+// account's other devices, no one else told; then kept as a deletion, as the archive keeps both alike.
+func (c *client) deleteForMe(ctx context.Context, chat chatRef, target ref) (any, error) {
+	cli, err := c.online(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ci := &signalpb.ConversationIdentifier{}
+	switch chat.Kind {
+	case "contact":
+		ci.Identifier = &signalpb.ConversationIdentifier_ThreadServiceId{ThreadServiceId: chat.ID}
+	case "group":
+		id, err := base64.StdEncoding.DecodeString(chat.ID)
+		if err != nil {
+			return nil, refuse("bad_request", "not a group id")
+		}
+		ci.Identifier = &signalpb.ConversationIdentifier_ThreadGroupId{ThreadGroupId: id}
+	default:
+		return nil, refuse("bad_request", "chat kind is contact or group")
+	}
+	ts := now()
+	content := signalmeow.WrapSyncMessage(&signalpb.SyncMessage{Content: &signalpb.SyncMessage_DeleteForMe_{
+		DeleteForMe: &signalpb.SyncMessage_DeleteForMe{MessageDeletes: []*signalpb.SyncMessage_DeleteForMe_MessageDeletes{{
+			Conversation: ci,
+			Messages: []*signalpb.AddressableMessage{{
+				Author:        &signalpb.AddressableMessage_AuthorServiceId{AuthorServiceId: target.Author},
+				SentTimestamp: proto.Uint64(uint64(target.TS))}},
+		}}}}})
+	if res := cli.SendMessage(ctx, cli.Store.ACIServiceID(), content); !res.WasSuccessful {
+		if res.Error != nil {
+			return nil, res.Error
+		}
+		return nil, errors.New("not sent")
+	}
+	c.ev.say("delete", M{"chat": chatJSON(chat), "sender": c.own(cli), "sender_device": uint32(cli.Store.DeviceID),
+		"outgoing": true, "ts": ts, "server_ts": ts, "target_author": target.Author, "target_ts": uint64(target.TS), "for_me": true})
 	return M{"ts": ts}, nil
 }
 

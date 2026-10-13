@@ -17,6 +17,7 @@ import (
 
 	"github.com/mdp/qrterminal"
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 
@@ -340,6 +341,14 @@ func (b *Bridge) handle(client *whatsmeow.Client, store *MessageStore, evt any) 
 		handleCallEvent(client, store, v, b.log)
 	case *events.Receipt:
 		handleReceipt(store, v, b.log)
+	case *events.DeleteForMe:
+		// a message deleted for the user alone on another of their devices (the phone): kept as a
+		// deletion, as the archive keeps both alike
+		chats := []string{v.ChatJID.String()}
+		if v.ChatJID.Server != types.GroupServer {
+			chats = alternates(client, v.ChatJID, types.EmptyJID)
+		}
+		store.deletedForMe(chats, v.MessageID, ownJID(client), v.Timestamp)
 	case *events.JoinedGroup, *events.GroupInfo:
 		handleGroupEvent(client, store, v, b.log)
 	case *events.Picture:

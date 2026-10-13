@@ -158,9 +158,10 @@ func (s *Server) chatRoutes() {
 		c["sendable"], c["replyable"], c["mentionable"], c["fileable"], c["unsendable"] = sendable, replyable, mentionable, fileable, unsendable
 		c["findable"], c["reach"] = s.Host.Findable(q.r.PathValue("chat_id")), s.Host.Reach(q.r.PathValue("chat_id"))
 		// what can be done to a message, by service: the emoji (null: any), whether any other emoji
-		// may be put too, and how long after sending an edit or a deletion for everyone is allowed
-		react, free, edit, del := s.Host.Reactable()
-		reactions, freeReactions, editable, deletable := M{}, M{}, M{}, M{}
+		// may be put too, how long after sending an edit or a deletion for everyone is allowed, and
+		// whether a message may be deleted for the user alone
+		react, free, edit, del, me := s.Host.Reactable()
+		reactions, freeReactions, editable, deletable, deletableMe := M{}, M{}, M{}, M{}, M{}
 		for _, x := range services {
 			if r, ok := react[x]; ok {
 				reactions[x], freeReactions[x] = r, free[x]
@@ -171,8 +172,12 @@ func (s *Server) chatRoutes() {
 			if d, ok := del[x]; ok {
 				deletable[x] = d
 			}
+			if me[x] {
+				deletableMe[x] = true
+			}
 		}
 		c["reactions"], c["free_reactions"], c["editable"], c["deletable"] = reactions, freeReactions, editable, deletable
+		c["deletable_for_me"] = deletableMe
 		return c, nil
 	})
 
@@ -419,8 +424,11 @@ func (s *Server) chatRoutes() {
 		return act(q, MessageAction{Kind: "edit", Text: text})
 	})
 
-	// deleted for everyone in the chat, through its service
+	// deleted for everyone in the chat, through its service; {for_me: true}: for the user alone
 	h("POST /api/messages/{mid}/delete", bodyRequired, func(q *req) (any, error) {
+		if q.get("for_me") == true {
+			return act(q, MessageAction{Kind: "delete_me"})
+		}
 		return act(q, MessageAction{Kind: "delete"})
 	})
 

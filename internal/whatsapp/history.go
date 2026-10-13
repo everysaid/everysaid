@@ -196,7 +196,7 @@ func (store *MessageStore) migratePending() error {
 		CREATE TABLE IF NOT EXISTS pending_changes (
 			chat_jid TEXT,
 			target TEXT,              -- the message changed
-			change TEXT,              -- edit, delete
+			change TEXT,              -- edit, delete, delete_me (by the user, for the user alone)
 			sender TEXT,              -- who did it
 			is_from_me BOOLEAN,
 			content TEXT,             -- an edit's new text
@@ -205,6 +205,21 @@ func (store *MessageStore) migratePending() error {
 		);
 	`)
 	return err
+}
+
+// deletedForMe marks a message deleted for the user alone (from here or another of their devices),
+// as a deletion: in the first of its chat's jids that has it, else kept for the import to apply
+// to the archive's copy (any message of the chat, whoever wrote it).
+func (store *MessageStore) deletedForMe(chats []string, id, own string, at time.Time) {
+	for _, chat := range chats {
+		if res, err := store.db.Exec("UPDATE messages SET deleted = 1 WHERE id = ? AND chat_jid = ?", id, chat); err == nil {
+			if n, _ := res.RowsAffected(); n > 0 {
+				return
+			}
+		}
+	}
+	store.db.Exec(`INSERT INTO pending_changes (chat_jid, target, change, sender, is_from_me, content, timestamp)
+		VALUES (?, ?, 'delete_me', ?, 1, '', ?) ON CONFLICT (chat_jid, target, change) DO NOTHING`, chats[0], id, own, at)
 }
 
 // pendChange keeps a change of a message not in the store (the newest edit).

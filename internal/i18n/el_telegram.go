@@ -37,6 +37,7 @@ func init() {
 		"Telegram does not allow this reaction in this chat":                                                                                 "Το Telegram δεν επιτρέπει αυτή την αντίδραση σε αυτή τη συνομιλία",
 		"Telegram no longer allows this message to be edited":                                                                                "Το Telegram δεν επιτρέπει πια την επεξεργασία αυτού του μηνύματος",
 		"Telegram does not allow this message to be deleted for everyone":                                                                    "Το Telegram δεν επιτρέπει να διαγραφεί αυτό το μήνυμα για όλους",
+		"Telegram does not allow a message of a supergroup to be deleted for you alone":                                                      "Το Telegram δεν επιτρέπει να διαγραφεί μήνυμα υπερομάδας μόνο για σένα",
 		"The message is no longer on Telegram":                                                                                               "Το μήνυμα δεν υπάρχει πια στο Telegram",
 		"{chat}: Telegram did not give its members ({e})":                                                                                    "{chat}: το Telegram δεν έδωσε τα μέλη της ομάδας ({e})",
 		"{chat}: Telegram gave {n} of its {count} members":                                                                                   "{chat}: το Telegram έδωσε {n} από τα {count} μέλη της ομάδας",

@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/appstate"
 	"go.mau.fi/whatsmeow/proto/waAdv"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
 
 	"everysaid/internal/errs"
 	"everysaid/internal/plugins"
@@ -223,5 +225,66 @@ func TestChangesKeepTheGatesOfSending(t *testing.T) {
 	}
 	if i := p.Info(); i.EditWindow != 15*time.Minute || i.DeleteWindow != 48*time.Hour {
 		t.Fatalf("windows %v %v", i.EditWindow, i.DeleteWindow)
+	}
+}
+
+// A deletion for the user alone goes to the account's app state, no message to anyone: the right
+// index (a group's message of another names its author), stored as a deletion, the archive's copy
+// marked; one the bridge does not have waits for the import; one deleted so on the phone too.
+func TestDeleteForMe(t *testing.T) {
+	f := bridgeInstance(t)
+	b, sent := linked(t, f)
+	var patches []appstate.PatchInfo
+	b.sender.patch = func(p appstate.PatchInfo) error {
+		patches = append(patches, p)
+		return nil
+	}
+	group, nikos := "120363000000000001@g.us", "15557654321@s.whatsapp.net"
+	old := time.Now().Add(-72 * time.Hour) // long past deleting for everyone
+	f.ms.storeChatTime(group, "Friends", old)
+	f.ms.storeMessage(StoredMessage{ID: "G1", ChatJID: group, Sender: nikos, Content: "hi all", Timestamp: old, Kind: "text"})
+	f.ms.storeMessage(StoredMessage{ID: "MINE", ChatJID: peer, Sender: "15550009999@s.whatsapp.net", Content: "car papers",
+		Timestamp: old, IsFromMe: true, Kind: "image"})
+	f.ms.storeMessage(StoredMessage{ID: "P2", ChatJID: peer, Sender: peer, Content: "from the phone", Timestamp: old, Kind: "text"})
+
+	for _, c := range []struct {
+		req   ChangeRequest
+		index string
+	}{
+		{ChangeRequest{Kind: "delete_me", Recipient: group, ID: "G1"}, "deleteMessageForMe," + group + ",G1,0," + nikos},
+		{ChangeRequest{Kind: "delete_me", Recipient: peer, ID: "MINE"}, "deleteMessageForMe," + peer + ",MINE,1,0"},
+		{ChangeRequest{Kind: "delete_me", Recipient: peer, ID: "OLD", Sender: "+15551234567", TS: old.UnixMilli()},
+			"deleteMessageForMe," + peer + ",OLD,0,0"},
+	} {
+		if code, a := b.Change(c.req); code != 200 {
+			t.Fatalf("%s: %d %s", c.req.ID, code, a.Message)
+		}
+		m := patches[len(patches)-1].Mutations[0]
+		if got := strings.Join(m.Index, ","); got != c.index || m.Version != 3 ||
+			m.Value.GetDeleteMessageForMeAction().GetMessageTimestamp() != old.Unix() {
+			t.Fatalf("%s: index %s, version %d, %v", c.req.ID, got, m.Version, m.Value)
+		}
+	}
+	if len(*sent) != 0 || count(t, f.ms, "SELECT count(*) FROM sent") != 0 {
+		t.Fatal("a message went")
+	}
+	if n := count(t, f.ms, "SELECT count(*) FROM messages WHERE deleted AND id IN ('G1', 'MINE')"); n != 2 {
+		t.Fatalf("stored %d", n)
+	}
+	if n := count(t, f.ms, "SELECT count(*) FROM pending_changes WHERE target = 'OLD' AND change = 'delete_me'"); n != 1 {
+		t.Fatalf("pending %d", n)
+	}
+	// deleted for the user on the phone
+	b.handle(b.client, f.ms, &events.DeleteForMe{ChatJID: types.NewJID("15551234567", types.DefaultUserServer), MessageID: "P2", Timestamp: time.Now()})
+	if n := count(t, f.ms, "SELECT count(*) FROM messages WHERE deleted AND id = 'P2'"); n != 1 {
+		t.Fatalf("from the phone %d", n)
+	}
+	if err := (Plugin{}).RunImport(f.ctx()); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"MINE", "P2"} {
+		if _, text, _, deleted := archived(t, f, k); !deleted || text == "" {
+			t.Fatalf("%s in the archive: %q %v", k, text, deleted)
+		}
 	}
 }

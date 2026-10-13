@@ -87,8 +87,9 @@ var messengerInfo = &plugins.Info{
 	}, liveSettings...), exportSettings...),
 	CanSend: true, CanReply: true, CanMention: true, CanMarkRead: true, CanSendFiles: true,
 	CanReact: true, Reactions: reactions, FreeReactions: true, CanEdit: true, CanDelete: true,
-	EditWindow: 15 * time.Minute, // Messenger's own: edits within 15 minutes
-	Actions:    []plugins.Action{logout},
+	CanDeleteForMe: true,             // but not in an end-to-end encrypted chat (unsendForMe)
+	EditWindow:     15 * time.Minute, // Messenger's own: edits within 15 minutes
+	Actions:        []plugins.Action{logout},
 }
 
 var instagramInfo = &plugins.Info{
@@ -372,6 +373,10 @@ func (p Plugin) Edit(ctx context.Context, c *plugins.Context, conv plugins.Conve
 
 func (p Plugin) Delete(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref) error {
 	return unsend(ctx, c, p.service, conv, msg)
+}
+
+func (p Plugin) DeleteForMe(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref) error {
+	return unsendForMe(ctx, c, p.service, conv, msg)
 }
 
 // MarkRead sends read receipts for the chat, where the user turned them on; nothing otherwise.

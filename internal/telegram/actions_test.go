@@ -134,6 +134,17 @@ func TestActionsEndToEnd(t *testing.T) {
 	if bobChat.message(250) != nil {
 		t.Fatal("still on Telegram")
 	}
+	// another's message, deleted for the user alone (not revoked): kept, said deleted
+	if err := p.DeleteForMe(ctx, c, conv, theirs); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.requests[len(f.requests)-1].(*tg.MessagesDeleteMessagesRequest); r.Revoke || !reflect.DeepEqual(r.ID, []int{249}) {
+		t.Fatalf("%+v", r)
+	}
+	db.Row(q, "SELECT deleted FROM message WHERE id = ?", []any{theirs.ID}, &deleted)
+	if !deleted {
+		t.Fatal("not marked deleted for me")
+	}
 
 	// a supergroup's message: deleted through the channel
 	conv, ours := ref("7", "-1000000000030")
@@ -146,6 +157,10 @@ func TestActionsEndToEnd(t *testing.T) {
 	db.Row(q, "SELECT deleted FROM message WHERE id = ?", []any{ours.ID}, &deleted)
 	if !deleted {
 		t.Fatal("not marked deleted")
+	}
+	// a supergroup has no deletion for one alone
+	if err := p.DeleteForMe(ctx, c, conv, ours); !errors.As(err, &ue) || ue.Text != notForMeAlone {
+		t.Fatal(err)
 	}
 
 	// one gone from Telegram meanwhile

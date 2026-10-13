@@ -488,6 +488,25 @@ func unsend(ctx context.Context, c *plugins.Context, service string, conv plugin
 	return s.write(func(w *importers.MetaWriter, a *archive.Archive) { w.Delete(conv.Key, msg.Key) }, false)
 }
 
+// unsendForMe deletes a message for the owner alone ("Remove for you"), on Messenger's chats that are
+// not end-to-end encrypted: those keep their messages on the owner's devices, out of reach here.
+func unsendForMe(ctx context.Context, c *plugins.Context, service string, conv plugins.Conversation, msg plugins.Ref) error {
+	s, err := liveFor(ctx, c, service)
+	if err != nil {
+		return err
+	}
+	if s.ig != nil || s.encrypted(conv.Key) {
+		return errs.Plugin(notForMeAlone, 409)
+	}
+	if _, err := s.cli.ExecuteTasks(ctx, &socket.DeleteMessageMeOnlyTask{ThreadKey: s.fbThread(conv.Key), MessageId: msg.Key}); err != nil {
+		return err
+	}
+	return s.write(func(w *importers.MetaWriter, a *archive.Archive) { w.Delete(conv.Key, msg.Key) }, false)
+}
+
+// notForMeAlone: where a message cannot be deleted for the owner alone from here.
+const notForMeAlone = "An end-to-end encrypted chat's message cannot be deleted for you alone from here"
+
 // markRead tells Meta the owner read a chat up to a time; how many messages it marked.
 func markRead(ctx context.Context, c *plugins.Context, service string, conv plugins.Conversation, until int64) (int, error) {
 	s := running(c.ID)

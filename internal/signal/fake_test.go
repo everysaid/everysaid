@@ -104,7 +104,7 @@ func (f *fake) Call(ctx context.Context, cmd string, args map[string]any) (json.
 
 func (f *fake) call(ctx context.Context, cmd string, req map[string]any) (any, error) {
 	needsLink := map[string]bool{"sync": true, "receive": true, "send": true, "mark_read": true, "history": true,
-		"react": true, "edit": true, "delete": true, "discover": true}
+		"react": true, "edit": true, "delete": true, "delete_me": true, "discover": true}
 	if needsLink[cmd] && !f.has("linked") {
 		return nil, refuse("not_linked", "not linked to a Signal account")
 	}
@@ -175,7 +175,7 @@ func (f *fake) call(ctx context.Context, cmd string, req map[string]any) (any, e
 		f.appendTo("sent.jsonl", req)
 		f.ev.say("message", ev)
 		return map[string]any{"ts": ts}, nil
-	case "react", "edit", "delete":
+	case "react", "edit", "delete", "delete_me":
 		// said back as Signal's events of the owner, as the client does
 		f.mu.Lock()
 		f.sent++
@@ -190,9 +190,13 @@ func (f *fake) call(ctx context.Context, cmd string, req map[string]any) (any, e
 			ev["target_ts"], ev["text"] = req["target_ts"], req["text"]
 		case "delete":
 			ev["target_author"], ev["target_ts"] = fakeOwn, req["target_ts"]
+		case "delete_me":
+			target := req["target"].(map[string]any)
+			ev["target_author"], ev["target_ts"], ev["for_me"] = target["author"], target["ts"], true
 		}
+		req["cmd"] = cmd
 		f.appendTo("acted.jsonl", req)
-		f.ev.say(map[string]string{"react": "reaction", "edit": "edit", "delete": "delete"}[cmd], ev)
+		f.ev.say(map[string]string{"react": "reaction", "edit": "edit", "delete": "delete", "delete_me": "delete"}[cmd], ev)
 		return map[string]any{"ts": ts}, nil
 	case "mark_read":
 		f.appendTo("read.jsonl", map[string]any{"messages": req["messages"], "receipts": req["receipts"]})

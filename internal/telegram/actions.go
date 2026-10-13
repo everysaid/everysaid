@@ -31,6 +31,8 @@ const (
 	editTooLate     = "Telegram no longer allows this message to be edited"
 	deleteRefused   = "Telegram does not allow this message to be deleted for everyone"
 	messageGone     = "The message is no longer on Telegram"
+	// a supergroup's message is the group's: deleted for all or not at all
+	notForMeAlone = "Telegram does not allow a message of a supergroup to be deleted for you alone"
 )
 
 func (Plugin) React(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref, emoji string) error {
@@ -82,6 +84,20 @@ func (Plugin) Delete(ctx context.Context, c *plugins.Context, conv plugins.Conve
 		case tgerr.Is(err, "MESSAGE_DELETE_FORBIDDEN"):
 			return pluginErr(deleteRefused)
 		case err != nil:
+			return err
+		}
+		return noteDeleted(c, chat, []int{id})
+	})
+}
+
+// DeleteForMe deletes a message (anyone's) for the user alone, on all their sessions; Telegram has no
+// such deletion in a supergroup.
+func (Plugin) DeleteForMe(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref) error {
+	return onMessage(ctx, c, conv, msg, func(ctx context.Context, cn *conn, peer tg.InputPeerClass, chat int64, id int) error {
+		if _, ok := peer.(*tg.InputPeerChannel); ok {
+			return pluginErr(notForMeAlone)
+		}
+		if _, err := cn.api.MessagesDeleteMessages(ctx, &tg.MessagesDeleteMessagesRequest{ID: []int{id}}); err != nil {
 			return err
 		}
 		return noteDeleted(c, chat, []int{id})

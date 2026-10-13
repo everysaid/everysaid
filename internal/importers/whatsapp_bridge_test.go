@@ -395,7 +395,8 @@ func TestIphoneGroupNotices(t *testing.T) {
 }
 
 // An edit and a deletion of messages the bridge never had (the archive has them from elsewhere),
-// applied where the one who made them wrote the message; another's edit is not.
+// applied where the one who made them wrote the message; another's edit is not. A deletion for the
+// user alone is of any message of the chat.
 func TestBridgePendingChanges(t *testing.T) {
 	a, _ := newArchive(t)
 	path, d := bridgeDB(t, t.TempDir(), newBridgeSchema+`
@@ -404,12 +405,15 @@ func TestBridgePendingChanges(t *testing.T) {
 	waMessage(d, "THEIRS", 1, "teh text", 0, nil)
 	waMessage(d, "MINE", 2, "mine", 1, nil)
 	waMessage(d, "GONE", 3, "oops", 0, nil)
+	waMessage(d, "HIDDEN", 4, "theirs, hidden", 0, nil)
 	runBridge(t, a, path)
 	db.Exec(d, "INSERT INTO pending_changes VALUES (?, 'THEIRS', 'edit', ?, 0, 'the text', ?)", waPeer, waPeer, waTS(4))
 	db.Exec(d, "INSERT INTO pending_changes VALUES (?, 'MINE', 'edit', ?, 0, 'not theirs to edit', ?)", waPeer, waPeer, waTS(5))
 	db.Exec(d, "INSERT INTO pending_changes VALUES (?, 'GONE', 'delete', ?, 0, '', ?)", waPeer, waPeer, waTS(6))
+	db.Exec(d, "INSERT INTO pending_changes VALUES (?, 'HIDDEN', 'delete_me', '15550009999@s.whatsapp.net', 1, '', ?)", waPeer, waTS(7))
 	runBridge(t, a, path)
 	eq(t, "edited", msgRow(a, "THEIRS", "text, edited"), []any{"the text", int64(1)})
 	eq(t, "not another's", msgRow(a, "MINE", "text, edited"), []any{"mine", int64(0)})
 	eq(t, "deleted", msgRow(a, "GONE", "deleted")[0], int64(1))
+	eq(t, "deleted for me", msgRow(a, "HIDDEN", "text, deleted"), []any{"theirs, hidden", int64(1)})
 }

@@ -6,6 +6,7 @@ package signal
 // earlier helper's convert.rs tests did); it needs libsignal (a group's id), so the tag `signal`.
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 
@@ -169,6 +170,40 @@ func TestSentFromThePhoneToANumber(t *testing.T) {
 	out = testConv().convert(metaFrom(me), syncOf(&signalpb.SyncMessage{Content: &signalpb.SyncMessage_Sent_{Sent: sent}}))
 	if e := js(t, out[0]); e["event"] != "ids" || e["aci"] != anna || e["phone"] != "+306900000001" {
 		t.Fatalf("ids %v", e)
+	}
+}
+
+// A message deleted for the owner alone on the phone: a deletion of it, in its chat (a person's or
+// a group's); one named by number alone is left.
+func TestDeletedForMeOnThePhone(t *testing.T) {
+	gid := []byte("0123456789abcdef0123456789abcdef")
+	sm := &signalpb.SyncMessage{Content: &signalpb.SyncMessage_DeleteForMe_{DeleteForMe: &signalpb.SyncMessage_DeleteForMe{
+		MessageDeletes: []*signalpb.SyncMessage_DeleteForMe_MessageDeletes{
+			{Conversation: &signalpb.ConversationIdentifier{Identifier: &signalpb.ConversationIdentifier_ThreadServiceId{ThreadServiceId: anna}},
+				Messages: []*signalpb.AddressableMessage{
+					{Author: &signalpb.AddressableMessage_AuthorServiceId{AuthorServiceId: anna}, SentTimestamp: proto.Uint64(500)},
+					{Author: &signalpb.AddressableMessage_AuthorE164{AuthorE164: "+306900000001"}, SentTimestamp: proto.Uint64(600)}}},
+			{Conversation: &signalpb.ConversationIdentifier{Identifier: &signalpb.ConversationIdentifier_ThreadGroupId{ThreadGroupId: gid}},
+				Messages: []*signalpb.AddressableMessage{
+					{Author: &signalpb.AddressableMessage_AuthorServiceId{AuthorServiceId: me}, SentTimestamp: proto.Uint64(700)}}},
+		}}}}
+	out := testConv().convert(metaFrom(me), syncOf(sm))
+	if len(out) != 2 {
+		t.Fatalf("%d events", len(out))
+	}
+	e := js(t, out[0])
+	if e["event"] != "delete" || e["target_author"] != anna || e["target_ts"].(float64) != 500 || e["for_me"] != true ||
+		e["chat"].(map[string]any)["id"] != anna {
+		t.Fatalf("%v", e)
+	}
+	e = js(t, out[1])
+	if e["target_author"] != me || e["target_ts"].(float64) != 700 ||
+		e["chat"].(map[string]any)["id"] != base64.StdEncoding.EncodeToString(gid) {
+		t.Fatalf("%v", e)
+	}
+	// not from the owner: not taken
+	if out := testConv().convert(metaFrom(anna), syncOf(sm)); len(out) != 0 {
+		t.Fatal("another's sync taken")
 	}
 }
 

@@ -998,6 +998,23 @@ func TestReactEditDelete(t *testing.T) {
 		t.Fatal("no changed event")
 	}
 
+	// deleted for the user alone: anyone's message, at any time, named by its first time; marked
+	// as a deletion (its text kept); not asked again
+	if err := p.DeleteForMe(ctx, c, conv(anna), annaMsg); err != nil {
+		t.Fatal(err)
+	}
+	a = acted()
+	if last := a[len(a)-1]; last["cmd"] != "delete_me" || last["target"].(map[string]any)["author"] != anna ||
+		last["target"].(map[string]any)["ts"].(float64) != 1000 {
+		t.Fatalf("deleted for me as %v", last)
+	}
+	if num("SELECT deleted FROM message WHERE id = ?", annaMsg.ID) != 1 || db.Str(q, "SELECT coalesce(text, '') FROM message WHERE id = ?", annaMsg.ID) == "" {
+		t.Fatal("not marked deleted, or its text lost")
+	}
+	if err := p.DeleteForMe(ctx, c, conv(anna), annaMsg); err != nil || len(acted()) != len(a) {
+		t.Fatalf("deleted for me twice: %v", err)
+	}
+
 	// as many edits as Signal allows, then no more
 	s, err := OpenStore("", c.ID)
 	if err != nil {

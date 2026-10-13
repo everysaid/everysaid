@@ -254,10 +254,11 @@ export interface BubbleProps {
   onReply?: (m: MessageItem) => void;    // where an answer to this message can be sent
   onInfo?: (m: MessageItem) => void;     // who got and read it (the user's own messages)
   // what can be done to it through its service now: a reaction ("" takes the user's back), an edit,
-  // a deletion for everyone (the user's own)
+  // a deletion: for everyone (the user's own, while the service allows), else for the user alone
   react?: { quick: string[]; all: string[] | null; free: boolean; on: (m: MessageItem, emoji: string) => void };
   onEdit?: (m: MessageItem) => void;
   onDelete?: (m: MessageItem) => void;
+  deleteFor?: "all" | "me";
   onForward?: (m: MessageItem) => void;  // sent on to other chats
   // one waiting to be sent (or refused): why, said under it, and to send it again or let it go
   waiting?: { why: string | null; again: () => void; discard: () => void };
@@ -270,9 +271,9 @@ function Trigger({ as, children }: { as: boolean; children: React.ReactElement }
   return as ? <MenuTrigger asChild>{children}</MenuTrigger> : children;
 }
 
-function Actions({ m, react, onReply, onEdit, onDelete, onForward, open, onOpenChange, at }: {
+function Actions({ m, react, onReply, onEdit, onDelete, deleteFor, onForward, open, onOpenChange, at }: {
   m: MessageItem; react?: BubbleProps["react"]; onReply?: (m: MessageItem) => void; onEdit?: (m: MessageItem) => void;
-  onDelete?: (m: MessageItem) => void; onForward?: (m: MessageItem) => void; open: boolean; onOpenChange: (o: boolean) => void;
+  onDelete?: (m: MessageItem) => void; deleteFor?: "all" | "me"; onForward?: (m: MessageItem) => void; open: boolean; onOpenChange: (o: boolean) => void;
   at?: { x: number; y: number; link?: string } | null;     // opened by a right click: where (in the bubble), the menu there; on a link, which
 }) {
   const { t } = useTranslation();
@@ -332,7 +333,7 @@ function Actions({ m, react, onReply, onEdit, onDelete, onForward, open, onOpenC
         {file && <MenuItem icon={<Copy className="size-4" />} onSelect={() => copy(copyFile(file))}>{t("chat.copyFile")}</MenuItem>}
         {onForward && <MenuItem icon={<Forward className="size-4" />} onSelect={() => onForward(m)}>{t("chat.forward")}</MenuItem>}
         {onEdit && <MenuItem icon={<Pencil className="size-4" />} onSelect={() => { toComposer.current = true; onEdit(m); }}>{t("chat.edit")}</MenuItem>}
-        {onDelete && <MenuItem danger icon={<Trash2 className="size-4" />} onSelect={() => onDelete(m)}>{t("chat.deleteForAll")}</MenuItem>}
+        {onDelete && <MenuItem danger icon={<Trash2 className="size-4" />} onSelect={() => onDelete(m)}>{t(deleteFor === "me" ? "chat.deleteForMe" : "chat.deleteForAll")}</MenuItem>}
       </MenuContent>
     </Menu>
   );
@@ -381,7 +382,7 @@ function useMeasured(id: number) {
   return ref;
 }
 
-export const Bubble = memo(function Bubble({ m, group, first, last, above, below, showService, account, highlight, onOpen, onJump, onReply, onInfo, react, onEdit, onDelete, onForward, waiting }: BubbleProps) {
+export const Bubble = memo(function Bubble({ m, group, first, last, above, below, showService, account, highlight, onOpen, onJump, onReply, onInfo, react, onEdit, onDelete, deleteFor, onForward, waiting }: BubbleProps) {
   const { t } = useTranslation();
   const [menu, setMenu] = useState(false);
   const [menuAt, setMenuAt] = useState<{ x: number; y: number; link?: string } | null>(null);     // a right click's: where, in the bubble, and on which link
@@ -417,7 +418,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
     onPointerMove: unpress, onPointerUp: unpress, onPointerCancel: unpress,
   } : {};
   const actions = hasActions && (
-    <Actions m={m} react={react} onReply={onReply} onEdit={onEdit} onDelete={onDelete} onForward={onForward} open={menu} at={menuAt}
+    <Actions m={m} react={react} onReply={onReply} onEdit={onEdit} onDelete={onDelete} deleteFor={deleteFor} onForward={onForward} open={menu} at={menuAt}
       onOpenChange={(o) => { setMenu(o); if (!o) setMenuAt(null); }} />
   );
   const out = m.outgoing;

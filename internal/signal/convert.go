@@ -513,6 +513,28 @@ func (c conv) syncEvents(m meta, sm *signalpb.SyncMessage) []converted {
 			}
 		}
 	}
+	// messages deleted for the owner alone on another of their devices: kept as deletions, as the
+	// archive keeps both alike (a whole chat deleted, or one file of a message, is not followed)
+	for _, md := range sm.GetDeleteForMe().GetMessageDeletes() {
+		ci := md.GetConversation()
+		var chat M
+		if g := ci.GetThreadGroupId(); len(g) > 0 {
+			chat = M{"kind": "group", "id": base64.StdEncoding.EncodeToString(g)}
+		} else if id := serviceIDText(ci.GetThreadServiceId(), ci.GetThreadServiceIdBinary()); id != "" {
+			chat = contactChat(id)
+		} else {
+			continue
+		}
+		for _, am := range md.GetMessages() {
+			author := serviceIDText(am.GetAuthorServiceId(), am.GetAuthorServiceIdBinary())
+			if author == "" || am.SentTimestamp == nil {
+				continue // by number alone: not how the store knows its messages
+			}
+			ev := base(m, c.own, true, chat, m.ts)
+			ev["target_author"], ev["target_ts"], ev["for_me"] = author, am.GetSentTimestamp(), true
+			out = append(out, plain("delete", ev))
+		}
+	}
 	if reads := sm.GetRead(); len(reads) > 0 {
 		items := []M{}
 		for _, r := range reads {

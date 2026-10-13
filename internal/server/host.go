@@ -865,9 +865,9 @@ func (h *Host) sent(conv int64, result any) []M {
 }
 
 // MessageAction is what the user does to one message: a reaction ("" takes the user's back), an
-// edit, a deletion for everyone.
+// edit, a deletion for everyone, a deletion for the user alone.
 type MessageAction struct {
-	Kind  string // react, edit, delete
+	Kind  string // react, edit, delete, delete_me
 	Emoji string
 	Text  string
 }
@@ -881,6 +881,8 @@ func able(i *plugins.Info, kind string) bool {
 		return i.CanEdit
 	case "delete":
 		return i.CanDelete
+	case "delete_me":
+		return i.CanDeleteForMe
 	}
 	return true
 }
@@ -901,8 +903,9 @@ func Allows(i *plugins.Info, emoji string) bool {
 }
 
 // Act does an action on a message through the source that reaches its service and can; the source's
-// own import then brings the change into the archive. Edits and deletions are of the user's own
-// messages only, within the service's time for them.
+// own import then brings the change into the archive. Edits and deletions for everyone are of the
+// user's own messages only, within the service's time for them; a deletion for the user alone is of
+// any message, at any time.
 func (h *Host) Act(ctx context.Context, messageID int64, a MessageAction) (out M, err error) {
 	defer db.Recover(&err)
 	q := h.store.Read()
@@ -918,7 +921,7 @@ func (h *Host) Act(ctx context.Context, messageID int64, a MessageAction) (out M
 	if key.String == "" {
 		return nil, errs.New("message.no_key", 409, nil)
 	}
-	if a.Kind != "react" && !outgoing {
+	if (a.Kind == "edit" || a.Kind == "delete") && !outgoing {
 		return nil, errs.New("message.not_own", 409, nil)
 	}
 	var chosen *sender
@@ -932,7 +935,7 @@ func (h *Host) Act(ctx context.Context, messageID int64, a MessageAction) (out M
 	}
 	if chosen == nil {
 		code := map[string]string{"react": "message.cannot_react", "edit": "message.cannot_edit",
-			"delete": "message.cannot_delete"}[a.Kind]
+			"delete": "message.cannot_delete", "delete_me": "message.cannot_delete"}[a.Kind]
 		return nil, errs.New(code, 409, nil)
 	}
 	i := chosen.p.Info()
@@ -968,6 +971,12 @@ func (h *Host) Act(ctx context.Context, messageID int64, a MessageAction) (out M
 		} else {
 			err = errs.New("message.cannot_delete", 409, nil)
 		}
+	case "delete_me":
+		if r, ok := chosen.p.(plugins.MeDeleter); ok {
+			err = r.DeleteForMe(ctx, pc, c, ref)
+		} else {
+			err = errs.New("message.cannot_delete", 409, nil)
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -977,9 +986,10 @@ func (h *Host) Act(ctx context.Context, messageID int64, a MessageAction) (out M
 }
 
 // Reactable is {service: the emoji its source can put now (nil: any)}, for the services a source may
-// react on now; editable and deletable, {service: the seconds after sending it allows (0: always)}.
-func (h *Host) Reactable() (react map[string][]string, free map[string]bool, edit, del map[string]int64) {
-	react, free, edit, del = map[string][]string{}, map[string]bool{}, map[string]int64{}, map[string]int64{}
+// react on now; editable and deletable, {service: the seconds after sending it allows (0: always)};
+// me, the services a message may be deleted on for the user alone.
+func (h *Host) Reactable() (react map[string][]string, free map[string]bool, edit, del map[string]int64, me map[string]bool) {
+	react, free, edit, del, me = map[string][]string{}, map[string]bool{}, map[string]int64{}, map[string]int64{}, map[string]bool{}
 	for _, s := range h.Senders() {
 		i := s.p.Info()
 		for _, svc := range i.Services {
@@ -992,6 +1002,9 @@ func (h *Host) Reactable() (react map[string][]string, free map[string]bool, edi
 			}
 			if _, ok := del[svc]; i.CanDelete && !ok {
 				del[svc] = int64(i.DeleteWindow / time.Second)
+			}
+			if i.CanDeleteForMe {
+				me[svc] = true
 			}
 		}
 	}

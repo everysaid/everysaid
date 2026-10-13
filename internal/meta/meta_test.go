@@ -3,6 +3,7 @@ package meta
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -253,6 +254,17 @@ func TestLiveMessenger(t *testing.T) {
 	if err := (Plugin{"messenger"}).Delete(ctx, c, conv, ref); err != nil {
 		t.Fatal(err)
 	}
+	// another's message, deleted for the user alone ("Remove for you"): kept, said deleted
+	theirs := plugins.Ref{ID: db.Int(q, "SELECT id FROM message WHERE key = 'mid.1'"), Key: "mid.1"}
+	if theirs.ID == 0 {
+		t.Fatal("no mid.1")
+	}
+	if err := (Plugin{"messenger"}).DeleteForMe(ctx, c, conv, theirs); err != nil {
+		t.Fatal(err)
+	}
+	if db.Int(q, "SELECT deleted FROM message WHERE key = 'mid.1'") != 1 || db.Str(q, "SELECT coalesce(text, '') FROM message WHERE key = 'mid.1'") == "" {
+		t.Errorf("not kept as deleted")
+	}
 	var kinds []string
 	for _, task := range f.taskList() {
 		switch x := task.(type) {
@@ -262,9 +274,11 @@ func TestLiveMessenger(t *testing.T) {
 			kinds = append(kinds, "edit:"+x.Text)
 		case *socket.DeleteMessageTask:
 			kinds = append(kinds, "delete:"+x.MessageId)
+		case *socket.DeleteMessageMeOnlyTask:
+			kinds = append(kinds, fmt.Sprintf("delete for me:%s in %d", x.MessageId, x.ThreadKey))
 		}
 	}
-	if !reflect.DeepEqual(kinds, []string{"react:👍", "edit:a file!", "delete:mid.sent"}) {
+	if !reflect.DeepEqual(kinds, []string{"react:👍", "edit:a file!", "delete:mid.sent", fmt.Sprintf("delete for me:mid.1 in %d", john)}) {
 		t.Errorf("tasks: %v", kinds)
 	}
 	if db.Int(q, "SELECT deleted FROM message WHERE key = 'mid.sent'") != 1 ||

@@ -203,7 +203,7 @@ var askedCh = make(chan asked, 100)
 func (testSource) Info() *plugins.Info {
 	return &plugins.Info{ID: "test-sender", Name: "Test sender", Kind: "source",
 		Services: []string{"whatsapp", "telegram", "viber", "sms"}, CanSend: true, CanReply: true, CanMention: true,
-		CanMarkRead: true, CanSendFiles: true,
+		CanMarkRead: true, CanSendFiles: true, CanDeleteForMe: true,
 		Settings: []plugins.Setting{{Key: "udid", Label: "Serial", Pattern: `[0-9A-Fa-f]{8}-?[0-9A-Fa-f]{16}|[0-9A-Fa-f]{40}`},
 			{Key: "token", Label: "Token", Type: "secret"}},
 		NameWeights: []plugins.Weight{{Key: "whatsapp/book", Weight: 60}, {Key: "whatsapp/profile", Weight: 30}},
@@ -262,6 +262,12 @@ func (testSource) Forward(ctx context.Context, c *plugins.Context, from plugins.
 	for _, conv := range to {
 		askedCh <- asked{what: "forward", service: conv.Service, text: msgs[0].Key}
 	}
+	return nil
+}
+
+// DeleteForMe: told which message (by key), on which service.
+func (testSource) DeleteForMe(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref) error {
+	askedCh <- asked{what: "delete_me", service: conv.Service, text: msg.Key}
 	return nil
 }
 

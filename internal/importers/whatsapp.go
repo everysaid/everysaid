@@ -250,6 +250,12 @@ func bridgeChanges(a *archive.Archive, bridge *sql.DB, person *waPeople, own map
 			if c, _ := a.FindConversation("whatsapp", person.conversationKey(str(r["chat_jid"]))); c == 0 || c != conv {
 				continue // a message of another chat (ids are not unique across chats)
 			}
+			if str(r["change"]) == "delete_me" { // by the user, for them alone: any message of the chat
+				for _, k := range ApplyChange(a, mid, Change{Deleted: true}) {
+					out[k]++
+				}
+				continue
+			}
 			deletion := str(r["change"]) == "delete"
 			author := outgoing && truthy(r["is_from_me"])
 			if !outgoing && !truthy(r["is_from_me"]) {

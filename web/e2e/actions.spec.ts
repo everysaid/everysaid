@@ -3,7 +3,8 @@ import { signedIn } from "./demo";
 
 // What can be done to a message through its service: a reaction (put, changed, taken back with a
 // tap on it), an edit of the user's own (in the composer, which then has the text it had), a
-// deletion for everyone (asked first). The demo's own source does them all, into the demo archive.
+// deletion for everyone (asked first), or for the user alone. The demo's own source does them all,
+// into the demo archive.
 
 test("a reaction, an edit and a deletion of the user's own message", async ({ page }, info) => {
   await signedIn(page, info.project.name);
@@ -79,6 +80,44 @@ test("a reaction, an edit and a deletion of the user's own message", async ({ pa
   await gone.click();
   await expect(page.locator('[id^="m"]').filter({ hasText: `${text} (fixed)` }).locator(".italic")).toHaveCount(1);
   await composer.fill("");
+});
+
+// Another's message: deleted for the user alone (asked first), kept in the archive as a deletion.
+test("another's message deleted for the user alone", async ({ page }, info) => {
+  await signedIn(page, info.project.name);
+  const chat = await page.evaluate(async () => {
+    const h = { "X-Everysaid": "1" };
+    const chats = (await (await fetch("/api/chats", { headers: h })).json()).items;
+    for (const c of chats) {
+      const d = await (await fetch(`/api/chats/${c.id}`, { headers: h })).json();
+      const s = d.sendable.find((x: string) => x !== "sms" && d.deletable_for_me?.[x]);
+      if (s && c.type === "person") return { id: c.id, service: s };
+    }
+    return null;
+  });
+  test.skip(!chat, "no chat where the demo's source deletes for the user alone");
+  await page.goto(`/chat/${chat!.id}`);
+  const via = page.locator("[data-via]");
+  if ((await via.getAttribute("data-via")) !== chat!.service) {
+    await via.click();
+    await page.getByRole("menuitem").filter({ has: page.locator(`[data-icon="${chat!.service}"]`) }).click();
+  }
+  const text = `to be answered ${info.project.name} ${Date.now()}`;
+  await page.locator("[data-composer-body] textarea").fill(text);
+  await page.locator("[data-send]").click();
+  // the demo's other side answers it
+  const answer = page.locator('[id^="m"]').filter({ hasText: `↩ ${text}` }).last();
+  await expect(answer).toBeVisible({ timeout: 10000 });
+  await answer.locator("[data-actions]").click();
+  await expect(page.getByRole("menuitem", { name: /Διαγραφή για όλους|Delete for everyone/ })).toHaveCount(0);
+  await page.getByRole("menuitem", { name: /Διαγραφή για μένα|Delete for me/ }).click();
+  await expect(page.getByRole("dialog")).toContainText(/μόνο για σένα|for you alone/);
+  await page.locator("[data-confirm-delete]").click();
+  await expect(page.locator('[id^="m"]').filter({ hasText: `↩ ${text}` })).toHaveCount(0);
+  const gone = page.locator("[data-deleted]").last();
+  await expect(gone).toBeVisible();
+  await gone.click();
+  await expect(page.locator('[id^="m"]').filter({ hasText: `↩ ${text}` })).toHaveCount(1);
 });
 
 // A right click on a bubble opens its menu, as its ⋮ does, where the click was; on a link in it

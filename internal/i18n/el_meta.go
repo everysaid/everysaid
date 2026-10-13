@@ -73,6 +73,7 @@ func init() {
 		"This chat has no thread on the service":                                              "Αυτή η συνομιλία δεν έχει νήμα στην υπηρεσία",
 		"Meta refused the message":                                                            "Η Meta αρνήθηκε το μήνυμα",
 		"Meta did not say the message's id":                                                   "Η Meta δεν είπε το αναγνωριστικό του μηνύματος",
+		"An end-to-end encrypted chat's message cannot be deleted for you alone from here":    "Μήνυμα κρυπτογραφημένης συνομιλίας δεν μπορεί να διαγραφεί μόνο για σένα από εδώ",
 		"Meta did not take the edit":                                                          "Η Meta δεν δέχτηκε την επεξεργασία",
 	} {
 		EL[k] = v

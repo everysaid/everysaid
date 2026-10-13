@@ -64,7 +64,7 @@ func (Plugin) Info() *plugins.Info {
 		// any emoji, Signal's own quick ones first; edits and deletions for everyone within the day
 		// Signal's apps allow (global.normalDeleteMaxAgeInSeconds, a day by default, for both)
 		CanReact: true, Reactions: []string{"❤️", "👍", "👎", "😂", "😮", "😢"}, FreeReactions: true,
-		CanEdit: true, CanDelete: true, EditWindow: 24 * time.Hour, DeleteWindow: 24 * time.Hour,
+		CanEdit: true, CanDelete: true, CanDeleteForMe: true, EditWindow: 24 * time.Hour, DeleteWindow: 24 * time.Hour,
 		Actions: []plugins.Action{{ID: "link", Label: "Link this computer (QR code)"},
 			{ID: "sync", Label: "Ask the phone for its contacts"},
 			{ID: "unlink", Label: "Unlink this computer", Confirm: "Unlink this computer from Signal? The link goes, and " +
@@ -1082,6 +1082,17 @@ func act(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg
 // React puts the user's reaction on a message, in place of the one there was; "" takes it back,
 // which Signal wants said with the emoji that was there. Like Signal's apps, it is aimed at the
 // message's newest version.
+// DeleteForMe deletes any message for the user alone: said to their other devices, as Signal's apps
+// do (a message names itself by the time it was first sent).
+func (p Plugin) DeleteForMe(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref) error {
+	return act(ctx, c, conv, msg, "delete_me", func(n *conn, author string, times []int64) (M, error) {
+		if n.store.Deleted(author, times) {
+			return nil, nil // already
+		}
+		return M{"target": M{"author": author, "ts": times[0]}}, nil
+	})
+}
+
 func (p Plugin) React(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref, emoji string) error {
 	return act(ctx, c, conv, msg, "react", func(n *conn, author string, times []int64) (M, error) {
 		target := M{"author": author, "ts": times[len(times)-1]}
