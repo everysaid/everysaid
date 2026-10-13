@@ -21,6 +21,8 @@ test("a GIF found, sent with a tap, then among those of the archive", async ({ p
   const chat = await sendableChat(page);
   test.skip(!chat, "no chat to send to");
   await page.goto(`/chat/${chat}`);
+  await page.locator("[data-via]").click();                 // through WhatsApp, which takes files
+  await page.getByRole("menuitem", { name: "WhatsApp" }).click();
   await page.locator("[data-gif]").click();
   const picker = page.locator("[data-gif-picker]");
   await expect(picker.locator("[data-gif-option]")).toHaveCount(3);     // the searcher's tab first, all of them
