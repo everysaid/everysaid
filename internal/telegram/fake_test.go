@@ -221,6 +221,38 @@ func (f *fake) answer(input bin.Encoder) (bin.Encoder, error) {
 			}
 		}
 		return &tg.MessagesMessagesBox{Messages: &tg.MessagesMessages{Messages: out, Users: f.users}}, nil
+	case *tg.ContactsResolveUsernameRequest:
+		f.calls = append(f.calls, "resolveUsername")
+		gif := user(4, "GIF Search", 44)
+		gif.SetBot(true)
+		return &tg.ContactsResolvedPeer{Peer: &tg.PeerUser{UserID: 4}, Users: []tg.UserClass{gif}}, nil
+	case *tg.MessagesGetInlineBotResultsRequest:
+		// @gif: one sent before (on Telegram), one on the web (proxied), a picture (no video), and
+		// for the next page one more
+		f.calls = append(f.calls, "inline:"+r.Query+"/"+r.Offset)
+		video := []tg.DocumentAttributeClass{&tg.DocumentAttributeVideo{W: 320, H: 240}}
+		auto := &tg.BotInlineMessageMediaAuto{}
+		if r.Offset != "" {
+			return &tg.MessagesBotResults{Results: []tg.BotInlineResultClass{&tg.BotInlineResult{ID: "c", Type: "gif", SendMessage: auto,
+				Content: &tg.WebDocument{URL: "https://gifs.example/c.mp4", AccessHash: 6, MimeType: "video/mp4"}}}}, nil
+		}
+		f.files[501] = []byte("telegram gif")
+		return &tg.MessagesBotResults{NextOffset: "20", Results: []tg.BotInlineResultClass{
+			&tg.BotInlineMediaResult{ID: "a", Type: "gif", SendMessage: auto, Document: &tg.Document{ID: 501, AccessHash: 5, FileReference: []byte("r"),
+				MimeType: "video/mp4", Attributes: video}},
+			&tg.BotInlineResult{ID: "b", Type: "gif", SendMessage: auto, Content: &tg.WebDocument{URL: "https://gifs.example/b.mp4", AccessHash: 6,
+				MimeType: "video/mp4", Attributes: video}},
+			&tg.BotInlineResult{ID: "p", Type: "photo", SendMessage: auto, Content: &tg.WebDocument{URL: "https://gifs.example/p.jpg", MimeType: "image/jpeg"}},
+		}}, nil
+	case *tg.UploadGetWebFileRequest:
+		f.calls = append(f.calls, "getWebFile")
+		data := []byte("web gif of " + r.Location.(*tg.InputWebFileLocation).URL)
+		if r.Offset >= len(data) {
+			data = nil
+		} else {
+			data = data[r.Offset:min(len(data), r.Offset+r.Limit)]
+		}
+		return &tg.UploadWebFile{MimeType: "video/mp4", FileType: &tg.StorageFileMp4{}, Bytes: data}, nil
 	case *tg.UploadGetFileRequest:
 		f.calls = append(f.calls, "getFile")
 		var data []byte

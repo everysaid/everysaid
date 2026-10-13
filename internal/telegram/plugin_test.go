@@ -664,3 +664,38 @@ func TestGroupReaders(t *testing.T) {
 		t.Fatalf("again: %d receipts", n)
 	}
 }
+
+// GIFs through @gif: a file already on Telegram and one on the web (fetched through Telegram), not
+// a picture; the next page; a GIF's video, then one no longer among the results.
+func TestSearchGIFs(t *testing.T) {
+	in := newInstance(t, M{})
+	c := in.ctx()
+	f := account()
+	cn := f.conn()
+	_, release, _ := one.take(newTestCtx(), false, nil)
+	defer release()
+	defer one.share(cn)()
+	var p Plugin
+	found, next, err := p.SearchGIFs(newTestCtx(), c, "κόκκαλης", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 2 || found[0].ID != "501" || found[0].Width != 320 || found[1].ID[0] != 'w' || found[1].Height != 240 || next != "20" {
+		t.Fatalf("%+v %q", found, next)
+	}
+	more, next, err := p.SearchGIFs(newTestCtx(), c, "κόκκαλης", next)
+	if err != nil || len(more) != 1 || next != "" {
+		t.Fatalf("%+v %q %v", more, next, err)
+	}
+	g, err := p.GIF(newTestCtx(), c, "501")
+	if err != nil || string(g.Data) != "telegram gif" || !g.Animated || g.MimeType != "video/mp4" {
+		t.Fatalf("%+v %v", g, err)
+	}
+	g, err = p.GIF(newTestCtx(), c, found[1].ID)
+	if err != nil || string(g.Data) != "web gif of https://gifs.example/b.mp4" {
+		t.Fatalf("%+v %v", g, err)
+	}
+	if _, err := p.GIF(newTestCtx(), c, "999"); err == nil {
+		t.Fatal("a GIF never found")
+	}
+}
