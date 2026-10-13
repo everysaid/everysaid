@@ -218,6 +218,9 @@ export function SettingsPage() {
               <Line label={t("settings.sendEnter")}>
                 <Switch checked={(settings.data?.send_enter as boolean | undefined) ?? true} onChange={(v) => put.mutate({ send_enter: v })} />
               </Line>
+              <Line label={t("settings.emoticons")} hint={t("settings.emoticonsHint")}>
+                <Switch checked={(settings.data?.emoticons as boolean | undefined) ?? true} onChange={(v) => put.mutate({ emoticons: v })} />
+              </Line>
               {(canInstall || (isIos() && !isStandalone())) && (
                 <Line label={t("settings.install")} hint={isIos() ? t("settings.pushIos") : t("settings.installHint")}>
                   {canInstall && <Button size="sm" variant="primary" onClick={async () => { await installEvent?.prompt(); installEvent = null; setCanInstall(false); }}><Download className="size-4" />{t("settings.install")}</Button>}
