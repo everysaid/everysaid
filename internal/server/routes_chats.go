@@ -117,8 +117,12 @@ func (s *Server) chatRoutes() {
 		files := s.Host.Able("can_send_files")
 		lang := q.xlang()
 		services, _ := c["services"].([]string)
+		writable := s.Host.Writable(q.r.PathValue("chat_id"))
 		sendable, replyable, mentionable, fileable := []string{}, []string{}, []string{}, []string{}
 		for _, x := range services {
+			if !writable[x] { // a service of the chat's calls only: nowhere to write there
+				continue
+			}
 			if can[x] {
 				sendable = append(sendable, x)
 			}

@@ -412,6 +412,26 @@ func TestForward(t *testing.T) {
 	must(t, c.post(fmt.Sprintf("/api/messages/%d/forward", hello), M{"chats": []any{}}).status == 400, "no chats")
 }
 
+// A service the chat has only calls of is not one it can be written to on (nowhere to write there).
+func TestNotSendableWhereOnlyCalls(t *testing.T) {
+	c := newServer(t)
+	c.login()
+	a, err := archive.Open(c.s.Store.Path)
+	must(t, err == nil, "open: %v", err)
+	unnamed := a.Address(archive.H("phone", "+15550100010"))
+	a.AddCall(a.Source("test/calls", "", "", ""), "wa-call", archive.Call{Service: "whatsapp", AddressID: unnamed, TS: time.Now().UnixMilli()})
+	a.Commit()
+	a.Close()
+	chat := fmt.Sprintf("p%d", db.Int(c.s.Store.Read(), "SELECT person_id FROM person_address WHERE address_id = ?", unnamed))
+	d := c.getJSON("/api/chats/" + chat)
+	has := func(k, svc string) bool {
+		l, _ := d[k].([]any)
+		return slices.Contains(l, any(svc))
+	}
+	must(t, has("services", "whatsapp") && has("sendable", "sms") && !has("sendable", "whatsapp") && !has("fileable", "whatsapp"),
+		"its services %v, sendable %v, fileable %v", d["services"], d["sendable"], d["fileable"])
+}
+
 // A chat that has the message's service, forwarded to through another asked for: a message of its
 // own there.
 func TestForwardThroughAnotherService(t *testing.T) {
