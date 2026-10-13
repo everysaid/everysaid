@@ -48,7 +48,8 @@ export function filterParams(f: ChatFilters) {
 // the least messages, in steps that grow as the numbers do: a few, tens, hundreds, thousands
 const STEPS = [0, 1, 2, 3, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000];
 
-export function ChatFiltersButton({ value, onChange, seen }: { value: ChatFilters; onChange: (f: ChatFilters) => void; seen: string[] }) {
+// archivedUnread: something unread in an archived chat (outside them), a lighter tint than in them
+export function ChatFiltersButton({ value, onChange, seen, archivedUnread }: { value: ChatFilters; onChange: (f: ChatFilters) => void; seen: string[]; archivedUnread?: boolean }) {
   const { t } = useTranslation();
   const labels = useLabels();
   const [open, setOpen] = useState(false);
@@ -68,9 +69,10 @@ export function ChatFiltersButton({ value, onChange, seen }: { value: ChatFilter
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger asChild>
-        <button data-chat-filters aria-label={t("chats.filters")} title={t("chats.filters")}
+        <button data-chat-filters data-archived-unread={archivedUnread || undefined} aria-label={t("chats.filters")}
+          title={archivedUnread ? `${t("chats.filters")} · ${t("chats.archivedUnread")}` : t("chats.filters")}
           className={cn("relative ml-auto grid size-9 place-items-center rounded-full text-muted hover:bg-panel-2",
-            (n > 0 || value.archived) && "bg-accent/12 text-accent")}>
+            (n > 0 || value.archived) ? "bg-accent/12 text-accent" : archivedUnread && "bg-accent/6 text-accent/80")}>
           <ListFilter className="size-4" />
           {n > 0 && <span className="absolute -right-0.5 -top-0.5 min-w-4 rounded-full bg-accent px-1 text-[10px] font-bold leading-4 text-accent-fg">{n}</span>}
         </button>

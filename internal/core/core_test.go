@@ -367,6 +367,17 @@ func TestChatStateAndUnread(t *testing.T) {
 	if ids(chats(s, nil))[id] {
 		t.Fatal("archived chat listed")
 	}
+	if core.ArchivedUnread(s) {
+		t.Fatal("archived chat read, yet unread")
+	}
+	setState(t, s, id, false, map[string]any{"read_until": nil})
+	if !core.ArchivedUnread(s) {
+		t.Fatal("archived chat unread, not said")
+	}
+	setState(t, s, id, false, map[string]any{"muted": true})
+	if core.ArchivedUnread(s) {
+		t.Fatal("muted archived chat said unread")
+	}
 }
 
 func TestMediaAndDecisions(t *testing.T) {

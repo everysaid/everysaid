@@ -165,7 +165,7 @@ export function ChatList() {
         <div className="flex items-center gap-2">
           <Logo className="size-8 md:hidden" />
           <h1 className="text-xl font-semibold tracking-tight">{archived ? t("chats.showArchived") : t("chats.title")}</h1>
-          <ChatFiltersButton value={filters} onChange={setFilters} seen={[...seen.current]} />
+          <ChatFiltersButton value={filters} onChange={setFilters} seen={[...seen.current]} archivedUnread={!archived && chats.data?.archived_unread} />
         </div>
         <div className="relative">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" />

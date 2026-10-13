@@ -116,7 +116,11 @@ func (s *Server) chatRoutes() {
 				it["sendable"] = of[id]
 			}
 		}
-		return M{"items": items}, nil
+		out := M{"items": items}
+		if !archived {
+			out["archived_unread"] = core.ArchivedUnread(s.Store)
+		}
+		return out, nil
 	})
 
 	h("GET /api/chats/{chat_id}", bodyNone, func(q *req) (any, error) {

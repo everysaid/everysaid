@@ -1048,6 +1048,27 @@ func Chats(s *Store, o ChatsOptions) []M {
 	return out
 }
 
+// ArchivedUnread says whether an archived chat, not muted, has something unread: the chat list,
+// outside the archived ones, shows it.
+func ArchivedUnread(s *Store) bool {
+	ix := Index(s)
+	base := UnreadSince(s)
+	for id, st := range States(s) {
+		chat := ix.Chats[id]
+		if !st.Archived || st.Muted || chat == nil {
+			continue
+		}
+		since := base
+		if st.ReadUntil != nil && *st.ReadUntil > since {
+			since = *st.ReadUntil
+		}
+		if chat.LastMessage > since && unread(s, chat, since) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func personIDOf(c *Chat) any {
 	if c.Type == "person" {
 		return c.PersonID

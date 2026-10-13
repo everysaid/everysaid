@@ -19,7 +19,7 @@ export function useChats(params: { kind?: string; q?: string; archived?: boolean
   services?: string; no_services?: string; label?: number; sendable?: 1 } = {}) {
   return useQuery({
     queryKey: ["chats", params],
-    queryFn: () => api.get<{ items: ChatSummary[] }>(`/api/chats${qs(params)}`),
+    queryFn: () => api.get<{ items: ChatSummary[]; archived_unread?: boolean }>(`/api/chats${qs(params)}`),
     staleTime: 15_000,
   });
 }
