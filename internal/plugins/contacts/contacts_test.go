@@ -1,6 +1,7 @@
 package contacts
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"everysaid/internal/archive"
 	"everysaid/internal/config"
@@ -419,4 +421,44 @@ func TestCardDavSyncToken(t *testing.T) {
 	// a server that has no sync tokens: the whole address book, asked for at once
 	set(func(string) ([]entry, []string, string, bool) { return nil, nil, "", false })
 	sync("", "sync:t3", "sync:", "query")
+}
+
+func TestCardDavLive(t *testing.T) {
+	asked := make(chan string, 10)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body := string(b)
+		token := body[strings.Index(body, "<d:sync-token>")+len("<d:sync-token>") : strings.Index(body, "</d:sync-token>")]
+		select {
+		case asked <- token:
+		default: // the test read enough
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		w.WriteHeader(207)
+		io.WriteString(w, `<?xml version="1.0"?><d:multistatus xmlns:d="DAV:" xmlns:card="urn:ietf:params:xml:ns:carddav">`)
+		if token == "" { // the first time everything, then nothing changed
+			io.WriteString(w, `<d:response><d:href>/c/a.vcf</d:href><d:propstat><d:prop><card:address-data>`+
+				"BEGIN:VCARD\nVERSION:3.0\nUID:a\nFN:Alpha\nEND:VCARD\n"+`</card:address-data></d:prop></d:propstat></d:response>`)
+		}
+		io.WriteString(w, `<d:sync-token>t1</d:sync-token></d:multistatus>`)
+	}))
+	defer srv.Close()
+	s, c := archiveWith(t, "carddav", M{"url": srv.URL + "/c/", "username": "me"})
+	defer func(p time.Duration) { livePause = p }(livePause)
+	livePause = 10 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error)
+	go func() { done <- (CardDav{}).Live(ctx, c) }()
+	for _, want := range []string{"", "t1", "t1"} { // at once, then again and again
+		if got := <-asked; got != want {
+			t.Fatalf("token %q, want %q", got, want)
+		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if n := db.Strs(s.Read(), "SELECT name FROM contact"); len(n) != 1 || n[0] != "Alpha" {
+		t.Fatal(n)
+	}
 }
