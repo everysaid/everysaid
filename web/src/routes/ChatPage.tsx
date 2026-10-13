@@ -1124,7 +1124,8 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
     const at = asked.at + label.length + 1;
     setText(next);
     setCaret(at);
-    requestAnimationFrame(() => { ref.current?.focus(); ref.current?.setSelectionRange(at, at); });
+    caretTo.current = at;                 // as the field has the text, not a frame later
+    ref.current?.focus();
   };
   // a command chosen: "@" and its name, the words then written after it
   const command = (c: { id: string }) => {
@@ -1134,7 +1135,8 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
     const at = asked.at + label.length;
     setText(next);
     setCaret(at);
-    requestAnimationFrame(() => { ref.current?.focus(); ref.current?.setSelectionRange(at, at); });
+    caretTo.current = at;                 // as the field has the text, not a frame later
+    ref.current?.focus();
   };
   const sendGif = (gif: File) => {
     setEmojiOpen(false);
