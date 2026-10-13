@@ -22,7 +22,10 @@ export function MessageInfo({ m, onClose }: { m: MessageItem | null; onClose: ()
     <Dialog open={!!m} onOpenChange={(o) => !o && onClose()} title={t("chat.messageInfo")}>
       {m && (
         <div data-message-info className="space-y-4">
-          <div className="line-clamp-3 rounded-xl bg-panel-2 px-3 py-2 text-sm">{m.text || t(`kind.${m.kind}`, { defaultValue: m.kind })}</div>
+          <div className="rounded-xl bg-panel-2 px-3 py-2 text-sm">
+            {/* clamped inside the padding: on the same box a fourth line would show, cut, in it */}
+            <div className="line-clamp-3">{m.text || t(`kind.${m.kind}`, { defaultValue: m.kind })}</div>
+          </div>
           {q.isLoading ? (
             <Center className="py-6"><Spinner /></Center>
           ) : !items.length ? (
