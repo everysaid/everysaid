@@ -8,7 +8,7 @@ import { fileURLToPath, URL } from "node:url";
 // The emoji picker's data (emojibase, English), served by the app itself at /emojibase/en/: no
 // request leaves for a CDN (the server's Content-Security-Policy would not allow one either). With
 // it, shortcodes.json: each emoji (in the picker's order) with its shortcodes (GitHub's and
-// emojibase's), for the list a ":" opens in the composer.
+// emojibase's) and its category, for the list a ":" opens in the composer and the emoji of "@gif".
 function emojibase(): Plugin {
   const files = ["data.json", "messages.json", "shortcodes.json"];
   const raw = (f: string) => readFileSync(fileURLToPath(new URL(`./node_modules/emojibase-data/en/${f}`, import.meta.url)));
@@ -18,7 +18,7 @@ function emojibase(): Plugin {
     return Buffer.from(JSON.stringify(data
       .filter((e) => e.group !== undefined && e.group !== 2)          // not the skin tones and hair alone
       .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-      .map((e) => [e.emoji, [...new Set(codes.flatMap((c) => c[e.hexcode] ?? []))].join(" ")])
+      .map((e) => [e.emoji, [...new Set(codes.flatMap((c) => c[e.hexcode] ?? []))].join(" "), e.group])
       .filter(([, c]) => c)));
   };
   const read = (f: string) => (f === "shortcodes.json" ? shortcodes() : raw(f));

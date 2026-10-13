@@ -79,23 +79,28 @@ export type ResultsKeys = { key: (key: string, shift: boolean) => boolean };
 
 const RESULTS_TAB = "gif-results-tab";
 
-/** What "@gif <words>" finds, above the text being written: a tab for each GIFs plugin (the History
- * of the archive's GIFs too, which has no words) and one of the emoji, opened at the one chosen last. All by keyboard, the caret staying in the
- * text: Tab and Shift+Tab the tabs, ↓ and ↑ (and, among them, → and ←) the results, Enter the one
- * marked (or, none marked, the words asked for now). */
+/** What "@gif <words>" finds, above the text being written, as behind the button: the emoji first (all
+ * of them, by category, the ones used lately first; with words, those whose names have them), then a
+ * tab for each GIFs plugin in the order added (the History of the archive's GIFs too, which has no
+ * words; one that cannot now there, greyed, saying why), opened at the one chosen last. All by
+ * keyboard, the caret staying in the text: Tab and Shift+Tab the tabs, ↓ and ↑ (and, among them, →
+ * and ←) the results (the emoji a row at a time), Enter the one marked (or, none marked, the words
+ * asked for now). */
 export const GifResults = forwardRef<ResultsKeys, { query: string; onPick: (file: File) => void; onEmoji: (emoji: string) => void }>(
   function GifResults({ query, onPick, onEmoji }, ref) {
     const { t } = useTranslation();
     const searchers = useQuery(searchersQuery);
-    const able = (searchers.data?.items ?? []).filter((s) => !s.why);
-    const tabs = [...able.map((s) => ({ id: String(s.instance), name: s.name, history: s.history })),
-      { id: "emoji", name: t("emoji.choose"), history: false }];
+    const all = searchers.data?.items ?? [];
+    const tabs = [{ id: "emoji", name: t("emoji.choose"), history: false, why: null as string | null },
+      ...all.map((s) => ({ id: String(s.instance), name: s.name, history: !!s.history, why: s.why }))];
     const [chosen, setChosen] = useState(() => localStorage.getItem(RESULTS_TAB));
     const tab = tabs.find((x) => x.id === chosen) ?? tabs[0];
+    const searcher = all.find((s) => String(s.instance) === tab.id);
     const choose = (id: string) => { setChosen(id); localStorage.setItem(RESULTS_TAB, id); setCursor(-1); };
     const [cursor, setCursor] = useState(-1);
     const [go, setGo] = useState(0);
     const list = useRef<string[]>([]);              // what the tab shows, in order: GIFs' addresses, or emoji
+    const rows = useRef<number[][] | null>(null);   // the emoji's rows (their places in list), as shown
     const { busy, pick } = useFetchGif(onPick);
     const take = (i: number) => {
       const v = list.current[i];
@@ -103,10 +108,19 @@ export const GifResults = forwardRef<ResultsKeys, { query: string; onPick: (file
       if (tab.id === "emoji") onEmoji(v);
       else pick(v);
     };
+    // the place a row down (or up) from the one marked, in the same column or the row's last; -1 above the first
+    const row = (c: number, by: number) => {
+      const r = rows.current!;
+      const at = r.findIndex((x) => x.includes(c));
+      const next = r[at + by];
+      if (!next) return by < 0 ? -1 : c;
+      return next[Math.min(r[at].indexOf(c), next.length - 1)];
+    };
     useEffect(() => setCursor(-1), [query]);
     useImperativeHandle(ref, () => ({
       key: (key, shift) => {
         const n = list.current.length;
+        const emoji = tab.id === "emoji" && rows.current;
         switch (key) {
           case "Tab": {
             const i = tabs.findIndex((x) => x.id === tab.id);
@@ -114,11 +128,11 @@ export const GifResults = forwardRef<ResultsKeys, { query: string; onPick: (file
             return true;
           }
           case "ArrowDown":
-            setCursor((c) => Math.min(c + 1, n - 1));
+            setCursor((c) => (c < 0 ? Math.min(0, n - 1) : emoji ? row(c, 1) : Math.min(c + 1, n - 1)));
             return n > 0;
           case "ArrowUp":
             if (cursor < 0) return false;
-            setCursor((c) => c - 1);
+            setCursor((c) => (emoji ? row(c, -1) : c - 1));
             return true;
           case "ArrowRight":
           case "ArrowLeft":
@@ -134,50 +148,96 @@ export const GifResults = forwardRef<ResultsKeys, { query: string; onPick: (file
         return false;
       },
     }));
+    if (tab.id !== "emoji") rows.current = null;
+    if (searcher?.why) list.current = [];
     return (
       // a tap here leaves the caret in the text, where the keys are
-      <div data-gif-results className="flex h-72 flex-col" onMouseDown={(e) => e.preventDefault()}>
+      <div data-gif-results className="flex h-80 flex-col" onMouseDown={(e) => e.preventDefault()}>
         <Segmented className="mx-2 mt-2 self-start" value={tab.id} onChange={choose}
-          options={tabs.map((x) => ({ value: x.id, label: <span data-results-tab={x.id} data-results-history={x.history || undefined}>{x.name}</span> }))} />
-        {searchers.isPending ? <div className="grid flex-1 place-items-center"><Spinner /></div>
-          : tab.id === "emoji" ? <EmojiResults query={query} cursor={cursor} list={list} onPick={onEmoji} />
-          : able.find((s) => String(s.instance) === tab.id)?.history
+          options={tabs.map((x) => ({ value: x.id, label: (
+            <span data-results-tab={x.id} data-results-history={x.history || undefined} className={cn(x.why && "opacity-50")}>{x.name}</span>) }))} />
+        {tab.id === "emoji" ? <EmojiResults query={query} cursor={cursor} list={list} rows={rows} onPick={onEmoji} />
+          : searchers.isPending ? <div className="grid flex-1 place-items-center"><Spinner /></div>
+          : searcher?.why ? (
+            <div data-gif-unavailable className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center text-sm text-muted">
+              <p>{searcher.why}</p>
+              <Link to="/sources" className="text-accent hover:underline">{t("gif.setup")}</Link>
+            </div>
+          ) : searcher?.history
             ? <div className="flex min-h-0 flex-1 flex-col pt-2"><HistoryGrid pick={pick} busy={busy} cursor={cursor} list={list} /></div>
-          : <div className="flex min-h-0 flex-1 flex-col pt-2">
-              <SearchGrid key={tab.id} instance={Number(tab.id)} wait={able.find((s) => String(s.instance) === tab.id)?.wait_ms}
+          : searcher ? <div className="flex min-h-0 flex-1 flex-col pt-2">
+              <SearchGrid key={tab.id} instance={searcher.instance} wait={searcher.wait_ms}
                 pick={pick} busy={busy} query={query} go={go} cursor={cursor} list={list} />
-            </div>}
+            </div> : null}
       </div>
     );
   });
 
-/** The emoji whose names (English, as the picker's) have the words; without words, those used lately. */
-function EmojiResults({ query, cursor, list, onPick }: {
-  query: string; cursor: number; list: React.MutableRefObject<string[]>; onPick: (emoji: string) => void;
+const COLUMNS = 8;
+
+/** All the emoji, as the button's picker shows them: the ones used lately, then each category; with
+ * words, those whose names (English, as the picker's) have them. A row of the grid at a time by the keys. */
+function EmojiResults({ query, cursor, list, rows, onPick }: {
+  query: string; cursor: number; list: React.MutableRefObject<string[]>; rows: React.MutableRefObject<number[][] | null>;
+  onPick: (emoji: string) => void;
 }) {
   const { t } = useTranslation();
   const [codes, setCodes] = useState<Awaited<ReturnType<typeof shortcodes>> | null>(null);
   useEffect(() => { shortcodes().then(setCodes, () => {}); }, []);
+  // emojibase's groups, in the user's words (2, the skin tones alone, is not among them)
+  const groups = [t("emoji.smileys"), t("emoji.people"), "", t("emoji.animals"), t("emoji.food"), t("emoji.travel"),
+    t("emoji.activities"), t("emoji.objects"), t("emoji.symbols"), t("emoji.flags")];
   const words = query.trim().toLowerCase().replace(/\s+/g, "_");
-  const found = words && codes ? findEmoji(codes, words, recentEmoji(), 64).map((x) => x.emoji) : recentEmoji();
-  list.current = found;
-  if (!found.length) return <div className="grid flex-1 place-items-center text-sm text-muted">{t("emoji.none")}</div>;
+  const recent = recentEmoji();
+  const sections: { name: string; emoji: string[] }[] = [];
+  if (words) sections.push({ name: "", emoji: codes ? findEmoji(codes, words, recent, Infinity).map((x) => x.emoji) : [] });
+  else {
+    if (recent.length) sections.push({ name: t("emoji.recent"), emoji: recent.slice(0, 16) });
+    const byGroup = new Map<number, string[]>();
+    for (const [emoji, , group] of codes ?? []) {
+      if (!byGroup.has(group)) byGroup.set(group, []);
+      byGroup.get(group)!.push(emoji);
+    }
+    for (const [group, emoji] of byGroup) sections.push({ name: groups[group] ?? "", emoji });
+  }
+  list.current = sections.flatMap((s) => s.emoji);
+  let at = 0;
+  rows.current = sections.flatMap((s) => {
+    const r: number[][] = [];
+    for (let i = 0; i < s.emoji.length; i += COLUMNS) r.push(s.emoji.slice(i, i + COLUMNS).map((_, j) => at + i + j));
+    at += s.emoji.length;
+    return r;
+  });
+  if (!codes) return <div className="grid flex-1 place-items-center"><Spinner /></div>;
+  if (!list.current.length) return <div className="grid flex-1 place-items-center text-sm text-muted">{t("emoji.none")}</div>;
+  let i = 0;
   return (
-    <div className="flex flex-1 flex-wrap content-start gap-0.5 overflow-y-auto p-2">
-      {found.map((e, i) => (
-        <Marked key={e} on={i === cursor}>
-          <button type="button" data-emoji-result={e} data-active={i === cursor || undefined} onClick={() => onPick(e)}
-            className={cn("grid size-9 place-items-center rounded-md text-xl hover:bg-panel-2", i === cursor && "bg-panel-2 ring-2 ring-accent")}>{e}</button>
-        </Marked>
+    <div data-emoji-results className="flex-1 overflow-y-auto pb-1.5">
+      {sections.map((s, k) => (
+        <div key={k}>
+          {s.name && <div className="sticky top-0 bg-panel px-3 pb-1 pt-2.5 text-xs font-medium text-muted">{s.name}</div>}
+          <div className={cn("grid gap-0.5 px-1.5", !s.name && "pt-2")} style={{ gridTemplateColumns: `repeat(${COLUMNS}, minmax(0, 1fr))` }}>
+            {s.emoji.map((e) => {
+              const n = i++;
+              return (
+                <Marked key={n} on={n === cursor}>
+                  <button type="button" data-emoji-result={e} data-active={n === cursor || undefined} onClick={() => onPick(e)}
+                    className={cn("grid aspect-square w-full scroll-mt-9 place-items-center rounded-md text-xl hover:bg-panel-2",
+                      n === cursor && "bg-panel-2 ring-2 ring-inset ring-accent")}>{e}</button>
+                </Marked>
+              );
+            })}
+          </div>
+        </div>
       ))}
     </div>
   );
 }
 
-/** The result marked by the keys, kept in view. */
+/** The result marked by the keys, kept in view (the result itself: this wrapper has no box of its own). */
 function Marked({ on, children }: { on: boolean; children: React.ReactNode }) {
   const ref = useRef<HTMLSpanElement>(null);
-  useEffect(() => { if (on) ref.current?.scrollIntoView({ block: "nearest" }); }, [on]);
+  useEffect(() => { if (on) ref.current?.firstElementChild?.scrollIntoView({ block: "nearest" }); }, [on]);
   return <span ref={ref} className="contents">{children}</span>;
 }
 
