@@ -39,8 +39,8 @@ export function ForwardDialog({ m, onClose }: { m: MessageItem | null; onClose: 
   const [picked, setPicked] = useState<Record<string, string>>({});    // a service the user chose for a chat
   const [busy, setBusy] = useState(false);
   useEffect(() => { if (m) { setQ(""); setChosen([]); setPicked({}); } }, [m]);
-  const found = useChats({ q: dq || undefined });
-  const list = (found.data?.items ?? []).slice(0, 40);
+  const found = useChats({ q: dq || undefined, sendable: 1 });
+  const list = (found.data?.items ?? []).filter((c) => c.sendable?.length).slice(0, 40);     // those it can go to
   const details = useQueries({ queries: chosen.map((c) => ({ queryKey: ["chat", c.id], queryFn: () => api.get<ChatDetail>(`/api/chats/${c.id}`) })) });
   const detailOf = (id: string) => details[chosen.findIndex((c) => c.id === id)]?.data;
   const via = (c: ChatSummary) => picked[c.id] ?? (m ? byDefault(m, c, detailOf(c.id)) : null);
@@ -95,7 +95,7 @@ export function ForwardDialog({ m, onClose }: { m: MessageItem | null; onClose: 
                 <Avatar name={c.title} src={avatarUrl(c)} group={c.type === "group"} size={36} />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate">{c.title}</span>
-                  {!on && <span className="block truncate text-[11px] text-muted">{c.services.map((s) => service(s).name).join(" · ")}</span>}
+                  {!on && <span className="block truncate text-[11px] text-muted">{c.sendable!.map((s) => service(s).name).join(" · ")}</span>}
                 </span>
                 <span className={cn("grid size-5 shrink-0 place-items-center rounded-full border", on ? "border-accent bg-accent text-white" : "border-line")}>
                   {on && <Check className="size-3.5" />}

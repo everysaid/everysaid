@@ -192,6 +192,42 @@ func (h *Host) Writable(chatID string) map[string]bool {
 	return out
 }
 
+// SendableOf is, for each of these chats, the services it can be sent to now (those it can be written
+// to on that a source sends to), in the order of its services.
+func (h *Host) SendableOf(chats []string) map[string][]string {
+	can := h.Able("")
+	convService := map[int64]string{}
+	db.Each(h.store.Read(), "SELECT c.id, s.name FROM conversation c JOIN service s ON s.id = c.service_id", nil, func(scan func(...any)) {
+		var id int64
+		var svc string
+		scan(&id, &svc)
+		convService[id] = svc
+	})
+	ix := core.Index(h.store)
+	out := map[string][]string{}
+	for _, id := range chats {
+		c := ix.Chats[id]
+		if c == nil {
+			continue
+		}
+		has := map[string]bool{}
+		for _, conv := range c.Conversations {
+			has[convService[conv]] = true
+		}
+		list := []string{}
+		for _, svc := range c.ServiceList() {
+			if !can[svc] {
+				continue
+			}
+			if _, _, found := h.reached(id, svc); has[svc] || found {
+				list = append(list, svc)
+			}
+		}
+		out[id] = list
+	}
+	return out
+}
+
 func (h *Host) reached(chatID, service string) (int64, string, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

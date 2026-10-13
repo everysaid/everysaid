@@ -103,7 +103,20 @@ func (s *Server) chatRoutes() {
 		if label != 0 {
 			o.PeopleOnly = s.labelled(label)
 		}
-		return M{"items": core.Chats(s.Store, o)}, nil
+		items := core.Chats(s.Store, o)
+		// sendable=1: each with the services it can be sent to now
+		if q.str("sendable") == "1" {
+			ids := make([]string, len(items))
+			for i, it := range items {
+				ids[i], _ = it["id"].(string)
+			}
+			of := s.Host.SendableOf(ids)
+			for _, it := range items {
+				id, _ := it["id"].(string)
+				it["sendable"] = of[id]
+			}
+		}
+		return M{"items": items}, nil
 	})
 
 	h("GET /api/chats/{chat_id}", bodyNone, func(q *req) (any, error) {
