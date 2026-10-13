@@ -688,7 +688,7 @@ func TestViberCommand(t *testing.T) {
 	inScope, err := viberCommand(c)
 	must(t, err)
 	eq(t, "args in a scope", inScope.Args, append([]string{"systemd-run", "--user", "--scope", "--quiet", "--collect",
-		fmt.Sprintf("--unit=everysaid-viber-%d", c.ID), "--"}, cmd.Args...))
+		fmt.Sprintf("--unit=everysaid-viber-%d.scope", c.ID), "--"}, cmd.Args...))
 	for _, e := range []string{"DISPLAY=:42", "QT_QPA_PLATFORM=xcb", "VIBER_BRIDGE_SOCK=/run/x.sock", "VIBER_ALLOW_SEND=1"} {
 		if !slices.Contains(cmd.Env, e) {
 			t.Fatalf("%s not in %v", e, cmd.Env)

@@ -185,6 +185,11 @@ func launch(c *plugins.Context) error {
 	}
 	defer out.Close()
 	cmd.Stdout, cmd.Stderr = out, out
+	if userScope() {
+		// what Viber's D-Bus started for it (a portal, a secrets service) outlives it in its scope, and
+		// a scope still there by its name refuses the new one: it is ended first (Viber is not running)
+		exec.Command("systemctl", "--user", "stop", scopeUnit(c)).Run()
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -215,7 +220,7 @@ func viberCommand(c *plugins.Context) (*exec.Cmd, error) {
 	args := []string{"dbus-run-session", "--", "env", "--default-signal=INT", "LD_PRELOAD=" + so, bin}
 	if userScope() {
 		args = append([]string{"systemd-run", "--user", "--scope", "--quiet", "--collect",
-			fmt.Sprintf("--unit=everysaid-viber-%d", c.ID), "--"}, args...)
+			"--unit=" + scopeUnit(c), "--"}, args...)
 	}
 	cmd := exec.Command(args[0], args[1:]...)
 	var env []string
@@ -231,6 +236,9 @@ func viberCommand(c *plugins.Context) (*exec.Cmd, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	return cmd, nil
 }
+
+// scopeUnit is the scope Viber Desktop runs in under the user's systemd.
+func scopeUnit(c *plugins.Context) string { return fmt.Sprintf("everysaid-viber-%d.scope", c.ID) }
 
 // userScope: the user's systemd is there to put Viber in a scope of its own (systemd-run --scope
 // runs it in place, the same process, in another cgroup).
