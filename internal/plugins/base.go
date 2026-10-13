@@ -244,11 +244,13 @@ type Mention struct {
 	AddressID     int64
 }
 
-// File is a file to send, the text its caption.
+// File is a file to send, the text its caption. Animated: a short video without sound sent as a
+// GIF (played by itself, in a loop), as each service sends one; one that cannot, as a video.
 type File struct {
 	Data     []byte
 	Filename string
 	MimeType string
+	Animated bool
 }
 
 // Ref is a message of the archive as a plugin is given it: its id, its key on the service, whether

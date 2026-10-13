@@ -458,6 +458,48 @@ func TestSendKeepsFile(t *testing.T) {
 	}
 }
 
+// A GIF goes as an animated video without sound, and is one in the archive.
+func TestSendAnimated(t *testing.T) {
+	in := newInstance(t, M{})
+	importTelegram = func(a *archive.Archive, out func(string), only map[[2]int64]bool, skip map[int64]bool) error {
+		return importers.Telegram(a, out, importers.TelegramOptions{Only: only, Skip: skip})
+	}
+	c := in.ctx()
+	a, _ := archive.Open(in.path)
+	conv := a.Conversation("telegram", []archive.Handle{archive.H("id", "2", "telegram")}, "2", "Bob")
+	a.Commit()
+	a.Close()
+	f := account()
+	cn := f.conn()
+	if _, err := cn.dialogs(newTestCtx()); err != nil {
+		t.Fatal(err)
+	}
+	_, release, _ := one.take(newTestCtx(), false, nil)
+	defer release()
+	defer one.share(cn)()
+	var p Plugin
+	res, err := p.Send(newTestCtx(), c, plugins.Conversation{ID: conv, Key: "2", Service: "telegram"}, "", nil, nil,
+		&plugins.File{Filename: "gif.mp4", MimeType: "video/mp4", Data: []byte("mp4 bytes"), Animated: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := f.requests[len(f.requests)-1].(*tg.MessagesSendMediaRequest).Media.(*tg.InputMediaUploadedDocument)
+	animated := false
+	for _, at := range doc.Attributes {
+		_, ok := at.(*tg.DocumentAttributeAnimated)
+		animated = animated || ok
+	}
+	if !animated || !doc.NosoundVideo {
+		t.Fatalf("%+v", doc)
+	}
+	var sub sql.NullString
+	db.Row(in.h.store.Read(), "SELECT subtype FROM message WHERE conversation_id = ? AND key = ?",
+		[]any{conv, res.(plugins.Sent).Keys[0]}, &sub)
+	if sub.String != "gif" {
+		t.Fatalf("subtype %q", sub.String)
+	}
+}
+
 func TestLiveFiles(t *testing.T) {
 	in := newInstance(t, M{"skip_chats": []any{-10}})
 	imported := 0

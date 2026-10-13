@@ -1298,6 +1298,7 @@ type sendRequest struct {
 		ContentType string `json:"content_type"`
 		Filename    string `json:"filename"`
 		Voice       bool   `json:"voice"`
+		Gif         bool   `json:"gif"` // a video without sound, played by itself in a loop
 	} `json:"attachments"`
 }
 
@@ -1369,6 +1370,8 @@ func (c *client) send(ctx context.Context, req sendRequest) (any, error) {
 		ptr.ContentType, ptr.FileName = proto.String(ct), proto.String(name)
 		if a.Voice {
 			ptr.Flags = proto.Uint32(uint32(signalpb.AttachmentPointer_VOICE_MESSAGE))
+		} else if a.Gif {
+			ptr.Flags = proto.Uint32(uint32(signalpb.AttachmentPointer_GIF))
 		}
 		dm.Attachments = append(dm.Attachments, ptr)
 		local = append(local, data)

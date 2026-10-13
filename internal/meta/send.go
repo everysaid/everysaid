@@ -164,6 +164,7 @@ func send(ctx context.Context, c *plugins.Context, service string, conv plugins.
 	}
 	var id string
 	var ts int64
+	gif := false
 	switch {
 	case s.ig != nil:
 		var ids []string
@@ -188,7 +189,8 @@ func send(ctx context.Context, c *plugins.Context, service string, conv plugins.
 		}
 	case s.encrypted(conv.Key):
 		id, ts, err = s.sendWA(ctx, conv, text, reply, file, mime)
-	default:
+		gif = file != nil && (file.Animated && fileKind(mime) == "video" || mime == "image/gif") // played as one
+	default: // a GIF goes as the video it is
 		id, ts, err = s.sendFB(ctx, conv, text, reply, mentions, file, mime)
 	}
 	if err != nil {
@@ -201,6 +203,9 @@ func send(ctx context.Context, c *plugins.Context, service string, conv plugins.
 	if file != nil {
 		m.Kind = fileKind(mime)
 		m.Files = sentFile(c, conv.Key, id, file, mime)
+	}
+	if gif {
+		m.Subtype = "gif"
 	}
 	err = s.write(func(w *importers.MetaWriter, a *archive.Archive) {
 		w.Add(m)
@@ -367,7 +372,7 @@ func (s *liveSession) waMedia(ctx context.Context, e *whatsmeow.Client, file *pl
 	case "video":
 		m := &waConsumerApplication.ConsumerApplication_VideoMessage{Caption: text}
 		anc := &waMediaTransport.VideoTransport_Ancillary{Width: proto.Uint32(uint32(w)), Height: proto.Uint32(uint32(h))}
-		if mime == "image/gif" {
+		if mime == "image/gif" || file.Animated {
 			anc.GifPlayback = proto.Bool(true)
 		}
 		err = m.Set(&waMediaTransport.VideoTransport{Integral: &waMediaTransport.VideoTransport_Integral{Transport: tr}, Ancillary: anc})

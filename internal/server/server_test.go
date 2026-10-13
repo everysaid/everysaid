@@ -638,8 +638,12 @@ func TestMentionsFilesReceiptsAndReadReceipts(t *testing.T) {
 	r = c.form("/api/chats/"+group+"/send", map[string]string{"text": "", "service": "whatsapp"}, "file", "photo.jpg", "image/jpeg", []byte("\xff\xd8 picture"))
 	must(t, r.status == 200, "a file alone: %d %s", r.status, r.body)
 	a = next(t)
-	must(t, a.text == "" && a.file != nil && string(a.file.Data) == "\xff\xd8 picture" && a.file.Filename == "photo.jpg" && a.file.MimeType == "image/jpeg",
-		"file: %+v", a.file)
+	must(t, a.text == "" && a.file != nil && string(a.file.Data) == "\xff\xd8 picture" && a.file.Filename == "photo.jpg" && a.file.MimeType == "image/jpeg" &&
+		!a.file.Animated, "file: %+v", a.file)
+	r = c.form("/api/chats/"+group+"/send", map[string]string{"text": "", "service": "whatsapp", "animated": "1"}, "file", "gif.mp4", "video/mp4", []byte("mp4"))
+	must(t, r.status == 200, "a GIF: %d %s", r.status, r.body)
+	a = next(t)
+	must(t, a.file != nil && a.file.Animated && a.file.MimeType == "video/mp4", "a GIF: %+v", a.file)
 	must(t, c.post("/api/chats/"+group+"/send", M{"text": " "}).code() == "empty_message", "empty")
 
 	// read here: the services told, where something of the others is newer than what they said was read

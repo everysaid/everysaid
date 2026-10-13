@@ -53,6 +53,7 @@ type outboxRequest struct {
 	Mentions       []plugins.Mention `json:"mentions,omitempty"`
 	FileName       string            `json:"file_name,omitempty"`
 	FileType       string            `json:"file_type,omitempty"`
+	Animated       bool              `json:"animated,omitempty"`
 }
 
 // outboxDB is a connection to the archive for the outbox, opened at its first use.
@@ -128,7 +129,7 @@ func (h *Host) SendKept(ctx context.Context, chatID, id string, r SendRequest) (
 	kept := outboxRequest{Text: r.Text, ConversationID: r.ConversationID, Service: r.Service, ReplyTo: r.ReplyTo, Mentions: r.Mentions}
 	var file []byte
 	if r.File != nil {
-		kept.FileName, kept.FileType, file = r.File.Filename, r.File.MimeType, r.File.Data
+		kept.FileName, kept.FileType, kept.Animated, file = r.File.Filename, r.File.MimeType, r.File.Animated, r.File.Data
 	}
 	req, _ := json.Marshal(kept)
 	now := time.Now().UnixMilli()
@@ -301,7 +302,7 @@ func (h *Host) sendKept(ctx context.Context) {
 		}
 		req := SendRequest{Text: k.Text, ConversationID: k.ConversationID, Service: k.Service, ReplyTo: k.ReplyTo, Mentions: k.Mentions}
 		if k.FileName != "" || len(r.file) > 0 {
-			req.File = &plugins.File{Data: r.file, Filename: k.FileName, MimeType: k.FileType}
+			req.File = &plugins.File{Data: r.file, Filename: k.FileName, MimeType: k.FileType, Animated: k.Animated}
 		}
 		db.Exec(o, "UPDATE outbox SET state = 'sending', attempts = attempts + 1 WHERE id = ?", r.id)
 		h.outboxChanged(r.chat)

@@ -946,6 +946,9 @@ func (p Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conve
 		if file.MimeType != "" {
 			a["content_type"] = file.MimeType
 		}
+		if file.Animated {
+			a["gif"] = true
+		}
 		req["attachments"] = []M{a}
 	}
 	raw, err := n.h.Call(ctx, "send", req)

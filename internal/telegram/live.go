@@ -1165,7 +1165,8 @@ var notAPhoto = []string{"PHOTO_INVALID_DIMENSIONS", "PHOTO_SAVE_FILE_INVALID", 
 	"PHOTO_INVALID", "IMAGE_PROCESS_FAILED"}
 
 // media is what send_file makes of a file: a photo where its name says a PNG or JPEG and it is not
-// sent as a document, else a document with its name (and a video's attribute).
+// sent as a document, else a document with its name (and a video's attribute; an animated one's
+// too for a GIF, a video without sound that Telegram plays by itself in a loop).
 func media(ctx context.Context, api *tg.Client, f *plugins.File, forceDocument bool) (tg.InputMediaClass, error) {
 	name := f.Filename
 	if name == "" {
@@ -1188,11 +1189,18 @@ func media(ctx context.Context, api *tg.Client, f *plugins.File, forceDocument b
 	if !forceDocument && strings.HasPrefix(mimeType, "video/") {
 		attrs = append(attrs, &tg.DocumentAttributeVideo{W: 1, H: 1})
 	}
+	gif := f.Animated && !forceDocument
+	if gif {
+		attrs = append(attrs, &tg.DocumentAttributeAnimated{})
+	}
 	if mimeType == "" {
 		mimeType = "application/octet-stream"
 	}
 	doc := &tg.InputMediaUploadedDocument{File: handle, MimeType: mimeType, Attributes: attrs}
 	doc.SetForceFile(forceDocument && !isImage)
+	if gif {
+		doc.SetNosoundVideo(true)
+	}
 	return doc, nil
 }
 

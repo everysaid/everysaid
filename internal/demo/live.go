@@ -90,8 +90,11 @@ func Message(h plugins.Host, conversationID int64, text string, outgoing bool, r
 			key = fmt.Sprintf("demo-live-%d", n)
 		}
 		var x *archive.Extras
-		if replyKey != "" {
+		if replyKey != "" || file != nil && file.Animated {
 			x = &archive.Extras{ReplyKey: replyKey}
+			if file != nil && file.Animated {
+				x.Subtype = "gif"
+			}
 		}
 		mid := a.AddMessage(src, fmt.Sprintf("live-%d", n), archive.Message{Service: service, ConversationID: conversationID,
 			TS: n / 1_000_000, Outgoing: outgoing, SenderID: who, Kind: kind, Text: text, Key: key, Extras: x})

@@ -515,7 +515,7 @@ func request(c *plugins.Context, conv plugins.Conversation, text string, reply *
 		req.Message, req.Mentions = t, who
 	}
 	if file != nil {
-		req.Media, req.Filename, req.MimeType = file.Data, file.Filename, file.MimeType
+		req.Media, req.Filename, req.MimeType, req.Animated = file.Data, file.Filename, file.MimeType, file.Animated
 	}
 	if reply != nil {
 		// the bridge quotes from its own copy; one from before it was linked, from the archive's
