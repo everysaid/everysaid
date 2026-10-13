@@ -108,3 +108,32 @@ test("a right click on a bubble: its menu; on a link, the browser's", async ({ p
   await page.keyboard.press("Escape");
   await expect(menu).toHaveCount(0);
 });
+
+// On a touch screen, a long press on a bubble opens the same menu (its answer first); a tap does not.
+test("a long press on a bubble: its menu", async ({ page }, info) => {
+  test.skip(info.project.name !== "mobile", "a finger's");
+  await signedIn(page, info.project.name);
+  const found = await page.evaluate(async () => {
+    const r = await (await fetch(`/api/search?q=${encodeURIComponent("εύκολη")}`, { headers: { "X-Everysaid": "1" } })).json();
+    return { chat: r.items[0].chat_id as string, id: r.items[0].id as number };
+  });
+  await page.goto(`/chat/${found.chat}?m=${found.id}`);
+  const words = page.locator(`#m${found.id}`).getByText("Δες αυτή");
+  await expect(words).toBeVisible();
+  const touch = async (ms: number) => {
+    const b = (await words.boundingBox())!;
+    const at = { pointerType: "touch", isPrimary: true, pointerId: 7, bubbles: true, clientX: b.x + 6, clientY: b.y + 6 };
+    await words.dispatchEvent("pointerdown", at);
+    await page.waitForTimeout(ms);
+    await words.dispatchEvent("pointerup", at);
+  };
+  const menu = page.getByRole("menu");
+  await touch(100);                                                      // a tap
+  await page.waitForTimeout(600);
+  await expect(menu).toHaveCount(0);
+  await touch(700);                                                      // held
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("menuitem").first()).toHaveText(/Απάντηση|Reply/);
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+});
