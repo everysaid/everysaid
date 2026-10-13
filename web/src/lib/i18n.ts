@@ -43,6 +43,7 @@ const el = {
     chosenChats_one: "{{count}} συνομιλία", chosenChats_other: "{{count}} συνομιλίες", forwardSend: "Προώθηση", fromMe: "Εσύ",
     forwardedTo_one: "Στάλθηκε σε {{count}} συνομιλία", forwardedTo_other: "Στάλθηκε σε {{count}} συνομιλίες", forwardQueued: "Κάποια θα φύγουν μόλις γίνει δυνατό",
     deleteForAll: "Διαγραφή για όλους", deleteConfirm: "Το μήνυμα θα διαγραφεί για όλους στη συνομιλία, μέσω {{service}}. Αυτό δεν αναιρείται.",
+    deleteNote: "Διαγραφή", deleteNoteConfirm: "Το μήνυμα θα διαγραφεί από τις σημειώσεις σου, σε όλες τις συσκευές σου στο {{service}}. Το αρχείο το κρατά, σημειωμένο ως διαγραμμένο.",
     deleteForMe: "Διαγραφή για μένα", deleteForMeConfirm: "Το μήνυμα θα διαγραφεί μόνο για σένα, σε όλες τις συσκευές σου στο {{service}}· οι άλλοι θα το έχουν ακόμη. Το αρχείο το κρατά, σημειωμένο ως διαγραμμένο.",
     deleteConfirmButton: "Διαγραφή", actionFailed: "Δεν έγινε", showDeleted: "Εμφάνιση του τι ήταν", },
   // one per kind of message the archive knows (archive.MessageKinds; internal/checks checks)
@@ -324,6 +325,7 @@ const en: Shape<typeof el> = {
     chosenChats_one: "{{count}} chat", chosenChats_other: "{{count}} chats", forwardSend: "Forward", fromMe: "You",
     forwardedTo_one: "Sent to {{count}} chat", forwardedTo_other: "Sent to {{count}} chats", forwardQueued: "Some will go as soon as they can",
     deleteForAll: "Delete for everyone", deleteConfirm: "The message will be deleted for everyone in the chat, through {{service}}. This cannot be undone.",
+    deleteNote: "Delete", deleteNoteConfirm: "The message will be deleted from your notes, on all your devices on {{service}}. The archive keeps it, marked deleted.",
     deleteForMe: "Delete for me", deleteForMeConfirm: "The message will be deleted for you alone, on all your devices on {{service}}; the others will still have it. The archive keeps it, marked deleted.",
     deleteConfirmButton: "Delete", actionFailed: "It did not go through", showDeleted: "Show what it was",
     },

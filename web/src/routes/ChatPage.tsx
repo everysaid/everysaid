@@ -17,7 +17,7 @@ import { accountShort } from "@/lib/accounts";
 import { cn } from "@/lib/utils";
 import { chatRoute } from "@/router";
 import { Avatar, Button, Center, Dialog, IconButton, Menu, MenuContent, MenuItem, MenuSub, MenuSubContent, MenuSubTrigger, MenuTrigger, ServiceBadge, ServiceIcon, Spinner, Textarea } from "@/components/ui";
-import { Bubble, CallLine, SystemLine } from "@/components/Message";
+import { Bubble, CallLine, SystemLine, deleteLabel, type DeleteFor } from "@/components/Message";
 import { Lightbox, type LightboxItem } from "@/components/Lightbox";
 import { ChatInfo } from "@/components/ChatInfo";
 import { MessageInfo } from "@/components/MessageInfo";
@@ -196,17 +196,23 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   // goes back as it was, said why)
   const [editing, setEditing] = useState<MessageItem | null>(null);
   // the message to delete, and whether for everyone or for the user alone (asked first)
-  const [deleting, setDeleting] = useState<{ m: MessageItem; forMe: boolean } | null>(null);
+  const [deleting, setDeleting] = useState<{ m: MessageItem; as: DeleteFor; forMe: boolean } | null>(null);
   const [forwarding, setForwarding] = useState<MessageItem | null>(null);
   const patch = (id: number, f: (m: MessageItem) => MessageItem) =>
     setItems((prev) => prev.map((i) => (i.type === "message" && i.id === id ? f(i) : i)));
+  // what is shown of an action still waiting for the service: kept over the server's copy, which a
+  // change elsewhere may bring meanwhile (else it would show the message as it was, then as done)
+  const waitingOn = useRef(new Map<number, (m: MessageItem) => MessageItem>());
   const act = useCallback(async (m: MessageItem, call: () => Promise<unknown>, shown: (m: MessageItem) => MessageItem) => {
+    waitingOn.current.set(m.id, shown);
     patch(m.id, shown);
     try {
       await call();
     } catch (e) {
       patch(m.id, () => m);
       toast.error(`${t("chat.actionFailed")}: ${(e as Error).message}`);
+    } finally {
+      if (waitingOn.current.get(m.id) === shown) waitingOn.current.delete(m.id);
     }
   }, [t]);
   const react = useCallback((m: MessageItem, emoji: string) => act(m, () => api.post(`/api/messages/${m.id}/reaction`, { emoji }), (i) => ({
@@ -531,7 +537,9 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
         if (!page) return;
         const fresh = new Map(page.items.map((i) => [i.cursor, i]));
         setItems((prev) => prev.map((i) => {
-          const f = fresh.get(i.cursor);
+          let f = fresh.get(i.cursor);
+          const shown = f?.type === "message" ? waitingOn.current.get(f.id) : undefined;
+          if (f?.type === "message" && shown) f = shown(f);
           return f ? withLocal(f, i.type === "message" ? i.local : undefined) : i;
         }));
       }, 300);
@@ -721,7 +729,10 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       const within = (secs: number | undefined) => secs !== undefined && (secs === 0 || Date.now() - item.ts < secs * 1000);
       const own = item.outgoing && item.keyed && !item.deleted;
       // for everyone where the service still allows it, else for the user alone where it can
-      const deleteFor = own && within(deletable?.[svc]) ? "all" : item.keyed && !item.deleted && deletableForMe?.[svc] ? "me" : undefined;
+      // (in the user's notes no one else has it: either is a deletion)
+      const can = own && within(deletable?.[svc]) ? "all" : item.keyed && !item.deleted && deletableForMe?.[svc] ? "me" : undefined;
+      const deleteFor: DeleteFor | undefined = can && detail.data?.type === "conversation" ? "notes" : can;
+      const forMe = can === "me";
       const r = item.keyed && reactable && svc in reactable ? reactable[svc] : undefined;
       const reactWith = r !== undefined ? { quick: r ?? ["👍", "❤️", "😂", "😮", "😢", "🙏"], all: r, free: !!freeReactions?.[svc], on: react } : undefined;
       const same = (a: StreamItem | null) => a && a.type === "message" && a.kind !== "system" && a.outgoing === item.outgoing &&
@@ -741,7 +752,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
         onInfo={item.outgoing && item.receipts ? setInfoOf : undefined}
         react={reactWith}
         onEdit={own && item.text && within(editable?.[svc]) ? startEdit : undefined}
-        onDelete={deleteFor ? (m) => setDeleting({ m, forMe: deleteFor === "me" }) : undefined} deleteFor={deleteFor}
+        onDelete={deleteFor ? (m) => setDeleting({ m, as: deleteFor, forMe }) : undefined} deleteFor={deleteFor}
         onForward={item.text || item.attachments.some((a) => a.available !== "gone") ? setForwarding : undefined}
         waiting={waitingOf(item)} />;
     }
@@ -842,8 +853,9 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       <Lightbox items={media} index={lightbox} onIndex={setLightbox} onClose={() => setLightbox(null)} />
       <MessageInfo m={infoOf} onClose={() => setInfoOf(null)} />
       <ForwardDialog m={forwarding} onClose={() => setForwarding(null)} />
-      <Dialog open={!!deleting} onOpenChange={(o) => { if (!o) setDeleting(null); }} title={t(deleting?.forMe ? "chat.deleteForMe" : "chat.deleteForAll")}
-        description={t(deleting?.forMe ? "chat.deleteForMeConfirm" : "chat.deleteConfirm", { service: deleting ? service(deleting.m.service).name : "" })}>
+      <Dialog open={!!deleting} onOpenChange={(o) => { if (!o) setDeleting(null); }} title={t(deleteLabel[deleting?.as ?? "all"])}
+        description={t({ all: "chat.deleteConfirm", me: "chat.deleteForMeConfirm", notes: "chat.deleteNoteConfirm" }[deleting?.as ?? "all"],
+          { service: deleting ? service(deleting.m.service).name : "" })}>
         <div className="flex justify-end gap-2 pt-2">
           <Button variant="ghost" onClick={() => setDeleting(null)}>{t("common.cancel")}</Button>
           <Button data-confirm-delete variant="danger" onClick={() => { const d = deleting; setDeleting(null); if (d) remove(d.m, d.forMe); }}>{t("chat.deleteConfirmButton")}</Button>

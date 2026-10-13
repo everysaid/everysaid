@@ -254,11 +254,12 @@ export interface BubbleProps {
   onReply?: (m: MessageItem) => void;    // where an answer to this message can be sent
   onInfo?: (m: MessageItem) => void;     // who got and read it (the user's own messages)
   // what can be done to it through its service now: a reaction ("" takes the user's back), an edit,
-  // a deletion: for everyone (the user's own, while the service allows), else for the user alone
+  // a deletion: for everyone (the user's own, while the service allows), else for the user alone; in
+  // the user's notes, where no one else is, just a deletion
   react?: { quick: string[]; all: string[] | null; free: boolean; on: (m: MessageItem, emoji: string) => void };
   onEdit?: (m: MessageItem) => void;
   onDelete?: (m: MessageItem) => void;
-  deleteFor?: "all" | "me";
+  deleteFor?: DeleteFor;
   onForward?: (m: MessageItem) => void;  // sent on to other chats
   // one waiting to be sent (or refused): why, said under it, and to send it again or let it go
   waiting?: { why: string | null; again: () => void; discard: () => void };
@@ -271,9 +272,12 @@ function Trigger({ as, children }: { as: boolean; children: React.ReactElement }
   return as ? <MenuTrigger asChild>{children}</MenuTrigger> : children;
 }
 
+export type DeleteFor = "all" | "me" | "notes";
+export const deleteLabel = { all: "chat.deleteForAll", me: "chat.deleteForMe", notes: "chat.deleteNote" } as const;
+
 function Actions({ m, react, onReply, onEdit, onDelete, deleteFor, onForward, open, onOpenChange, at }: {
   m: MessageItem; react?: BubbleProps["react"]; onReply?: (m: MessageItem) => void; onEdit?: (m: MessageItem) => void;
-  onDelete?: (m: MessageItem) => void; deleteFor?: "all" | "me"; onForward?: (m: MessageItem) => void; open: boolean; onOpenChange: (o: boolean) => void;
+  onDelete?: (m: MessageItem) => void; deleteFor?: DeleteFor; onForward?: (m: MessageItem) => void; open: boolean; onOpenChange: (o: boolean) => void;
   at?: { x: number; y: number; link?: string } | null;     // opened by a right click: where (in the bubble), the menu there; on a link, which
 }) {
   const { t } = useTranslation();
@@ -333,7 +337,7 @@ function Actions({ m, react, onReply, onEdit, onDelete, deleteFor, onForward, op
         {file && <MenuItem icon={<Copy className="size-4" />} onSelect={() => copy(copyFile(file))}>{t("chat.copyFile")}</MenuItem>}
         {onForward && <MenuItem icon={<Forward className="size-4" />} onSelect={() => onForward(m)}>{t("chat.forward")}</MenuItem>}
         {onEdit && <MenuItem icon={<Pencil className="size-4" />} onSelect={() => { toComposer.current = true; onEdit(m); }}>{t("chat.edit")}</MenuItem>}
-        {onDelete && <MenuItem danger icon={<Trash2 className="size-4" />} onSelect={() => onDelete(m)}>{t(deleteFor === "me" ? "chat.deleteForMe" : "chat.deleteForAll")}</MenuItem>}
+        {onDelete && <MenuItem danger icon={<Trash2 className="size-4" />} onSelect={() => onDelete(m)}>{t(deleteLabel[deleteFor ?? "all"])}</MenuItem>}
       </MenuContent>
     </Menu>
   );
