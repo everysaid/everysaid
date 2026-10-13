@@ -68,7 +68,7 @@ func Person(s *Store, personID int64) M {
 	}
 	var contact any
 	if c := ppl.Contact(personID); c != nil {
-		contact = M{"id": c.ID, "name": c.Name, "organization": c.Organization}
+		contact = M{"id": c.ID, "name": c.Name, "organization": c.Organization, "gone": c.Gone}
 	}
 	contacts := []M{}
 	distinct := map[int64]string{}

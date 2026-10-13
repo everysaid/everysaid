@@ -147,6 +147,7 @@ type ContactRef struct {
 	Organization *string
 	AddressID    int64
 	Updated      int64
+	Gone         bool // no longer in the address book (kept as it was)
 }
 
 // Seen is a name a service showed for one of a person's handles.
@@ -230,23 +231,28 @@ func NewPeople(q db.Querier) *People {
 		scan(&aid, &label)
 		p.AccountLabel[aid] = label
 	})
-	db.Each(q, "SELECT pa.person_id, c.id, c.name, c.photo, c.organization, ca.address_id, c.updated_at "+
+	// a contact gone from the address book still counts, for the numbers no contact still there lists
+	db.Each(q, "SELECT pa.person_id, c.id, c.name, c.photo, c.organization, ca.address_id, c.updated_at, g.contact_id IS NOT NULL "+
 		"FROM contact_address ca JOIN contact c ON c.id = ca.contact_id "+
 		"JOIN person_address pa ON pa.address_id = ca.address_id "+
-		"JOIN plugin_instance i ON i.id = c.instance_id WHERE i.enabled", nil, func(scan func(...any)) {
-		var pid int64
-		var c ContactRef
-		var name, photo, org sql.NullString
-		scan(&pid, &c.ID, &name, &photo, &org, &c.AddressID, &c.Updated)
-		c.Name = name.String
-		if photo.Valid {
-			c.Photo = &photo.String
-		}
-		if org.Valid {
-			c.Organization = &org.String
-		}
-		p.Contacts[pid] = append(p.Contacts[pid], c)
-	})
+		"JOIN plugin_instance i ON i.id = c.instance_id LEFT JOIN contact_gone g ON g.contact_id = c.id "+
+		"WHERE i.enabled AND (g.contact_id IS NULL OR NOT EXISTS (SELECT 1 FROM contact_address ca2 "+
+		"JOIN contact c2 ON c2.id = ca2.contact_id JOIN plugin_instance i2 ON i2.id = c2.instance_id "+
+		"WHERE ca2.address_id = ca.address_id AND i2.enabled AND c2.id NOT IN (SELECT contact_id FROM contact_gone)))",
+		nil, func(scan func(...any)) {
+			var pid int64
+			var c ContactRef
+			var name, photo, org sql.NullString
+			scan(&pid, &c.ID, &name, &photo, &org, &c.AddressID, &c.Updated, &c.Gone)
+			c.Name = name.String
+			if photo.Valid {
+				c.Photo = &photo.String
+			}
+			if org.Valid {
+				c.Organization = &org.String
+			}
+			p.Contacts[pid] = append(p.Contacts[pid], c)
+		})
 	db.Each(q, "SELECT pa.person_id, s.name, h.kind, h.name, h.address_id, h.first_seen, h.last_seen, h.current "+
 		"FROM handle_name h JOIN person_address pa ON pa.address_id = h.address_id "+
 		"JOIN service s ON s.id = h.service_id", nil, func(scan func(...any)) {
@@ -441,7 +447,7 @@ func (p *People) Aka(pid int64) []M {
 		if c.Name != "" && c.Name != shown {
 			k := key{c.Name, "contacts"}
 			if _, ok := out[k]; !ok {
-				out[k] = M{"name": c.Name, "source": "contacts", "first_seen": c.Updated, "last_seen": c.Updated, "current": true}
+				out[k] = M{"name": c.Name, "source": "contacts", "first_seen": c.Updated, "last_seen": c.Updated, "current": !c.Gone}
 				order = append(order, k)
 			}
 		}

@@ -320,6 +320,10 @@ CREATE TABLE IF NOT EXISTS contact_address (    -- the numbers and emails a cont
     PRIMARY KEY (contact_id, address_id)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS contact_address_address ON contact_address (address_id);
+CREATE TABLE IF NOT EXISTS contact_gone (   -- a contact the address book no longer has: kept, with its
+    contact_id INTEGER PRIMARY KEY REFERENCES contact ON DELETE CASCADE,   -- numbers, name and photo
+    gone_at INTEGER NOT NULL                -- (a contact still there that lists a number comes first)
+);
 CREATE TABLE IF NOT EXISTS state_report (   -- what a source says about a conversation's state
     conversation_id INTEGER NOT NULL REFERENCES conversation,
     instance_id INTEGER NOT NULL REFERENCES plugin_instance,

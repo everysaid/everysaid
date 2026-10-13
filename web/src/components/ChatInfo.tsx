@@ -55,7 +55,7 @@ export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => 
         <Avatar name={chat.title} src={avatarUrl({ id: chat.id, type: chat.type, person_id: chat.person_id, avatar: chat.avatar ?? p?.avatar })} group={chat.type === "group"} size={96} />
         <div>
           <div className="text-lg font-semibold">{chat.title}</div>
-          {p?.contact && <div className="text-xs text-muted">{t("people.contact")}{p.contact.organization ? ` · ${p.contact.organization}` : ""}</div>}
+          {p?.contact && <div className="text-xs text-muted">{t(p.contact.gone ? "people.contactGone" : "people.contact")}{p.contact.organization ? ` · ${p.contact.organization}` : ""}</div>}
         </div>
         <div className="flex flex-wrap justify-center gap-1">{chat.services.map((s) => <ServiceBadge key={s} id={s} />)}</div>
       </div>

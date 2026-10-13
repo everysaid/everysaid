@@ -155,6 +155,40 @@ func merge(tx *sql.Tx, into, other int64) error {
 	return nil
 }
 
+// MergeByContacts merges the people a contact of an address book lists handles of (the user's own
+// word that they are one): those of each contact still there into the first of them; not where one of
+// them is the user, nor where the user turned two of them down as not the same (or split them). It
+// returns how many people were merged into another.
+func MergeByContacts(s *Store) (int, error) {
+	n := 0
+	err := s.Write(func(tx *sql.Tx) error {
+		contacts := db.Ints(tx, "SELECT DISTINCT ca.contact_id FROM contact_address ca JOIN contact c ON c.id = ca.contact_id "+
+			"JOIN plugin_instance i ON i.id = c.instance_id WHERE i.enabled AND c.id NOT IN (SELECT contact_id FROM contact_gone) "+
+			"ORDER BY ca.contact_id")
+		for _, cid := range contacts {
+			pids := db.Ints(tx, "SELECT DISTINCT pa.person_id FROM contact_address ca JOIN person_address pa ON pa.address_id = ca.address_id "+
+				"WHERE ca.contact_id = ? ORDER BY pa.person_id", cid)
+			if len(pids) < 2 {
+				continue
+			}
+			marks, args := db.Marks(len(pids)), db.Args(pids)
+			if db.Exists(tx, "SELECT 1 FROM account ac JOIN person_address pa ON pa.address_id = ac.address_id "+
+				"WHERE pa.person_id IN ("+marks+")", args...) ||
+				db.Exists(tx, "SELECT 1 FROM merge_dismissed WHERE a IN ("+marks+") AND b IN ("+marks+")", append(args, args...)...) {
+				continue
+			}
+			for _, other := range pids[1:] {
+				if err := merge(tx, pids[0], other); err != nil {
+					return err
+				}
+				n++
+			}
+		}
+		return nil
+	})
+	return n, err
+}
+
 // mergeChatState: the user's choices for the other's chat are kept where theirs for `into` are
 // older or missing; archived only if both were (one of them in view keeps the whole in view).
 func mergeChatState(tx *sql.Tx, into, other string) {
@@ -184,6 +218,8 @@ func SplitAddress(s *Store, addressID int64) (int64, error) {
 		}
 		out = db.LastID(tx, "INSERT INTO person DEFAULT VALUES")
 		db.Exec(tx, "UPDATE person_address SET person_id = ?, how = 'manual' WHERE address_id = ?", out, addressID)
+		// not the same, in the user's word: not merged again (by a contact that lists both, nor suggested)
+		db.Exec(tx, "INSERT OR REPLACE INTO merge_dismissed VALUES (?, ?, ?)", min(pid, out), max(pid, out), time.Now().Unix())
 		db.Exec(tx, "DELETE FROM analysis WHERE person_id = ?", pid) // read again, without it
 		// its chat is new, but not newly seen: archived as the chat it left
 		db.Exec(tx, "INSERT INTO chat_state SELECT ?, field, value, set_at, always FROM chat_state "+
