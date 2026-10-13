@@ -172,6 +172,26 @@ func (h *Host) Reach(chatID string) map[string]string {
 }
 
 // reached is where a first message to a chat on a service goes: the instance and key found.
+// Writable is the services a chat can be written to on: those of its conversations, and those it was
+// found on (a first message there); not one it has only calls of.
+func (h *Host) Writable(chatID string) map[string]bool {
+	out := map[string]bool{}
+	c := core.ChatOf(h.store, chatID)
+	if c == nil {
+		return out
+	}
+	q := h.store.Read()
+	for _, conv := range c.Conversations {
+		out[db.Str(q, "SELECT s.name FROM conversation c JOIN service s ON s.id = c.service_id WHERE c.id = ?", conv)] = true
+	}
+	for svc := range c.Services {
+		if _, _, ok := h.reached(chatID, svc); ok {
+			out[svc] = true
+		}
+	}
+	return out
+}
+
 func (h *Host) reached(chatID, service string) (int64, string, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
