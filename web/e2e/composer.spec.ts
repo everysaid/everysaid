@@ -69,6 +69,12 @@ test("a person's services, all on at first: one turned off leaves its messages o
   await expect(page.locator(`[data-service-toggle="${chat.services.at(-1)}"]`)).toBeDisabled();
   for (const s of chat.services.slice(0, -1)) await page.locator(`[data-service-toggle="${s}"]`).click();   // all back on
   await expect(page).not.toHaveURL(/hide=/);
+  // Ctrl+click: that one alone; again on it, all back
+  const alone = chat.services.at(-1);
+  await page.locator(`[data-service-toggle="${alone}"]`).click({ modifiers: ["Control"] });
+  for (const s of chat.services) await expect(page.locator(`[data-service-toggle="${s}"]`)).toHaveAttribute("aria-pressed", s === alone ? "true" : "false");
+  await page.locator(`[data-service-toggle="${alone}"]`).click({ modifiers: ["Control"] });
+  await expect(page).not.toHaveURL(/hide=/);
 });
 
 // A person looked for on the services their chat has none of (the demo's source finds every number on
