@@ -108,6 +108,7 @@ type MediaOptions struct {
 	Before        int64
 	Limit         int
 	AvailableOnly bool
+	GIFs          bool // only GIFs that are videos (what can be sent again as one)
 }
 
 // Media is files of messages, newest first: [{sha256, mime, size, available, message_id, ts,
@@ -134,6 +135,9 @@ func Media(s *Store, o MediaOptions) (M, error) {
 	sort.Slice(kinds, func(i, j int) bool { return kinds[i] < kinds[j] })
 	where := []string{"m.kind_id IN (" + db.Marks(len(kinds)) + ")", shown(s, "m.service_id", ""), "NOT m.deleted"}
 	args := db.Args(kinds)
+	if o.GIFs {
+		where = append(where, "m.subtype = 'gif'", "md.mime = 'video/mp4'")
+	}
 	if o.ChatID != "" {
 		_, convs, _, err := streamSources(s, o.ChatID)
 		if err != nil {

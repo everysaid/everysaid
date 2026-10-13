@@ -270,6 +270,30 @@ func (testSource) MarkRead(ctx context.Context, c *plugins.Context, conv plugins
 	return 1, nil
 }
 
+// noGIFs: the test source cannot find GIFs now.
+var noGIFs atomic.Bool
+
+func (testSource) NotSearching(c *plugins.Context) string {
+	if noGIFs.Load() {
+		return "Not signed in"
+	}
+	return ""
+}
+
+func (testSource) SearchGIFs(ctx context.Context, c *plugins.Context, query, offset string) ([]plugins.GIF, string, error) {
+	if offset == "" {
+		return []plugins.GIF{{ID: query + "-1", Width: 2, Height: 1}}, "2", nil
+	}
+	return []plugins.GIF{{ID: query + "-" + offset}}, "", nil
+}
+
+func (testSource) GIF(ctx context.Context, c *plugins.Context, id string) (*plugins.File, error) {
+	if id == "gone" {
+		return nil, errs.Plugin("That GIF is no longer in the results: search again", 404)
+	}
+	return &plugins.File{Data: []byte("mp4 of " + id), Filename: id + ".mp4", MimeType: "video/mp4", Animated: true}, nil
+}
+
 // testLibrary keeps files in a folder (as the folder library does).
 type testLibrary struct{}
 
