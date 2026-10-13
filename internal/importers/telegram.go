@@ -794,6 +794,7 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 	}
 	say(out, "calls: {n}", map[string]any{"n": fmt.Sprintf("%7d", calls)})
 	if len(updated) > 0 {
+		a.Changed = true
 		var parts []string
 		for _, k := range []string{"text", "edited", "deleted", "reactions", "preview"} {
 			if updated[k] > 0 {

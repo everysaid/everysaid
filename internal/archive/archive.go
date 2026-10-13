@@ -198,6 +198,10 @@ type Archive struct {
 	pendingEdits                      [][2]any
 	pendingTapbacks                   []pendingTapback
 	pendingFiles                      []string // media files to delete once committed (PurgeSpam's)
+
+	// Changed: an importer changed messages already there (deleted, edited, a preview), which the
+	// pages showing them are then told of (new ones are said apart)
+	Changed bool
 }
 
 // Open opens (making it if new) the archive at path.

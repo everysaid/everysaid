@@ -366,6 +366,23 @@ func TestStoreThenImport(t *testing.T) {
 	if n := db.Int(in.h.store.Read(), "SELECT count(*) FROM message"); n != 3 {
 		t.Fatalf("%d messages", n)
 	}
+	// deleted on Telegram: kept, said deleted, and the pages showing it told
+	in.h.events = nil
+	if err := noteDeleted(c, 0, []int{5}); err != nil {
+		t.Fatal(err)
+	}
+	if !db.Exists(in.h.store.Read(), "SELECT 1 FROM message WHERE key = '5' AND deleted") {
+		t.Fatal("not marked deleted")
+	}
+	changed := 0
+	for _, e := range in.h.events {
+		if e["type"] == "changed" {
+			changed++
+		}
+	}
+	if changed != 1 {
+		t.Fatalf("%v", in.h.events)
+	}
 }
 
 // What Telegram pushes: a new message, and a service message (a call) that Telethon's NewMessage
