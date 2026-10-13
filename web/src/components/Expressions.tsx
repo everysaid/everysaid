@@ -9,13 +9,13 @@ import { api, qs } from "@/lib/api";
 import { useDebounced } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 
-// What goes into a message besides words, behind one button, a tab each: the emoji; the GIFs already
-// in the archive (History: sent or received before, each once however many copies the services
-// made of it); and what each plugin that finds GIFs finds (Telegram's @gif, Klipy), one that cannot
-// now there, greyed, saying why. An emoji goes into the text; a GIF is sent at once, as the video it
-// is (the services each send it as theirs).
+// What goes into a message besides words, behind one button, a tab each: the emoji first, then the
+// GIFs plugins in the order added (Sources, GIFs): the GIFs already in the archive (History: sent or
+// received before, each once however many copies the services made of it), what each plugin that
+// finds GIFs finds (Telegram's @gif, Klipy), one that cannot now there, greyed, saying why. An emoji
+// goes into the text; a GIF is sent at once, as the video it is (the services each send it as theirs).
 
-type Searcher = { instance: number; name: string; why: string | null };
+type Searcher = { instance: number; name: string; why: string | null; history?: boolean };
 type Found = { id: string; width: number; height: number };
 type Kept = { sha256: string; ts: number; look?: string };
 
@@ -54,12 +54,12 @@ export function Expressions({ onEmoji, onGif, gifs }: { onEmoji: (emoji: string)
       {gifs && (
         <Segmented className="mx-2 mt-2 self-start" value={tab} onChange={setTab} options={[
           { value: "emoji", label: t("emoji.choose") },
-          { value: "history", label: <span data-gif-tab="history">{t("gif.history")}</span> },
-          ...list.map((s) => ({ value: String(s.instance), label: <span data-gif-tab={s.instance} className={cn(s.why && "opacity-50")}>{s.name}</span> })),
+          ...list.map((s) => ({ value: String(s.instance), label: (
+            <span data-gif-tab={s.instance} data-gif-history={s.history || undefined} className={cn(s.why && "opacity-50")}>{s.name}</span>) })),
         ]} />
       )}
       {tab === "emoji" ? <div className="flex min-h-0 flex-1 justify-center"><EmojiPicker onPick={onEmoji} /></div>
-        : tab === "history" ? <div data-gif-picker className="flex min-h-0 flex-1 flex-col pt-2"><HistoryGrid pick={pick} busy={busy} /></div>
+        : searcher?.history ? <div data-gif-picker className="flex min-h-0 flex-1 flex-col pt-2"><HistoryGrid pick={pick} busy={busy} /></div>
         : searcher?.why ? (
           <div data-gif-unavailable className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center text-sm text-muted">
             <p>{searcher.why}</p>
@@ -78,7 +78,7 @@ export function Expressions({ onEmoji, onGif, gifs }: { onEmoji: (emoji: string)
 export function GifResults({ query, onPick }: { query: string; onPick: (file: File) => void }) {
   const { t } = useTranslation();
   const searchers = useQuery(searchersQuery);
-  const able = (searchers.data?.items ?? []).filter((s) => !s.why);
+  const able = (searchers.data?.items ?? []).filter((s) => !s.why && !s.history);
   const [chosen, setChosen] = useState<number | null>(null);
   const searcher = able.find((s) => s.instance === chosen) ?? able[0];
   const { busy, pick } = useFetchGif(onPick);

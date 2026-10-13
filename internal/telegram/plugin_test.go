@@ -675,7 +675,7 @@ func TestSearchGIFs(t *testing.T) {
 	_, release, _ := one.take(newTestCtx(), false, nil)
 	defer release()
 	defer one.share(cn)()
-	var p Plugin
+	var p GIFs
 	found, next, err := p.SearchGIFs(newTestCtx(), c, "κόκκαλης", "")
 	if err != nil {
 		t.Fatal(err)

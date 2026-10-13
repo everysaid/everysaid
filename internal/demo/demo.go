@@ -532,6 +532,10 @@ func BuildArchive(seed int64) (path string, err error) {
 	}
 	a.Exec("INSERT INTO plugin_instance (plugin, kind, label, settings, is_default, created_at) VALUES "+
 		"('folder', 'library', 'Photos folder', ?, 1, ?)", pyjson.Dumps(pyjson.OrderedMap{{Key: "path", Value: lib}}, true), nowSec)
+	// GIFs found by name, beside the History of those in the archive (there from the start: at the
+	// demo's own hour, as all it makes)
+	a.Exec("UPDATE plugin_instance SET created_at = ? WHERE plugin = 'gif-history'", nowSec)
+	a.Exec("INSERT INTO plugin_instance (plugin, kind, label, created_at) VALUES ('demo-gifs', 'gifs', 'Demo GIFs', ?)", nowSec)
 	var failed error
 	for _, l := range links {
 		if err := <-l.done; err != nil && failed == nil {

@@ -1,15 +1,21 @@
 package server
 
-import "testing"
+import (
+	"testing"
 
-// The GIFs: the instances that find them, a search and its next page, a GIF's file; one that cannot
-// now says why and is not asked.
+	_ "everysaid/internal/plugins/gifs" // History, as the app has it
+)
+
+// The GIFs: the History (there from the start, its name in the user's language) and the plugins that
+// find them, in the order added; a search and its next page, a GIF's file; one that cannot now says
+// why and is not asked.
 func TestGIFs(t *testing.T) {
 	c := newServer(t)
 	c.login()
-	list := items(c.getJSON("/api/gifs"))
-	must(t, len(list) == 1 && list[0]["name"] == "Sender" && list[0]["why"] == nil, "searchers: %v", list)
-	iid := int64(list[0]["instance"].(float64))
+	list := items(c.getJSON("/api/gifs?lang=el"))
+	must(t, len(list) == 2 && list[0]["history"] == true && list[0]["name"] == "Ιστορικό" &&
+		list[1]["name"] == "Finder" && list[1]["why"] == nil, "GIFs: %v", list)
+	iid := int64(list[1]["instance"].(float64))
 	base := "/api/gifs/" + itoa(iid)
 
 	r := c.getJSON(base + "/search?q=dog")
@@ -26,6 +32,6 @@ func TestGIFs(t *testing.T) {
 	noGIFs.Store(true)
 	defer noGIFs.Store(false)
 	list = items(c.getJSON("/api/gifs"))
-	must(t, len(list) == 1 && list[0]["why"] == "Not signed in", "why not: %v", list)
+	must(t, len(list) == 2 && list[1]["why"] == "Not signed in", "why not: %v", list)
 	must(t, c.get(base+"/search?q=dog").status == 409, "not asked when it cannot")
 }

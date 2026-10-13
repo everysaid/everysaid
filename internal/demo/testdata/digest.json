@@ -51,7 +51,7 @@
   },
   "contact": {
    "rows": 20,
-   "sha256": "763bbab03e23dccae20268571e96a3338f1b71893b55c5ec232a6c65d315991b"
+   "sha256": "dba7b117fcd076d669e8a3940fd9043795f66c8fdfd7c5897e63f300a993f371"
   },
   "contact_address": {
    "rows": 20,
@@ -182,8 +182,8 @@
    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   },
   "plugin_instance": {
-   "rows": 6,
-   "sha256": "c62fec9101b3b314dfb23e019d567f344942cbea440a5ff7353887c5025dca77"
+   "rows": 8,
+   "sha256": "943fe191420481fe22e6bcc2c5ab9db89e551478607e64e25a590d8b1b3a3430"
   },
   "reaction": {
    "rows": 436,
@@ -198,12 +198,12 @@
    "sha256": "f949fc0a546a3f2f80c25469ebe8267698367e3f30dcc5988cda14e0115c52f2"
   },
   "setting": {
-   "rows": 2,
-   "sha256": "8ed1c15c339a1920584ed108b67cfeeb06561afd5350aa389e197515578ed38e"
+   "rows": 3,
+   "sha256": "b009e9f64c0625c28441c6326c20bc7338339a201b3ade7c65a4665cc6428c09"
   },
   "source": {
    "rows": 5,
-   "sha256": "1894de92dd9d97a45491c75eb1a6d31fdcc54d85b36b08331023935ba447fc58"
+   "sha256": "a60de82e354f5f8eb8003f9aa996436f3e1a2439a31ecae125172fcfca7db490"
   },
   "spam": {
    "rows": 0,
@@ -211,7 +211,7 @@
   },
   "state_report": {
    "rows": 1,
-   "sha256": "461e3ac6e8e83c2510fb0d55e5cdb6b80f62ecf9da61506aa31bcc5124e8693e"
+   "sha256": "8db471128a00fa8709d1f0d8f8e4667bab41d5aa8ec9b461a0b6ab09e5d36a6f"
   },
   "term": {
    "rows": 201,

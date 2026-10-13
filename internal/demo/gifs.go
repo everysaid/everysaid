@@ -17,9 +17,17 @@ var gifFiles embed.FS
 var demoGIFs = []plugins.GIF{{ID: "dog", Width: 160, Height: 120}, {ID: "cat", Width: 160, Height: 160},
 	{ID: "party", Width: 200, Height: 120}}
 
-func (Sender) NotSearching(c *plugins.Context) string { return "" }
+// GIFs is the demo's `demo-gifs` plugin (only in the demo, as its sender).
+type GIFs struct{}
 
-func (Sender) SearchGIFs(ctx context.Context, c *plugins.Context, query, offset string) ([]plugins.GIF, string, error) {
+func (GIFs) Info() *plugins.Info {
+	return &plugins.Info{ID: "demo-gifs", Name: "Demo GIFs", Kind: "gifs",
+		Description: "Invented: three GIFs that move, found by their names."}
+}
+
+func (GIFs) NotSearching(c *plugins.Context) string { return "" }
+
+func (GIFs) SearchGIFs(ctx context.Context, c *plugins.Context, query, offset string) ([]plugins.GIF, string, error) {
 	out := []plugins.GIF{}
 	for _, g := range demoGIFs {
 		if strings.Contains(g.ID, strings.ToLower(strings.TrimSpace(query))) {
@@ -29,7 +37,7 @@ func (Sender) SearchGIFs(ctx context.Context, c *plugins.Context, query, offset 
 	return out, "", nil
 }
 
-func (Sender) GIF(ctx context.Context, c *plugins.Context, id string) (*plugins.File, error) {
+func (GIFs) GIF(ctx context.Context, c *plugins.Context, id string) (*plugins.File, error) {
 	data, err := gifFiles.ReadFile("gifs/" + id + ".mp4")
 	if err != nil || strings.Contains(id, "/") {
 		return nil, errs.Plugin("That GIF is no longer in the results: search again", 404)
