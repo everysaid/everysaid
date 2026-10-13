@@ -115,7 +115,7 @@ const thumbSize = "block max-h-80 min-h-24 w-full min-w-40 max-w-72 object-cover
 // the server's, until it has it
 export function LocalThumb({ l }: { l: Local }) {
   return (
-    <div data-local className="relative block overflow-hidden rounded-xl bg-black/10">
+    <div data-local className="relative mx-auto block w-fit max-w-full overflow-hidden rounded-xl bg-black/10">
       {l.video
         ? <video src={`${l.url}#t=0.1`} muted playsInline preload="metadata" className={thumbSize} />
         : <img src={l.url} alt="" decoding="async" className={thumbSize}
@@ -517,8 +517,8 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
             </div>
           )}
           {media.length > 0 && (
-            // one picture: as wide as it is shown (a caption wider than it leaves no empty band beside it)
-            <div className={cn("grid gap-1", media.length > 1 ? "grid-cols-2" : "w-fit max-w-full")}>
+            // one picture: as wide as it is shown, centred under a caption wider than it
+            <div className={cn("grid gap-1", media.length > 1 ? "grid-cols-2" : "mx-auto w-fit max-w-full")}>
               {media.map((a) => <Thumb key={a.sha256} a={a} loop={m.subtype === "gif"} onOpen={() => onOpen(a, m)} />)}
             </div>
           )}
