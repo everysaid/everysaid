@@ -370,7 +370,8 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
     setItems((prev) => {
       let changed = made.length > 0;
       const next = prev.map((i) => {
-        if (i.type !== "message" || !i.outbox) return i;
+        // one on its way from here says what its sending says (kept here meanwhile, it is not waiting)
+        if (i.type !== "message" || !i.outbox || isFlying(i.outbox)) return i;
         const st = stateOf(i.outbox);
         if (!st && !isFlying(i.outbox)) sent.push(i.outbox);
         if (!st || st === i.status) return i;
