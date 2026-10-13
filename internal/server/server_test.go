@@ -430,6 +430,14 @@ func TestNotSendableWhereOnlyCalls(t *testing.T) {
 	}
 	must(t, has("services", "whatsapp") && has("sendable", "sms") && !has("sendable", "whatsapp") && !has("fileable", "whatsapp"),
 		"its services %v, sendable %v, fileable %v", d["services"], d["sendable"], d["fileable"])
+	// the same in the list, asked for
+	for _, x := range items(c.getJSON("/api/chats?sendable=1")) {
+		if x["id"] == chat {
+			must(t, fmt.Sprint(x["sendable"]) == "[sms]", "in the list: %v", x["sendable"])
+			return
+		}
+	}
+	t.Fatal("not in the list")
 }
 
 // A chat that has the message's service, forwarded to through another asked for: a message of its

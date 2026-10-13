@@ -97,6 +97,7 @@ export interface ChatSummary {
   muted: boolean;
   archived: boolean;
   avatar: string | null;     // a key of the person's or group's photo (it changes with it); null: initials
+  sendable?: string[];       // asked for (sendable=1): the services it can be sent to now
 }
 
 export interface Handle {
