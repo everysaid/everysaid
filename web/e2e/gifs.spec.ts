@@ -129,3 +129,26 @@ test("@gif by keys: a tab a plugin's and one the emoji's, the one chosen last op
   await field.press("Escape");
   await expect(results).toHaveCount(0);
 });
+
+test("@gif's emoji as the button's: all of them by category, ↓ a row down, the one marked kept in view", async ({ page }, info) => {
+  await signedIn(page, info.project.name);
+  const chat = await sendableChat(page);
+  test.skip(!chat, "no chat to send to");
+  const field = page.locator("[data-composer-body] textarea");
+  const results = page.locator("[data-gif-results]");
+  await field.fill("@gif ");
+  const tabs = results.locator("[data-results-tab]");
+  await expect(tabs.first()).toHaveAttribute("data-results-tab", "emoji");       // the emoji first, then the History
+  await expect(tabs.nth(1)).toHaveAttribute("data-results-history", "true");
+  await tabs.first().click();
+  expect(await results.locator("[data-emoji-result]").count()).toBeGreaterThan(1000);
+  await field.press("ArrowDown");
+  await field.press("ArrowDown");                                               // a row down: the ninth
+  await expect(results.locator("[data-emoji-result]").nth(8)).toHaveAttribute("data-active", "true");
+  await field.press("ArrowUp");
+  await expect(results.locator("[data-emoji-result]").first()).toHaveAttribute("data-active", "true");
+  for (let i = 0; i < 12; i++) await field.press("ArrowDown");
+  await expect(results.locator("[data-emoji-result][data-active]")).toBeInViewport({ ratio: 1 });
+  await expect(field).toBeFocused();
+  await field.press("Escape");
+});

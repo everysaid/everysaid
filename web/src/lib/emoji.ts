@@ -28,10 +28,10 @@ export function emoticonAt(text: string): { from: number; emoticon: string; emoj
 /** What ends a word, after which an emoticon before it is turned. */
 export const ENDS = /^[\s.,!?]$/;
 
-type Coded = [emoji: string, codes: string];
+type Coded = [emoji: string, codes: string, group: number];
 let index: Promise<Coded[]> | null = null;
 
-/** The emoji with their shortcodes, in the picker's order (served by the app with the picker's data;
+/** The emoji with their shortcodes and categories (emojibase's groups), in the picker's order (served by the app with the picker's data;
  * loaded at the first ":"). */
 export function shortcodes(): Promise<Coded[]> {
   index ??= fetch("/emojibase/en/shortcodes.json").then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
