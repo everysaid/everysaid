@@ -30,8 +30,13 @@ test("a GIF found, sent with a tap, then among those of the archive", async ({ p
 
   const sent = page.waitForResponse((r) => r.url().includes(`/api/chats/${chat}/send`) && r.request().method() === "POST");
   await picker.locator("[data-gif-option]").click();
-  const req = (await sent).request();
-  expect(req.postData()).toContain('name="animated"');
+  expect((await sent).ok()).toBe(true);
+  // it went as a GIF (the form's body cannot be read here: the archive says it)
+  await expect.poll(() => page.evaluate(async (id) => {
+    const r = await (await fetch(`/api/chats/${id}/stream?limit=5`, { headers: { "X-Everysaid": "1" } })).json();
+    const mine = r.items.filter((i: { type: string; outgoing: boolean }) => i.type === "message" && i.outgoing);
+    return mine[mine.length - 1]?.subtype;
+  }, chat)).toBe("gif");
   await expect(picker).toHaveCount(0);                                     // closed once picked
   await expect(page.locator('[id^="m"]').last().locator("video")).toBeVisible();
 
