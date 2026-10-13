@@ -293,6 +293,12 @@ type Deleter interface {
 	Delete(ctx context.Context, c *Context, conv Conversation, msg Ref) error
 }
 
+// Forwarder forwards messages of one conversation to others of its service, as the service's own
+// "Forward" does (marked forwarded there, a file not sent again); it returns once they went.
+type Forwarder interface {
+	Forward(ctx context.Context, c *Context, from Conversation, msgs []Ref, to []Conversation) error
+}
+
 // SpamReporter tells the service that the other person of a one-to-one conversation is spam: it
 // reports them where the service lets it, blocks them, and deletes the chat with them there.
 type SpamReporter interface {

@@ -8,6 +8,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -404,6 +405,47 @@ func (s *Server) chatRoutes() {
 	// deleted for everyone in the chat, through its service
 	h("POST /api/messages/{mid}/delete", bodyRequired, func(q *req) (any, error) {
 		return act(q, MessageAction{Kind: "delete"})
+	})
+
+	// sent on to chats {chats: [chat id, or {chat, service}]}: by its service's own forward where a
+	// chat has it (and no other is asked for), else as a message of its own; what became of it in each
+	h("POST /api/messages/{mid}/forward", bodyRequired, func(q *req) (any, error) {
+		mid, err := q.pathInt("mid")
+		if err != nil {
+			return nil, err
+		}
+		list, _ := q.get("chats").([]any)
+		var chats []ForwardTarget
+		for _, c := range list {
+			var t ForwardTarget
+			switch v := c.(type) {
+			case string:
+				t.Chat = v
+			case map[string]any:
+				t.Chat, _ = v["chat"].(string)
+				t.Service, _ = v["service"].(string)
+			}
+			if t.Chat != "" && !slices.ContainsFunc(chats, func(x ForwardTarget) bool { return x.Chat == t.Chat }) {
+				chats = append(chats, t)
+			}
+		}
+		if len(chats) == 0 || len(chats) != len(list) || len(chats) > 50 {
+			return nil, failed(400, "chats")
+		}
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(q.r.Context()), 2*time.Minute)
+		defer cancel()
+		out, err := s.Host.Forward(sctx, mid, chats)
+		if err != nil {
+			return nil, is404(err, nil)
+		}
+		items := make([]M, len(out))
+		for i, r := range out {
+			items[i] = M{"chat": r.Chat, "service": r.Service, "forwarded": r.Forwarded, "queued": r.Queued}
+			if r.Error != nil {
+				items[i]["error"] = userErrorDetail(r.Error, q.xlang())
+			}
+		}
+		return M{"items": items}, nil
 	})
 
 	h("GET /api/messages/{mid}/receipts", bodyNone, func(q *req) (any, error) {

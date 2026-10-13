@@ -15,6 +15,7 @@ import (
 	"everysaid/internal/archive"
 	"everysaid/internal/config"
 	"everysaid/internal/core"
+	"everysaid/internal/db"
 	"everysaid/internal/errs"
 	"everysaid/internal/importers"
 	"everysaid/internal/plugins"
@@ -233,6 +234,23 @@ func (Sender) Edit(ctx context.Context, c *plugins.Context, conv plugins.Convers
 
 func (Sender) Delete(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref) error {
 	return change(c, func(a *archive.Archive) { importers.ApplyChange(a, msg.ID, importers.Change{Deleted: true}) })
+}
+
+// Forward writes the message, marked forwarded, into each conversation (of its own service).
+func (Sender) Forward(ctx context.Context, c *plugins.Context, from plugins.Conversation, msgs []plugins.Ref, to []plugins.Conversation) error {
+	for _, conv := range to {
+		for _, m := range msgs {
+			text := db.Str(c.Store().Read(), "SELECT coalesce(text, '') FROM message WHERE id = ?", m.ID)
+			id, err := Message(c.Host(), conv.ID, text, true, "", nil, nil)
+			if err != nil {
+				return err
+			}
+			if err := change(c, func(a *archive.Archive) { a.Exec("UPDATE message SET forwarded = 1 WHERE id = ?", id) }); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (Sender) Check(c *plugins.Context) (bool, string) { return true, "ready" }

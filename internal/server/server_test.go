@@ -360,6 +360,75 @@ func TestSendSaysWhatWent(t *testing.T) {
 	must(t, len(went) == 0, "messages where the plugin cannot say: %v", went)
 }
 
+// A message forwarded: by its service's own forward to a chat with a conversation of it, as a
+// message of its own (its file with it) to one of another service, refused where nothing sends;
+// a deleted one not at all.
+func TestForward(t *testing.T) {
+	c := newServer(t)
+	c.login()
+	drain()
+	q := c.s.Store.Read()
+	chatOf := func(handle string) string {
+		return fmt.Sprintf("p%d", db.Int(q, "SELECT pa.person_id FROM person_address pa JOIN address a ON a.id = pa.address_id WHERE a.value = ?", handle))
+	}
+	native, other, none := chatOf("+15556660001"), chatOf("+15550100010"), chatOf("katerina.oikonomou@example.com")
+	hello := db.Int(q, "SELECT id FROM message WHERE text = 'Hello all'")
+	r := c.post(fmt.Sprintf("/api/messages/%d/forward", hello), M{"chats": []any{native, other, none}})
+	must(t, r.status == 200, "forward: %d %s", r.status, r.body)
+	got := map[string]asked{}
+	for range 2 {
+		a := next(t)
+		got[a.what] = a
+	}
+	must(t, got["forward"].service == "whatsapp" && got["forward"].text != "", "the service's own forward: %+v", got["forward"])
+	must(t, got["send"].service == "sms" && got["send"].text == "Hello all", "a message of its own: %+v", got["send"])
+	res := map[string]map[string]any{}
+	for _, x := range items(r.json()) {
+		res[x["chat"].(string)] = x
+	}
+	must(t, res[native]["forwarded"] == true && res[native]["service"] == "whatsapp" && res[native]["error"] == nil, "native: %v", res[native])
+	must(t, res[other]["forwarded"] == false && res[other]["service"] == "sms" && res[other]["error"] == nil, "copy: %v", res[other])
+	e, _ := res[none]["error"].(map[string]any)
+	must(t, e != nil && e["code"] == "chat.no_sender", "nothing sends there: %v", res[none])
+
+	pic := db.Int(q, "SELECT m.id FROM message m JOIN attachment a ON a.message_id = m.id LIMIT 1")
+	// its file kept here (another test may have let it go to the library)
+	file := filepath.Join(archive.MediaRoot(), db.Str(q, "SELECT m.path FROM media m JOIN attachment a ON a.sha256 = m.sha256 WHERE a.message_id = ?", pic))
+	if _, err := os.Stat(file); err != nil {
+		os.MkdirAll(filepath.Dir(file), 0o700)
+		must(t, os.WriteFile(file, tinyJPEG(), 0o600) == nil, "the picture's file")
+	}
+	r = c.post(fmt.Sprintf("/api/messages/%d/forward", pic), M{"chats": []any{other}})
+	must(t, r.status == 200 && items(r.json())[0]["error"] == nil, "forward a picture: %d %s", r.status, r.body)
+	a := next(t)
+	must(t, a.what == "send" && a.file != nil && a.file.MimeType == "image/jpeg" && len(a.file.Data) > 0, "with its file: %+v", a)
+
+	c.s.Store.Write(func(tx *sql.Tx) error {
+		_, err := tx.Exec("UPDATE message SET deleted = 1 WHERE id = ?", hello)
+		return err
+	})
+	r = c.post(fmt.Sprintf("/api/messages/%d/forward", hello), M{"chats": []any{native}})
+	must(t, r.status == 409 && r.code() == "message.deleted", "deleted: %d %s", r.status, r.body)
+	must(t, c.post(fmt.Sprintf("/api/messages/%d/forward", hello), M{"chats": []any{}}).status == 400, "no chats")
+}
+
+// A chat that has the message's service, forwarded to through another asked for: a message of its
+// own there.
+func TestForwardThroughAnotherService(t *testing.T) {
+	c := newServer(t)
+	c.login()
+	drain()
+	q := c.s.Store.Read()
+	maria := fmt.Sprintf("p%d", db.Int(q, "SELECT pa.person_id FROM person_address pa JOIN address a ON a.id = pa.address_id WHERE a.value = '+15557770001'"))
+	hello := db.Int(q, "SELECT id FROM message WHERE text = 'Hello all'")
+	r := c.post(fmt.Sprintf("/api/messages/%d/forward", hello), M{"chats": []any{M{"chat": maria, "service": "sms"}}})
+	must(t, r.status == 200, "forward: %d %s", r.status, r.body)
+	a := next(t)
+	must(t, a.what == "send" && a.service == "sms" && a.text == "Hello all", "through SMS: %+v", a)
+	res := items(r.json())[0]
+	must(t, res["forwarded"] == false && res["service"] == "sms" && res["error"] == nil, "a message of its own: %v", res)
+}
+
 // A person with two handles on one service: each conversation with its handle, the last active first
 // and taken by default; a message goes to the one asked for.
 func TestSendToOneOfTheirHandles(t *testing.T) {

@@ -21,6 +21,7 @@ import { Bubble, CallLine, SystemLine } from "@/components/Message";
 import { Lightbox, type LightboxItem } from "@/components/Lightbox";
 import { ChatInfo } from "@/components/ChatInfo";
 import { MessageInfo } from "@/components/MessageInfo";
+import { ForwardDialog } from "@/components/ForwardDialog";
 import { DateField } from "@/components/DateField";
 import { keepRecent, recentEmoji } from "@/components/EmojiPicker";
 import { Expressions, GifResults, type ResultsKeys } from "@/components/Expressions";
@@ -195,6 +196,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   // goes back as it was, said why)
   const [editing, setEditing] = useState<MessageItem | null>(null);
   const [deleting, setDeleting] = useState<MessageItem | null>(null);
+  const [forwarding, setForwarding] = useState<MessageItem | null>(null);
   const patch = (id: number, f: (m: MessageItem) => MessageItem) =>
     setItems((prev) => prev.map((i) => (i.type === "message" && i.id === id ? f(i) : i)));
   const act = useCallback(async (m: MessageItem, call: () => Promise<unknown>, shown: (m: MessageItem) => MessageItem) => {
@@ -736,6 +738,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
         react={reactWith}
         onEdit={own && item.text && within(editable?.[svc]) ? startEdit : undefined}
         onDelete={own && within(deletable?.[svc]) ? setDeleting : undefined}
+        onForward={item.text || item.attachments.some((a) => a.available !== "gone") ? setForwarding : undefined}
         waiting={waitingOf(item)} />;
     }
     const unread = item.cursor === newFrom ? (
@@ -834,6 +837,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       )}
       <Lightbox items={media} index={lightbox} onIndex={setLightbox} onClose={() => setLightbox(null)} />
       <MessageInfo m={infoOf} onClose={() => setInfoOf(null)} />
+      <ForwardDialog m={forwarding} onClose={() => setForwarding(null)} />
       <Dialog open={!!deleting} onOpenChange={(o) => { if (!o) setDeleting(null); }} title={t("chat.deleteForAll")}
         description={t("chat.deleteConfirm", { service: deleting ? service(deleting.service).name : "" })}>
         <div className="flex justify-end gap-2 pt-2">

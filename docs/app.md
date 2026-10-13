@@ -143,7 +143,11 @@ touch screen) put the user's reaction (the service's quick ones, and any other e
 them: WhatsApp, Signal, Viber; Telegram's own list), change it, or take it back (also a tap on it),
 and edit the user's own message or delete it for everyone (asked first), within the time the
 service allows (WhatsApp 15 minutes to edit and two days to delete, Signal a day for both, Telegram
-two days to edit).
+two days to edit). **Forward** sends a message on to chats chosen in a window, of any service: to a
+chat with a conversation of the message's own service by that service's forward, marked forwarded
+there, where its source forwards (Viber; `POST /api/messages/{mid}/forward`); elsewhere as a message
+of its own, its text with its files, the way the chat is written to (kept to go later where it
+cannot now, as anything sent).
 
 A message deleted for everyone (by the user or its sender) is kept in the archive but shows as the
 service shows it, "deleted", what it was on a tap; search and the media pages leave it out.

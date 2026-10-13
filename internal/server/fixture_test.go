@@ -257,6 +257,14 @@ func writeSent(c *plugins.Context, conv plugins.Conversation, text string) (_ an
 	return plugins.Sent{Keys: []string{key}}, nil
 }
 
+// Forward: told which messages (by key) went to which conversations.
+func (testSource) Forward(ctx context.Context, c *plugins.Context, from plugins.Conversation, msgs []plugins.Ref, to []plugins.Conversation) error {
+	for _, conv := range to {
+		askedCh <- asked{what: "forward", service: conv.Service, text: msgs[0].Key}
+	}
+	return nil
+}
+
 // Find: every number is on Telegram and Viber.
 func (testSource) Find(ctx context.Context, c *plugins.Context, phones []string) ([]plugins.Found, error) {
 	var out []plugins.Found
