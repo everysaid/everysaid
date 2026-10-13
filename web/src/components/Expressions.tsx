@@ -1,11 +1,12 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { EmojiPicker } from "@/components/EmojiPicker";
+import { EmojiPicker, recentEmoji } from "@/components/EmojiPicker";
 import { MoreOnScroll, Segmented, Spinner } from "@/components/ui";
 import { api, qs } from "@/lib/api";
+import { findEmoji, shortcodes } from "@/lib/emoji";
 import { cn } from "@/lib/utils";
 
 // What goes into a message besides words, behind one button, a tab each: the emoji first, then the
@@ -73,33 +74,116 @@ export function Expressions({ onEmoji, onGif, gifs }: { onEmoji: (emoji: string)
   );
 }
 
-/** What "@gif <words>" finds, above the text being written: the first plugin that can, the others a tap away. */
-export function GifResults({ query, go, onPick }: { query: string; go: number; onPick: (file: File) => void }) {
+/** Keys the window above the text takes while "@gif" and words are written there (true: taken). */
+export type ResultsKeys = { key: (key: string, shift: boolean) => boolean };
+
+const RESULTS_TAB = "gif-results-tab";
+
+/** What "@gif <words>" finds, above the text being written: a tab for each plugin that finds GIFs
+ * and one of the emoji, opened at the one chosen last. All by keyboard, the caret staying in the
+ * text: Tab and Shift+Tab the tabs, ↓ and ↑ (and, among them, → and ←) the results, Enter the one
+ * marked (or, none marked, the words asked for now). */
+export const GifResults = forwardRef<ResultsKeys, { query: string; onPick: (file: File) => void; onEmoji: (emoji: string) => void }>(
+  function GifResults({ query, onPick, onEmoji }, ref) {
+    const { t } = useTranslation();
+    const searchers = useQuery(searchersQuery);
+    const tabs = [...(searchers.data?.items ?? []).filter((s) => !s.why && !s.history).map((s) => ({ id: String(s.instance), name: s.name })),
+      { id: "emoji", name: t("emoji.choose") }];
+    const [chosen, setChosen] = useState(() => localStorage.getItem(RESULTS_TAB));
+    const tab = tabs.find((x) => x.id === chosen) ?? tabs[0];
+    const choose = (id: string) => { setChosen(id); localStorage.setItem(RESULTS_TAB, id); setCursor(-1); };
+    const [cursor, setCursor] = useState(-1);
+    const [go, setGo] = useState(0);
+    const list = useRef<string[]>([]);              // what the tab shows, in order: GIFs' addresses, or emoji
+    const { busy, pick } = useFetchGif(onPick);
+    const take = (i: number) => {
+      const v = list.current[i];
+      if (v === undefined) return;
+      if (tab.id === "emoji") onEmoji(v);
+      else pick(v);
+    };
+    useEffect(() => setCursor(-1), [query]);
+    useImperativeHandle(ref, () => ({
+      key: (key, shift) => {
+        const n = list.current.length;
+        switch (key) {
+          case "Tab": {
+            const i = tabs.findIndex((x) => x.id === tab.id);
+            choose(tabs[(i + (shift ? tabs.length - 1 : 1)) % tabs.length].id);
+            return true;
+          }
+          case "ArrowDown":
+            setCursor((c) => Math.min(c + 1, n - 1));
+            return n > 0;
+          case "ArrowUp":
+            if (cursor < 0) return false;
+            setCursor((c) => c - 1);
+            return true;
+          case "ArrowRight":
+          case "ArrowLeft":
+            if (cursor < 0) return false;
+            setCursor((c) => Math.max(0, Math.min(n - 1, c + (key === "ArrowRight" ? 1 : -1))));
+            return true;
+          case "Enter":
+            if (cursor >= 0) take(cursor);
+            else if (tab.id === "emoji") take(0);
+            else setGo((g) => g + 1);
+            return true;
+        }
+        return false;
+      },
+    }));
+    return (
+      // a tap here leaves the caret in the text, where the keys are
+      <div data-gif-results className="flex h-72 flex-col" onMouseDown={(e) => e.preventDefault()}>
+        <Segmented className="mx-2 mt-2 self-start" value={tab.id} onChange={choose}
+          options={tabs.map((x) => ({ value: x.id, label: <span data-results-tab={x.id}>{x.name}</span> }))} />
+        {searchers.isPending ? <div className="grid flex-1 place-items-center"><Spinner /></div>
+          : tab.id === "emoji" ? <EmojiResults query={query} cursor={cursor} list={list} onPick={onEmoji} />
+          : <div className="flex min-h-0 flex-1 flex-col pt-2">
+              <SearchGrid key={tab.id} instance={Number(tab.id)} pick={pick} busy={busy} query={query} go={go} cursor={cursor} list={list} />
+            </div>}
+      </div>
+    );
+  });
+
+/** The emoji whose names (English, as the picker's) have the words; without words, those used lately. */
+function EmojiResults({ query, cursor, list, onPick }: {
+  query: string; cursor: number; list: React.MutableRefObject<string[]>; onPick: (emoji: string) => void;
+}) {
   const { t } = useTranslation();
-  const searchers = useQuery(searchersQuery);
-  const able = (searchers.data?.items ?? []).filter((s) => !s.why && !s.history);
-  const [chosen, setChosen] = useState<number | null>(null);
-  const searcher = able.find((s) => s.instance === chosen) ?? able[0];
-  const { busy, pick } = useFetchGif(onPick);
+  const [codes, setCodes] = useState<Awaited<ReturnType<typeof shortcodes>> | null>(null);
+  useEffect(() => { shortcodes().then(setCodes, () => {}); }, []);
+  const words = query.trim().toLowerCase().replace(/\s+/g, "_");
+  const found = words && codes ? findEmoji(codes, words, recentEmoji(), 64).map((x) => x.emoji) : recentEmoji();
+  list.current = found;
+  if (!found.length) return <div className="grid flex-1 place-items-center text-sm text-muted">{t("emoji.none")}</div>;
   return (
-    <div data-gif-results className="flex h-72 flex-col">
-      {able.length > 1 && (
-        <Segmented className="mx-2 mt-2 self-start" value={String(searcher?.instance)} onChange={(v) => setChosen(Number(v))}
-          options={able.map((s) => ({ value: String(s.instance), label: s.name }))} />
-      )}
-      {searchers.isPending ? <div className="grid flex-1 place-items-center"><Spinner /></div>
-        : !searcher ? <div className="grid flex-1 place-items-center px-6 text-center text-sm text-muted">{t("gif.noSearcher")}</div>
-        : <div className="flex min-h-0 flex-1 flex-col pt-2"><SearchGrid key={searcher.instance} instance={searcher.instance} pick={pick} busy={busy} query={query} go={go} /></div>}
+    <div className="flex flex-1 flex-wrap content-start gap-0.5 overflow-y-auto p-2">
+      {found.map((e, i) => (
+        <Marked key={e} on={i === cursor}>
+          <button type="button" data-emoji-result={e} data-active={i === cursor || undefined} onClick={() => onPick(e)}
+            className={cn("grid size-9 place-items-center rounded-md text-xl hover:bg-panel-2", i === cursor && "bg-panel-2 ring-2 ring-accent")}>{e}</button>
+        </Marked>
+      ))}
     </div>
   );
+}
+
+/** The result marked by the keys, kept in view. */
+function Marked({ on, children }: { on: boolean; children: React.ReactNode }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  useEffect(() => { if (on) ref.current?.scrollIntoView({ block: "nearest" }); }, [on]);
+  return <span ref={ref} className="contents">{children}</span>;
 }
 
 // the words are asked for a second after the last typed, or at once with Enter (go: the composer's
 // Enter, for "@gif"): a plugin may count each search (Klipy's limit an hour)
 const ASK_AFTER = 1000;
 
-function SearchGrid({ instance, pick, busy, query, go }: {
+function SearchGrid({ instance, pick, busy, query, go, cursor = -1, list }: {
   instance: number; pick: (url: string) => void; busy: string | null; query?: string; go?: number;
+  cursor?: number; list?: React.MutableRefObject<string[]>;
 }) {
   const { t } = useTranslation();
   const [q, setQ] = useState("");
@@ -117,6 +201,8 @@ function SearchGrid({ instance, pick, busy, query, go }: {
     getNextPageParam: (last) => last.next || undefined,
   });
   const items = res.data?.pages.flatMap((p) => p.items) ?? [];
+  const url = (g: Found) => `/api/gifs/${instance}/${encodeURIComponent(g.id)}`;
+  if (list) list.current = items.map(url);
   return (
     <>
       {query === undefined && (
@@ -129,10 +215,11 @@ function SearchGrid({ instance, pick, busy, query, go }: {
       )}
       <Grid loading={res.isPending} error={res.error?.message} empty={t("gif.none")} more={!!res.hasNextPage}
         moreLoading={res.isFetchingNextPage} onMore={() => res.fetchNextPage()}>
-        {items.map((g) => {
-          const url = `/api/gifs/${instance}/${encodeURIComponent(g.id)}`;
-          return <Clip key={g.id} src={url} w={g.width} h={g.height} busy={busy === url} onClick={() => pick(url)} />;
-        })}
+        {items.map((g, i) => (
+          <Marked key={g.id} on={i === cursor}>
+            <Clip src={url(g)} w={g.width} h={g.height} busy={busy === url(g)} active={i === cursor} onClick={() => pick(url(g))} />
+          </Marked>
+        ))}
       </Grid>
     </>
   );
@@ -193,7 +280,7 @@ function Grid({ loading, error, empty, more, moreLoading, onMore, children }: {
 }
 
 // a GIF, played once it comes into view (a grid of them would otherwise all load at once)
-function Clip({ src, w, h, busy, onClick }: { src: string; w?: number; h?: number; busy: boolean; onClick: () => void }) {
+function Clip({ src, w, h, busy, active, onClick }: { src: string; w?: number; h?: number; busy: boolean; active?: boolean; onClick: () => void }) {
   const ref = useRef<HTMLButtonElement>(null);
   const [seen, setSeen] = useState(false);
   useEffect(() => {
@@ -204,9 +291,9 @@ function Clip({ src, w, h, busy, onClick }: { src: string; w?: number; h?: numbe
     return () => io.disconnect();
   }, []);
   return (
-    <button ref={ref} type="button" data-gif-option onMouseDown={(e) => e.preventDefault()} onClick={onClick} disabled={busy}
+    <button ref={ref} type="button" data-gif-option data-active={active || undefined} onMouseDown={(e) => e.preventDefault()} onClick={onClick} disabled={busy}
       style={{ aspectRatio: w && h ? `${w} / ${h}` : "4 / 3" }}
-      className="relative mb-1.5 block w-full overflow-hidden rounded-lg bg-panel-2 hover:ring-2 hover:ring-accent">
+      className={cn("relative mb-1.5 block w-full overflow-hidden rounded-lg bg-panel-2 hover:ring-2 hover:ring-accent", active && "ring-2 ring-accent")}>
       {seen && <video src={src} autoPlay muted loop playsInline className="size-full object-cover" />}
       {busy && <div className="absolute inset-0 grid place-items-center bg-black/30"><Spinner /></div>}
     </button>
