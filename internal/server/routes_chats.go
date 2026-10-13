@@ -2,6 +2,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"io"
 	"mime/multipart"
@@ -322,7 +323,11 @@ func (s *Server) chatRoutes() {
 				return nil, failed(409, err.Error())
 			}
 		}
-		out, err := s.Host.SendKept(q.r.Context(), q.r.PathValue("chat_id"), id, r)
+		// the sending goes on if the app goes meanwhile (a page closed, a connection lost): cut short,
+		// it would go only later, again, the chat's next messages waiting behind it
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(q.r.Context()), 2*time.Minute)
+		defer cancel()
+		out, err := s.Host.SendKept(sctx, q.r.PathValue("chat_id"), id, r)
 		var kept *queued
 		if errors.As(err, &kept) { // it could not go now: kept, sent by itself when it can (202)
 			why := any(nil)

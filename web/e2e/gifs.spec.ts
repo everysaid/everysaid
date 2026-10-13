@@ -23,13 +23,14 @@ async function sendableChat(page: Page) {
   return chat;
 }
 
-// the last message the user sent in the chat went as a GIF
+// the last message the user sent in the chat went as a GIF (kept a while first where the chat has
+// others waiting before it: the demo's limit of messages a minute, reached by the tests before)
 async function lastWentAsGif(page: Page, chat: string) {
   await expect.poll(() => page.evaluate(async (id) => {
     const r = await (await fetch(`/api/chats/${id}/stream?limit=5`, { headers: { "X-Everysaid": "1" } })).json();
     const mine = r.items.filter((i: { type: string; outgoing: boolean }) => i.type === "message" && i.outgoing);
     return mine[mine.length - 1]?.subtype;
-  }, chat)).toBe("gif");
+  }, chat), { timeout: 45_000 }).toBe("gif");
 }
 
 test("a GIF found, sent with a tap, then in the History", async ({ page }, info) => {
@@ -50,7 +51,7 @@ test("a GIF found, sent with a tap, then in the History", async ({ page }, info)
   expect((await sent).ok()).toBe(true);
   await lastWentAsGif(page, chat!);
   await expect(box).toHaveCount(0);                                    // closed once picked
-  await expect(page.locator('[id^="m"]').last().locator("video")).toBeVisible();
+  await expect(page.locator('[id^="m"]').filter({ has: page.locator("video") }).last()).toBeVisible();   // the demo answers after it
 
   await page.locator("[data-emoji]").click();
   await box.locator("[data-gif-tab='history']").click();

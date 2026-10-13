@@ -480,3 +480,46 @@ func TestMediaIsFetchedThroughASourceAtWork(t *testing.T) {
 	_, err = c.s.Host.FetchMedia(context.Background(), c.s.Store, mid)
 	must(t, errors.Is(err, mcp.ErrNoFetch) && asked.Load() == 1, "a disabled source: %v", err)
 }
+
+// A sending the app gives up on half way (its page closed, its connection lost) goes on, and is sent
+// once: not cut short to go again later, the chat's next messages waiting behind it.
+func TestSendingGoesOnWhenTheAppGoes(t *testing.T) {
+	c := newServer(t)
+	c.login()
+	var group string
+	for _, x := range items(c.getJSON("/api/chats?kind=group")) {
+		group = x["id"].(string)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	go c.s.Serve(ctx, ln)
+	u, _ := url.Parse("http://" + base)
+	cookie := c.jar.Cookies(u)[0]
+	rctx, leave := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		body := strings.NewReader(`{"text": "slow: the app goes", "service": "whatsapp", "client_id": "leaving-1"}`)
+		req, _ := http.NewRequestWithContext(rctx, "POST", "http://"+ln.Addr().String()+"/api/chats/"+group+"/send", body)
+		req.Host = base
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Everysaid", "1")
+		req.AddCookie(cookie)
+		if r, err := http.DefaultClient.Do(req); err == nil {
+			r.Body.Close()
+		}
+	}()
+	time.Sleep(200 * time.Millisecond)
+	leave() // the app gone while it sends
+	<-done
+	state := func() string { return db.Str(c.s.Host.outboxDB(), "SELECT state FROM outbox WHERE id = 'leaving-1'") }
+	deadline := time.Now().Add(5 * time.Second)
+	for state() != "sent" && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	must(t, state() == "sent", "sent though the app went: %s", state())
+}
