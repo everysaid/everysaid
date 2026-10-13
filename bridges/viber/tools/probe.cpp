@@ -69,12 +69,16 @@ static void dump() {
     fclose(f);
 }
 
+// In an anonymous namespace: the bridge has a Runner too, and loaded together the two would
+// share one Runner::event (the bridge's, which crashes Viber on the probe's event).
+namespace {
 struct Runner : QObject {
     bool event(QEvent *e) override {
         if (e->type() == QEvent::User) { dump(); return true; }
         return QObject::event(e);
     }
 };
+}
 static Runner *runner;
 
 static void watch() {
