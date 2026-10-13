@@ -23,7 +23,7 @@ import { ChatInfo } from "@/components/ChatInfo";
 import { MessageInfo } from "@/components/MessageInfo";
 import { DateField } from "@/components/DateField";
 import { keepRecent, recentEmoji } from "@/components/EmojiPicker";
-import { Expressions, GifResults } from "@/components/Expressions";
+import { Expressions, GifResults, type ResultsKeys } from "@/components/Expressions";
 import { byCode, emoticonAt, ENDS, findEmoji, shortcodes } from "@/lib/emoji";
 import { Pending } from "@/components/Pending";
 import { dropUnsent, flying, keepUnsent, sendUnsent, unreached, type Unsent, type Went } from "@/lib/outbox";
@@ -1015,7 +1015,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   const commands = useMemo(() => [{ id: "gif", label: t("gif.command"), able: gifAble }].filter((c) => c.able), [gifAble, t]);
   // "@gif" and words: GIFs for them, shown above the text as it is written
   const gifQuery = gifAble && !noList ? /^@gif\s([\s\S]*)$/u.exec(text)?.[1] ?? null : null;
-  const [gifGo, setGifGo] = useState(0);
+  const results = useRef<ResultsKeys>(null);
   // "@" and what follows it, up to the caret: whom to name, or what to do
   const asked = useMemo(() => {
     if ((!mentionable.includes(via) && !commands.length) || noList) return null;
@@ -1182,7 +1182,13 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
       )}
       {gifQuery !== null && (
         <div className="absolute bottom-full left-3 right-3 z-20 mb-1 overflow-hidden rounded-2xl border border-line bg-panel shadow-xl md:right-auto md:w-96">
-          <GifResults query={gifQuery} go={gifGo} onPick={(gif) => { setText(""); sendGif(gif); }} />
+          <GifResults ref={results} query={gifQuery} onPick={(gif) => { setText(""); sendGif(gif); }} onEmoji={(e) => {
+            keepRecent(e);                            // the emoji in place of "@gif" and its words
+            setText(e);
+            setCaret(e.length);
+            caretTo.current = e.length;
+            ref.current?.focus();
+          }} />
         </div>
       )}
       {atCount > 0 && (
@@ -1314,15 +1320,15 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
             }}
             onSelect={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
             onKeyDown={(e) => {
-              if (gifQuery !== null && !listOpen) {     // "@gif" and words: a GIF is picked above, not sent as text
+              if (gifQuery !== null && !listOpen) {     // "@gif" and words: picked above by the keys, not sent as text
                 if (e.key === "Escape") {
                   e.preventDefault();
                   setNoList(true);
                   return;
                 }
-                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                if (e.nativeEvent.isComposing || (e.key === "Enter" && e.shiftKey)) return;
+                if (results.current?.key(e.key, e.shiftKey) || e.key === "Enter") {
                   e.preventDefault();
-                  setGifGo((n) => n + 1);              // the words asked for now, not a second later
                   return;
                 }
               }

@@ -90,3 +90,35 @@ test("@gif and words: GIFs above the text, one sent with a tap, the text gone", 
   await expect(field).toHaveValue("");
   await expect(results).toHaveCount(0);
 });
+
+test("@gif by keys: a tab a plugin's and one the emoji's, the one chosen last opened again", async ({ page }, info) => {
+  await signedIn(page, info.project.name);
+  const chat = await sendableChat(page);
+  test.skip(!chat, "no chat to send to");
+  const field = page.locator("[data-composer-body] textarea");
+  const results = page.locator("[data-gif-results]");
+  await field.fill("@gif cat");
+  await expect(results.locator("[data-gif-option]")).toHaveCount(1);
+  await field.press("ArrowDown");                                              // the first marked, the caret still in the text
+  await expect(results.locator("[data-gif-option][data-active]")).toHaveCount(1);
+  await expect(field).toBeFocused();
+  await field.press("Enter");                                                  // sent
+  await lastWentAsGif(page, chat!);
+  await expect(field).toHaveValue("");
+
+  await field.fill("@gif cat");
+  await field.press("Tab");                                                    // the emoji's tab
+  await expect(results.locator("[data-results-tab='emoji']")).toBeVisible();
+  await expect(results.locator("[data-emoji-result]").first()).toBeVisible();
+  const first = await results.locator("[data-emoji-result]").first().getAttribute("data-emoji-result");
+  await field.press("ArrowDown");
+  await field.press("Enter");                                                  // the emoji in place of "@gif cat"
+  await expect(field).toHaveValue(first!);
+  await expect(results).toHaveCount(0);
+
+  await field.fill("@gif dog");                                               // opened at the tab chosen last
+  await expect(results.locator("[data-emoji-result]").first()).toBeVisible();
+  await expect(results.locator("[data-gif-option]")).toHaveCount(0);
+  await field.press("Escape");
+  await expect(results).toHaveCount(0);
+});
