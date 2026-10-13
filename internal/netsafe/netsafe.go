@@ -73,6 +73,7 @@ var (
 	ErrNotPublic = errors.New("not an address on the internet")
 	ErrURL       = errors.New("not an http(s) URL")
 	ErrNotImage  = errors.New("not a picture")
+	ErrNotVideo  = errors.New("not a video")
 	ErrTooLarge  = errors.New("too large")
 )
 
@@ -86,6 +87,7 @@ const (
 	totalTimeout   = 10 * time.Second // the whole request, redirects and body included
 	maxRedirects   = 3
 	MaxBytes       = 5 << 20 // a picture's
+	MaxVideoBytes  = 20 << 20
 	maxPixels      = 50_000_000
 )
 
@@ -141,6 +143,28 @@ func Client() *http.Client {
 // Image fetches a picture at a URL through Client: an image/* answer of at most MaxBytes that Go
 // can read (its size, not the whole picture, is checked here). userAgent says who asks.
 func Image(ctx context.Context, rawURL, userAgent string) ([]byte, error) {
+	b, err := fetch(ctx, rawURL, userAgent, "image/", MaxBytes, ErrNotImage)
+	if err != nil {
+		return nil, err
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(b))
+	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
+		return nil, ErrNotImage
+	}
+	if cfg.Width*cfg.Height > maxPixels {
+		return nil, ErrTooLarge
+	}
+	return b, nil
+}
+
+// Video fetches a video at a URL through Client: a video/* answer of at most MaxVideoBytes.
+func Video(ctx context.Context, rawURL, userAgent string) ([]byte, error) {
+	return fetch(ctx, rawURL, userAgent, "video/", MaxVideoBytes, ErrNotVideo)
+}
+
+// fetch is the answer at a URL through Client, of a type starting with kind ("image/") and at most
+// max bytes; notKind where it is of another type.
+func fetch(ctx context.Context, rawURL, userAgent, kind string, max int64, notKind error) ([]byte, error) {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
 		return nil, ErrURL
@@ -153,7 +177,7 @@ func Image(ctx context.Context, rawURL, userAgent string) ([]byte, error) {
 		return nil, ErrURL
 	}
 	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Accept", "image/*")
+	req.Header.Set("Accept", kind+"*")
 	resp, err := Client().Do(req)
 	if err != nil {
 		return nil, err
@@ -162,24 +186,17 @@ func Image(ctx context.Context, rawURL, userAgent string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, &StatusError{resp.StatusCode}
 	}
-	if mt, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type")); err != nil || !strings.HasPrefix(mt, "image/") {
-		return nil, ErrNotImage
+	if mt, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type")); err != nil || !strings.HasPrefix(mt, kind) {
+		return nil, notKind
 	}
-	if resp.ContentLength > MaxBytes {
+	if resp.ContentLength > max {
 		return nil, ErrTooLarge
 	}
-	b, err := io.ReadAll(io.LimitReader(resp.Body, MaxBytes+1))
+	b, err := io.ReadAll(io.LimitReader(resp.Body, max+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(b) > MaxBytes {
-		return nil, ErrTooLarge
-	}
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(b))
-	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 {
-		return nil, ErrNotImage
-	}
-	if cfg.Width*cfg.Height > maxPixels {
+	if int64(len(b)) > max {
 		return nil, ErrTooLarge
 	}
 	return b, nil

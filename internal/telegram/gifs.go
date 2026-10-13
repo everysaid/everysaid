@@ -5,12 +5,15 @@ package telegram
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"strconv"
 	"sync"
 
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/tg"
 
+	"everysaid/internal/netsafe"
 	"everysaid/internal/plugins"
 )
 
@@ -22,16 +25,66 @@ const (
 	gifBytes    = 64 << 20 // the files kept in memory, for the results shown again
 )
 
-// gifs are the last results' documents and files: a GIF found is asked for by its id, shown then sent.
+// gifs are the last results' files where they are and those fetched: a GIF found is asked for by
+// its id, shown then sent.
 var gifs = struct {
 	sync.Mutex
 	bot   *tg.InputUser
-	docs  map[string]*tg.Document
+	found map[string]gifAt
 	order []string
 	files map[string][]byte
 	held  []string
 	size  int
-}{docs: map[string]*tg.Document{}, files: map[string][]byte{}}
+}{found: map[string]gifAt{}, files: map[string][]byte{}}
+
+// gifAt is where a GIF found is: a file on Telegram (one sent before), else on the web, which
+// Telegram fetches (proxied: accessHash) or which is fetched from it.
+type gifAt struct {
+	doc        *tg.Document
+	url        string
+	accessHash int64
+	proxied    bool
+}
+
+// gifOf is a result as a GIF and where it is; false for one that is no video.
+func gifOf(r tg.BotInlineResultClass) (plugins.GIF, gifAt, bool) {
+	var g plugins.GIF
+	var at gifAt
+	var attrs []tg.DocumentAttributeClass
+	switch r := r.(type) {
+	case *tg.BotInlineMediaResult: // a file already on Telegram
+		doc, ok := r.Document.(*tg.Document)
+		if !ok || doc.MimeType != "video/mp4" {
+			return g, at, false
+		}
+		g.ID, at.doc, attrs = strconv.FormatInt(doc.ID, 10), doc, doc.Attributes
+	case *tg.BotInlineResult: // one on the web, as for words rarely asked
+		switch d := r.Content.(type) {
+		case *tg.WebDocument:
+			if d.MimeType != "video/mp4" {
+				return g, at, false
+			}
+			at.url, at.accessHash, at.proxied, attrs = d.URL, d.AccessHash, true, d.Attributes
+		case *tg.WebDocumentNoProxy:
+			if d.MimeType != "video/mp4" {
+				return g, at, false
+			}
+			at.url, attrs = d.URL, d.Attributes
+		default:
+			return g, at, false
+		}
+		sum := sha256.Sum256([]byte(at.url))
+		g.ID = "w" + hex.EncodeToString(sum[:12])
+	default:
+		return g, at, false
+	}
+	for _, a := range attrs {
+		if v, ok := a.(*tg.DocumentAttributeVideo); ok {
+			g.Width, g.Height = v.W, v.H
+		}
+	}
+	return g, at, true
+}
 
 func (Plugin) NotSearching(c *plugins.Context) string {
 	if _, _, ok := credentials(); !ok || !hasSession() {
@@ -55,28 +108,18 @@ func (Plugin) SearchGIFs(ctx context.Context, c *plugins.Context, query, offset 
 		gifs.Lock()
 		defer gifs.Unlock()
 		for _, r := range res.Results {
-			m, ok := r.(*tg.BotInlineMediaResult)
+			g, at, ok := gifOf(r)
 			if !ok {
 				continue
 			}
-			doc, ok := m.Document.(*tg.Document)
-			if !ok || doc.MimeType != "video/mp4" {
-				continue
-			}
-			g := plugins.GIF{ID: strconv.FormatInt(doc.ID, 10)}
-			for _, a := range doc.Attributes {
-				if v, ok := a.(*tg.DocumentAttributeVideo); ok {
-					g.Width, g.Height = v.W, v.H
-				}
-			}
-			if _, ok := gifs.docs[g.ID]; !ok {
+			if _, ok := gifs.found[g.ID]; !ok {
 				gifs.order = append(gifs.order, g.ID)
 			}
-			gifs.docs[g.ID] = doc
+			gifs.found[g.ID] = at
 			out = append(out, g)
 		}
 		for len(gifs.order) > gifsKept {
-			delete(gifs.docs, gifs.order[0])
+			delete(gifs.found, gifs.order[0])
 			gifs.order = gifs.order[1:]
 		}
 		return nil
@@ -86,21 +129,34 @@ func (Plugin) SearchGIFs(ctx context.Context, c *plugins.Context, query, offset 
 
 func (Plugin) GIF(ctx context.Context, c *plugins.Context, id string) (*plugins.File, error) {
 	gifs.Lock()
-	doc, data := gifs.docs[id], gifs.files[id]
+	at, found := gifs.found[id]
+	data := gifs.files[id]
 	gifs.Unlock()
-	if doc == nil {
+	if !found {
 		return nil, pluginErr(gifNotFound)
 	}
 	if data == nil {
-		err := withConn(ctx, func(ctx context.Context, cn *conn) error {
-			var b bytes.Buffer
-			loc := &tg.InputDocumentFileLocation{ID: doc.ID, AccessHash: doc.AccessHash, FileReference: doc.FileReference}
-			if _, err := downloader.NewDownloader().Download(cn.api, loc).Stream(ctx, &b); err != nil {
-				return err
-			}
-			data = b.Bytes()
-			return nil
-		})
+		var err error
+		if at.doc == nil && !at.proxied {
+			data, err = netsafe.Video(ctx, at.url, "Everysaid")
+		} else {
+			err = withConn(ctx, func(ctx context.Context, cn *conn) error {
+				var b bytes.Buffer
+				d := downloader.NewDownloader()
+				var get *downloader.Builder
+				if at.doc != nil {
+					get = d.Download(cn.api, &tg.InputDocumentFileLocation{ID: at.doc.ID, AccessHash: at.doc.AccessHash,
+						FileReference: at.doc.FileReference})
+				} else {
+					get = d.Web(cn.api, &tg.InputWebFileLocation{URL: at.url, AccessHash: at.accessHash})
+				}
+				if _, err := get.Stream(ctx, &b); err != nil {
+					return err
+				}
+				data = b.Bytes()
+				return nil
+			})
+		}
 		if err != nil {
 			return nil, err
 		}

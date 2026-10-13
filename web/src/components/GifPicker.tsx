@@ -90,7 +90,9 @@ function MineGrid({ pick, busy }: { pick: (url: string, key: string) => void; bu
     queryFn: ({ pageParam }) => api.get<{ items: Mine[]; has_more: boolean }>(`/api/media${qs({ gif: true, available: true, limit: 30, before: pageParam || undefined })}`),
     getNextPageParam: (last) => (last.has_more && last.items.length ? last.items[last.items.length - 1].ts : undefined),
   });
-  const items = res.data?.pages.flatMap((p) => p.items) ?? [];
+  // each file once: a page leaves out what it has already, not what an earlier page had
+  const seen = new Set<string>();
+  const items = (res.data?.pages.flatMap((p) => p.items) ?? []).filter((m) => !seen.has(m.sha256) && seen.add(m.sha256));
   return (
     <Grid loading={res.isPending} error={res.error?.message} empty={t("gif.mineNone")} more={!!res.hasNextPage}
       moreLoading={res.isFetchingNextPage} onMore={() => res.fetchNextPage()}>
