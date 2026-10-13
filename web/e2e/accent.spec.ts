@@ -5,7 +5,6 @@ import { signedIn } from "./demo";
 // every device), back to the default with a click; the dark theme takes a lighter shade of it.
 
 test("the main colour, picked and back to the default", async ({ page }, info) => {
-  test.skip(info.project.name !== "desktop", "once is enough");
   await signedIn(page, info.project.name);
   await page.evaluate(() => localStorage.setItem("theme", "light"));
   await page.goto("/settings");

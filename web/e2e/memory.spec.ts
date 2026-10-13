@@ -2,10 +2,9 @@ import { expect, test } from "@playwright/test";
 import { signedIn } from "./demo";
 
 // What a chat keeps while the user is elsewhere: the unsent text, where it was being read; and the
-// Chats tab (on a wide screen) comes back to the chat open last.
+// Chats tab (on a wide screen, where the list is beside the chat) comes back to the chat open last.
 
 test("a chat keeps its unsent text and its place; the Chats tab comes back to it", async ({ page }, info) => {
-  test.skip(info.project.name !== "desktop", "the tabs beside a chat are the wide screen's");
   await signedIn(page, info.project.name);
   const [a, b] = await page.evaluate(async () => {
     const h = { "X-Everysaid": "1" };
@@ -34,6 +33,7 @@ test("a chat keeps its unsent text and its place; the Chats tab comes back to it
 
   await page.goto(`/chat/${b}`);
   await expect(field).toHaveValue("");
+  if (info.project.name === "desktop") {       // the list beside the chat: the wide screen's
   const archivedSwitch = page.getByRole("switch", { name: /^(Αρχειοθετημένες συνομιλίες|Archived chats)$/ });
   await page.locator("[data-chat-filters]").click();                // the list as it is left
   await archivedSwitch.click();
@@ -45,6 +45,7 @@ test("a chat keeps its unsent text and its place; the Chats tab comes back to it
   await expect(archivedSwitch).toHaveAttribute("aria-checked", "true");
   await archivedSwitch.click();
   await page.keyboard.press("Escape");
+  }
 
   await page.goto(`/chat/${a}`);
   await expect(field).toHaveValue("half written");
