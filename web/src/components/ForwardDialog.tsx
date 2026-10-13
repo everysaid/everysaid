@@ -107,7 +107,7 @@ export function ForwardDialog({ m, onClose }: { m: MessageItem | null; onClose: 
                   {d && !d.sendable.length && <span className="text-xs text-danger">{t("errors.chat.no_sender")}</span>}
                   {d?.sendable.map((s) => (
                     <button key={s} data-service={s} aria-pressed={now === s} onClick={() => setPicked((p) => ({ ...p, [c.id]: s }))}
-                      className={cn("rounded-full ring-offset-1 ring-offset-panel", now === s ? "ring-2 ring-accent" : "opacity-60 hover:opacity-100")}>
+                      className={cn("inline-flex rounded-full leading-none ring-offset-1 ring-offset-panel", now === s ? "ring-2 ring-accent" : "opacity-60 hover:opacity-100")}>
                       <ServiceBadge id={s} />
                     </button>
                   ))}
