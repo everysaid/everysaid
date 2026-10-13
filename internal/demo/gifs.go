@@ -6,6 +6,7 @@ import (
 	"context"
 	"embed"
 	"strings"
+	"time"
 
 	"everysaid/internal/errs"
 	"everysaid/internal/plugins"
@@ -26,6 +27,9 @@ func (GIFs) Info() *plugins.Info {
 }
 
 func (GIFs) NotSearching(c *plugins.Context) string { return "" }
+
+// SearchWait: invented, at once (a moment's pause, as Telegram's).
+func (GIFs) SearchWait() time.Duration { return 300 * time.Millisecond }
 
 func (GIFs) SearchGIFs(ctx context.Context, c *plugins.Context, query, offset string) ([]plugins.GIF, string, error) {
 	out := []plugins.GIF{}

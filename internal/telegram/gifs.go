@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/tg"
@@ -21,7 +22,7 @@ import (
 const (
 	gifBotName  = "gif"
 	gifNotFound = "That GIF is no longer in the results: search again"
-	noGIFBot    = "Telegram did not give its @gif bot"
+	noGIFBot    = "Telegram did not find its @gif bot"
 )
 
 // gifs are the last results and the files fetched; gifBot is @gif as the account reaches it.
@@ -100,6 +101,10 @@ func (GIFs) Check(c *plugins.Context) (bool, string) {
 	}
 	return true, "ready"
 }
+
+// SearchWait: asked as the words are written (a moment's pause, not at every letter: Telegram makes
+// one who asks too often wait).
+func (GIFs) SearchWait() time.Duration { return 300 * time.Millisecond }
 
 func (GIFs) NotSearching(c *plugins.Context) string {
 	if _, _, ok := credentials(); !ok || !hasSession() {

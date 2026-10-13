@@ -14,7 +14,7 @@ func TestGIFs(t *testing.T) {
 	c.login()
 	list := items(c.getJSON("/api/gifs?lang=el"))
 	must(t, len(list) == 2 && list[0]["history"] == true && list[0]["name"] == "Ιστορικό" &&
-		list[1]["name"] == "Finder" && list[1]["why"] == nil, "GIFs: %v", list)
+		list[1]["name"] == "Finder" && list[1]["why"] == nil && list[1]["wait_ms"].(float64) == 1000, "GIFs: %v", list)
 	iid := int64(list[1]["instance"].(float64))
 	base := "/api/gifs/" + itoa(iid)
 

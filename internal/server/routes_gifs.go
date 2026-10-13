@@ -34,6 +34,10 @@ func (s *Server) gifRoutes() {
 				if w := g.NotSearching(plugins.NewContext(s.Host, r)); w != "" {
 					it["why"] = i18n.Tr(w, q.lang())
 				}
+				it["wait_ms"] = 1000 // how long after the last letter it is asked
+				if pc, ok := g.(plugins.GIFPacer); ok {
+					it["wait_ms"] = pc.SearchWait().Milliseconds()
+				}
 			default:
 				continue
 			}
@@ -49,7 +53,7 @@ func (s *Server) gifRoutes() {
 		}
 		found, next, err := g.SearchGIFs(q.r.Context(), c, q.str("q"), q.str("offset"))
 		if err != nil {
-			return nil, passUser(err, pluginFailed)
+			return nil, passUser(err, s.gifFailed)
 		}
 		if found == nil {
 			found = []plugins.GIF{}
@@ -78,7 +82,7 @@ func (s *Server) gifRoutes() {
 		}
 		f, err := g.GIF(q.r.Context(), c, q.r.PathValue("id"))
 		if err != nil {
-			return nil, passUser(err, pluginFailed)
+			return nil, passUser(err, s.gifFailed)
 		}
 		q.w.Header().Set("Content-Type", f.MimeType)
 		q.w.Header().Set("Content-Length", strconv.Itoa(len(f.Data)))
@@ -110,11 +114,15 @@ func (s *Server) gifSearcher(q *req) (plugins.GIFSearcher, *plugins.Context, err
 	return g, c, nil
 }
 
-// pluginFailed is a plugin's failure (a service not answering) as the user is told it.
-func pluginFailed(err error) error {
+// gifFailed is a plugin's failure that has no words for the user (the network, a service's
+// answer): said in theirs, the cause logged.
+func (s *Server) gifFailed(err error) error {
 	var ue *errs.UserError
 	if errors.As(err, &ue) {
 		return err
 	}
-	return errs.Plugin(err.Error(), 502)
+	s.log.Warn("a GIF source failed", "error", err)
+	return errs.Plugin(noGIFAnswer, 502)
 }
+
+const noGIFAnswer = "The GIF source did not answer"
