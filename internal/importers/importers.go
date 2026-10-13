@@ -70,7 +70,7 @@ var Names = []Importer{
 	}},
 	{"messenger", "Messenger's export (Download your information)", metaExportImporter("messenger")},
 	{"instagram", "Instagram's export (Download your information)", metaExportImporter("instagram")},
-	{"voip", "WhatsApp and Viber calls, carrier notices", func(a *archive.Archive, out func(string)) error {
+	{"voip", "WhatsApp, Viber and SIP calls, carrier notices", func(a *archive.Archive, out func(string)) error {
 		return VoIP(a, out, VoIPOptions{})
 	}},
 	{"media", "the files of messages", func(a *archive.Archive, out func(string)) error { return Media(a, out) }},

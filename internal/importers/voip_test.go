@@ -135,3 +135,46 @@ func TestMediaComeAgainAfterItsCopyWasRemoved(t *testing.T) {
 		t.Fatalf("put back though in a library (%v), or its source taken (%v)", isFile(stored), !isFile(dir+"/b.webp"))
 	}
 }
+
+// TestSipCalls: an Acrobits softphone's call log, each call once: one the iPhone's call log has
+// too (from CallKit) is that call, and a second import adds nothing.
+func TestSipCalls(t *testing.T) {
+	t.Cleanup(config.Load)
+	t.Setenv("EVERYSAID_CACHE", t.TempDir())
+	config.Load()
+	must(t, os.MkdirAll(archive.IphoneData(), 0o700))
+	a, _ := newArchive(t)
+	log := sqliteAt(t, AcrobitsDB(), `
+CREATE TABLE Events (eventId INTEGER PRIMARY KEY, streamKey TEXT, timestamp REAL, eventType INTEGER, direction INTEGER,
+    accountId TEXT, sender TEXT);
+CREATE TABLE RemoteUsers (eventId INTEGER, genericUri TEXT, transportUri TEXT);
+CREATE TABLE EventAttributes (eventId INTEGER, key TEXT, type INTEGER, value TEXT);`)
+	at := func(i int) float64 { return float64(pairTS/1000-archive.AppleEpoch) + float64(i*3600) }
+	for i, c := range []struct {
+		dir   int
+		peer  string
+		attrs map[string]string
+	}{
+		{1, "+15557770001", map[string]string{"callResult": "1", "callDuration": "12.6", "callId": "a@sip"}},
+		{1, "+15557770001", map[string]string{"callResult": "2", "callDuration": "0"}},
+		{1, "anonymous", map[string]string{"callResult": "4"}},
+		{2, "sip:+15557770002@host", map[string]string{"callResult": "64"}},
+	} {
+		db.Exec(log, "INSERT INTO Events VALUES (?, 'legacy:calls', ?, 1, ?, 'x', '')", i+1, at(i), c.dir)
+		db.Exec(log, "INSERT INTO RemoteUsers VALUES (?, '', ?)", i+1, c.peer)
+		for k, v := range c.attrs {
+			db.Exec(log, "INSERT INTO EventAttributes VALUES (?, ?, 0, ?)", i+1, k, v)
+		}
+	}
+	callKit := a.Source("iphone/calls", "", "", "")
+	a.AddCall(callKit, "1", archive.Call{Service: "sip", AddressID: a.Address(archive.H("phone", "+15557770001")),
+		TS: pairTS + 20_000, Answered: true, Duration: 13})
+
+	for range 2 {
+		must(t, VoIP(a, nil, VoIPOptions{NoBridge: true, Carriers: []string{}}))
+	}
+	eq(t, "calls", db.Strs(a.Tx(), "SELECT coalesce(ad.value, '-') || ' ' || c.outgoing || c.answered || ' ' || "+
+		"coalesce(c.detail, '') || ' ' || c.duration || ' ' || coalesce(c.key, '') FROM call c "+
+		"LEFT JOIN address ad ON ad.id = c.address_id ORDER BY c.ts"),
+		[]string{"+15557770001 01  13 a@sip", "+15557770001 00 missed 0 ", "- 00 rejected 0 ", "+15557770002 10 unanswered 0 "})
+}
