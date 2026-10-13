@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"everysaid/internal/archive"
@@ -134,6 +135,7 @@ func saved(c *plugins.Context, cards []Card) error {
 	if err != nil {
 		return err
 	}
+	c.Emit(plugins.M{"type": "changed"})
 	c.Log("contacts: {n}, addresses found in the archive: {linked}", map[string]any{"n": n, "linked": linked})
 	return nil
 }
@@ -171,6 +173,8 @@ func (CardDav) Info() *plugins.Info {
 		ID: "carddav", Name: "Address book (CardDAV)", Kind: "contacts",
 		NameWeights: []plugins.Weight{{Key: "contacts", Weight: 100}}, // the user's own address book
 		Description: "A CardDAV address book: Nextcloud, iCloud, Fastmail, Radicale and others.",
+		Modes:       []string{"import", "live"},
+		LiveDefault: true, // kept up to date: at the server's start, then every quarter of an hour
 		Settings: []plugins.Setting{
 			{Key: "url", Label: "Address book URL", Type: "url", Required: true,
 				Help: "e.g. https://cloud.example.org/remote.php/dav/addressbooks/users/NAME/contacts/"},
@@ -332,10 +336,33 @@ func changes(c *plugins.Context, token string) (cards []Card, changed, gone []st
 	return cards, changed, gone, token, true, nil
 }
 
+// livePause is how long the live address book waits between two syncs.
+var livePause = 15 * time.Minute
+
+// Live syncs the address book now and then every livePause, until ctx ends; an error ends it, and
+// the server tries again after a growing pause.
+func (p CardDav) Live(ctx context.Context, c *plugins.Context) error {
+	for {
+		if err := p.Sync(c); err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(livePause):
+		}
+	}
+}
+
+// syncing keeps a live sync and one the user started from running at once (one sync token).
+var syncing sync.Mutex
+
 // Sync brings the address book: what changed since the last time where the server keeps a sync
 // token (RFC 6578), else all of it, replacing the contacts; only from full answers (207
 // Multi-Status) of the address book, so that a wrong one never empties them.
 func (CardDav) Sync(c *plugins.Context) error {
+	syncing.Lock()
+	defer syncing.Unlock()
 	url := c.Str("url")
 	token, _ := c.State["sync_token"].(string)
 	if at, _ := c.State["sync_url"].(string); at != url {
@@ -383,10 +410,14 @@ func (CardDav) Sync(c *plugins.Context) error {
 }
 
 func savedSince(c *plugins.Context, cards []Card, changed, gone []string) error {
+	if len(changed) == 0 && len(gone) == 0 {
+		return nil // nothing changed: no line every quarter of an hour
+	}
 	n, linked, err := saveCards(c, cards, false, changed, gone)
 	if err != nil {
 		return err
 	}
+	c.Emit(plugins.M{"type": "changed"})
 	c.Log("contacts changed: {n}, gone: {gone}, addresses found in the archive: {linked}",
 		map[string]any{"n": n, "gone": len(gone), "linked": linked})
 	return nil

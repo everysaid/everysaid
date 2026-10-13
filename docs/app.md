@@ -121,7 +121,8 @@ live connection. Each instance shows whether it is ready, what it needs, and its
 - **Sources:** an iPhone backup, an Android phone over adb, Viber Desktop, WhatsApp, Telegram,
   Signal, the carriers' missed-call notices, Adium and Pidgin logs.
 - **Photo libraries:** a folder, or immich.
-- **Names and photos:** a CardDAV address book, or a .vcf file.
+- **Names and photos:** a CardDAV address book (kept up to date on its own: at the server's start,
+  then every 15 minutes, only what changed; its live switch turns that off), or a .vcf file.
 - **Local analysis:** Ollama.
 
 The live services: Telegram and WhatsApp run inside `everysaid serve` (WhatsApp as a device linked
