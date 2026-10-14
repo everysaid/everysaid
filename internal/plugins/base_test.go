@@ -61,6 +61,31 @@ func TestLogLines(t *testing.T) {
 	}
 }
 
+// Work that fails on a goroutine of its own is said in the log and ends there, not the server: also
+// when the archive is gone, so that the log itself (which reads it) fails too.
+func TestSafe(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	a, err := archive.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Close()
+	s, err := core.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := NewContext(testHost{s}, Instance{ID: 7, Plugin: "none", Settings: "{}", State: "{}"})
+	log := filepath.Join(t.TempDir(), "run.log")
+	c.SetLogPath(log)
+	ran := false
+	c.Safe("a round", func() { ran = true; panic("the archive is locked") })
+	if b, _ := os.ReadFile(log); !ran || !strings.Contains(string(b), "a round: the archive is locked") {
+		t.Fatalf("logged %q", b)
+	}
+	s.Close() // every read fails from here: the log's too
+	c.Safe("another", func() { panic("again") })
+}
+
 // A setting's value is of its type: what the form or an API client sends is checked.
 func TestSettingTypes(t *testing.T) {
 	for _, x := range []struct {

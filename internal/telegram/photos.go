@@ -158,13 +158,15 @@ func keepPhoto(store *sql.DB, w photoWork, data []byte, now int64) (err error) {
 // photos keeps the photos up to date while the connection lasts.
 func photos(ctx context.Context, c *plugins.Context, cn *conn) {
 	for {
-		if n, err := photoRound(ctx, c, cn); err != nil && ctx.Err() == nil {
-			c.Log("error: {e}", map[string]any{"e": err.Error()})
-		} else if n > 0 {
-			if err := importPics(c); err != nil {
+		c.Safe("photos", func() {
+			if n, err := photoRound(ctx, c, cn); err != nil && ctx.Err() == nil {
 				c.Log("error: {e}", map[string]any{"e": err.Error()})
+			} else if n > 0 {
+				if err := importPics(c); err != nil {
+					c.Log("error: {e}", map[string]any{"e": err.Error()})
+				}
 			}
-		}
+		})
 		select {
 		case <-ctx.Done():
 			return

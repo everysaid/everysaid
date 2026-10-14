@@ -101,7 +101,10 @@ func (h *Host) Find(chatID string) ([]string, error) {
 // "none" (or "failed", where one could not say) once every source asked for it answered.
 func (h *Host) ask(chatID string, s sender, services, phones []string, rs map[string]*reach) {
 	found := map[string]plugins.Found{}
-	pc, err := h.Ctx(s.iid)
+	pc, err := func() (pc *plugins.Context, err error) { // on a goroutine of its own: a read that fails is a failed answer
+		defer db.Recover(&err)
+		return h.Ctx(s.iid)
+	}()
 	if err == nil {
 		ctx, cancel := context.WithTimeout(h.lifetime(), findFor)
 		var got []plugins.Found

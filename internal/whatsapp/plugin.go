@@ -8,6 +8,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -287,15 +288,18 @@ func (p Plugin) Live(ctx context.Context, c *plugins.Context) error {
 	opts := ConfigOptions()
 	opts.Limits = limits(c)
 	b := New(storeDir(c), opts, Hooks{
+		// on the bridge's goroutines: a log that fails is not the server's end
 		QR: func(code, drawn string) {
-			c.Log("Scan this QR code in WhatsApp on the phone (Linked devices):", nil)
-			c.Logf("%s", drawn)
-			c.Emit(M{"type": "plugin_qr", "instance": c.ID, "code": code})
+			c.Safe("QR", func() {
+				c.Log("Scan this QR code in WhatsApp on the phone (Linked devices):", nil)
+				c.Logf("%s", drawn)
+				c.Emit(M{"type": "plugin_qr", "instance": c.ID, "code": code})
+			})
 		},
 		Event: func(event, code, detail string) {
-			c.Logf("%s", strings.TrimSpace("[bridge] "+event+" "+code+" "+detail))
+			c.Safe("event", func() { c.Logf("%s", strings.TrimSpace("[bridge] "+event+" "+code+" "+detail)) })
 		},
-		Warn: func(text string) { c.Logf("%s", text) },
+		Warn: func(text string) { c.Safe("warning", func() { c.Logf("%s", text) }) },
 	})
 	if !HasDevice(storeDir(c)) {
 		c.Log("Not linked to WhatsApp yet: use “Link a device” and scan the QR code with the phone", nil)
@@ -303,7 +307,11 @@ func (p Plugin) Live(ctx context.Context, c *plugins.Context) error {
 	ctx, stop := context.WithCancel(ctx)
 	defer stop()
 	done := make(chan error, 1)
-	go func() { done <- b.Run(ctx) }()
+	go func() {
+		err := errors.New("the WhatsApp bridge failed")
+		c.Safe("the bridge", func() { err = b.Run(ctx) })
+		done <- err
+	}()
 
 	messages, devices := paths(c)
 	ps := []string{messages, messages + "-wal", devices, devices + "-wal"}

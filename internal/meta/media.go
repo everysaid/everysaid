@@ -339,7 +339,7 @@ func (s *liveSession) downloader(ctx context.Context) {
 			return
 		case <-s.wake:
 		}
-		s.fetchFiles(ctx, "")
+		s.c.Safe("downloads", func() { s.fetchFiles(ctx, "") })
 	}
 }
 

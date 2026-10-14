@@ -44,9 +44,11 @@ func askReaders(ctx context.Context, c *plugins.Context, cn *conn, chatID int64)
 	readersAsking.Unlock()
 	go func() {
 		for {
-			if err := readers(ctx, c, cn, chatID, readersLast); err != nil {
-				c.Log("error: {e}", map[string]any{"e": err})
-			}
+			c.Safe("readers", func() {
+				if err := readers(ctx, c, cn, chatID, readersLast); err != nil {
+					c.Log("error: {e}", map[string]any{"e": err})
+				}
+			})
 			select {
 			case <-ctx.Done():
 			case <-time.After(readersEvery):

@@ -323,8 +323,10 @@ func (q *memberQueue) run(ctx context.Context, c *plugins.Context, cn *conn) {
 		q.chats = map[int64]bool{}
 		q.mu.Unlock()
 		sort.Slice(chats, func(i, j int) bool { return chats[i] < chats[j] })
-		if err := refreshMembers(ctx, c, cn, chats); err != nil && ctx.Err() == nil {
-			c.Log("error: {e}", map[string]any{"e": err.Error()})
-		}
+		c.Safe("members", func() {
+			if err := refreshMembers(ctx, c, cn, chats); err != nil && ctx.Err() == nil {
+				c.Log("error: {e}", map[string]any{"e": err.Error()})
+			}
+		})
 	}
 }

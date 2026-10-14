@@ -288,7 +288,7 @@ func (n *conn) event(name string, raw []byte) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("%s: %v", name, r)
-			n.c.Logf("%s", err)
+			n.c.Safe("an event", func() { n.c.Logf("%s", err) }) // the log reads the archive too
 		}
 	}()
 	switch name {
@@ -319,7 +319,7 @@ func (n *conn) event(name string, raw []byte) (err error) {
 		ask := !n.synced && !n.syncAsked
 		n.syncAsked = n.syncAsked || ask
 		// not in this handler: the client waits for its events to be handled, and these go to Signal
-		go func() {
+		go n.c.Safe("after the queue", func() {
 			if ask {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				if _, err := n.h.Call(ctx, "sync", nil); err == nil {
@@ -332,7 +332,7 @@ func (n *conn) event(name string, raw []byte) (err error) {
 			}
 			signal(n.queueEmpty)
 			signal(n.dirty)
-		}()
+		})
 	case "contacts":
 		kept, err := n.store.Apply(raw)
 		if err != nil {

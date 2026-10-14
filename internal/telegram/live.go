@@ -725,7 +725,7 @@ func live(ctx context.Context, c *plugins.Context) error {
 		}
 	}
 	// a broadcast channel's gap is not ours (channels are not kept); getChannelDifference two at a time
-	mgr := updates.New(updates.Config{Handler: d, Storage: newFileState(StatePath()),
+	mgr := updates.New(updates.Config{Handler: safeUpdates{c, d}, Storage: newFileState(StatePath()),
 		OnTooLong: resync, OnChannelTooLong: func(id int64) {
 			if keptChat(-channelMark - id) {
 				resync()
@@ -766,7 +766,7 @@ func live(ctx context.Context, c *plugins.Context) error {
 			}
 		}
 		cn.readers = func(chat int64) { askReaders(ctx, c, cn, chat) }
-		go func() { // one chat after another: not all asked at once
+		go c.Safe("readers", func() { // one chat after another: not all asked at once
 			for _, chat := range recentGroups() {
 				if ctx.Err() != nil {
 					return
@@ -775,7 +775,7 @@ func live(ctx context.Context, c *plugins.Context) error {
 					c.Log("error: {e}", map[string]any{"e": err})
 				}
 			}
-		}()
+		})
 		handlers(c, cn, d, queue.add, files)
 		liveConn.Store(cn)
 		defer liveConn.Store(nil)
@@ -868,6 +868,25 @@ func follow(ctx context.Context, c *plugins.Context, cn *conn, mgr telegram.Upda
 			}
 		}
 	}
+}
+
+// safeUpdates hands Telegram's updates to their handlers on gotd's goroutines, which do not recover:
+// one that fails (the archive locked too long by another) is said in the log, not the server's end.
+type safeUpdates struct {
+	c *plugins.Context
+	d telegram.UpdateHandler
+}
+
+func (s safeUpdates) Handle(ctx context.Context, u tg.UpdatesClass) (err error) {
+	failed := true
+	s.c.Safe("an update", func() {
+		err = s.d.Handle(ctx, u)
+		failed = false
+	})
+	if failed {
+		return errors.New("an update failed")
+	}
+	return err
 }
 
 // handlers are what the connection does with what Telegram pushes. One bad update must not stop

@@ -698,9 +698,11 @@ func (q *fileQueue) run(ctx context.Context, c *plugins.Context, cn *conn) {
 		todo := q.msgs
 		q.msgs = map[int64]map[int]bool{}
 		q.mu.Unlock()
-		if err := fetchQueued(ctx, c, cn, todo); err != nil && ctx.Err() == nil {
-			c.Log("error: {e}", map[string]any{"e": err.Error()})
-		}
+		c.Safe("files", func() {
+			if err := fetchQueued(ctx, c, cn, todo); err != nil && ctx.Err() == nil {
+				c.Log("error: {e}", map[string]any{"e": err.Error()})
+			}
+		})
 	}
 }
 

@@ -332,12 +332,12 @@ func (s *liveSession) onEvent(ctx context.Context, evt any) {
 		s.push(ctx, item{tbl: e})
 	case *messagix.ConnectedEvent:
 		s.connected.Store(true)
-		go s.connectE2EE(ctx)
-		go s.threadBackfill(ctx)
+		go s.c.Safe("encrypted chats", func() { s.connectE2EE(ctx) })
+		go s.c.Safe("the list of chats", func() { s.threadBackfill(ctx) })
 	case *messagix.ReconnectedEvent:
 		s.connected.Store(true)
 		if s.waClient() == nil {
-			go s.connectE2EE(ctx)
+			go s.c.Safe("encrypted chats", func() { s.connectE2EE(ctx) })
 		}
 	case *messagix.TransientDisconnectEvent:
 		s.connected.Store(false)
@@ -527,15 +527,17 @@ func (s *liveSession) historyLoop(ctx context.Context) {
 			return
 		case <-time.After(historyPause):
 		}
-		resp, err := s.cli.ExecuteTasks(ctx, &socket.FetchMessagesTask{ThreadKey: r.FBKey, Direction: 0,
-			ReferenceTimestampMs: r.MinTS, ReferenceMessageId: r.MinID, SyncGroup: 1, Cursor: s.cli.GetCursor(1)})
-		if err != nil {
-			s.c.Log("{service}: earlier messages not brought ({e})", map[string]any{"service": s.label(), "e": err.Error()})
-			continue
-		}
-		if resp != nil {
-			s.push(ctx, item{tbl: resp, initial: true})
-		}
+		s.c.Safe("earlier messages", func() {
+			resp, err := s.cli.ExecuteTasks(ctx, &socket.FetchMessagesTask{ThreadKey: r.FBKey, Direction: 0,
+				ReferenceTimestampMs: r.MinTS, ReferenceMessageId: r.MinID, SyncGroup: 1, Cursor: s.cli.GetCursor(1)})
+			if err != nil {
+				s.c.Log("{service}: earlier messages not brought ({e})", map[string]any{"service": s.label(), "e": err.Error()})
+				return
+			}
+			if resp != nil {
+				s.push(ctx, item{tbl: resp, initial: true})
+			}
+		})
 	}
 }
 

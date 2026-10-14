@@ -497,7 +497,7 @@ func (s *liveSession) onIG(ctx context.Context, evt slidetypes.ClientEvent) erro
 	switch e := evt.(type) {
 	case *slidetypes.Connected:
 		s.connected.Store(true)
-		go s.igThreadBackfill(ctx)
+		go s.c.Safe("the list of chats", func() { s.igThreadBackfill(ctx) })
 	case *slidetypes.Disconnected:
 		s.connected.Store(false)
 		if websocket.CloseStatus(e.Error) == dgw.CloseStatusUnauthorized {
@@ -595,20 +595,22 @@ func (s *liveSession) igHistoryLoop(ctx context.Context) {
 			return
 		case <-time.After(historyPause):
 		}
-		req := &slidetypes.PaginateMessagesRequest{ThreadID: h.IGID, FirstN: 20, InitialMessagePageCount: 20}
-		if !h.First {
-			cursor := h.Cursor
-			req.AfterCursor = &cursor
-		}
-		resp, err := s.ig.PaginateMessages(ctx, req)
-		if err != nil {
-			s.c.Log("{service}: earlier messages not brought ({e})", map[string]any{"service": s.label(), "e": err.Error()})
-			continue
-		}
-		if page := resp.ThreadInfo.AsIGDirectThread; page != nil && page.Messages != nil {
-			key, igID, msgs := h.Key, h.IGID, page.Messages
-			s.submitRead(ctx, func(o *ops) { s.tr.igPage(o, key, igID, msgs) })
-		}
+		s.c.Safe("earlier messages", func() {
+			req := &slidetypes.PaginateMessagesRequest{ThreadID: h.IGID, FirstN: 20, InitialMessagePageCount: 20}
+			if !h.First {
+				cursor := h.Cursor
+				req.AfterCursor = &cursor
+			}
+			resp, err := s.ig.PaginateMessages(ctx, req)
+			if err != nil {
+				s.c.Log("{service}: earlier messages not brought ({e})", map[string]any{"service": s.label(), "e": err.Error()})
+				return
+			}
+			if page := resp.ThreadInfo.AsIGDirectThread; page != nil && page.Messages != nil {
+				key, igID, msgs := h.Key, h.IGID, page.Messages
+				s.submitRead(ctx, func(o *ops) { s.tr.igPage(o, key, igID, msgs) })
+			}
+		})
 	}
 }
 

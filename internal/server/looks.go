@@ -82,10 +82,13 @@ func (s *Server) addLooks(items []M) {
 		go func() {
 			defer wg.Done()
 			for it := range work {
-				sha, _ := it["sha256"].(string)
-				if path := s.Host.LocalFile(sha); path != "" {
-					it["look"] = look(path, sha)
-				}
+				func() { // on a goroutine of its own: a read that fails leaves the GIF without its look
+					defer s.Host.recovered("a GIF's look", 0)
+					sha, _ := it["sha256"].(string)
+					if path := s.Host.LocalFile(sha); path != "" {
+						it["look"] = look(path, sha)
+					}
+				}()
 			}
 		}()
 	}
