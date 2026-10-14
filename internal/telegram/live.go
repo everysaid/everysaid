@@ -44,8 +44,8 @@ import (
 )
 
 const (
-	notSignedIn = "Not signed in to Telegram yet (everysaid telegram-sync --save-credentials, --login)"
-	expired     = "The Telegram sign-in has expired: everysaid telegram-sync --login"
+	notSignedIn = "Not signed in to Telegram yet: Log in"
+	expired     = "The Telegram sign-in has expired: Log in again"
 	// the live connection waits for telegram-sync run by hand (or another server) to finish
 	waitingOther = "waiting: Telegram is connected by another Everysaid (telegram-sync run by hand?)"
 )

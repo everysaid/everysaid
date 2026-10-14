@@ -61,6 +61,7 @@ var info = &plugins.Info{
 		{Key: "read_receipts", Label: "Send read receipts", Type: "bool", Default: false,
 			Help: "When a chat is opened here, the others see it read, and it is read on the phone too"},
 	},
+	Actions: []plugins.Action{{ID: "login", Label: "Log in"}},
 	CanSend: true, CanReply: true, CanMention: true, CanMarkRead: true, CanSendFiles: true,
 	CanReact: true, Reactions: reactions, CanEdit: true, CanDelete: true, CanDeleteForMe: true, CanReportSpam: true,
 	// Telegram's edit_time_limit (its apps offer no edit after it, but in Saved Messages); deleting
@@ -72,12 +73,28 @@ func (Plugin) Info() *plugins.Info { return info }
 
 func (Plugin) Check(c *plugins.Context) (bool, string) {
 	if _, _, ok := credentials(); !ok {
-		return false, "missing: api_id and api_hash (everysaid telegram-sync --save-credentials)"
+		return false, "missing: api_id and api_hash (Log in)"
 	}
 	if !hasSession() {
-		return false, "missing: a login (everysaid telegram-sync --login)"
+		return false, "missing: a login (Log in)"
 	}
 	return true, "ready"
+}
+
+// Action: "login" logs in from the interface (login.go).
+func (Plugin) Action(c *plugins.Context, name string) error {
+	if name == "login" {
+		return login(context.Background(), c)
+	}
+	return pluginErr("unknown action")
+}
+
+// IdleActions: logging in, while the live connection is up (its session works).
+func (Plugin) IdleActions(c *plugins.Context) []string {
+	if one.connected() {
+		return []string{"login"}
+	}
+	return nil
 }
 
 // ids is a setting holding chat ids (numbers or their text).

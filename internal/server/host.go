@@ -320,6 +320,7 @@ func (h *Host) Status(iid int64, lang string) (M, error) {
 	out["log"] = logLines
 	out["bar"] = bar
 	out["asks"] = asks
+	out["asking"] = plugins.Asking(iid, lang) // what a run asks now (a code just arrived)
 	out["idle_actions"] = idle
 	out["info"] = info
 	return out, nil

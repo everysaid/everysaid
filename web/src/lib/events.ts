@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { QueryClient } from "@tanstack/react-query";
 import { flushUnsent } from "./outbox";
+import type { PluginQuestion } from "./api";
 
 export type LiveEvent =
   | { type: "hello" | "ping" | "changed" | "reconnected" }
@@ -9,6 +10,7 @@ export type LiveEvent =
   | { type: "plugin_log"; instance: number; line: string }
   | { type: "plugin_progress"; instance: number; line: string }     // a line drawn again (a progress bar)
   | { type: "plugin_qr"; instance: number; code: string }           // a code to link a device (WhatsApp, Signal): shown as a QR
+  | { type: "plugin_ask"; instance: number; question?: PluginQuestion }  // what a run asks now; without one, it asks no more
   | { type: "alert"; title: string; body: string }                   // a plugin's warning, in the user's words
   | { type: "reach"; chat: string; service: string; state: string }   // a source's answer: whether a person is on its service
   | { type: "outbox"; chat: string };                                   // what of a chat waits to be sent changed

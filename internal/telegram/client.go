@@ -69,6 +69,13 @@ type gate struct {
 
 var one = &gate{changed: make(chan struct{})}
 
+// connected: a connection is open in this process, to share.
+func (g *gate) connected() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.shared != nil
+}
+
 func (g *gate) notify() { // with mu held
 	close(g.changed)
 	g.changed = make(chan struct{})

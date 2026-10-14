@@ -92,13 +92,13 @@ func TestNoSession(t *testing.T) {
 func TestCheck(t *testing.T) {
 	values := fakeSecrets(t, map[string]string{})
 	var p Plugin
-	if ok, why := p.Check(nil); ok || why != "missing: api_id and api_hash (everysaid telegram-sync --save-credentials)" {
+	if ok, why := p.Check(nil); ok || why != "missing: api_id and api_hash (Log in)" {
 		t.Fatal(why)
 	}
 	values[SecretAPIID], values[SecretAPIHash] = "123", "abc"
-	if ok, why := p.Check(nil); ok || why != "missing: a login (everysaid telegram-sync --login)" {
+	if ok, why := p.Check(nil); ok || why != "missing: a login (Log in)" {
 		t.Fatal(why)
-	} else if el := i18n.Tr(why, "el"); el != "λείπει: η σύνδεση (everysaid telegram-sync --login)" {
+	} else if el := i18n.Tr(why, "el"); el != "λείπει: η σύνδεση (Σύνδεση)" {
 		t.Fatal(el)
 	}
 	if el := i18n.Tr(notSignedIn, "el"); el == notSignedIn || i18n.Tr(expired, "el") == expired {
