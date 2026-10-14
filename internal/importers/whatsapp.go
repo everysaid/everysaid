@@ -767,19 +767,24 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 		if conv == 0 { // a channel
 			return false
 		}
-		if a.HasOrigin(src[source], rowKey, "") {
-			return false
-		}
+		// a message is known by its stanza id: the row key alone is not enough, as the iPhone gives the
+		// number of a deleted row (Core Data's Z_PK) to a new one, which was then taken as had
 		k, isStr := key.(string)
 		if isStr {
 			if mid, ok := a.MessageByKey("whatsapp", k, 0); ok && mid != 0 {
-				// the archive has it from another source: this one's row is recorded as had too
-				// (WhatsAppPrune takes out what the archive has)
-				a.Exec("INSERT OR IGNORE INTO message_origin (source_id, row_key, message_id) VALUES (?, ?, ?)",
-					src[source], rowKey, mid)
-				skipped[source]++
+				if !a.HasOrigin(src[source], rowKey, "") {
+					// the archive has it from another source: this one's row is recorded as had too
+					// (WhatsAppPrune takes out what the archive has)
+					a.Exec("INSERT OR IGNORE INTO message_origin (source_id, row_key, message_id) VALUES (?, ?, ?)",
+						src[source], rowKey, mid)
+					skipped[source]++
+				}
 				return false
 			}
+			// the row key was another message's, deleted at the source since: now it is this one's
+			a.Exec("DELETE FROM message_origin WHERE source_id = ? AND row_key = ?", src[source], rowKey)
+		} else if a.HasOrigin(src[source], rowKey, "") {
+			return false
 		}
 		if extra != nil && len(extra.Reactions) > 0 { // the reactors are jids: people, or the owner
 			for i, r := range extra.Reactions {
@@ -863,10 +868,22 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 				text = metadataTextOf(metadata[toInt(r["Z_PK"])])
 			}
 			x := whatsappExtras(r, asBytes(r["meta_blob"]), asBytes(r["receipt_blob"]), r)
-			if mt == 6 && !a.HasOrigin(src["iphone"], pyStr(r["Z_PK"]), "") && a.Exists("SELECT 1 FROM message "+
-				"WHERE conversation_id = ? AND subtype_code = 'whatsmeow:group_event' AND abs(ts - ?) <= 5000",
-				s.conv, appleMS(toFloat(r["ZMESSAGEDATE"]))) {
-				return // the bridge's copy of the same change is there already
+			// the archive's copy of this row: by its stanza id where it has one (a row key may be a
+			// deleted row's, given again to this one)
+			had := func() (int64, bool) {
+				if k, isStr := r["ZSTANZAID"].(string); isStr && k != "" {
+					mid, ok := a.MessageByKey("whatsapp", k, 0)
+					return mid, ok && mid != 0
+				}
+				return a.IntOK("SELECT message_id FROM message_origin WHERE source_id = ? AND row_key = ?",
+					src["iphone"], pyStr(r["Z_PK"]))
+			}
+			if mt == 6 {
+				if _, known := had(); !known && a.Exists("SELECT 1 FROM message "+
+					"WHERE conversation_id = ? AND subtype_code = 'whatsmeow:group_event' AND abs(ts - ?) <= 5000",
+					s.conv, appleMS(toFloat(r["ZMESSAGEDATE"]))) {
+					return // the bridge's copy of the same change is there already
+				}
 			}
 			if mt == 6 { // a group's change: those whose meaning is known, as notices
 				var by map[string]any
@@ -877,8 +894,7 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 				}
 				x.Notice = iphoneGroupNotice(a, person, own, toInt(r["ZGROUPEVENTTYPE"]), str(r["ZTEXT"]), by)
 				if x.Notice != nil {
-					if mid, ok := a.IntOK("SELECT message_id FROM message_origin WHERE source_id = ? AND row_key = ?",
-						src["iphone"], pyStr(r["Z_PK"])); ok {
+					if mid, ok := had(); ok {
 						setNoticeIfChanged(a, mid, x.Notice) // imported before there were notices
 					}
 				}
@@ -886,8 +902,7 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 			x.Preview = linkPreviews[toInt(r["Z_PK"])]
 			if !add("iphone", pyStr(r["Z_PK"]), x, s.conv, appleMS(toFloat(r["ZMESSAGEDATE"])), outgoing, sender, kind, text,
 				r["ZSTANZAID"]) && x.Preview != nil { // imported before there were previews
-				if mid, ok := a.IntOK("SELECT message_id FROM message_origin WHERE source_id = ? AND row_key = ?",
-					src["iphone"], pyStr(r["Z_PK"])); ok && setPreview(a, mid, x.Preview, true) {
+				if mid, ok := had(); ok && setPreview(a, mid, x.Preview, true) {
 					previews++
 				}
 			}

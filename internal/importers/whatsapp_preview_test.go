@@ -83,6 +83,16 @@ CREATE TABLE ZWAMESSAGEDATAITEM (Z_PK INTEGER PRIMARY KEY, ZMESSAGE INTEGER, ZIN
 	eq(t, "backfilled", run()["preview"], 2)
 	eq(t, "W1 again", previewOf(a, "W1"), []any{"https://example.org/a", "A page", "About it", int64(30)})
 	eq(t, "W2 not on the list", WhatsAppPreviewThumbs(path), map[string]bool{"x/a.thumb": true})
+
+	// W3 deleted on the phone, its row number (Z_PK) given to a new link: the new one comes in with
+	// its own preview, and W3 keeps its
+	db.Exec(d, "UPDATE ZWAMEDIAITEM SET ZTITLE = 'A new page', ZMEDIAURL = 'https://example.org/n' WHERE Z_PK = 3")
+	db.Exec(d, "UPDATE ZWAMESSAGE SET ZSTANZAID = 'W5', ZTEXT = 'https://example.org/n', ZMESSAGEDATE = ? WHERE Z_PK = 3", at+10)
+	db.Exec(d, "UPDATE ZWAMESSAGEDATAITEM SET ZCONTENT1 = 'https://example.org/n', ZMATCHEDTEXT = 'https://example.org/n', "+
+		"ZTITLE = 'A new page', ZSUMMARY = 'https://example.org/n' WHERE Z_PK = 4")
+	run()
+	eq(t, "W5", previewOf(a, "W5"), []any{"https://example.org/n", "A new page", nil, int64(0)})
+	eq(t, "W3 kept", previewOf(a, "W3"), []any{"https://example.org/c", "Only a title", nil, int64(0)})
 }
 
 func TestBridgePreviews(t *testing.T) {
