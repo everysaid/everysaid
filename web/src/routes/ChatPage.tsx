@@ -261,7 +261,8 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
         const info = await api.get<ChatDetail>(`/api/chats/${chatId}`);
         qc.setQueryData(["chat", chatId], info);
         const after = info.unread_after;
-        const fresh = (i: StreamItem) => i.type === "message" && !i.outgoing && i.kind !== "system" && i.ts > after;
+        // in the user's notes every message is theirs: one written elsewhere is new too
+        const fresh = (i: StreamItem) => i.type === "message" && (!i.outgoing || info.type === "conversation") && i.kind !== "system" && i.ts > after;
         let at = around ?? resume?.ts;
         if (jumpTo && !at) at = (await api.get<MessageItem>(`/api/messages/${jumpTo}`)).ts + 1;
         let page: StreamPage | null = null;

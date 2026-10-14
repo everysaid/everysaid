@@ -754,9 +754,13 @@ func unread(s *Store, chat *Chat, since int64) int64 {
 		return 0
 	}
 	args := append(db.Args(chat.Conversations), since)
+	// not the owner's own, from another device, but in their notes, where every message is theirs
+	own := "AND outgoing = 0 AND (sender_id IS NULL OR sender_id NOT IN (SELECT address_id FROM account)) "
+	if chat.Notes {
+		own = ""
+	}
 	return db.Int(s.Read(), "SELECT count(*) FROM message WHERE conversation_id IN ("+db.Marks(len(chat.Conversations))+
-		") AND outgoing = 0 AND ts > ? "+
-		"AND (sender_id IS NULL OR sender_id NOT IN (SELECT address_id FROM account)) "+ // not the owner's own, from another device
+		") AND ts > ? "+own+
 		"AND kind_id != (SELECT id FROM message_kind WHERE name = 'system')", args...) // nor a service's notice
 }
 

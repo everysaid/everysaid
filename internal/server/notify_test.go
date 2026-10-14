@@ -196,3 +196,54 @@ func TestNotificationsByServicePerDevice(t *testing.T) {
 	must(t, c.do("PUT", "/api/settings", M{"hidden_services": []string{service}}, H).status == 200, "hide")
 	must(t, len(arrive()) == 0, "nothing of a hidden service")
 }
+
+// In the user's notes every message is theirs: one written on another device is unread and notifies;
+// the user's own in a chat with someone else does neither.
+func TestANoteFromAnotherDeviceIsNew(t *testing.T) {
+	c := newServer(t)
+	c.login()
+	s := c.s.Host.Store()
+	var saved int64
+	s.MustWrite(func(tx *sql.Tx) { // the user's notes on Telegram (the chat with oneself)
+		tg := db.Int(tx, "SELECT id FROM service WHERE name = 'telegram'")
+		saved = db.LastID(tx, "INSERT INTO conversation (service_id, key, is_group) VALUES (?, 'saved', 0)", tg)
+		db.Exec(tx, "INSERT INTO conversation_member VALUES (?, (SELECT address_id FROM account LIMIT 1))", saved)
+	})
+	notes := core.ChatOfConversation(s, saved)
+	must(t, notes != "" && notes == core.NotesChat(s), "the notes: %q", notes)
+	q := s.Read()
+	person := db.Int(q, "SELECT id FROM conversation c WHERE NOT is_group AND EXISTS "+
+		"(SELECT 1 FROM message m WHERE m.conversation_id = c.id AND NOT m.outgoing) ORDER BY id LIMIT 1")
+	other := core.ChatOfConversation(s, person)
+	for _, cid := range []string{notes, other} {
+		must(t, core.SetChatState(s, cid, false, map[string]core.StateValue{"read_until": "now"}) == nil, "read")
+	}
+	time.Sleep(5 * time.Millisecond)
+	first := db.Int(q, "SELECT max(id) FROM message")
+	s.MustWrite(func(tx *sql.Tx) {
+		for _, conv := range []int64{saved, person} {
+			db.Exec(tx, "INSERT INTO message (service_id, conversation_id, ts, outgoing, kind_id, text) "+
+				"SELECT service_id, id, ?, 1, (SELECT id FROM message_kind WHERE name = 'text'), 'mine' FROM conversation WHERE id = ?",
+				time.Now().UnixMilli(), conv)
+		}
+	})
+	last := db.Int(s.Read(), "SELECT max(id) FROM message")
+
+	ch := c.s.Host.Listen()
+	defer c.s.Host.Unlisten(ch)
+	c.s.Host.Emit(M{"type": "new", "messages": []int64{first, last}})
+	var event M
+	select {
+	case event = <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no event")
+	}
+	notified, _ := event["notify"].([]map[string]any)
+	must(t, len(notified) == 1 && notified[0]["chat"] == notes, "only the note notifies: %v", event["notify"])
+	unread := map[string]any{}
+	for _, it := range c.getJSON("/api/chats?limit=1000&archived=true")["items"].([]any) {
+		m := it.(map[string]any)
+		unread[m["id"].(string)] = m["unread"]
+	}
+	must(t, unread[notes] == float64(1) && unread[other] == float64(0), "the note unread, the other not: %v %v", unread[notes], unread[other])
+}

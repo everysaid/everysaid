@@ -181,6 +181,7 @@ func (h *Host) describeNew(event M) (out M, err error) {
 		mine[a] = true
 	}
 	since := core.UnreadSince(h.store)
+	notesChat := core.NotesChat(h.store)
 	hiddenServices, hiddenConvs := core.Hidden(h.store)
 	type row struct {
 		id, conv, ts int64
@@ -205,12 +206,14 @@ func (h *Host) describeNew(event M) (out M, err error) {
 			continue
 		}
 		chats[cid]++
-		// no push for the owner's own, written on another device (a source may give it as received)
+		// no push for the owner's own, written on another device (a source may give it as received),
+		// but in their notes, where every message is theirs
 		read := since
 		if st := states[cid]; st.ReadUntil != nil {
 			read = max(read, *st.ReadUntil)
 		}
-		if !r.outgoing && !(r.sender.Valid && mine[r.sender.Int64]) && r.kind != "system" && !states[cid].Archived && r.ts > read &&
+		own := r.outgoing || (r.sender.Valid && mine[r.sender.Int64])
+		if (!own || cid == notesChat) && r.kind != "system" && !states[cid].Archived && r.ts > read &&
 			!hiddenServices[r.svc] && !hiddenConvs[r.conv] {
 			incoming = append(incoming, Incoming{cid, r.id, r.ts, r.service, r.text.String, r.kind})
 		}
