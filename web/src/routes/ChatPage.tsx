@@ -215,12 +215,9 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       if (waitingOn.current.get(m.id) === shown) waitingOn.current.delete(m.id);
     }
   }, [t]);
-  const react = useCallback((m: MessageItem, emoji: string) => {
-    renew.current();                                   // answered with a reaction: the line past what was seen
-    return act(m, () => api.post(`/api/messages/${m.id}/reaction`, { emoji }), (i) => ({
-      ...i, reactions: [...i.reactions.filter((r) => !r.mine), ...(emoji ? [{ emoji, code: null, count: 1, mine: true, who: null }] : [])],
-    }));
-  }, [act]);
+  const react = useCallback((m: MessageItem, emoji: string) => act(m, () => api.post(`/api/messages/${m.id}/reaction`, { emoji }), (i) => ({
+    ...i, reactions: [...i.reactions.filter((r) => !r.mine), ...(emoji ? [{ emoji, code: null, count: 1, mine: true, who: null }] : [])],
+  })), [act]);
   const startEdit = useCallback((m: MessageItem) => {
     setReplyTo(null);
     setEditing(m);
@@ -248,13 +245,10 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
     setGeneration((g) => g + 1);
   };
 
-  // the first unread message when the chat was opened (its cursor): the line "new messages" before it
+  // the first unread message when the chat was opened (its cursor): the line "new messages" before
+  // it, there until the user sends something
   const [newFrom, setNewFrom] = useState<string | null>(null);
-  // the line put again before the first message not seen yet (none, if all were): on coming back,
-  // and on answering (the field taken, a reaction, a message sent), which makes nothing else seen
-  const renew = useRef(() => {});
   const told = useRef(0);               // how far the server was told the chat was read (ms)
-  const readBefore = useRef(0);         // how far it was read when it was opened (the messages' time, ms)
   const toLatest = useRef(false);       // the latest asked for: not the first unread
   // the first page: the latest, or around a message or a time; with something unread (and not sent
   // elsewhere), from the first unread, wherever the user was before
@@ -287,7 +281,6 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
         page ??= await api.get<StreamPage>(`/api/chats/${chatId}/stream${qs({ around: at, limit: PAGE, hide })}`);
         if (cancelled) return;
         told.current = Math.max(told.current, after);
-        readBefore.current = after;
         setNewFrom(page.items.find(fresh)?.cursor ?? null);
         setItems(page.items);
         setFirst(START - page.items.length);
@@ -441,7 +434,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   const send = useCallback(async (body: string, service: string | null, answered: MessageItem | null, mentions: Mentioned[], file: File | null,
     conversationId: number | null, animated = false) => {
     if (hasNewer) navigate({ to: "/chat/$chatId", params: { chatId }, search: { hide } });
-    renew.current();                                   // answered: the line past what was seen
+    setNewFrom(null);                                  // answered: what was new is seen
     const id = -Date.now() - Math.random();
     const mark = (status: string, conversation_id = 0) => setItems((prev) => prev.map((i) => (i.type === "message" && i.id === id
       ? { ...i, status, conversation_id: conversation_id || i.conversation_id } : i)));
@@ -602,25 +595,6 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   }, [chatId, qc]);
   useEffect(() => () => clearTimeout(tellTimer.current), []);
 
-  renew.current = () => {
-    const base = Math.max(seen.current, readBefore.current);
-    const first = itemsRef.current.find((i) => i.type === "message" && i.id > 0 && !i.outgoing && i.kind !== "system" && i.ts > base);
-    setNewFrom(first?.cursor ?? null);
-  };
-
-  // back from away (another tab or service, the window hidden, asleep): the line "new
-  // messages" put again as on opening the chat, before the first message not seen yet, wherever
-  // the user had read to (none, if all was); while they look, it stays where it is
-  const wasAway = useRef(false);
-  useEffect(() => {
-    if (!looking) {
-      wasAway.current = true;
-      return;
-    }
-    if (!wasAway.current) return;
-    wasAway.current = false;
-    renew.current();
-  }, [looking]);
   useEffect(() => {
     const el = scroller.current;
     if (!ready || !el) return;
@@ -849,7 +823,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
             accounts={detail.data.accounts ?? []}
             mentionable={isGroup ? detail.data.mentionable ?? [] : []} fileable={detail.data.fileable ?? []} members={detail.data.members ?? []}
             chatId={chatId} onSend={send} take={take} replyTo={replyTo} onCancelReply={() => setReplyTo(null)}
-            editing={editing} onEdit={edit} onCancelEdit={() => setEditing(null)} onFocus={() => renew.current()}
+            editing={editing} onEdit={edit} onCancelEdit={() => setEditing(null)}
             preferred={(!hasNewer && [...items].reverse().find((i) => i.type === "message")?.service) || detail.data.last_service} />
         )}
       </div>
@@ -1010,7 +984,7 @@ type Taker = { ok: () => boolean; put: (f: File) => void };
  * closed, with a lock for Send. accounts: the conversations a message may go to (a person's handles,
  * the groups merged into one); a service with more than one opens a menu of them, by name, the last
  * active picked until the user picks another. */
-function Composer({ chatId, services, sendable, replyable, mentionable, fileable, members, missing, preferred, findable, reach, accounts, onSend, take, replyTo, onCancelReply, editing, onEdit, onCancelEdit, onFocus }: {
+function Composer({ chatId, services, sendable, replyable, mentionable, fileable, members, missing, preferred, findable, reach, accounts, onSend, take, replyTo, onCancelReply, editing, onEdit, onCancelEdit }: {
   chatId: string; services: string[]; sendable: string[]; replyable: string[]; mentionable: string[]; fileable: string[];
   findable: boolean; reach: Record<string, string>;
   accounts: NonNullable<ChatDetail["accounts"]>;
@@ -1021,7 +995,6 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   take: React.MutableRefObject<Taker | null>;          // set here: where a dropped or pasted file goes
   replyTo: MessageItem | null; onCancelReply: () => void;
   editing: MessageItem | null; onEdit: (m: MessageItem, text: string) => void; onCancelEdit: () => void;
-  onFocus: () => void;                                 // the field taken: what was new is seen
 }) {
   const { t } = useTranslation();
   const settings = useSettings();
@@ -1417,7 +1390,6 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
             ref={ref}
             rows={1}
             value={text}
-            onFocus={onFocus}
             disabled={!can}                      // nothing to write where it cannot go
             role={listOpen ? "combobox" : undefined}
             aria-expanded={listOpen || undefined}

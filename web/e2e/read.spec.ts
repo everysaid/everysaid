@@ -2,8 +2,8 @@ import { expect, test, type Page } from "@playwright/test";
 import { signedIn } from "./demo";
 
 // How far a chat was read: a chat with unread messages opens at the first of them, under a line
-// "new messages"; they are read as they are seen (once a message's end has been in view), not by
-// opening the chat; all of them once its end is.
+// "new messages", there until the user sends something; they are read as they are seen (once a
+// message's end has been in view), not by opening the chat; all of them once its end is.
 
 const SCROLLER = "[data-stream] [data-virtuoso-scroller]";
 const h = { "X-Everysaid": "1" };
@@ -40,10 +40,10 @@ test("a chat opens at its first unread, which are read as they are seen", async 
   await expect.poll(() => unread(page, chat), { timeout: 5000 }).toBeLessThan(40);
   expect(await unread(page, chat)).toBeGreaterThan(0);
 
-  // the field taken to answer makes nothing more seen: the line past what was, not gone
+  // the field taken changes nothing: the line stays where it was
   await page.locator("[data-composer-body] textarea").focus();
-  await expect(page.locator("[data-cursor]", { has: line }).getByText("unread 0", { exact: true })).toHaveCount(0);
-  await expect(line).toHaveCount(1);
+  await page.waitForTimeout(500);
+  await expect(page.locator("[data-cursor]", { has: line }).getByText("unread 0", { exact: true })).toHaveCount(1);
   await page.locator("[data-composer-body] textarea").blur();
 
   // to the end: all read; the line stays while the chat is open
@@ -52,13 +52,8 @@ test("a chat opens at its first unread, which are read as they are seen", async 
     await page.waitForTimeout(150);
   }
   await expect.poll(() => unread(page, chat), { timeout: 5000 }).toBe(0);
-  for (let i = 0; i < 20 && !(await line.count()); i++) {
-    await page.evaluate((s) => { document.querySelector(s)!.scrollTop -= 400; }, SCROLLER);
-    await page.waitForTimeout(150);
-  }
-  await expect(line).toHaveCount(1);
 
-  // away and back: the line before the first not seen yet; none, all seen
+  // away and back, with messages meanwhile: the line still where it was
   const away = () => page.evaluate(() => {
     Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
     document.dispatchEvent(new Event("visibilitychange"));
@@ -67,42 +62,21 @@ test("a chat opens at its first unread, which are read as they are seen", async 
     Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
     document.dispatchEvent(new Event("visibilitychange"));
   });
-  const toEnd = async () => {
-    for (let i = 0; i < 10; i++) {
-      await page.evaluate((s) => { const el = document.querySelector(s)!; el.scrollTop = el.scrollHeight; }, SCROLLER);
-      await page.waitForTimeout(150);
-    }
-  };
   await away();
-  for (let i = 0; i < 3; i++)
-    await page.request.post("/api/demo/incoming", { data: { chat, text: `while away ${i}` }, headers: h });
-  await page.waitForTimeout(1500);                     // brought meanwhile (below the view: not drawn)
+  await page.request.post("/api/demo/incoming", { data: { chat, text: "while away" }, headers: h });
+  await expect(page.getByText("while away", { exact: true })).toBeAttached();
   await back();
-  await toEnd();
-  await expect(page.locator("[data-cursor]", { has: line }).getByText("while away 0", { exact: true })).toHaveCount(1);
-  await away();
-  await back();
-  await expect(line).toHaveCount(0);
+  await page.waitForTimeout(500);
+  for (let i = 0; i < 20 && !(await line.count()); i++) {
+    await page.evaluate((s) => { document.querySelector(s)!.scrollTop -= 400; }, SCROLLER);
+    await page.waitForTimeout(150);
+  }
+  await expect(page.locator("[data-cursor]", { has: line }).getByText("unread 0", { exact: true })).toHaveCount(1);
 
-  // one that comes while the user looks at the end is seen: away and back, still no line
-  await page.request.post("/api/demo/incoming", { data: { chat, text: "while here" }, headers: h });
-  await expect(page.getByText("while here", { exact: true })).toBeVisible();
-  await page.waitForTimeout(1500);
-  await away();
-  await back();
-  await expect(line).toHaveCount(0);
-
-  // and once the user takes the field to answer
-  await away();
-  await page.request.post("/api/demo/incoming", { data: { chat, text: "while away again" }, headers: h });
-  await page.waitForTimeout(1500);
-  await back();
-  await toEnd();
-  await expect(page.locator("[data-cursor]", { has: line }).getByText("while away again", { exact: true })).toHaveCount(1);
-  await page.locator("[data-composer-body] textarea").focus();
-  await expect(line).toHaveCount(0);
+  // sending something: the line gone
   await page.locator("[data-composer-body] textarea").fill(`quiet: answered ${info.project.name}`);
   await page.locator("[data-send]").click();
+  await expect(line).toHaveCount(0);
 
   // opened again with nothing unread: at its end, no line
   await page.reload();
