@@ -338,3 +338,15 @@ func TestTheStoreIsPrivate(t *testing.T) {
 		}
 	}
 }
+
+// The owner's own chat (their notes) takes messages, though no one else ever writes there; another
+// number's, where no one wrote, still does not.
+func TestSendsToTheOwnersNotes(t *testing.T) {
+	b, _, _ := offline(t)
+	if chats, err := b.sender.chatsFor("+15550009999"); err != nil || len(chats) != 1 || chats[0].String() != "15550009999@s.whatsapp.net" {
+		t.Fatalf("the owner's notes: %v %v", chats, err)
+	}
+	if _, err := b.sender.chatsFor("+15550001111"); err == nil {
+		t.Fatal("a chat where no one wrote")
+	}
+}

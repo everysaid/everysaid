@@ -119,8 +119,8 @@ func (s *Sender) chatFor(recipient string) (types.JID, error) {
 }
 
 // chatsFor is every chat a recipient means where the other side has written, or that the owner
-// started from here: one person's may be kept under both their number and their LID (before and
-// after WhatsApp moved the chat to LIDs).
+// started from here, or the owner's own (their notes, where no one else writes): one person's may be
+// kept under both their number and their LID (before and after WhatsApp moved the chat to LIDs).
 func (s *Sender) chatsFor(recipient string) ([]types.JID, error) {
 	candidates, err := s.jidsOf(recipient)
 	if err != nil {
@@ -128,6 +128,10 @@ func (s *Sender) chatsFor(recipient string) ([]types.JID, error) {
 	}
 	var chats []types.JID
 	for _, c := range candidates {
+		if s.own(c) {
+			chats = append(chats, c)
+			continue
+		}
 		var n int
 		// someone wrote there (incoming_chats, kept when their messages have left the store), or the
 		// chat was started from here
@@ -142,6 +146,14 @@ func (s *Sender) chatsFor(recipient string) ([]types.JID, error) {
 		return nil, fmt.Errorf("no chat with %s where they have written: the bridge sends only there", recipient)
 	}
 	return chats, nil
+}
+
+// own says whether a chat is the owner's own, by their number or their LID.
+func (s *Sender) own(c types.JID) bool {
+	if s.client == nil || s.client.Store.ID == nil {
+		return false
+	}
+	return c == s.client.Store.ID.ToNonAD() || (!s.client.Store.LID.IsEmpty() && c == s.client.Store.LID.ToNonAD())
 }
 
 // jidsOf is every jid a recipient may be kept under (its number and its LID), each a person's or a
