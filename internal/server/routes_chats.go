@@ -116,7 +116,7 @@ func (s *Server) chatRoutes() {
 				it["sendable"] = of[id]
 			}
 		}
-		out := M{"items": items}
+		out := M{"items": items, "notes": core.NotesChat(s.Store)}
 		if !archived {
 			out["archived_unread"] = core.ArchivedUnread(s.Store)
 		}

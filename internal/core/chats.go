@@ -223,6 +223,7 @@ type Chat struct {
 	LastMessage    int64
 	HasCalls       bool
 	Others         map[int64]bool // a group's people, but the owner (nil: not a group's)
+	Notes          bool           // the owner's notes to themselves (their conversations where no one else is)
 }
 
 // ServiceList is the chat's services, sorted.
@@ -366,7 +367,7 @@ func buildIndex(s *Store) *ChatIndex {
 		case alone[r.id]:
 			key = fmt.Sprintf("c%d", notes)
 			chat = get(key, func() *Chat {
-				return &Chat{ID: key, Type: "conversation", ConversationID: notes, TitleTS: -1, Services: map[string]bool{}}
+				return &Chat{ID: key, Type: "conversation", ConversationID: notes, TitleTS: -1, Services: map[string]bool{}, Notes: true}
 			})
 		case !r.group && len(others) == 1:
 			var pid int64
@@ -1046,6 +1047,17 @@ func Chats(s *Store, o ChatsOptions) []M {
 		})
 	}
 	return out
+}
+
+// NotesChat is the id of the owner's notes to themselves, "" when there are none: the chat list shows
+// them apart, not among the people.
+func NotesChat(s *Store) string {
+	for _, c := range Index(s).Chats {
+		if c.Notes {
+			return c.ID
+		}
+	}
+	return ""
 }
 
 // ArchivedUnread says whether an archived chat, not muted, has something unread: the chat list,

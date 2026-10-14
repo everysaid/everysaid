@@ -5,7 +5,7 @@ import { Link, useParams } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Virtuoso } from "react-virtuoso";
-import { Archive, ArchiveRestore, BellOff, Check, Image, MessagesSquare, Mic, MoreVertical, Phone, PhoneMissed, Pin, PinOff, Search, Video, X } from "lucide-react";
+import { Archive, ArchiveRestore, BellOff, Check, Image, MessagesSquare, Mic, MoreVertical, NotebookPen, Phone, PhoneMissed, Pin, PinOff, Search, Video, X } from "lucide-react";
 import { api, type ChatSummary } from "@/lib/api";
 import { useChats, useDebounced } from "@/lib/hooks";
 import { shortWhen } from "@/lib/format";
@@ -125,8 +125,9 @@ export function ChatList() {
   const seen = useRef(new Set<string>());             // every service the list has shown, to filter by
   for (const c of chats.data?.items ?? []) for (const s of c.services) seen.current.add(s);
   const params = useParams({ strict: false }) as { chatId?: string };
+  const notes = chats.data?.notes;
   const items = useMemo(() => {
-    let list = chats.data?.items ?? [];
+    let list = (chats.data?.items ?? []).filter((c) => c.id !== chats.data?.notes);   // the notes: at the top, apart
     if (archived) list = list.filter((c) => c.archived);
     if (filter === "unread") return list.filter((c) => c.unread > 0);
     if (filter === "person") return list.filter((c) => c.type === "person");
@@ -166,7 +167,15 @@ export function ChatList() {
         <div className="flex items-center gap-2">
           <Logo className="size-8 md:hidden" />
           <h1 className="text-xl font-semibold tracking-tight">{archived ? t("chats.showArchived") : t("chats.title")}</h1>
-          <ChatFiltersButton value={filters} onChange={setFilters} seen={[...seen.current]} archivedUnread={!archived && chats.data?.archived_unread} />
+          <div className="ml-auto flex items-center gap-1">
+            {notes && (
+              <Link to="/chat/$chatId" params={{ chatId: notes }} onClick={markList} data-notes aria-label={t("chats.notes")} title={t("chats.notes")}
+                className={cn("grid size-9 place-items-center rounded-full text-muted hover:bg-panel-2", params.chatId === notes && "bg-accent/12 text-accent")}>
+                <NotebookPen className="size-4" />
+              </Link>
+            )}
+            <ChatFiltersButton value={filters} onChange={setFilters} seen={[...seen.current]} archivedUnread={!archived && chats.data?.archived_unread} />
+          </div>
         </div>
         <div className="relative">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted" />

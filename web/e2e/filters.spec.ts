@@ -74,3 +74,15 @@ test("chat info: archived and back", async ({ page }, info) => {
   await expect.poll(async () => page.evaluate(async (id) =>
     (await (await fetch(`/api/chats/${id}`, { headers: { "X-Everysaid": "1" } })).json()).archived, chat)).toBe(false);
 });
+
+// The notes to oneself: an icon beside the filters, not a row among the people.
+test("notes: apart from the list, by their icon", async ({ page }, info) => {
+  await signedIn(page, info.project.name);
+  await page.goto("/");
+  const notes = await page.evaluate(async () => (await (await fetch("/api/chats", { headers: { "X-Everysaid": "1" } })).json()).notes as string);
+  expect(notes, "the demo's notes").toBeTruthy();
+  await expect(page.locator("[data-chat]").first()).toBeVisible();
+  await expect(page.locator(`[data-chat="${notes}"]`)).toHaveCount(0);
+  await page.locator("[data-notes]").click();
+  await expect(page).toHaveURL(new RegExp(`/chat/${notes}$`));
+});
