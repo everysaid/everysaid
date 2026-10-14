@@ -49,6 +49,16 @@ function Preview({ c }: { c: ChatSummary }) {
   );
 }
 
+// a chat's unread messages, as a number: on its row, and on the notes' button
+function UnreadCount({ c, className }: { c?: ChatSummary; className?: string }) {
+  if (!c?.unread) return null;
+  return (
+    <span data-unread className={cn("min-w-5 rounded-full px-1.5 text-center text-[11px] font-bold leading-5", c.muted ? "bg-muted/30 text-fg" : "bg-accent text-accent-fg", className)}>
+      {c.unread > 999 ? "999+" : c.unread}
+    </span>
+  );
+}
+
 function ChatRow({ c, active }: { c: ChatSummary; active: boolean }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
@@ -78,11 +88,7 @@ function ChatRow({ c, active }: { c: ChatSummary; active: boolean }) {
               {c.muted && <BellOff className="size-3.5" />}
               {c.pinned && <Pin className="size-3.5 rotate-45" />}
               <span className="flex -space-x-0.5">{c.services.filter((s) => service(s).messages).slice(0, 4).map((s) => <ServiceDot key={s} id={s} className="ring-2 ring-panel" />)}</span>
-              {c.unread > 0 && (
-                <span className={cn("min-w-5 rounded-full px-1.5 text-center text-[11px] font-bold leading-5", c.muted ? "bg-muted/30 text-fg" : "bg-accent text-accent-fg")}>
-                  {c.unread > 999 ? "999+" : c.unread}
-                </span>
-              )}
+              <UnreadCount c={c} />
             </span>
           </div>
         </div>
@@ -170,8 +176,9 @@ export function ChatList() {
           <div className="ml-auto flex items-center gap-1">
             {notes && (
               <Link to="/chat/$chatId" params={{ chatId: notes }} onClick={markList} data-notes aria-label={t("chats.notes")} title={t("chats.notes")}
-                className={cn("grid size-9 place-items-center rounded-full text-muted hover:bg-panel-2", params.chatId === notes && "bg-accent/12 text-accent")}>
+                className={cn("relative grid size-9 place-items-center rounded-full text-muted hover:bg-panel-2", params.chatId === notes && "bg-accent/12 text-accent")}>
                 <NotebookPen className="size-4" />
+                <UnreadCount c={chats.data?.items.find((c) => c.id === notes)} className="absolute -right-0.5 -top-0.5 min-w-4 px-1 text-[10px] leading-4" />
               </Link>
             )}
             <ChatFiltersButton value={filters} onChange={setFilters} seen={[...seen.current]} archivedUnread={!archived && chats.data?.archived_unread} />
