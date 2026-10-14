@@ -76,7 +76,9 @@ func OpenAt(path string) (*sql.DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("keys.db: %w", err)
 	}
-	os.Chmod(path, 0o600)
+	for _, f := range []string{path, path + "-wal", path + "-shm"} { // the driver makes them 644 (umask)
+		os.Chmod(f, 0o600)
+	}
 	opens[path] = d
 	return d, nil
 }

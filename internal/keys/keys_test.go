@@ -35,6 +35,11 @@ func TestEncryptedAndKept(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, f := range []string{path + "-wal", path + "-shm"} { // the driver's own files too
+		if st, err := os.Stat(f); err != nil || st.Mode().Perm() != 0o600 {
+			t.Errorf("%s: %v %v", f, st, err)
+		}
+	}
 	var v string
 	if err := d.QueryRow("SELECT v FROM secret").Scan(&v); err != nil || v != "device-identity-key" {
 		t.Fatalf("read back %q, %v", v, err)
