@@ -214,6 +214,14 @@ func (testSource) Info() *plugins.Info {
 
 func (testSource) Check(c *plugins.Context) (bool, string) { return true, "ready" }
 
+// its screen: a picture of one pixel, and the clicks on it recorded
+func (testSource) Screen(c *plugins.Context) ([]byte, error) { return []byte("\x89PNG\r\n\x1a\n"), nil }
+
+func (testSource) Click(c *plugins.Context, x, y int) error {
+	askedCh <- asked{what: "click", text: fmt.Sprintf("%d,%d", x, y)}
+	return nil
+}
+
 // busy: the test source cannot send now (a limit of pace), as a service may say for a while.
 var busy atomic.Bool
 
