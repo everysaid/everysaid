@@ -781,6 +781,14 @@ func WhatsApp(a *archive.Archive, out func(string), opt WhatsAppOptions) (update
 				}
 				return false
 			}
+			// the row taken before it had its stanza id (a backup made as it was being sent): the same
+			// message, which has its key now
+			if pending := a.Int("SELECT m.id FROM message_origin o JOIN message m ON m.id = o.message_id "+
+				"WHERE o.source_id = ? AND o.row_key = ? AND m.key IS NULL AND m.conversation_id = ?",
+				src[source], rowKey, conv); pending != 0 {
+				a.Exec("UPDATE message SET key = ? WHERE id = ?", k, pending)
+				return false
+			}
 			// the row key was another message's, deleted at the source since: now it is this one's
 			a.Exec("DELETE FROM message_origin WHERE source_id = ? AND row_key = ?", src[source], rowKey)
 		} else if a.HasOrigin(src[source], rowKey, "") {

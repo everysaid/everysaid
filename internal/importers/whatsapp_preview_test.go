@@ -31,11 +31,8 @@ func previewOf(a *archive.Archive, key string) []any {
 	return []any{m[0]["url"], m[0]["title"], m[0]["description"], m[0]["w"]}
 }
 
-func TestWhatsAppIphonePreviews(t *testing.T) {
-	a, _ := newArchive(t)
-	dir := t.TempDir()
-	path := filepath.Join(dir, "whatsapp.sqlite")
-	d := sqliteAt(t, path, `
+// waIphoneSchema is the part of WhatsApp's iPhone database the importer reads.
+const waIphoneSchema = `
 CREATE TABLE ZWACHATSESSION (Z_PK INTEGER PRIMARY KEY, ZCONTACTJID TEXT, ZPARTNERNAME TEXT, ZSESSIONTYPE INTEGER, ZARCHIVED INTEGER);
 CREATE TABLE ZWAGROUPMEMBER (Z_PK INTEGER PRIMARY KEY, ZCHATSESSION INTEGER, ZMEMBERJID TEXT);
 CREATE TABLE ZWAMEDIAITEM (Z_PK INTEGER PRIMARY KEY, ZMETADATA BLOB, ZLATITUDE REAL, ZLONGITUDE REAL, ZTITLE TEXT,
@@ -47,7 +44,13 @@ CREATE TABLE ZWAMESSAGE (Z_PK INTEGER PRIMARY KEY, ZCHATSESSION INTEGER, ZMESSAG
     ZMESSAGETYPE INTEGER, ZMEDIAITEM INTEGER, ZFROMJID TEXT, ZGROUPMEMBER INTEGER, ZMESSAGEINFO INTEGER, ZTEXT TEXT,
     ZSTANZAID TEXT, ZSTARRED INTEGER, ZGROUPEVENTTYPE INTEGER);
 CREATE TABLE ZWAMESSAGEDATAITEM (Z_PK INTEGER PRIMARY KEY, ZMESSAGE INTEGER, ZINDEX INTEGER, ZCONTENT1 TEXT,
-    ZMATCHEDTEXT TEXT, ZTITLE TEXT, ZSUMMARY TEXT, ZTHUMBNAILPATH TEXT);`)
+    ZMATCHEDTEXT TEXT, ZTITLE TEXT, ZSUMMARY TEXT, ZTHUMBNAILPATH TEXT);`
+
+func TestWhatsAppIphonePreviews(t *testing.T) {
+	a, _ := newArchive(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "whatsapp.sqlite")
+	d := sqliteAt(t, path, waIphoneSchema)
 	db.Exec(d, "INSERT INTO ZWACHATSESSION VALUES (1, ?, 'Peer', 0, 0)", waPeer)
 	at := float64(pairTS/1000 - archive.AppleEpoch)
 	// a link with its whole preview (and a second link, not shown); a link the app found no
@@ -115,4 +118,31 @@ ALTER TABLE messages ADD COLUMN preview_image BLOB;`)
 	eq(t, "L1 large", previewOf(a, "L1"), []any{"https://x.org", "X", "All about x", int64(40)})
 	eq(t, "pictures", a.Int("SELECT count(*) FROM link_preview_image"), int64(1))
 	eq(t, "the same again", runBridge(t, a, path)["preview"], 0)
+}
+
+// A message in a backup made as it was being sent, before WhatsApp gave it its stanza id, is the
+// same message in the next backup, which has it: one row, which takes the id as its key.
+func TestWhatsAppIphoneSentBeforeItsID(t *testing.T) {
+	a, _ := newArchive(t)
+	path := filepath.Join(t.TempDir(), "whatsapp.sqlite")
+	d := sqliteAt(t, path, waIphoneSchema)
+	db.Exec(d, "INSERT INTO ZWACHATSESSION VALUES (1, ?, 'Peer', 0, 0)", waPeer)
+	at := float64(pairTS/1000 - archive.AppleEpoch)
+	db.Exec(d, "INSERT INTO ZWAMESSAGE (Z_PK, ZCHATSESSION, ZMESSAGEDATE, ZISFROMME, ZMESSAGETYPE, ZTEXT, ZSTANZAID) "+
+		"VALUES (1, 1, ?, 1, 0, 'on my way', NULL)", at)
+	run := func() {
+		_, err := WhatsApp(a, nil, WhatsAppOptions{IphoneDB: path, NoContacts: true, NoBridge: true, NoStore: true})
+		must(t, err)
+	}
+	run()
+	first := a.Int("SELECT id FROM message WHERE key IS NULL AND text = 'on my way'")
+	if first == 0 {
+		t.Fatal("not taken without its id")
+	}
+	db.Exec(d, "UPDATE ZWAMESSAGE SET ZSTANZAID = 'W9' WHERE Z_PK = 1")
+	run()
+	run() // again: nothing changes
+	eq(t, "one message", a.Int("SELECT count(*) FROM message"), int64(1))
+	eq(t, "the same, with its key", a.Int("SELECT id FROM message WHERE key = 'W9'"), first)
+	eq(t, "its origin kept", a.Int("SELECT count(*) FROM message_origin WHERE message_id = ?", first), int64(1))
 }
