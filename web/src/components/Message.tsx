@@ -1,9 +1,10 @@
-import { memo, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, memo, Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Check, CheckCheck, Clock, Copy, CornerUpLeft, EllipsisVertical, FileText, Forward, ImageOff, Link2, MapPin, Pencil, Phone, Pin, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Plus, Trash2, TriangleAlert, Video } from "lucide-react";
-import { thumbUrl, type Attachment, type LinkPreview, type Local, type CallItem, type Mention, type MessageItem, type Receipts } from "@/lib/api";
+import { api, thumbUrl, type Attachment, type LinkPreview, type Local, type CallItem, type Mention, type MessageItem, type Receipts } from "@/lib/api";
 import { bytes, duration, time } from "@/lib/format";
 import { service } from "@/lib/services";
 import { noticeLines, pollOf } from "@/lib/notice";
@@ -12,6 +13,7 @@ import { Avatar, Menu, MenuContent, MenuItem, MenuTrigger } from "./ui";
 import { EmojiPicker } from "./EmojiPicker";
 import { copyFile, copyText } from "@/lib/clip";
 import { Sending } from "./Sending";
+import type { DocumentKind } from "./DocumentViewer";
 
 const URL_RE = /(https?:\/\/[^\s<>"')\]]+)/g;
 const BIDI = /[\u202a-\u202e\u2066-\u2069]/g;      // direction marks around a name (Viber writes "\u202a@Name\u202c")
@@ -169,18 +171,52 @@ function AttachmentView({ a, onOpen }: { a: Attachment; onOpen: (a: Attachment) 
       <audio controls preload="none" src={`/api/media/${a.sha256}/original`} className="h-10 w-64 max-w-full" />
     );
   }
-  return (
-    <a
-      href={a.available === "gone" ? undefined : `/api/media/${a.sha256}/original`}
-      download={a.name ?? ""}
-      className="flex items-center gap-3 rounded-xl bg-black/10 px-3 py-2 text-sm"
-    >
+  return <FileView a={a} />;
+}
+
+const DocumentViewer = lazy(() => import("./DocumentViewer"));
+
+/** Text shown as it is, and Markdown, by type and by extension. */
+const textTypes: Record<string, DocumentKind> = { "text/plain": "text", "text/markdown": "markdown", "text/x-markdown": "markdown" };
+const textExtensions: Record<string, DocumentKind> = { txt: "text", md: "markdown", markdown: "markdown" };
+
+/** A file: opened in the document viewer when it can be shown (text, Markdown, a PDF, an office
+ *  document where the server has a program for it), else downloaded. */
+function FileView({ a }: { a: Attachment }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const shown = useQuery({
+    queryKey: ["documents"],
+    queryFn: () => api.get<{ types: string[]; extensions: string[] }>("/api/documents"),
+    staleTime: Infinity,
+  }).data;
+  const mime = (a.mime ?? "").split(";")[0].trim();
+  const ext = (a.name ?? "").toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] ?? "";
+  const unknown = !mime || mime === "application/octet-stream";
+  const kind: DocumentKind | null = a.available === "gone" ? null
+    : textTypes[mime] ?? (unknown ? textExtensions[ext] : undefined)
+      ?? (shown && (shown.types.includes(mime) || (unknown && shown.extensions.includes(ext))) ? "pdf" : null);
+  const viewable = kind != null;
+  const body = (
+    <>
       <FileText className="size-8 shrink-0 opacity-80" />
       <span className="min-w-0">
         <span className="block truncate font-medium">{a.name || mime || t("kind.file")}</span>
         <span className="text-xs opacity-70">{a.available === "gone" ? t("chat.gone") : bytes(a.size)}</span>
       </span>
-    </a>
+    </>
+  );
+  const card = "flex items-center gap-3 rounded-xl bg-black/10 px-3 py-2 text-sm";
+  if (!viewable) {
+    return (
+      <a href={a.available === "gone" ? undefined : `/api/media/${a.sha256}/original`} download={a.name ?? ""} className={card}>{body}</a>
+    );
+  }
+  return (
+    <>
+      <button onClick={() => setOpen(true)} className={cn(card, "text-left")} data-document>{body}</button>
+      {open && kind && <Suspense><DocumentViewer sha256={a.sha256} name={a.name ?? ""} kind={kind} onClose={() => setOpen(false)} /></Suspense>}
+    </>
   );
 }
 

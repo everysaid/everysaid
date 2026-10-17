@@ -18,7 +18,9 @@ func init() {
 		"never":                  "ποτέ",
 		"— {what} —":             "— {what} —",
 		"A message was not sent": "Ένα μήνυμα δεν στάλθηκε",
-		"It could not go for a day: it waits in its chat to be sent again or discarded": "Δεν μπόρεσε να φύγει για μια μέρα: περιμένει στη συνομιλία του να ξανασταλεί ή να απορριφθεί",
+		"Office documents shown with {program}: {kinds}":                                        "Έγγραφα γραφείου με το {program}: {kinds}",
+		"No program for office documents (OnlyOffice or LibreOffice): they are only downloaded": "Κανένα πρόγραμμα για έγγραφα γραφείου (OnlyOffice ή LibreOffice): μόνο λήψη",
+		"It could not go for a day: it waits in its chat to be sent again or discarded":         "Δεν μπόρεσε να φύγει για μια μέρα: περιμένει στη συνομιλία του να ξανασταλεί ή να απορριφθεί",
 	} {
 		EL[k] = v
 	}

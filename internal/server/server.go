@@ -90,6 +90,7 @@ type Server struct {
 	Store   *core.Store
 	Host    *Host
 	Push    *Push
+	Docs    *Documents
 	log     *slog.Logger
 	mux     *http.ServeMux
 	handler http.Handler
@@ -173,6 +174,7 @@ func New(o Options) (*Server, error) {
 	}
 	s.Push = NewPush(s.Auth, s.log)
 	s.Host = NewHost(s.Store, s.Push, s.log)
+	s.Docs = FindDocuments()
 
 	s.origins = append([]string{o.Origin}, o.ExtraOrigins...)
 	s.allowed = map[string]bool{}

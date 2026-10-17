@@ -1,5 +1,5 @@
 import { defineConfig, type Plugin } from "vite";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
@@ -38,6 +38,31 @@ function emojibase(): Plugin {
   };
 }
 
+// pdf.js's data, fetched only for a document that needs it: the character maps, the standard fonts
+// (for a PDF that does not carry them) and the image decoders (wasm, and their fallbacks where the
+// Content-Security-Policy does not let wasm run). Under assets/, kept as long as the version is.
+const pdfjsDir = fileURLToPath(new URL("./node_modules/pdfjs-dist/", import.meta.url));
+const pdfjsData = `assets/pdfjs-${JSON.parse(readFileSync(pdfjsDir + "package.json").toString()).version}`;
+function pdfjs(): Plugin {
+  const files = () => ["cmaps", "standard_fonts", "wasm"].flatMap((d) => readdirSync(pdfjsDir + d)
+    .filter((f) => !f.startsWith("LICENSE") && !f.startsWith("quickjs")) // quickjs: forms' scripts, never run here
+    .map((f) => `${d}/${f}`));
+  return {
+    name: "pdfjs-data",
+    config: () => ({ define: { __PDFJS_DATA__: JSON.stringify(`/${pdfjsData}/`) } }),
+    configureServer(server) {
+      server.middlewares.use(`/${pdfjsData}/`, (req, res, next) => {
+        const f = (req.url ?? "").replace(/^\//, "").split("?")[0];
+        if (!files().includes(f)) return next();
+        res.end(readFileSync(pdfjsDir + f));
+      });
+    },
+    generateBundle() {
+      for (const f of files()) this.emitFile({ type: "asset", fileName: `${pdfjsData}/${f}`, source: readFileSync(pdfjsDir + f) });
+    },
+  };
+}
+
 // The app is served by `everysaid serve` (web/dist). In development, `pnpm dev` proxies /api to it:
 // start the server with EVERYSAID_EXTRA_ORIGINS=http://localhost:5173 so passkeys work there too.
 export default defineConfig({
@@ -45,6 +70,7 @@ export default defineConfig({
     react(),
     tailwindcss(),
     emojibase(),
+    pdfjs(),
     VitePWA({
       strategies: "injectManifest",
       srcDir: "src",
@@ -66,7 +92,8 @@ export default defineConfig({
           { src: "/icon-maskable.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
         ],
       },
-      injectManifest: { globPatterns: ["**/*.{js,css,html,svg,png,woff2}"] },
+      // the document viewer (pdf.js) only from the network, when a document is opened
+      injectManifest: { globPatterns: ["**/*.{js,css,html,svg,png,woff2}"], globIgnores: ["assets/pdfjs-*/**", "assets/DocumentViewer-*", "assets/PdfPages-*", "assets/TextPages-*", "assets/pdf_viewer-*"] },
       devOptions: { enabled: false },
     }),
   ],

@@ -46,6 +46,9 @@ func ServeMain(argv []string, out io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	fmt.Fprintln(out, i18n.Say("Everysaid: {origin} (listening on {host}:{port})", M{"origin": s.Origin(), "host": *host, "port": *port}))
+	for _, l := range s.Docs.Said() {
+		fmt.Fprintln(out, l)
+	}
 	return s.Run(ctx)
 }
 
