@@ -90,6 +90,8 @@ for (const [ext, mime] of office) {
       return;
     }
     await sent.locator("[data-document]").click({ timeout: 15000 });
-    await expect(page.locator("[data-document-pages] .textLayer")).toContainText(new RegExp(`hello from ${ext}`, "i"), { timeout: 60000 });
+    const pages = page.locator("[data-document-pages]");
+    await expect(pages).toContainText(new RegExp(`hello from ${ext}`, "i"), { timeout: 60000 });
+    if (["xls", "xlsx", "ods"].includes(ext)) await expect(pages).toContainText("second sheet"); // every sheet, not only the first
   });
 }
