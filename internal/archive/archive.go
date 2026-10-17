@@ -331,6 +331,24 @@ var (
 // import's lock, so that a live source waiting for it writes in between.
 func (a *Archive) OnBreathe(let, take func()) { a.let, a.take = let, take }
 
+// Away runs fn with the archive and the import's lock let go (what it wrote committed first): work
+// that needs neither and may take long (the network) does not hold the others meanwhile.
+func (a *Archive) Away(fn func()) {
+	a.Commit()
+	if a.let != nil {
+		a.let()
+	}
+	defer func() {
+		if a.take != nil {
+			a.take()
+		}
+		a.addresses = map[Handle]int64{}
+		a.conversations = map[string]int64{}
+		a.devices = nil
+	}()
+	fn()
+}
+
 // Breathe commits what the import wrote so far, once it has kept the archive for BreatheAfter, and
 // lets the others write (the server's, the live sources'): a long import no longer holds them for
 // its whole length. Only where nothing is being read on the connection: a question still open keeps
@@ -515,6 +533,7 @@ func (a *Archive) Sources() []int64 { return a.sources }
 
 // HasOrigin says whether the source's row is in the archive (table: message_origin or call_origin).
 func (a *Archive) HasOrigin(sourceID int64, rowKey string, table string) bool {
+	a.Breathe() // asked of each row an import reads, those already there too
 	if table == "" {
 		table = "message_origin"
 	}
@@ -724,6 +743,7 @@ func (a *Archive) Conversation(service string, members []Handle, key, title stri
 // MessageByKey is the id of the message with this key, within the conversation where the service
 // needs it.
 func (a *Archive) MessageByKey(service, key string, conversationID int64) (int64, bool) {
+	a.Breathe() // asked once for each change, receipt or reaction an import brings
 	sid := a.Service.ID(service)
 	var scope any
 	if a.keyScoped[sid] {

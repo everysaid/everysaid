@@ -146,6 +146,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS message_key ON message (service_id, key, ifnul
     WHERE key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS message_conversation_ts ON message (conversation_id, ts);
 CREATE INDEX IF NOT EXISTS message_ts ON message (ts);
+-- the replies not yet linked to what they answer, and the quoted texts kept: few, looked for after
+-- every import (Resolve), which would otherwise read every message
+CREATE INDEX IF NOT EXISTS message_reply_open ON message (id) WHERE reply_key IS NOT NULL AND reply_to IS NULL;
+CREATE INDEX IF NOT EXISTS message_reply_text ON message (id) WHERE reply_text IS NOT NULL;
 CREATE TABLE IF NOT EXISTS notice (     -- what a notice says (a group's change, a timer set...), for the
     message_id INTEGER PRIMARY KEY REFERENCES message,  -- interface to put in words
     code TEXT NOT NULL,                 -- what it is: group, timer, pin, unpin, unreadable, story_reply...

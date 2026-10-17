@@ -84,8 +84,9 @@ func ApplyPins(a *archive.Archive, service string) map[string]int {
 		ts        int64
 	}
 	var pins []pin
+	// from the notices (CROSS JOIN: SQLite would rather walk every message in time order)
 	a.Each("SELECT m.conversation_id, m.reply_to, m.reply_key, n.code, n.args, m.ts FROM notice n "+
-		"JOIN message m ON m.id = n.message_id WHERE m.service_id = ? AND n.code IN ('pin', 'unpin') "+
+		"CROSS JOIN message m ON m.id = n.message_id WHERE m.service_id = ? AND n.code IN ('pin', 'unpin') "+
 		"AND (m.reply_to IS NOT NULL OR m.reply_key IS NOT NULL) ORDER BY m.ts, m.id",
 		[]any{a.Service.ID(service)}, func(scan func(...any)) {
 			var p pin
