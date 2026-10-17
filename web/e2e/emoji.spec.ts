@@ -10,15 +10,19 @@ test("emoji alone: larger the fewer, one without its bubble", async ({ page }, i
     const r = await (await fetch("/api/chats", { headers: { "X-Everysaid": "1" } })).json();
     return r.items[0].id as string;
   });
-  // the chat's newest plain messages given emoji instead of their words
+  // the chat's newest messages, whatever they were (files, replies: the tests before may have sent
+  // many, the plain ones far above the screen, never drawn), made plain with emoji for their words
   const texts = ["😂", "👍🏽 ❤️", "🎉🎉🎉", "😮😮😮😮", "ok 😂"];
   const changed: number[] = [];
   await page.route(`**/api/chats/${chat}/stream*`, async (r) => {
     const res = await r.fetch();
     const body = await res.json();
-    const plain = body.items.filter((m: Record<string, unknown>) => m.type === "message" && m.text && !m.deleted && !m.reply
-      && !(m.attachments as unknown[]).length && !m.preview && !m.location && !m.notice);
-    for (const [i, m] of plain.slice(-texts.length).entries()) { m.text = texts[i]; changed[i] = m.id; }
+    const said = body.items.filter((m: Record<string, unknown>) => m.type === "message" && m.kind !== "system");
+    for (const [i, m] of said.slice(-texts.length).entries()) {
+      Object.assign(m, { kind: "text", text: texts[i], deleted: false, reply: null, attachments: [], local: undefined,
+        preview: null, location: null, notice: null });
+      changed[i] = m.id;
+    }
     await r.fulfill({ response: res, json: body });
   });
   await page.goto(`/chat/${chat}`);
