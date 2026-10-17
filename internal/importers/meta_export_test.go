@@ -187,6 +187,40 @@ func TestMetaExportKeepsOnceAnEncryptedMessageBroughtLive(t *testing.T) {
 	}
 }
 
+// A message sent from here is written with the time its id says (or the clock's, where it says
+// none); the live source's copy of it then has the service's own time, which the export has too:
+// the message takes it, so the export (no id, that time) finds it and it is kept once.
+func TestMetaExportKeepsOnceAMessageSentFromHere(t *testing.T) {
+	a, _ := newArchive(t)
+	w := NewMetaWriter(a, "messenger", "messenger-live", "", "")
+	w.Self(MetaUser{ID: "100", Name: "Zoë Owner"})
+	w.Conv(MetaThread{Key: "200", Members: []MetaUser{{ID: "200", Name: "John Doe"}}})
+	sent := MetaMessage{Thread: "200", ID: "mid.$abc", TS: metaTS2 + 37, Outgoing: true, Text: "café ❤️ 日本", Sent: true}
+	if _, isNew := w.Add(sent); !isNew {
+		t.Fatal("the message sent was not added")
+	}
+	live := sent
+	live.TS, live.Sent = metaTS2, false
+	if _, isNew := w.Add(live); isNew {
+		t.Fatal("the live copy was added again")
+	}
+	// the message sent, written after its live copy, leaves it the service's time
+	if _, isNew := w.Add(sent); isNew {
+		t.Fatal("the message sent was added again")
+	}
+	if ts := a.Int("SELECT ts FROM message WHERE key = 'mid.$abc'"); ts != metaTS2 {
+		t.Errorf("its time: %d", ts)
+	}
+	a.Commit()
+	must(t, MetaExport(a, nil, MetaExportOptions{Dir: metaExport(t), Service: "messenger"}))
+	if n := a.Int("SELECT count(*) FROM message WHERE text = 'café ❤️ 日本'"); n != 1 {
+		t.Errorf("the same message twice: %d", n)
+	}
+	if n := a.Int("SELECT count(*) FROM message_origin o JOIN message m ON m.id = o.message_id WHERE m.key = 'mid.$abc'"); n != 2 {
+		t.Errorf("its origins: %d", n)
+	}
+}
+
 func TestMetaExportWithoutAnOwnerAsks(t *testing.T) {
 	a, _ := newArchive(t)
 	dir := t.TempDir()

@@ -88,6 +88,7 @@ type MetaMessage struct {
 	Notice                     *archive.Notice
 	Mentions                   []MetaMention
 	Preview                    *archive.Preview // its link's preview, as the service made it
+	Sent                       bool             // written as sent from here: its time not the service's own yet
 }
 
 // MetaMention is someone a text names, and how it names them.
@@ -282,6 +283,10 @@ func (w *MetaWriter) Add(m MetaMessage) (int64, bool) {
 	}
 	var mid int64
 	if a.Row("SELECT message_id FROM message_origin WHERE source_id = ? AND row_key = ?", []any{w.Source, rowKey}, &mid) {
+		if m.Outgoing && !m.Sent && m.ID != "" && m.TS != 0 {
+			// a message sent from here come back: the service's time (the export's) for the one it was written with
+			a.Exec("UPDATE message SET ts = ? WHERE id = ? AND ts != ?", m.TS, mid, m.TS)
+		}
 		w.files(mid, m.Files) // a file sent, its message come back from the service first
 		w.preview(mid, m.Preview)
 		return mid, false

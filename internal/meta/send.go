@@ -172,8 +172,8 @@ func send(ctx context.Context, c *plugins.Context, service string, conv plugins.
 		if err == nil && len(ids) > 1 { // the file, then its text as a message of its own
 			id = ids[0]
 			sent := plugins.Sent{Keys: ids}
-			ms := []importers.MetaMessage{{Thread: conv.Key, ID: ids[0], TS: ts, Outgoing: true, Kind: fileKind(mime)},
-				{Thread: conv.Key, ID: ids[1], TS: ts + 1, Outgoing: true, Text: text, Kind: "text"}}
+			ms := []importers.MetaMessage{{Thread: conv.Key, ID: ids[0], TS: ts, Outgoing: true, Kind: fileKind(mime), Sent: true},
+				{Thread: conv.Key, ID: ids[1], TS: ts + 1, Outgoing: true, Text: text, Kind: "text", Sent: true}}
 			if reply != nil {
 				ms[0].ReplyTo = reply.Key
 			}
@@ -196,7 +196,7 @@ func send(ctx context.Context, c *plugins.Context, service string, conv plugins.
 	if err != nil {
 		return nil, err
 	}
-	m := importers.MetaMessage{Thread: conv.Key, ID: id, TS: ts, Outgoing: true, Text: text, Kind: "text"}
+	m := importers.MetaMessage{Thread: conv.Key, ID: id, TS: ts, Outgoing: true, Text: text, Kind: "text", Sent: true}
 	if reply != nil {
 		m.ReplyTo = reply.Key
 	}
