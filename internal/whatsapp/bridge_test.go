@@ -1,7 +1,6 @@
 package whatsapp
 
-// Ports bridges/whatsapp/bridge_test.go. Tests run on an in-memory database or in temporary
-// folders: never on a real store.
+// Tests run on an in-memory database or in temporary folders: never on a real store.
 
 import (
 	"bytes"

@@ -1,6 +1,6 @@
 package whatsapp
 
-// Ports bridges/whatsapp/status.go (/api/status is now Bridge.Status, /api/unblock Bridge.Unblock).
+// The connection's state and events (Bridge.Status), and unblocking sending (Bridge.Unblock).
 
 // The state of the connection, as WhatsApp reports it, kept in messages.db for whoever reads the
 // bridge (bridge_state, bridge_events) and said on the plugin's card (Bridge.Status). Any sign that

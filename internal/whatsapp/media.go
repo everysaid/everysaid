@@ -1,6 +1,6 @@
 package whatsapp
 
-// Ports bridges/whatsapp/media.go (and MediaDownloader of main.go).
+// Downloading the messages' files.
 
 // The files of messages: downloaded as messages arrive ([whatsapp] download in config.toml, on by
 // default) or when asked (Bridge.Download), into <store>/media/<chat>/<message id><ext>. messages.media_path records the

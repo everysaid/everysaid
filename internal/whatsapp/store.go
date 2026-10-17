@@ -2,17 +2,15 @@
 // as a device (like WhatsApp Web), keeping what arrives in the store folder for the importers, and
 // the `whatsapp-bridge` plugin that runs it.
 //
-// It ports the standalone bridge (bridges/whatsapp/*.go, a separate program with a REST API) and the
-// Python plugin WhatsappBridge (everysaid/plugins/sources.py). The store folder holds `messages.db`
-// (what arrived, read by the importer) and `media/`; whatsmeow's device store (the session's keys) is
-// in keys.db (devices.go). The bridge and this package must never run on one device at once (the
-// second connection would take the session over).
+// The store folder holds `messages.db` (what arrived, read by the importer) and `media/`; whatsmeow's
+// device store (the session's keys) is in keys.db (devices.go). Two connections on one device must
+// never run at once (the second would take the session over).
 //
-// SQLite is modernc.org/sqlite (no cgo) where the bridge had mattn/go-sqlite3: times are written in
-// mattn's format (`_time_format=sqlite`), booleans as 0/1, nil byte slices as NULL, as before.
+// SQLite is modernc.org/sqlite (no cgo): times are written as mattn/go-sqlite3 wrote them
+// (`_time_format=sqlite`), booleans as 0/1, nil byte slices as NULL, as the store has them.
 package whatsapp
 
-// Ports bridges/whatsapp/main.go (MessageStore, the chats' names, history sync).
+// MessageStore, the chats' names, history sync.
 
 import (
 	"context"

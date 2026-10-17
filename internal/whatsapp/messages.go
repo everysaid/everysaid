@@ -1,6 +1,6 @@
 package whatsapp
 
-// Ports bridges/whatsapp/messages.go (and extractMediaInfo of main.go).
+// The messages as they arrive: what each says, its file, its changes.
 
 // What the bridge keeps of each message beyond text and media: its kind, the message it answers,
 // forwarding, a shared place, contact or poll; and, in tables of their own, reactions, calls and

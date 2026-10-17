@@ -1,6 +1,6 @@
 package whatsapp
 
-// Ports bridges/whatsapp/receipts.go (the REST handler /api/read is now Bridge.MarkRead).
+// Receipts: who got and read the messages, and marking chats read (Bridge.MarkRead).
 
 // Receipts: who got and who read (or played) the account's messages, and when, as WhatsApp tells
 // every device of the account (receipts); when the account itself read a message, on any device

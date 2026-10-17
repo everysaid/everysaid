@@ -1,9 +1,9 @@
 package whatsapp
 
-// The device must stay the one the standalone bridge linked: one key, one identity. The bridge sets
-// nothing of its own (no store.SetOSInfo, DeviceProps or BaseClientPayload change), so what WhatsApp
-// sees is whatsmeow's defaults at the bridge's version. A newer whatsmeow, or any code of the binary
-// changing those globals, fails here.
+// The device must stay the one that was linked: one key, one identity. Nothing of the binary's own is
+// set (no store.SetOSInfo, DeviceProps or BaseClientPayload change), so what WhatsApp sees is
+// whatsmeow's defaults at the version it was linked with. A newer whatsmeow, or any code of the
+// binary changing those globals, fails here.
 
 import (
 	"runtime/debug"
@@ -14,7 +14,7 @@ import (
 	"go.mau.fi/whatsmeow/store"
 )
 
-// The whatsmeow of bridges/whatsapp/go.mod.
+// The whatsmeow the device was linked with.
 const bridgeWhatsmeow = "v0.0.0-20260929112325-8b41cfe6d9c4"
 
 func TestTheDeviceIsTheBridges(t *testing.T) {

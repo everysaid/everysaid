@@ -1,6 +1,6 @@
 package whatsapp
 
-// Ports bridges/whatsapp/send.go (the REST handler /api/send is now Bridge.Send).
+// Sending (Bridge.Send), within the limits.
 
 // Sending text and files, as an answer to a message or not; off unless config.toml allows it
 // ([whatsapp] send = true, what the bridge's -send was), and kept to what a person does by hand: only into chats where the other side has written

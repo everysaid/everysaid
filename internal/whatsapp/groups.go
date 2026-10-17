@@ -1,6 +1,6 @@
 package whatsapp
 
-// Ports bridges/whatsapp/groups.go.
+// The groups: their names, members and addressing.
 
 // The members of the groups the account is in, for mentions (send.go) and for whoever reads the
 // bridge: all of them once at each start (one query, as WhatsApp Web makes on connecting), and a

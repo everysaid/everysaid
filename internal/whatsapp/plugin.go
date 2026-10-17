@@ -7,9 +7,7 @@ package whatsapp
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -54,8 +52,6 @@ func (Plugin) Info() *plugins.Info {
 		Modes:       []string{"import", "live"},
 		LiveDefault: true,
 		Needs:       []string{"a link from the phone (a QR code)", "the bridge's store folder"},
-		// The bridge's REST API (setting `api`) is gone: a value stored for it stays, unused but for
-		// telling whether the standalone bridge is still running (Live).
 		Settings: []plugins.Setting{
 			{Key: "store", Label: "The bridge's store folder", Type: "path", Required: true, Default: defaultStore()},
 			{Key: "send", Label: "Sending messages", Type: "bool", Default: false,
@@ -255,36 +251,9 @@ func watchState(c *plugins.Context) {
 
 func (p Plugin) RunImport(c *plugins.Context) error { return runImport(c) }
 
-// standaloneAnswers says whether the standalone bridge answers on its REST API: it may be running
-// on this store, and a second connection with the same device would take its session over. Only
-// its own answer counts (its status, as JSON): anything else on that port (another program) does
-// not keep the connection from starting.
-func standaloneAnswers(c *plugins.Context) bool {
-	api := strings.TrimRight(c.Str("api"), "/")
-	if api == "" {
-		api = "http://127.0.0.1:8080"
-	}
-	cl := http.Client{Timeout: 1500 * time.Millisecond}
-	r, err := cl.Get(api + "/api/status")
-	if err != nil {
-		return false
-	}
-	defer r.Body.Close()
-	var status map[string]any
-	if r.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&status) != nil {
-		return false
-	}
-	_, connected := status["connected"]
-	_, blocked := status["send_blocked"]
-	return connected && blocked
-}
-
 // Live runs the connection, and imports what it keeps (messages.db) and the chats' state, archived,
 // pinned, muted (whatsmeow's, in keys.db) as they change.
 func (p Plugin) Live(ctx context.Context, c *plugins.Context) error {
-	if standaloneAnswers(c) {
-		return errs.Plugin("The standalone WhatsApp bridge is running: stop it first (both on one device would end its session)", 409)
-	}
 	opts := ConfigOptions()
 	opts.Limits = limits(c)
 	b := New(storeDir(c), opts, Hooks{

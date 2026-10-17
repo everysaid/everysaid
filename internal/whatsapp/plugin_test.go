@@ -375,44 +375,6 @@ func TestTheManifest(t *testing.T) {
 			t.Fatal("the REST API is gone")
 		}
 	}
-	// a stored value of the bridge's REST API is kept, unused
-	f := bridgeInstance(t)
-	plugins.Update(f.h.store, f.iid, nil, M{"api": "http://127.0.0.1:9"}, nil, false)
-	if f.ctx().Str("api") != "http://127.0.0.1:9" {
-		t.Fatal("api lost")
-	}
-}
-
-// A store made by the standalone bridge (mattn/go-sqlite3, cgo) opens here unchanged. Give one,
-// made in a temporary folder by the bridge's code path, in EVERYSAID_TEST_BRIDGE_STORE; it is
-// copied first, never written.
-func TestAStoreOfTheBridgeOpens(t *testing.T) {
-	from := os.Getenv("EVERYSAID_TEST_BRIDGE_STORE")
-	if from == "" {
-		t.Skip("EVERYSAID_TEST_BRIDGE_STORE not given")
-	}
-	dir := t.TempDir()
-	raw, err := os.ReadFile(filepath.Join(from, "messages.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	os.WriteFile(filepath.Join(dir, "messages.db"), raw, 0o600)
-	ms, err := OpenMessages(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ms.Close()
-	var at time.Time
-	if err := ms.db.QueryRow("SELECT timestamp FROM messages WHERE id = 'M'").Scan(&at); err != nil || at.Nanosecond() != 123456789 {
-		t.Fatalf("old time %v %v", at, err)
-	}
-	ms.storeMessage(StoredMessage{ID: "N", ChatJID: "1@s.whatsapp.net", Timestamp: at, Kind: "text"})
-	var a, b string
-	ms.db.QueryRow("SELECT CAST(timestamp AS TEXT) FROM messages WHERE id = 'M'").Scan(&a)
-	ms.db.QueryRow("SELECT CAST(timestamp AS TEXT) FROM messages WHERE id = 'N'").Scan(&b)
-	if a != b {
-		t.Fatalf("written %q, the bridge wrote %q", b, a)
-	}
 }
 
 // A store without a linked device: Run makes it, waits to be linked without connecting, and ends

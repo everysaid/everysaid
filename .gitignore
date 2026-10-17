@@ -12,9 +12,5 @@ web/test-results/
 web/playwright-report/
 /demo/
 
-# The WhatsApp bridge's build, and a store made by running it from its folder
-bridges/whatsapp/whatsapp-bridge
-bridges/whatsapp/store/
-
 # TypeScript's incremental build cache
 *.tsbuildinfo

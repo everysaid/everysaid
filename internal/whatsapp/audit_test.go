@@ -10,8 +10,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -27,8 +25,6 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
-
-	"everysaid/internal/plugins"
 )
 
 // offline is a bridge on a temporary store folder with a client that never connects.
@@ -300,26 +296,8 @@ func TestDownloadsRecordOnlyWhatIsGone(t *testing.T) {
 	}
 }
 
-// Only the standalone bridge's own status keeps the connection from starting: another program on its
-// port does not.
-func TestTheStandaloneBridgeIsKnownByItsAnswer(t *testing.T) {
-	f := bridgeInstance(t)
-	for _, c := range []struct {
-		body string
-		want bool
-	}{{`{"connected": true, "send_blocked": "", "limits": {}}`, true}, {`<html>a dev server</html>`, false},
-		{`{"ok": true}`, false}} {
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(c.body)) }))
-		plugins.Update(f.h.store, f.iid, nil, M{"api": srv.URL}, nil, false)
-		if got := standaloneAnswers(f.ctx()); got != c.want {
-			t.Errorf("%s: %v", c.body, got)
-		}
-		srv.Close()
-	}
-}
-
 // The store's folder and databases (the session's keys, the messages) are the user's alone, also
-// those a standalone bridge made readable by all.
+// those made readable by all before.
 func TestTheStoreIsPrivate(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("no Unix modes")

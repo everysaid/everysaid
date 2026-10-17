@@ -1,8 +1,8 @@
 package whatsapp
 
-// Ports bridges/whatsapp/main.go (main: the client, its events, pairing, the REST API) as a value
-// the plugin runs while it is live: Run connects and keeps the connection until its context ends;
-// what the REST API offered (send, read, download, status, unblock) are its methods.
+// The client, its events and pairing, as a value the plugin runs while it is live: Run connects and
+// keeps the connection until its context ends; sending, reading, downloading, the status and
+// unblocking are its methods.
 
 import (
 	"context"
@@ -138,7 +138,7 @@ func (l *logger) Sub(module string) waLog.Logger {
 
 // private keeps the store folder and a database of it to the user alone: the session's keys and the
 // messages are in them (SQLite makes a database, and its journal, as the umask allows, often
-// readable by all; a store made by the standalone bridge is so).
+// readable by all).
 func private(dir, path string) {
 	os.Chmod(dir, 0700)
 	os.Chmod(path, 0600)
