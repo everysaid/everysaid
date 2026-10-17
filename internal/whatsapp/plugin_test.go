@@ -305,15 +305,20 @@ func TestSendingSaysWhyNot(t *testing.T) {
 	if _, err := p.Send(context.Background(), f.ctx(), conv, "hi", nil, nil, nil); !errors.As(err, &ue) || ue.Text != "Sending is off in this source's settings" {
 		t.Fatalf("off: %v", err)
 	}
-	// clearing the block is the user's action; the source's own setting stays off
+	// nothing turns it on again by itself
+	watchState(f.ctx())
+	if plugins.Sending(p, f.ctx()) {
+		t.Fatal("sending again by itself")
+	}
+	// the user's "allow sending again": the block cleared and the source's sending on, kept
 	if err := p.Action(f.ctx(), "unblock"); err != nil {
 		t.Fatal(err)
 	}
 	if v, _ := f.ms.state("send_blocked"); v != "" {
 		t.Fatalf("still blocked: %q", v)
 	}
-	if plugins.Sending(p, f.ctx()) {
-		t.Fatal("sending again by itself")
+	if f.ctx().Settings["send"] != true { // read again from the archive
+		t.Fatalf("sending still off: %v", f.ctx().Settings["send"])
 	}
 }
 

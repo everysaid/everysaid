@@ -233,7 +233,7 @@ func (p Plugin) InfoFacts(c *plugins.Context) []plugins.Fact {
 }
 
 // watchState: once the bridge blocks sending (WhatsApp warned the account), this instance's sending
-// goes off too, said in its log and to the user's devices. Turning it on again is the user's.
+// goes off too, said in its log and to the user's devices. Turning it on again is the user's ("unblock").
 func watchState(c *plugins.Context) {
 	blocked := bridgeState(c)["send_blocked"]
 	was, _ := c.State["send_blocked"].(string)
@@ -348,7 +348,8 @@ func (p Plugin) Live(ctx context.Context, c *plugins.Context) error {
 }
 
 // Action: "link" shows QR codes for the phone to link this device (through the live connection);
-// "unblock" lets sending go again after WhatsApp's warning (a person's decision).
+// "unblock" lets sending go again after WhatsApp's warning (a person's decision): the bridge's block
+// cleared and this source's sending on.
 func (p Plugin) Action(c *plugins.Context, name string) error {
 	switch name {
 	case "link":
@@ -376,6 +377,13 @@ func (p Plugin) Action(c *plugins.Context, name string) error {
 		}
 		c.Log("Sending allowed again at the bridge (blocked for: {why})", map[string]any{"why": old})
 		watchState(c)
+		if !c.Bool("send") {
+			if err := plugins.Update(c.Store(), c.ID, nil, M{"send": true}, nil, false); err != nil {
+				return err
+			}
+			c.Settings["send"] = true
+			c.Emit(M{"type": "changed"})
+		}
 		return nil
 	}
 	return errs.Plugin("unknown action", 0)
