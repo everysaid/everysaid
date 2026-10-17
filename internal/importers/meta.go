@@ -238,8 +238,9 @@ func (w *MetaWriter) Message(thread, id string) int64 {
 
 // twin is the message the archive already has that is this one from another source: the same time,
 // direction and text (a live message: only one without a key). A message of the export, which has
-// no id, may also be one of a log that kept only seconds (Adium's and Pidgin's of Facebook's chat):
-// the one such message within two seconds.
+// no id, may also be one an encrypted chat brought live (its id, whole seconds: the same second), or
+// one of a log that kept only seconds (Adium's and Pidgin's of Facebook's chat): the one such
+// message within two seconds.
 func (w *MetaWriter) twin(m MetaMessage) int64 {
 	q := "SELECT id FROM message WHERE service_id = ? AND ts = ? AND outgoing = ? AND text IS ?"
 	if m.ID != "" {
@@ -249,6 +250,11 @@ func (w *MetaWriter) twin(m MetaMessage) int64 {
 	mine := " AND id NOT IN (SELECT message_id FROM message_origin WHERE source_id = ?)"
 	sid := w.A.Service.ID(w.Service)
 	ids := w.A.Ints(q+mine+" ORDER BY id LIMIT 2", sid, m.TS, archive.B2I(m.Outgoing), archive.NullStr(m.Text), w.Source)
+	if len(ids) == 0 && m.ID == "" && m.TS%1000 != 0 && m.Text != "" {
+		// the export's message (milliseconds) of an encrypted chat brought live before (its id, whole seconds)
+		ids = w.A.Ints("SELECT id FROM message WHERE service_id = ? AND ts = ? AND outgoing = ? AND text = ? "+
+			"AND key IS NOT NULL"+mine+" ORDER BY id LIMIT 2", sid, m.TS-m.TS%1000, archive.B2I(m.Outgoing), m.Text, w.Source)
+	}
 	switch {
 	case len(ids) > 0:
 	case m.ID == "" && m.Text != "":

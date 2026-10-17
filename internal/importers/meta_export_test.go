@@ -163,6 +163,30 @@ func TestMetaExportKeepsOnceWhatTheLiveSourceBrought(t *testing.T) {
 	}
 }
 
+// An encrypted chat's message, brought live (its id, whole seconds), is the export's same message
+// (no id, milliseconds) when the export comes after it: kept once.
+func TestMetaExportKeepsOnceAnEncryptedMessageBroughtLive(t *testing.T) {
+	if metaTS2%1000 == 0 {
+		t.Fatal("the export's time must have milliseconds")
+	}
+	a, _ := newArchive(t)
+	w := NewMetaWriter(a, "messenger", "messenger-live", "", "")
+	w.Self(MetaUser{ID: "100", Name: "Zoë Owner"})
+	w.Conv(MetaThread{Key: "200", Members: []MetaUser{{ID: "200", Name: "John Doe"}}})
+	whole := metaTS2 - metaTS2%1000
+	if _, isNew := w.Add(MetaMessage{Thread: "200", ID: "7123456789", TS: whole, Outgoing: true, Text: "café ❤️ 日本"}); !isNew {
+		t.Fatal("the live message was not added")
+	}
+	a.Commit()
+	must(t, MetaExport(a, nil, MetaExportOptions{Dir: metaExport(t), Service: "messenger"}))
+	if n := a.Int("SELECT count(*) FROM message WHERE text = 'café ❤️ 日本'"); n != 1 {
+		t.Errorf("the same message twice: %d", n)
+	}
+	if n := a.Int("SELECT count(*) FROM message_origin o JOIN message m ON m.id = o.message_id WHERE m.key = '7123456789'"); n != 2 {
+		t.Errorf("its origins: %d", n)
+	}
+}
+
 func TestMetaExportWithoutAnOwnerAsks(t *testing.T) {
 	a, _ := newArchive(t)
 	dir := t.TempDir()
