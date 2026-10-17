@@ -43,6 +43,11 @@ type Host struct {
 
 	importLock sync.Mutex
 
+	// the messages already notified of, the latest first out: two imports that wrote in turn
+	// (archive.Breathe) say ranges of ids that overlap, and a message is notified of once
+	notified      map[int64]bool
+	notifiedOrder []int64
+
 	mu        sync.Mutex
 	ctx       context.Context // the server's life: live connections and work end with it
 	listeners map[chan M]struct{}
@@ -214,7 +219,7 @@ func (h *Host) describeNew(event M) (out M, err error) {
 		}
 		own := r.outgoing || (r.sender.Valid && mine[r.sender.Int64])
 		if (!own || cid == notesChat) && r.kind != "system" && !states[cid].Archived && r.ts > read &&
-			!hiddenServices[r.svc] && !hiddenConvs[r.conv] {
+			!hiddenServices[r.svc] && !hiddenConvs[r.conv] && h.firstNotice(r.id) {
 			incoming = append(incoming, Incoming{cid, r.id, r.ts, r.service, r.text.String, r.kind})
 		}
 	}
@@ -230,6 +235,26 @@ func (h *Host) describeNew(event M) (out M, err error) {
 	}
 	return out, nil
 }
+
+// firstNotice says whether a message is notified of for the first time (dispatch's goroutine alone
+// calls it); the last notifiedKeep are remembered.
+func (h *Host) firstNotice(id int64) bool {
+	if h.notified[id] {
+		return false
+	}
+	if h.notified == nil {
+		h.notified = map[int64]bool{}
+	}
+	h.notified[id] = true
+	h.notifiedOrder = append(h.notifiedOrder, id)
+	if len(h.notifiedOrder) > notifiedKeep {
+		delete(h.notified, h.notifiedOrder[0])
+		h.notifiedOrder = h.notifiedOrder[1:]
+	}
+	return true
+}
+
+const notifiedKeep = 10000
 
 // Alert tells the user something about the app (a plugin's warning): on the open apps, and as a push.
 func (h *Host) Alert(title, body string) {

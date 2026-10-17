@@ -63,6 +63,16 @@ func Changed(q Querier, query string, args ...any) int64 {
 type Rows struct {
 	*sql.Rows
 	query string
+	done  func() // told when the rows are closed (a Querier that tracks them)
+}
+
+// Close closes the rows.
+func (r *Rows) Close() error {
+	if r.done != nil {
+		r.done()
+		r.done = nil
+	}
+	return r.Rows.Close()
 }
 
 // Next is the next row; a statement that fails before its last row panics here, as one that
@@ -70,6 +80,10 @@ type Rows struct {
 func (r *Rows) Next() bool {
 	if r.Rows.Next() {
 		return true
+	}
+	if r.done != nil { // read to the end: database/sql has closed them
+		r.done()
+		r.done = nil
 	}
 	if err := r.Rows.Err(); err != nil {
 		panic(&Error{r.query, err})
@@ -89,7 +103,11 @@ func Query(q Querier, query string, args ...any) *Rows {
 	if err != nil {
 		panic(&Error{query, err})
 	}
-	return &Rows{rows, query}
+	r := &Rows{Rows: rows, query: query}
+	if t, ok := q.(interface{ Track() func() }); ok { // the rows counted as read until closed
+		r.done = t.Track()
+	}
+	return r
 }
 
 // Each calls fn for each row, with a scan of that row.

@@ -78,12 +78,12 @@ func RunImporters(c *plugins.Context, steps []Step) (msgs, calls [2]int64, err e
 		}
 		defer a.Close()
 		defer archive.Recover(&err)
+		a.OnBreathe(l.Unlock, l.Lock) // a live source waiting writes in between
 		lang := importers.Lang
 		importers.Lang = c.Lang // the importers' lines in the user's language, not the system's
 		defer func() { importers.Lang = lang }()
 		msgs[0] = a.Int("SELECT ifnull(max(id), 0) FROM message")
 		calls[0] = a.Int("SELECT ifnull(max(id), 0) FROM call")
-		t0 := time.Now().Unix() - 1
 		out := func(text string) {
 			for _, line := range strings.Split(text, "\n") {
 				if strings.TrimSpace(line) != "" {
@@ -96,8 +96,11 @@ func RunImporters(c *plugins.Context, steps []Step) (msgs, calls [2]int64, err e
 			if err = s.Run(a, out); err != nil {
 				return
 			}
+			a.Breathe()
 		}
-		a.Exec("UPDATE source SET instance_id = ? WHERE instance_id IS NULL AND imported_at >= ?", c.ID, t0)
+		for _, src := range a.Sources() {
+			a.Exec("UPDATE source SET instance_id = ? WHERE id = ? AND instance_id IS NULL", c.ID, src)
+		}
 		a.Commit()
 		msgs[1] = a.Int("SELECT ifnull(max(id), 0) FROM message")
 		calls[1] = a.Int("SELECT ifnull(max(id), 0) FROM call")

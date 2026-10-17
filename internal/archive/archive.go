@@ -36,6 +36,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -190,6 +191,11 @@ type Archive struct {
 	inTx  bool
 	stmts map[string]*sql.Stmt
 
+	txStart   time.Time // when the open transaction began
+	reading   int       // questions whose rows are still being read, on the connection
+	let, take func()    // what Breathe lets go and takes again (OnBreathe)
+	sources   []int64   // the sources this import brought (Imported), in order
+
 	Service, AddressKind, MessageKind *Names
 	keyScoped                         map[int64]bool
 	addresses                         map[Handle]int64
@@ -307,8 +313,44 @@ func (a *Archive) begin() db.Querier {
 			panic(&Error{Query: "BEGIN IMMEDIATE", Err: err})
 		}
 		a.inTx = true
+		a.txStart = time.Now()
 	}
 	return stmtConn{a}
+}
+
+// BreatheAfter is how long an import keeps the archive to itself before it lets the others write;
+// BreathePause how long it then leaves it free: a write waiting in SQLite's busy handler (the
+// server's own, the outbox's) tries again only every few to a hundred milliseconds, and would not
+// find a moment between a commit and the next write.
+var (
+	BreatheAfter = 250 * time.Millisecond
+	BreathePause = 30 * time.Millisecond
+)
+
+// OnBreathe gives what Breathe lets go once it has committed, and takes again after the pause: the
+// import's lock, so that a live source waiting for it writes in between.
+func (a *Archive) OnBreathe(let, take func()) { a.let, a.take = let, take }
+
+// Breathe commits what the import wrote so far, once it has kept the archive for BreatheAfter, and
+// lets the others write (the server's, the live sources'): a long import no longer holds them for
+// its whole length. Only where nothing is being read on the connection: a question still open keeps
+// its snapshot, and the next write after another's commit would fail (SQLITE_BUSY_SNAPSHOT). The
+// rows cached may be gone afterwards (another's spam removed), so the caches are emptied.
+func (a *Archive) Breathe() {
+	if !a.inTx || a.reading > 0 || time.Since(a.txStart) < BreatheAfter {
+		return
+	}
+	a.Commit()
+	if a.let != nil {
+		a.let()
+	}
+	time.Sleep(BreathePause)
+	if a.take != nil {
+		a.take()
+	}
+	a.addresses = map[Handle]int64{}
+	a.conversations = map[string]int64{}
+	a.devices = nil
 }
 
 func (a *Archive) q() db.Querier { return a.begin() }
@@ -330,6 +372,12 @@ func (c stmtConn) stmt(q string) *sql.Stmt {
 func (c stmtConn) Exec(q string, args ...any) (sql.Result, error) { return c.stmt(q).Exec(args...) }
 func (c stmtConn) Query(q string, args ...any) (*sql.Rows, error) { return c.stmt(q).Query(args...) }
 func (c stmtConn) QueryRow(q string, args ...any) *sql.Row        { return c.stmt(q).QueryRow(args...) }
+
+// Track counts a question's rows as being read until they are closed (db.Query): Breathe waits.
+func (c stmtConn) Track() func() {
+	c.a.reading++
+	return func() { c.a.reading-- }
+}
 
 // Exec runs a change (inside the open transaction).
 func (a *Archive) Exec(q string, args ...any) sql.Result { return db.Exec(a.q(), q, args...) }
@@ -456,7 +504,14 @@ func (a *Archive) Keeper(devices []string, ts int64) string {
 
 func (a *Archive) Imported(sourceID int64) {
 	a.Exec("UPDATE source SET imported_at = ? WHERE id = ?", time.Now().Unix(), sourceID)
+	if !slices.Contains(a.sources, sourceID) {
+		a.sources = append(a.sources, sourceID)
+	}
 }
+
+// Sources are the sources this import brought (those it said Imported of): not found by their
+// time, since another import may write in between (Breathe).
+func (a *Archive) Sources() []int64 { return a.sources }
 
 // HasOrigin says whether the source's row is in the archive (table: message_origin or call_origin).
 func (a *Archive) HasOrigin(sourceID int64, rowKey string, table string) bool {
@@ -761,6 +816,7 @@ func B2I(b bool) int       { return b2i(b) }
 // AddMessage adds a message from a source row; it returns its id. A rowKey "" records no origin
 // (the Adium and Pidgin logs: their messages are known again by time, direction, kind and text).
 func (a *Archive) AddMessage(sourceID int64, rowKey string, m Message) int64 {
+	a.Breathe() // between two messages, the one before written whole
 	x := m.Extras
 	if x == nil {
 		x = &Extras{}
@@ -1009,6 +1065,7 @@ type Call struct {
 }
 
 func (a *Archive) AddCall(sourceID int64, rowKey string, c Call) int64 {
+	a.Breathe()
 	attempts := c.Attempts
 	if attempts == 0 {
 		attempts = 1
