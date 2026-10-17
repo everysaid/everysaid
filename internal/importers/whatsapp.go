@@ -1439,7 +1439,7 @@ func WhatsAppPrune(a *archive.Archive, bridgeDB string) (err error) {
 		}
 	}
 	for _, id := range callIDs {
-		if hasTable(d, "call_participants") {
+		if hasTable(tx, "call_participants") { // on the transaction: another connection would wait for it
 			db.Exec(tx, "DELETE FROM call_participants WHERE call_id = ?", id)
 		}
 	}
@@ -1451,7 +1451,7 @@ func WhatsAppPrune(a *archive.Archive, bridgeDB string) (err error) {
 	}
 	// the times of rows gone some other way (made anew by INSERT OR REPLACE)
 	for _, t := range []string{"messages", "reactions", "receipts", "chat_events", "group_event", "calls", "pending_changes", "pending_reads"} {
-		if hasTable(d, t) {
+		if hasTable(tx, t) {
 			db.Exec(tx, "DELETE FROM stored WHERE tbl = ? AND rid NOT IN (SELECT rowid FROM "+t+")", t)
 		}
 	}

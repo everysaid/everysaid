@@ -584,3 +584,33 @@ func TestTheStoreKeepsOnlyWhatTheArchiveLacks(t *testing.T) {
 		t.Fatalf("read until %d, want %d", until, at.UnixMilli())
 	}
 }
+
+// A week's messages large enough that taking them out spills to the file (the store's lock then
+// exclusive) leave at once: the pruning asked about the store's tables on another connection while
+// its own transaction held it, waited for itself until the busy timeout and was rolled back, at
+// every import, the archive held the while.
+func TestALargePruneDoesNotWaitForItself(t *testing.T) {
+	f := bridgeInstance(t)
+	at := time.Now().Add(-30 * 24 * time.Hour)
+	text := strings.Repeat("x", 1000)
+	for i := range 6000 { // the old among the new: the pages each keep some, all of them changed
+		f.ms.storeMessage(StoredMessage{ID: fmt.Sprintf("%c%d", "ON"[i%2], i), ChatJID: peer, Sender: peer, Content: text, Timestamp: at, Kind: "text"})
+	}
+	if err := (Plugin{}).RunImport(f.ctx()); err != nil {
+		t.Fatal(err)
+	}
+	f.ms.db.Exec("UPDATE stored SET at = ? WHERE rid IN (SELECT rowid FROM messages WHERE id LIKE 'O%')",
+		time.Now().Add(-8*24*time.Hour).Unix()) // a week has gone for the old ones
+	start := time.Now()
+	if err := (Plugin{}).RunImport(f.ctx()); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 4*time.Second {
+		t.Fatalf("took %v", d)
+	}
+	var left int
+	f.ms.db.QueryRow("SELECT count(*) FROM messages").Scan(&left)
+	if left != 3000 {
+		t.Fatalf("%d messages left", left)
+	}
+}
