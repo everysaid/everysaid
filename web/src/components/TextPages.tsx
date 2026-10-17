@@ -13,9 +13,11 @@ const shownBytes = 2 << 20;
  *  encoding. */
 const legacy: Record<string, string> = { el: "windows-1253", en: "windows-1252" };
 
-function decode(b: ArrayBuffer, lang: string) {
+/** The text of b; cut: b is the beginning of a file, so its last character may be cut in two (left
+ *  out, not taken for a file that is not UTF-8). */
+function decode(b: ArrayBuffer, lang: string, cut: boolean) {
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(b);
+    return new TextDecoder("utf-8", { fatal: true }).decode(b, { stream: cut });
   } catch {
     return new TextDecoder(legacy[lang] ?? "windows-1252").decode(b);
   }
@@ -32,9 +34,7 @@ export default function TextPages({ sha256, name, markdown }: { sha256: string; 
       .then((b) => {
         if (gone) return;
         const cut = b.byteLength > shownBytes;
-        let body = decode(cut ? b.slice(0, shownBytes) : b, i18n.language);
-        if (cut) body = body.replace(/�$/, ""); // a character cut in two
-        setText({ body, cut });
+        setText({ body: decode(cut ? b.slice(0, shownBytes) : b, i18n.language, cut), cut });
       })
       .catch(() => !gone && setText("failed"));
     return () => { gone = true; };

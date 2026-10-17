@@ -19,12 +19,12 @@ async function whatsappGroup(page: Page) {
   });
 }
 
-async function open(page: Page, name: string, mimeType: string, project: string) {
+async function open(page: Page, name: string, mimeType: string, project: string, buffer?: Buffer) {
   await signedIn(page, project);
   const group = await whatsappGroup(page);
   test.skip(!group, "no WhatsApp group the demo can send to");
   await page.goto(`/chat/${group.id}`);
-  await page.locator("[data-file-input]").setInputFiles({ name, mimeType, buffer: readFileSync(`e2e/files/${name}`) });
+  await page.locator("[data-file-input]").setInputFiles({ name, mimeType, buffer: buffer ?? readFileSync(`e2e/files/${name}`) });
   await expect(page.locator("[data-file]")).toContainText(name);
   const caption = `quiet: ${name} ${project} ${Date.now()}`;
   await page.locator("[data-composer-body] textarea").fill(caption);
@@ -53,6 +53,17 @@ test("a text file as it is, an old one in its language's old encoding", async ({
   sent = await open(page, "old-greek.txt", "text/plain", info.project.name);
   await sent.locator("[data-document]").click({ timeout: 15000 });
   await expect(page.locator("[data-document-text]")).toContainText("Γεια από παλιό αρχείο");
+});
+
+test("a large text file: its beginning, still read as UTF-8 though cut in the middle of a character", async ({ page }, info) => {
+  // one byte, then two-byte letters: the 2 MB shown end in the middle of one
+  const big = Buffer.from("x" + "αβγδ\n".repeat(450_000), "utf8");
+  const sent = await open(page, "big.txt", "text/plain", info.project.name, big);
+  await sent.locator("[data-document]").click({ timeout: 30000 });
+  const text = page.locator("[data-document-text]");
+  await expect(text).toContainText("xαβγδ\nαβγδ");
+  expect(await text.evaluate((e) => /[ÎÏ�]/.test(e.textContent ?? ""))).toBe(false);
+  await expect(page.locator("[data-document-pages]")).toContainText(/Φαίνεται μόνο η αρχή|Only the beginning/);
 });
 
 test("a Markdown file formatted, its links to a new tab", async ({ page }, info) => {
