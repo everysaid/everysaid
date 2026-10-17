@@ -241,7 +241,11 @@ func findOnlyOffice() (func(context.Context, string, string) error, bool) {
 			"<m_sFileFrom>" + xmlText(in) + "</m_sFileFrom><m_sFileTo>" + xmlText(out) + "</m_sFileTo>" +
 			"<m_nFormatTo>513</m_nFormatTo>" + // PDF
 			"<m_sAllFontsPath>" + xmlText(filepath.Join(fonts, "AllFonts.js")) + "</m_sAllFontsPath>" +
-			"<m_sFontDir>" + xmlText(fonts) + "</m_sFontDir></TaskQueueDataConvert>"
+			"<m_sFontDir>" + xmlText(fonts) + "</m_sFontDir>" +
+			// without parameters of its own a workbook's PDF has only its first sheet; with them every
+			// sheet, each as wide as the page and as long as it needs
+			`<m_sJsonParams>{"spreadsheetLayout":{"ignorePrintArea":true,"fitToWidth":1,"fitToHeight":0}}</m_sJsonParams>` +
+			"</TaskQueueDataConvert>"
 		if err := os.WriteFile(job, []byte(x), 0o600); err != nil {
 			return err
 		}

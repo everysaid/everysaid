@@ -111,6 +111,10 @@ func TestConvertersMakePDFs(t *testing.T) {
 					if !strings.Contains(strings.ToLower(string(words)), "hello from "+ext) { // a title may be in capitals
 						t.Errorf("its words: %q", words)
 					}
+					// a workbook: every sheet, not only the first
+					if (ext == "xls" || ext == "xlsx" || ext == "ods") && !strings.Contains(string(words), "second sheet") {
+						t.Errorf("only its first sheet: %q", words)
+					}
 				}
 			})
 		}
