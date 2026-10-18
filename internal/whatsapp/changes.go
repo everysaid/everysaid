@@ -5,10 +5,10 @@ package whatsapp
 
 // The user's reaction to a message (put, changed, taken back), the edit of one of the user's own
 // messages and its deletion for everyone, under the gates of sending (send.go): sending allowed, no
-// block, a human pace. WhatsApp does not give a device back what it sent itself, so each is stored
-// as it would have been had it come from the phone (processMessage), and the import brings it.
+// block, a human pace. WhatsApp does not give a device back what it sent itself, so each is
+// written into the archive as it would have been had it come from the phone (processMessage).
 // A deletion for the user alone (any message) is no message but a change of the account's app
-// state, which the phone and the other devices follow; stored as a deletion, as the archive keeps
+// state, which the phone and the other devices follow; written as a deletion, as the archive keeps
 // both alike.
 
 import (
@@ -26,6 +26,8 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
+
+	"everysaid/internal/importers"
 )
 
 // How long after sending WhatsApp lets a message be edited, deleted for everyone, as the apps offer
@@ -40,13 +42,17 @@ type ChangeRequest struct {
 	Kind      string // react, edit, delete, delete_me
 	Recipient string // the chat, as for sending: a number's digits, or a jid
 	ID        string // the message's id
-	// for a message the bridge does not have (from before it was linked): whether it is the
-	// account's own, and if not who wrote it (a jid or a number)
-	FromMe bool
-	Sender string
-	Emoji  string // "" takes the account's reaction back
-	Text   string // an edit's new text (a caption, for a file)
-	TS     int64  // when it was sent (Unix ms), as the archive has it: for a deletion for the user alone
+	// the message as the archive has it (Known), for one the bridge's record of the last week does
+	// not name: whether it is the account's own, and if not who wrote it (a jid or a number); its
+	// kind (text, image, video, document, ...) and whom it names (jids), for an edit
+	Known       bool
+	FromMe      bool
+	Sender      string
+	MessageKind string
+	Mentions    []string
+	Emoji       string // "" takes the account's reaction back
+	Text        string // an edit's new text (a caption, for a file)
+	TS          int64  // when it was sent (Unix ms), as the archive has it: for a deletion for the user alone
 }
 
 // Change does it (an HTTP status and the answer, as Send gives them).
@@ -64,8 +70,8 @@ func (s *Sender) connected() bool {
 	return s.client != nil && s.client.Store.ID != nil && (s.transmit != nil || (s.client.IsConnected() && s.client.IsLoggedIn()))
 }
 
-// target is the message's chat, who wrote it and whether it is the account's own: as the bridge
-// keeps it, or as the request says for one it does not have (known false).
+// target is the message's chat, who wrote it and whether it is the account's own: as the bridge's
+// record of the last week has it, or as the request says (known false where neither has it).
 func (s *Sender) target(req ChangeRequest) (chat, author types.JID, fromMe, known bool, err error) {
 	chats, err := s.jidsOf(req.Recipient)
 	if err != nil {
@@ -74,8 +80,8 @@ func (s *Sender) target(req ChangeRequest) (chat, author types.JID, fromMe, know
 	for _, c := range chats {
 		var sender sql.NullString
 		var mine sql.NullBool
-		if s.store.db.QueryRow("SELECT sender, is_from_me FROM messages WHERE id = ? AND chat_jid = ?", req.ID, c.String()).
-			Scan(&sender, &mine) != nil {
+		if s.store.db.QueryRow("SELECT sender, from_me FROM whatsapp_recent WHERE store = ? AND id = ? AND chat_jid = ?",
+			s.store.key, req.ID, c.String()).Scan(&sender, &mine) != nil {
 			continue
 		}
 		chat, fromMe, known = c, mine.Bool, true
@@ -87,7 +93,7 @@ func (s *Sender) target(req ChangeRequest) (chat, author types.JID, fromMe, know
 		break
 	}
 	if !known {
-		chat, fromMe = chats[0], req.FromMe
+		chat, fromMe, known = chats[0], req.FromMe, req.Known
 		if !fromMe && req.Sender != "" {
 			author = types.NewJID(strings.TrimPrefix(req.Sender, "+"), types.DefaultUserServer)
 			if strings.Contains(req.Sender, "@") {
@@ -108,13 +114,11 @@ func (s *Sender) target(req ChangeRequest) (chat, author types.JID, fromMe, know
 	return chat, author.ToNonAD(), fromMe, known, nil
 }
 
-// edited is the new content of a message: its text, or its caption, keeping the people it names
-// whose @ is still in the text.
-func (s *Sender) edited(chat types.JID, id, text string) (*waE2E.Message, error) {
-	var kind, mentions sql.NullString
-	s.store.db.QueryRow("SELECT kind, mentions FROM messages WHERE id = ? AND chat_jid = ?", id, chat.String()).Scan(&kind, &mentions)
+// edited is the new content of a message of a kind: its text, or its caption, keeping the people it
+// names whose @ is still in the text.
+func edited(kind string, mentions []string, text string) (*waE2E.Message, error) {
 	var named []string
-	for _, jid := range strings.Split(mentions.String, ",") {
+	for _, jid := range mentions {
 		if j, err := types.ParseJID(jid); jid != "" && err == nil && containsToken(text, "@"+j.User) {
 			named = append(named, jid)
 		}
@@ -123,7 +127,7 @@ func (s *Sender) edited(chat types.JID, id, text string) (*waE2E.Message, error)
 	if len(named) > 0 {
 		ci = &waE2E.ContextInfo{MentionedJID: named}
 	}
-	switch kind.String {
+	switch kind {
 	case "text", "":
 		if ci == nil {
 			return &waE2E.Message{Conversation: proto.String(text)}, nil
@@ -165,7 +169,7 @@ func (s *Sender) change(req ChangeRequest) (int, SendResponse) {
 		return s.deleteForMe(chat, author, fromMe, known, req)
 	}
 	if req.Kind == "edit" || req.Kind == "delete" {
-		// what the bridge does not have it could not store as changed, nor tell whose it is
+		// what neither the bridge nor the archive has cannot be told whose it is
 		if !known {
 			return fail(http.StatusNotFound, "the bridge does not have this message")
 		}
@@ -185,7 +189,7 @@ func (s *Sender) change(req ChangeRequest) (int, SendResponse) {
 		if text == "" {
 			return fail(http.StatusBadRequest, "the new text is empty")
 		}
-		content, err := s.edited(chat, req.ID, text)
+		content, err := edited(req.MessageKind, req.Mentions, text)
 		if err != nil {
 			return fail(http.StatusBadRequest, "%v", err)
 		}
@@ -205,17 +209,14 @@ func (s *Sender) change(req ChangeRequest) (int, SendResponse) {
 		return fail(http.StatusInternalServerError, "sending failed: %v", err)
 	}
 	// it is a message on the wire like any other: it counts for the pace, not as a text repeated
-	s.store.db.Exec("INSERT INTO sent (at, chat_jid, id, text_hash) VALUES (?, ?, ?, NULL)", time.Now().Unix(), chat.String(), resp.ID)
+	s.store.sent(chat.String(), resp.ID, "")
 	own := *s.client.Store.ID
 	evt := &events.Message{Info: types.MessageInfo{MessageSource: types.MessageSource{Chat: chat, Sender: own,
 		IsFromMe: true, IsGroup: chat.Server == types.GroupServer}, ID: resp.ID, Timestamp: resp.Timestamp}, RawMessage: msg}
-	processMessage(s.client, s.store, evt.UnwrapRaw(), "", s.logger)
-	if req.Kind == "react" {
-		// The account has one reaction on a message, whichever of its jids (number, LID) WhatsApp
-		// named it by when it came from the phone: those rows say the same, or the import would
-		// take whichever it read last.
-		s.store.db.Exec("UPDATE reactions SET emoji = ?, timestamp = ? WHERE chat_jid = ? AND message_id = ? AND is_from_me AND sender != ?",
-			req.Emoji, time.UnixMilli(msg.GetReactionMessage().GetSenderTimestampMS()), chat.String(), req.ID, own.ToNonAD().String())
+	b := &importers.WABatch{}
+	processMessage(s.client, s.store, b, evt.UnwrapRaw(), "", s.logger)
+	if !s.store.Write(b, s.logger) {
+		s.logger.Warnf("Sent, but not written into the archive")
 	}
 	return http.StatusOK, SendResponse{Success: true, Message: "sent", ID: resp.ID, ChatJID: chat.String(), Timestamp: resp.Timestamp}
 }
@@ -225,11 +226,10 @@ func (s *Sender) change(req ChangeRequest) (int, SendResponse) {
 // its author; any other, none ("0").
 func (s *Sender) deleteForMe(chat, author types.JID, fromMe, known bool, req ChangeRequest) (int, SendResponse) {
 	at := time.UnixMilli(req.TS)
-	if known {
-		var stored time.Time
-		if s.store.db.QueryRow("SELECT timestamp FROM messages WHERE id = ? AND chat_jid = ?", req.ID, chat.String()).Scan(&stored) == nil {
-			at = stored
-		}
+	var stored int64
+	if s.store.db.QueryRow("SELECT at FROM whatsapp_recent WHERE store = ? AND id = ? AND chat_jid = ?", s.store.key, req.ID,
+		chat.String()).Scan(&stored) == nil {
+		at = time.UnixMilli(stored)
 	}
 	own, participant := "0", "0"
 	if fromMe {
@@ -252,6 +252,8 @@ func (s *Sender) deleteForMe(chat, author types.JID, fromMe, known bool, req Cha
 	if err != nil {
 		return http.StatusInternalServerError, SendResponse{Message: fmt.Sprintf("deleting failed: %v", err)}
 	}
-	s.store.deletedForMe([]string{chat.String()}, req.ID, ownJID(s.client), at)
+	b := &importers.WABatch{}
+	deletedForMe(b, []string{chat.String()}, req.ID, ownJID(s.client), at)
+	s.store.Write(b, s.logger)
 	return http.StatusOK, SendResponse{Success: true, Message: "deleted", ChatJID: chat.String()}
 }

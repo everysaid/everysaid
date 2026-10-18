@@ -2,12 +2,13 @@ package whatsapp
 
 // What the audit of the move into the program found, each kind with its check: the connection's end
 // losing nothing, what whatsmeow leaves undone (logged out, banned, failed), channels and status kept
-// out, edits only by their authors, a person's two chats (number and LID), downloads, the standalone
-// bridge's answer, and the store's files kept private. Never connected: the client is made on a
-// device store in a temporary folder.
+// out, edits only by their authors, a person's two chats (number and LID), downloads, and the store
+// folder kept private. Never connected: the client is made on a device store in a temporary
+// folder, and writes into an archive of its own.
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -25,11 +26,72 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
+
+	"everysaid/internal/archive"
+	"everysaid/internal/db"
+	"everysaid/internal/importers"
 )
 
-// offline is a bridge on a temporary store folder with a client that never connects.
-func offline(t *testing.T) (*Bridge, *whatsmeow.Client, *MessageStore) {
+// probe reads an archive of the tests.
+type probe struct {
+	t    *testing.T
+	path string
+}
+
+func (p probe) read(fn func(d *sql.DB)) {
+	d, err := db.ReadOnly(p.path)
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	defer d.Close()
+	fn(d)
+}
+
+// Int is the first column of a query's first row.
+func (p probe) Int(query string, args ...any) (n int) {
+	p.read(func(d *sql.DB) { n = int(db.Int(d, query, args...)) })
+	return n
+}
+
+// Str is the first column of a query's first row, as text.
+func (p probe) Str(query string, args ...any) (s string) {
+	p.read(func(d *sql.DB) { s = db.Str(d, query, args...) })
+	return s
+}
+
+// testArchive is an archive of its own, the bridge's way into it (as the plugin's writeTo, without
+// its instance), and what reads it.
+func testArchive(t *testing.T, dir string) (Writer, probe) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	write := func(fn func(w *importers.WhatsAppWriter) error) (err error) {
+		keys, err := Devices(context.Background())
+		if err != nil {
+			return err
+		}
+		a, err := archive.Open(path)
+		if err != nil {
+			return err
+		}
+		defer a.Close()
+		defer archive.Recover(&err)
+		w := importers.NewWhatsAppWriter(a, keys, key(dir))
+		if err := fn(w); err != nil {
+			return err
+		}
+		w.Done()
+		return nil
+	}
+	if err := write(func(*importers.WhatsAppWriter) error { return nil }); err != nil { // made
+		t.Fatal(err)
+	}
+	return write, probe{t, path}
+}
+
+// offline is a bridge on a temporary store folder with a client that never connects, writing into
+// an archive of its own (in reads it).
+func offline(t *testing.T) (b *Bridge, client *whatsmeow.Client, store *Store, in probe) {
 	dir := t.TempDir()
+	write, in := testArchive(t, dir)
 	c, err := OpenDevices(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -41,16 +103,15 @@ func offline(t *testing.T) (*Bridge, *whatsmeow.Client, *MessageStore) {
 	if err := c.PutDevice(context.Background(), device); err != nil {
 		t.Fatal(err)
 	}
-	client := whatsmeow.NewClient(device, nil)
-	store, err := OpenMessages(dir)
+	client = whatsmeow.NewClient(device, nil)
+	store, err = OpenStore(dir, write)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { store.Close() })
-	b := New(dir, Options{}, Hooks{})
+	b = New(dir, Options{}, Hooks{Write: write})
 	b.store, b.client = store, client
-	b.sender = &Sender{client: client, store: store, enabled: true, limits: SendLimits{6, 60, 300, 3, 5}}
-	return b, client, store
+	b.sender = &Sender{client: client, store: store, logger: b.log, enabled: true, limits: SendLimits{6, 60, 300, 3, 5}}
+	return b, client, store, in
 }
 
 func text(chat, sender types.JID, id, body string, fromMe bool) *events.Message {
@@ -59,19 +120,11 @@ func text(chat, sender types.JID, id, body string, fromMe bool) *events.Message 
 		Message: &waE2E.Message{Conversation: proto.String(body)}}
 }
 
-func count(t *testing.T, s *MessageStore, query string, args ...any) int {
-	var n int
-	if err := s.db.QueryRow(query, args...).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	return n
-}
-
 // whatsmeow acknowledges a history-sync notification to the phone at once and downloads the history
-// later, apart from the connection: the end waits for it (and for what is being handled) before the
-// stores close, and nothing is handled or sent after.
+// later, apart from the connection: the end waits for it (and for what is being handled), and
+// nothing is handled or sent after.
 func TestTheEndLosesNoHistoryAlreadyAcknowledged(t *testing.T) {
-	b, client, store := offline(t)
+	b, client, store, in := offline(t)
 	defer func(w time.Duration) { historyWait = w }(historyWait)
 	historyWait = 5 * time.Second
 	person := types.NewJID("15551234567", types.DefaultUserServer)
@@ -97,11 +150,11 @@ func TestTheEndLosesNoHistoryAlreadyAcknowledged(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("did not end once the history came")
 	}
-	if count(t, store, "SELECT count(*) FROM messages WHERE id = 'OLD'") != 1 {
+	if in.Int("SELECT count(*) FROM message WHERE key = 'OLD'") != 1 {
 		t.Fatal("the history was lost")
 	}
 	b.handle(client, store, text(person, person, "LATE", "late", false))
-	if count(t, store, "SELECT count(*) FROM messages WHERE id = 'LATE'") != 0 {
+	if in.Int("SELECT count(*) FROM message WHERE key = 'LATE'") != 0 {
 		t.Fatal("handled after the end")
 	}
 	if code, _ := b.Send(SendRequest{Recipient: "15551234567", Message: "hi"}); code != 503 {
@@ -148,13 +201,20 @@ func TestTheConnectionStaysAsWhatsAppDesktopWould(t *testing.T) {
 }
 
 // Channels and status (the owner's rule: never in the archive) are not kept, live or from history,
-// nor their receipts, and their files are not downloaded, also for what an older version kept.
+// nor their receipts, and their files are not downloaded.
 func TestChannelsAndStatusAreNotKept(t *testing.T) {
-	b, client, store := offline(t)
+	b, client, store, in := offline(t)
 	person := types.NewJID("15551234567", types.DefaultUserServer)
 	channel := types.NewJID("120363000000000000", types.NewsletterServer)
+	picture := func(chat, sender types.JID, id string) *events.Message {
+		e := text(chat, sender, id, "", false)
+		e.Message = &waE2E.Message{ImageMessage: &waE2E.ImageMessage{URL: proto.String("https://mmg.whatsapp.net/v/x"),
+			MediaKey: []byte("k"), FileEncSHA256: []byte("e")}}
+		return e
+	}
 	for _, e := range []*events.Message{text(types.StatusBroadcastJID, person, "S", "status", false),
-		text(channel, channel, "C", "news", false), text(person, person, "P", "hi", false)} {
+		text(channel, channel, "C", "news", false), text(person, person, "P", "hi", false),
+		picture(types.StatusBroadcastJID, person, "SP"), picture(channel, channel, "CP")} {
 		b.handle(client, store, e)
 	}
 	b.handle(client, store, &events.HistorySync{Data: &waHistorySync.HistorySync{Conversations: []*waHistorySync.Conversation{{
@@ -163,24 +223,22 @@ func TestChannelsAndStatusAreNotKept(t *testing.T) {
 			MessageTimestamp: proto.Uint64(uint64(time.Now().Unix())), Message: &waE2E.Message{Conversation: proto.String("status")}}}}}}}})
 	b.handle(client, store, &events.Receipt{MessageSource: types.MessageSource{Chat: types.StatusBroadcastJID, Sender: person},
 		MessageIDs: []string{"MINE"}, Timestamp: time.Now(), Type: types.ReceiptTypeRead})
-	if n := count(t, store, "SELECT count(*) FROM messages"); n != 1 {
+	if n := in.Int("SELECT count(*) FROM message"); n != 1 {
 		t.Fatalf("%d messages kept, only the person's should be", n)
 	}
-	if n := count(t, store, "SELECT count(*) FROM chats") + count(t, store, "SELECT count(*) FROM receipts"); n != 1 {
+	if n := in.Int("SELECT count(*) FROM conversation") + in.Int("SELECT count(*) FROM receipt"); n != 1 {
 		t.Fatalf("%d chats and receipts, only the person's chat should be", n)
 	}
-	// what an older version kept stays, but its file is not fetched
-	for _, chat := range []string{types.StatusBroadcastJID.String(), channel.String()} {
-		store.StoreChat(chat, "", time.Now())
-		store.storeMessage(StoredMessage{ID: "OLD", ChatJID: chat, Timestamp: time.Now(), Kind: "image", MediaType: "image"})
+	if n := count(t, store, "SELECT count(*) FROM whatsapp_chat WHERE store = ?", store.key); n != 1 {
+		t.Fatalf("%d chats kept by the bridge", n)
 	}
-	d := &Downloads{store: store, jobs: make(chan mediaJob, 10), done: make(chan struct{})}
 	for _, chat := range []string{types.StatusBroadcastJID.String(), channel.String()} {
-		if d.wanted(mediaJob{"OLD", chat}) {
+		d := &Downloads{store: store, jobs: make(chan mediaJob, 10), done: make(chan struct{})}
+		if d.wanted(mediaJob{chat[:2] + "P", chat}) || count(t, store, "SELECT count(*) FROM whatsapp_media WHERE chat_jid = ?", chat) != 0 {
 			t.Fatalf("a file of %s wanted", chat)
 		}
 	}
-	d = startDownloads(client, store, nil)
+	d := startDownloads(client, store, nil)
 	d.stop()
 	if len(d.jobs) != 0 {
 		t.Fatalf("%d files of channels queued at the start", len(d.jobs))
@@ -191,7 +249,7 @@ func TestChannelsAndStatusAreNotKept(t *testing.T) {
 // someone said); a deletion also when a group's admin did. One person's chat may be under their
 // number and their LID: an edit arriving under the other one still finds its message.
 func TestOnlyTheAuthorChangesAMessage(t *testing.T) {
-	b, client, store := offline(t)
+	b, client, store, in := offline(t)
 	group := types.NewJID("120363111111111111", types.GroupServer)
 	alice := types.NewJID("15550000001", types.DefaultUserServer)
 	bob := types.NewJID("15550000002", types.DefaultUserServer)
@@ -208,9 +266,7 @@ func TestOnlyTheAuthorChangesAMessage(t *testing.T) {
 		return e
 	}
 	content := func(id string) (body string, deleted bool) {
-		var d *bool
-		store.db.QueryRow("SELECT content, deleted FROM messages WHERE id = ?", id).Scan(&body, &d)
-		return body, d != nil && *d
+		return in.Str("SELECT text FROM message WHERE key = ?", id), in.Int("SELECT deleted FROM message WHERE key = ?", id) == 1
 	}
 	b.handle(client, store, text(group, alice, "G", "alice's", false))
 	b.handle(client, store, edit(group, bob, "G", "forged", false))
@@ -248,7 +304,7 @@ func TestOnlyTheAuthorChangesAMessage(t *testing.T) {
 // Read receipts go to every chat of the person read: their number's and their LID's (a chat moves
 // to the LID at some point, its newer messages there).
 func TestReadReceiptsReachTheNumbersAndTheLIDsChat(t *testing.T) {
-	b, client, store := offline(t)
+	b, client, store, _ := offline(t)
 	pn := types.NewJID("15551234567", types.DefaultUserServer)
 	lid := types.NewJID("99991234567", types.HiddenUserServer)
 	if err := client.Store.LIDs.PutLIDMapping(context.Background(), lid, pn); err != nil {
@@ -275,19 +331,17 @@ func TestReadReceiptsReachTheNumbersAndTheLIDsChat(t *testing.T) {
 // the network) is tried again at the next start, while WhatsApp still keeps it. Nothing half
 // written stays.
 func TestDownloadsRecordOnlyWhatIsGone(t *testing.T) {
-	_, client, store := offline(t)
+	_, client, store, _ := offline(t)
 	if !gone(fmt.Errorf("x: %w", whatsmeow.ErrMediaDownloadFailedWith410)) || !gone(whatsmeow.ErrInvalidMediaSHA256) ||
 		!gone(errIncomplete) || gone(whatsmeow.ErrNotConnected) || gone(errors.New("dial tcp: i/o timeout")) {
 		t.Fatal("gone")
 	}
-	store.StoreChat("1@s.whatsapp.net", "A", time.Now())
-	store.storeMessage(StoredMessage{ID: "F", ChatJID: "1@s.whatsapp.net", Timestamp: time.Now(), Kind: "document",
-		MediaType: "document", Filename: "a.pdf", DirectPath: "/v/t62/x", MediaKey: []byte("k"), FileEncSHA256: []byte("e"),
-		FileSHA256: []byte("s"), FileLength: 3})
-	if _, err := store.download(client, "F", "1@s.whatsapp.net"); err == nil {
+	store.exec(`INSERT INTO whatsapp_media (store, chat_jid, id, at, media_type, filename, direct_path, media_key, file_enc_sha256,
+		file_sha256, file_length) VALUES (?, '1@s.whatsapp.net', 'F', 0, 'document', 'a.pdf', '/v/t62/x', 'k', 'e', 's', 3)`, store.key)
+	if err := store.download(client, "F", "1@s.whatsapp.net"); err == nil {
 		t.Fatal("downloaded while never connected")
 	}
-	if n := count(t, store, "SELECT count(*) FROM messages WHERE id = 'F' AND media_error IS NULL"); n != 1 {
+	if n := count(t, store, "SELECT count(*) FROM whatsapp_media WHERE id = 'F' AND error IS NULL"); n != 1 {
 		t.Fatal("a passing failure recorded as if the file were gone: never tried again")
 	}
 	parts, _ := filepath.Glob(filepath.Join(store.dir, "media", "*", "*.part"))
@@ -296,31 +350,26 @@ func TestDownloadsRecordOnlyWhatIsGone(t *testing.T) {
 	}
 }
 
-// The store's folder and databases (the session's keys, the messages) are the user's alone, also
-// those made readable by all before.
+// The store folder (the files on their way into the archive) is the user's alone, also one made
+// readable by all before.
 func TestTheStoreIsPrivate(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("no Unix modes")
 	}
 	dir := filepath.Join(t.TempDir(), "store")
 	os.MkdirAll(dir, 0o755)
-	os.WriteFile(filepath.Join(dir, "messages.db"), nil, 0o644)
-	s, err := OpenMessages(dir)
-	if err != nil {
+	if _, err := OpenStore(dir, nil); err != nil {
 		t.Fatal(err)
 	}
-	s.Close()
-	for path, want := range map[string]os.FileMode{dir: 0o700, filepath.Join(dir, "messages.db"): 0o600} {
-		if st, err := os.Stat(path); err != nil || st.Mode().Perm() != want {
-			t.Errorf("%s: %v %v", filepath.Base(path), st.Mode().Perm(), err)
-		}
+	if st, err := os.Stat(dir); err != nil || st.Mode().Perm() != 0o700 {
+		t.Errorf("the store folder: %v %v", st.Mode().Perm(), err)
 	}
 }
 
 // The owner's own chat (their notes) takes messages, though no one else ever writes there; another
 // number's, where no one wrote, still does not.
 func TestSendsToTheOwnersNotes(t *testing.T) {
-	b, _, _ := offline(t)
+	b, _, _, _ := offline(t)
 	if chats, err := b.sender.chatsFor("+15550009999"); err != nil || len(chats) != 1 || chats[0].String() != "15550009999@s.whatsapp.net" {
 		t.Fatalf("the owner's notes: %v %v", chats, err)
 	}

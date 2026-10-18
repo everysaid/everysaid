@@ -58,7 +58,7 @@ CREATE TABLE ZWACDCALLEVENT (Z_PK INTEGER PRIMARY KEY, Z1CALLEVENTS INTEGER, ZDA
 	db.Exec(chats, "INSERT INTO ZWAMEDIAITEM VALUES (1, ?)", pbBytes(87, pbBytes(1, call)))
 	db.Exec(chats, "INSERT INTO ZWAMESSAGE VALUES (1, 1, ?, 1, 59, 1, NULL)", float64(pairTS/1000-archive.AppleEpoch))
 
-	must(t, VoIP(a, nil, VoIPOptions{NoBridge: true, Carriers: []string{}}))
+	must(t, VoIP(a, nil, VoIPOptions{Carriers: []string{}}))
 	eq(t, "calls", a.Int("SELECT count(*) FROM call"), int64(1))
 	eq(t, "members", db.Strs(a.Tx(), "SELECT ad.value FROM call_member m JOIN address ad ON ad.id = m.address_id"),
 		[]string{"+15557770001"})
@@ -171,7 +171,7 @@ CREATE TABLE EventAttributes (eventId INTEGER, key TEXT, type INTEGER, value TEX
 		TS: pairTS + 20_000, Answered: true, Duration: 13})
 
 	for range 2 {
-		must(t, VoIP(a, nil, VoIPOptions{NoBridge: true, Carriers: []string{}}))
+		must(t, VoIP(a, nil, VoIPOptions{Carriers: []string{}}))
 	}
 	eq(t, "calls", db.Strs(a.Tx(), "SELECT coalesce(ad.value, '-') || ' ' || c.outgoing || c.answered || ' ' || "+
 		"coalesce(c.detail, '') || ' ' || c.duration || ' ' || coalesce(c.key, '') FROM call c "+

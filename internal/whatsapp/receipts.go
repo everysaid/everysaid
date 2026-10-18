@@ -3,9 +3,10 @@ package whatsapp
 // Receipts: who got and read the messages, and marking chats read (Bridge.MarkRead).
 
 // Receipts: who got and who read (or played) the account's messages, and when, as WhatsApp tells
-// every device of the account (receipts); when the account itself read a message, on any device
-// (messages.read_at). The bridge sends read receipts of its own only when asked (Sender.markRead):
-// the app does so only where the user turned it on.
+// every device of the account; when the account itself read a message, on any device (the chat's
+// read state in the archive, and whatsapp_recent.read_at for what is still to mark). The bridge
+// sends read receipts of its own only when asked (Sender.markRead): the app does so only where the
+// user turned it on.
 
 import (
 	"context"
@@ -16,47 +17,26 @@ import (
 	"go.mau.fi/whatsmeow/proto/waWeb"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
-	waLog "go.mau.fi/whatsmeow/util/log"
+
+	"everysaid/internal/db"
+	"everysaid/internal/importers"
 )
 
 // How far back a read receipt goes: what is older stays as it was (read on the phone, or not).
 const readBack = 7 * 24 * time.Hour
 
-func (store *MessageStore) migrateReceipts() error {
-	_, err := store.db.Exec(`
-		CREATE TABLE IF NOT EXISTS receipts (
-			chat_jid TEXT,
-			message_id TEXT,          -- one of the account's messages
-			jid TEXT,                 -- who got it, read it or played it
-			type TEXT,                -- delivered, read, played
-			timestamp TIMESTAMP,      -- when (NULL: only that it was, from history)
-			PRIMARY KEY (chat_jid, message_id, jid, type)
-		);
-	`)
-	return err
-}
-
-func (store *MessageStore) storeReceipt(chatJID, messageID, jid, kind string, t interface{}) {
-	store.db.Exec(`INSERT INTO receipts (chat_jid, message_id, jid, type, timestamp) VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT DO UPDATE SET timestamp = coalesce(receipts.timestamp, excluded.timestamp)`,
-		chatJID, messageID, jid, kind, t)
-}
-
-// markedRead records that the account read these messages (on any device); the first time stays.
-func (store *MessageStore) markedRead(chat string, ids []string, at time.Time) {
+// markedRead records that the account read these messages (on any device): in the archive, and
+// in whatsapp_recent (the first time stays), by their ids, as the receipt's chat may be the other
+// jid (a LID for a number) of the one they came in.
+func (store *Store) markedRead(b *importers.WABatch, chat string, ids []string, at time.Time) {
 	for _, id := range ids {
-		// by its id, as the receipt's chat may be the other jid (a LID for a number) of the one stored
-		var n int
-		store.db.QueryRow("SELECT count(*) FROM messages WHERE id = ?", id).Scan(&n)
-		if n == 0 { // a message the store no longer has (pruned): the importer moves the chat's read state
-			store.db.Exec("INSERT OR IGNORE INTO pending_reads (chat_jid, id, read_at) VALUES (?, ?, ?)", chat, id, at)
-			continue
-		}
-		store.db.Exec("UPDATE messages SET read_at = ? WHERE id = ? AND NOT is_from_me AND read_at IS NULL", at, id)
+		store.exec("UPDATE whatsapp_recent SET read_at = ? WHERE store = ? AND id = ? AND NOT from_me AND read_at IS NULL",
+			at.UnixMilli(), store.key, id)
 	}
+	b.Reads = append(b.Reads, importers.WARead{Chat: chat, IDs: ids, At: at.UnixMilli()})
 }
 
-func handleReceipt(store *MessageStore, v *events.Receipt, logger waLog.Logger) {
+func handleReceipt(store *Store, b *importers.WABatch, v *events.Receipt) {
 	if isChannel(v.Chat) {
 		return
 	}
@@ -69,38 +49,39 @@ func handleReceipt(store *MessageStore, v *events.Receipt, logger waLog.Logger) 
 	case types.ReceiptTypePlayed:
 		kind = "played"
 	case types.ReceiptTypeReadSelf, types.ReceiptTypePlayedSelf:
-		store.markedRead(v.Chat.ToNonAD().String(), v.MessageIDs, v.Timestamp)
+		store.markedRead(b, v.Chat.ToNonAD().String(), v.MessageIDs, v.Timestamp)
 		return
 	default:
 		return
 	}
 	who := v.Sender.ToNonAD().String()
 	for _, id := range v.MessageIDs {
-		store.storeReceipt(v.Chat.String(), id, who, kind, v.Timestamp)
+		b.Receipts = append(b.Receipts, importers.WAReceipt{Chat: v.Chat.String(), Target: id, Who: who, Kind: kind,
+			At: v.Timestamp.UnixMilli()})
 	}
 }
 
-// historyReceipts stores what a history-sync message says of who got and read it: per person in a
+// historyReceipts adds what a history-sync message says of who got and read it: per person in a
 // group (with times), only its state in a person's chat.
-func historyReceipts(store *MessageStore, chat types.JID, webMsg *waWeb.WebMessageInfo) {
+func historyReceipts(b *importers.WABatch, chat types.JID, webMsg *waWeb.WebMessageInfo) {
 	if !webMsg.GetKey().GetFromMe() {
 		return
 	}
 	id := webMsg.GetKey().GetID()
-	unix := func(s int64) interface{} {
-		if s <= 0 {
-			return nil
-		}
-		return time.Unix(s, 0)
+	add := func(who, kind string, s int64) {
+		b.Receipts = append(b.Receipts, importers.WAReceipt{Chat: chat.String(), Target: id, Who: who, Kind: kind, At: s * 1000})
 	}
 	for _, r := range webMsg.GetUserReceipt() {
 		who := r.GetUserJID()
 		if j, err := types.ParseJID(who); err == nil {
 			who = j.ToNonAD().String()
 		}
-		for kind, s := range map[string]int64{"delivered": r.GetReceiptTimestamp(), "read": r.GetReadTimestamp(), "played": r.GetPlayedTimestamp()} {
-			if s > 0 {
-				store.storeReceipt(chat.String(), id, who, kind, unix(s))
+		for _, k := range []struct {
+			kind string
+			at   int64
+		}{{"delivered", r.GetReceiptTimestamp()}, {"read", r.GetReadTimestamp()}, {"played", r.GetPlayedTimestamp()}} {
+			if k.at > 0 {
+				add(who, k.kind, k.at)
 			}
 		}
 	}
@@ -109,13 +90,13 @@ func historyReceipts(store *MessageStore, chat types.JID, webMsg *waWeb.WebMessa
 	}
 	switch webMsg.GetStatus() {
 	case waWeb.WebMessageInfo_PLAYED:
-		store.storeReceipt(chat.String(), id, chat.String(), "played", nil)
+		add(chat.String(), "played", 0)
 		fallthrough
 	case waWeb.WebMessageInfo_READ:
-		store.storeReceipt(chat.String(), id, chat.String(), "read", nil)
+		add(chat.String(), "read", 0)
 		fallthrough
 	case waWeb.WebMessageInfo_DELIVERY_ACK:
-		store.storeReceipt(chat.String(), id, chat.String(), "delivered", nil)
+		add(chat.String(), "delivered", 0)
 	}
 }
 
@@ -147,11 +128,13 @@ func (s *Sender) markRead(req ReadRequest) (int, map[string]interface{}) {
 	if req.Self {
 		kind = types.ReceiptTypeReadSelf
 	}
+	read := &importers.WABatch{}
+	defer func() { s.store.Write(read, s.logger) }()
 	for _, b := range batches {
 		if err := s.client.MarkRead(context.Background(), b.ids, now, b.chat, b.from, kind); err != nil {
 			return fail(http.StatusInternalServerError, "marking read failed: %v", err)
 		}
-		s.store.markedRead(b.chat.ToNonAD().String(), b.ids, now)
+		s.store.markedRead(read, b.chat.ToNonAD().String(), b.ids, now)
 		marked += len(b.ids)
 	}
 	return http.StatusOK, map[string]interface{}{"success": true, "marked": marked}
@@ -199,20 +182,15 @@ func (s *Sender) toMark(recipient string, until time.Time) ([]readBatch, error) 
 }
 
 // unread is the chat's messages from others not read yet, up to a time and readBack old, by sender.
-func (s *Sender) unread(chat types.JID, until time.Time) (map[string][]string, error) {
-	rows, err := s.store.db.Query(`SELECT id, coalesce(sender, '') FROM messages WHERE chat_jid = ? AND NOT is_from_me
-		AND read_at IS NULL AND timestamp <= ? AND timestamp > ? ORDER BY timestamp`,
-		chat.String(), until, time.Now().Add(-readBack))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string][]string{}
-	for rows.Next() {
-		var id, sender string
-		if rows.Scan(&id, &sender) == nil {
+func (s *Sender) unread(chat types.JID, until time.Time) (out map[string][]string, err error) {
+	defer db.Recover(&err)
+	out = map[string][]string{}
+	db.Each(s.store.db, `SELECT id, coalesce(sender, '') FROM whatsapp_recent WHERE store = ? AND chat_jid = ? AND NOT from_me
+		AND read_at IS NULL AND at <= ? AND at > ? ORDER BY at`,
+		[]any{s.store.key, chat.String(), until.UnixMilli(), time.Now().Add(-readBack).UnixMilli()}, func(scan func(...any)) {
+			var id, sender string
+			scan(&id, &sender)
 			out[sender] = append(out[sender], id)
-		}
-	}
+		})
 	return out, nil
 }

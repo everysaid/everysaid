@@ -6,7 +6,6 @@ package whatsapp
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -22,6 +21,8 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 
 	"everysaid/internal/config"
+	"everysaid/internal/db"
+	"everysaid/internal/importers"
 	"everysaid/internal/keys"
 )
 
@@ -45,11 +46,12 @@ func ConfigOptions() Options {
 }
 
 // Hooks are how a running bridge speaks: a QR code to scan (its text, and the code drawn as text),
-// the connection's events, and its warnings.
+// the connection's events, and its warnings; and how it writes what arrives into the archive.
 type Hooks struct {
 	QR    func(code, drawn string)
 	Event func(event, code, detail string)
 	Warn  func(text string)
+	Write Writer
 }
 
 // Bridge is one store folder's connection, while it runs.
@@ -60,7 +62,7 @@ type Bridge struct {
 	log   waLog.Logger
 
 	mu        sync.Mutex
-	store     *MessageStore
+	store     *Store
 	client    *whatsmeow.Client
 	sender    *Sender
 	downloads *Downloads
@@ -136,14 +138,6 @@ func (l *logger) Sub(module string) waLog.Logger {
 	return &logger{b: l.b, module: module}
 }
 
-// private keeps the store folder and a database of it to the user alone: the session's keys and the
-// messages are in them (SQLite makes a database, and its journal, as the umask allows, often
-// readable by all).
-func private(dir, path string) {
-	os.Chmod(dir, 0700)
-	os.Chmod(path, 0600)
-}
-
 // Run connects to WhatsApp and stays connected until ctx ends (nil), the device is logged out or a
 // temporary ban ends (nil: to be started again), or the connection cannot be made (stay). A store
 // without a linked device waits for Pair.
@@ -182,11 +176,10 @@ func (b *Bridge) Run(ctx context.Context) error {
 	client.EnableDecryptedEventBuffer = true
 	client.AutomaticMessageRerequestFromPhone = true
 	client.ManualHistorySyncDownload = true
-	store, err := OpenMessages(b.Dir)
+	store, err := OpenStore(b.Dir, b.hooks.Write)
 	if err != nil {
 		return err
 	}
-	defer store.Close()
 	store.said = b.hooks.Event
 	sender := &Sender{client: client, store: store, logger: b.log, enabled: b.opts.Send, limits: b.opts.Limits}
 	b.mu.Lock()
@@ -290,14 +283,15 @@ func (b *Bridge) stay(ctx context.Context, ready func()) error {
 	}
 }
 
-// handle is the client's event handler: false for what could not be stored (WhatsApp is not told
+// handle is the client's event handler: false for what could not be written (WhatsApp is not told
 // it arrived, and gives it again), or when the bridge is ending.
-func (b *Bridge) handle(client *whatsmeow.Client, store *MessageStore, evt any) bool {
+func (b *Bridge) handle(client *whatsmeow.Client, store *Store, evt any) bool {
 	b.handling.RLock()
 	defer b.handling.RUnlock()
 	if b.closed {
 		return false
 	}
+	batch := &importers.WABatch{}
 	switch v := evt.(type) {
 	case *events.Message:
 		if n := v.Message.GetProtocolMessage().GetHistorySyncNotification(); n != nil && v.Info.IsFromMe {
@@ -311,7 +305,8 @@ func (b *Bridge) handle(client *whatsmeow.Client, store *MessageStore, evt any) 
 			default:
 			}
 		}
-		if !processMessage(client, store, v, "", b.log) {
+		processMessage(client, store, batch, v, "", b.log)
+		if !store.Write(batch, b.log) {
 			return false
 		}
 		b.mu.Lock()
@@ -320,6 +315,7 @@ func (b *Bridge) handle(client *whatsmeow.Client, store *MessageStore, evt any) 
 		if d != nil {
 			d.queue(v.Info.ID, v.Info.Chat.String())
 		}
+		return true
 	case *events.HistorySync:
 		ok := handleHistorySync(client, store, v, b.log)
 		b.historyPending(v.Notification.GetDirectPath(), -1)
@@ -327,7 +323,7 @@ func (b *Bridge) handle(client *whatsmeow.Client, store *MessageStore, evt any) 
 			return false
 		}
 	case *events.UndecryptableMessage:
-		handleUndecryptable(store, v, b.log)
+		handleUndecryptable(store, batch, v)
 	case *events.MediaRetry:
 		mediaRetried(store, v, func(id, chat string) {
 			b.mu.Lock()
@@ -338,9 +334,9 @@ func (b *Bridge) handle(client *whatsmeow.Client, store *MessageStore, evt any) 
 			}
 		}, b.log)
 	case *events.CallOffer, *events.CallOfferNotice, *events.CallAccept, *events.CallReject, *events.CallTerminate:
-		handleCallEvent(client, store, v, b.log)
+		handleCallEvent(client, batch, v)
 	case *events.Receipt:
-		handleReceipt(store, v, b.log)
+		handleReceipt(store, batch, v)
 	case *events.DeleteForMe:
 		// a message deleted for the user alone on another of their devices (the phone): kept as a
 		// deletion, as the archive keeps both alike
@@ -348,11 +344,11 @@ func (b *Bridge) handle(client *whatsmeow.Client, store *MessageStore, evt any) 
 		if v.ChatJID.Server != types.GroupServer {
 			chats = alternates(client, v.ChatJID, types.EmptyJID)
 		}
-		store.deletedForMe(chats, v.MessageID, ownJID(client), v.Timestamp)
+		deletedForMe(batch, chats, v.MessageID, ownJID(client), v.Timestamp)
 	case *events.JoinedGroup, *events.GroupInfo:
-		handleGroupEvent(client, store, v, b.log)
+		handleGroupEvent(client, store, batch, v, b.log)
 	case *events.Picture:
-		store.storeGroupPicture(v, b.log)
+		groupPicture(batch, v)
 		b.mu.Lock()
 		p := b.photos
 		b.mu.Unlock()
@@ -375,7 +371,7 @@ func (b *Bridge) handle(client *whatsmeow.Client, store *MessageStore, evt any) 
 		default:
 		}
 	}
-	return true
+	return store.Write(batch, b.log)
 }
 
 func (b *Bridge) historyPending(key string, n int) {
@@ -507,11 +503,7 @@ func (b *Bridge) Linked() bool {
 	return b.client != nil && b.client.Store.ID != nil
 }
 
-func readOnly(path string) string {
-	return strings.Replace(dsn(path), "?", "?mode=ro&", 1)
-}
-
-func (b *Bridge) parts() (*whatsmeow.Client, *MessageStore, *Sender) {
+func (b *Bridge) parts() (*whatsmeow.Client, *Store, *Sender) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.client, b.store, b.sender
@@ -563,11 +555,11 @@ func (b *Bridge) MarkRead(req ReadRequest) (int, map[string]any) {
 	return sender.markRead(req)
 }
 
-// Download is a message's file, downloaded now unless it was before (POST /api/download).
-func (b *Bridge) Download(id, chatJID string) (string, error) {
+// Download downloads a message's file now, unless it was before, into the archive.
+func (b *Bridge) Download(id, chatJID string) error {
 	client, store, _ := b.parts()
 	if store == nil || !b.open() {
-		return "", ErrNotConnected
+		return ErrNotConnected
 	}
 	defer b.handling.RUnlock()
 	return store.download(client, id, chatJID)
@@ -600,22 +592,22 @@ func (b *Bridge) Status() map[string]any {
 	return out
 }
 
-func status(store *MessageStore) map[string]any {
+func status(store *Store) map[string]any {
 	connection, connectionAt := store.state("connection")
 	blocked, blockedAt := store.state("send_blocked")
 	banUntil, _ := store.state("ban_until")
 	evts := []StatusEvent{}
-	if rows, err := store.db.Query("SELECT at, event, code, detail FROM bridge_events ORDER BY rowid DESC LIMIT 20"); err == nil {
-		for rows.Next() {
+	func() {
+		defer db.Recover(new(error))
+		db.Each(store.db, "SELECT at, event, coalesce(code, ''), coalesce(detail, '') FROM whatsapp_event WHERE store = ? "+
+			"ORDER BY rowid DESC LIMIT 20", []any{store.key}, func(scan func(...any)) {
 			var e StatusEvent
-			var code, detail sql.NullString
-			if rows.Scan(&e.At, &e.Event, &code, &detail) == nil {
-				e.Code, e.Detail = code.String, detail.String
-				evts = append(evts, e)
-			}
-		}
-		rows.Close()
-	}
+			var at int64
+			scan(&at, &e.Event, &e.Code, &e.Detail)
+			e.At = time.UnixMilli(at)
+			evts = append(evts, e)
+		})
+	}()
 	return map[string]any{"connection": connection, "connection_at": connectionAt, "ban_until": banUntil,
 		"send_blocked": blocked, "blocked_at": blockedAt, "events": evts}
 }
@@ -623,7 +615,7 @@ func status(store *MessageStore) map[string]any {
 // Unblock clears the send block (POST /api/unblock): a person's decision, never the code's.
 // It works on the store whether the bridge runs or not; it returns the reason cleared.
 func Unblock(dir string) (string, error) {
-	store := func() *MessageStore {
+	store := func() *Store {
 		if b := Running(dir); b != nil {
 			_, s, _ := b.parts()
 			return s
@@ -631,11 +623,10 @@ func Unblock(dir string) (string, error) {
 		return nil
 	}()
 	if store == nil {
-		s, err := OpenMessages(dir)
+		s, err := OpenStore(dir, nil)
 		if err != nil {
 			return "", err
 		}
-		defer s.Close()
 		store = s
 	}
 	old, _ := store.state("send_blocked")

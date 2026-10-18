@@ -2,8 +2,8 @@ package whatsapp
 
 // The connection's state and events (Bridge.Status), and unblocking sending (Bridge.Unblock).
 
-// The state of the connection, as WhatsApp reports it, kept in messages.db for whoever reads the
-// bridge (bridge_state, bridge_events) and said on the plugin's card (Bridge.Status). Any sign that
+// The state of the connection, as WhatsApp reports it, kept in keys.db (whatsapp_state,
+// whatsapp_event) and said on the plugin's card (Bridge.Status). Any sign that
 // WhatsApp is unhappy with the account (a temporary ban, a logout, a connect failure that means one, the session taken
 // over elsewhere, an outdated client) blocks sending until someone clears it on purpose
 // (Bridge.Unblock, the plugin's action); the block survives restarts.
@@ -17,60 +17,43 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 )
 
-func (store *MessageStore) migrateStatus() error {
-	_, err := store.db.Exec(`
-		CREATE TABLE IF NOT EXISTS bridge_state (
-			key TEXT PRIMARY KEY,     -- connection, send_blocked, ban_until
-			value TEXT,
-			at TIMESTAMP
-		);
-		CREATE TABLE IF NOT EXISTS bridge_events (
-			at TIMESTAMP,
-			event TEXT,
-			code TEXT,
-			detail TEXT
-		);
-		CREATE TABLE IF NOT EXISTS sent (
-			at INTEGER,               -- Unix seconds
-			chat_jid TEXT,
-			id TEXT,
-			text_hash TEXT
-		);
-		CREATE TABLE IF NOT EXISTS started (
-			at INTEGER,               -- Unix seconds
-			chat_jid TEXT PRIMARY KEY -- a chat the owner wrote in first, from here
-		);
-	`)
-	return err
+func (store *Store) setState(key, value string) {
+	store.exec("INSERT OR REPLACE INTO whatsapp_state (store, key, value, at) VALUES (?, ?, ?, ?)", store.key, key, value,
+		time.Now().Unix())
 }
 
-func (store *MessageStore) setState(key, value string) {
-	store.db.Exec("INSERT OR REPLACE INTO bridge_state (key, value, at) VALUES (?, ?, ?)", key, value, time.Now())
+func (store *Store) state(key string) (string, time.Time) {
+	var value sql.NullString
+	var at sql.NullInt64
+	store.db.QueryRow("SELECT value, at FROM whatsapp_state WHERE store = ? AND key = ?", store.key, key).Scan(&value, &at)
+	if !at.Valid {
+		return value.String, time.Time{}
+	}
+	return value.String, time.Unix(at.Int64, 0)
 }
 
-func (store *MessageStore) state(key string) (string, time.Time) {
-	var value string
-	var at sql.NullTime
-	store.db.QueryRow("SELECT value, at FROM bridge_state WHERE key = ?", key).Scan(&value, &at)
-	return value, at.Time
-}
+// How many of the connection's events are kept.
+const eventsKept = 200
 
-func (store *MessageStore) logEvent(event, code, detail string) {
-	store.db.Exec("INSERT INTO bridge_events (at, event, code, detail) VALUES (?, ?, ?, ?)", time.Now(), event, code, detail)
+func (store *Store) logEvent(event, code, detail string) {
+	store.exec("INSERT INTO whatsapp_event (store, at, event, code, detail) VALUES (?, ?, ?, ?, ?)", store.key,
+		time.Now().UnixMilli(), event, code, detail)
+	store.exec("DELETE FROM whatsapp_event WHERE store = ?1 AND rowid NOT IN "+
+		"(SELECT rowid FROM whatsapp_event WHERE store = ?1 ORDER BY rowid DESC LIMIT ?2)", store.key, eventsKept)
 	if store.said != nil {
 		store.said(event, code, detail)
 	}
 }
 
 // block stops sending; only the first reason is kept until it is cleared.
-func (store *MessageStore) block(reason string) {
+func (store *Store) block(reason string) {
 	if old, _ := store.state("send_blocked"); old == "" {
 		store.setState("send_blocked", reason)
 	}
 }
 
 // handleStateEvent records what WhatsApp says about the connection and the account.
-func handleStateEvent(store *MessageStore, evt interface{}, logger waLog.Logger) {
+func handleStateEvent(store *Store, evt interface{}, logger waLog.Logger) {
 	switch v := evt.(type) {
 	case *events.Connected:
 		store.setState("connection", "connected")

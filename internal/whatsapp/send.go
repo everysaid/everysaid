@@ -31,6 +31,8 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
+
+	"everysaid/internal/importers"
 )
 
 type SendLimits struct {
@@ -46,7 +48,7 @@ const sameTextMinLength = 20
 
 type Sender struct {
 	client  *whatsmeow.Client
-	store   *MessageStore
+	store   *Store
 	logger  waLog.Logger
 	enabled bool
 	limits  SendLimits
@@ -62,9 +64,13 @@ type SendRequest struct {
 	Recipient string `json:"recipient"` // a phone number's digits, or a jid
 	Message   string `json:"message"`   // the text, or a file's caption
 	ReplyTo   string `json:"reply_to"`  // the id of the message answered, in that chat
-	// for a message answered that the bridge does not have (from before it was linked)
-	ReplySender string `json:"reply_sender"` // "me", or who wrote it: a jid or a number
-	ReplyText   string `json:"reply_text"`
+	// the message answered, as the archive has it: who wrote it ("me", or a jid or a number; the
+	// bridge's own record of the last week names them exactly), its text, its kind (text, image,
+	// video, voice, audio, document, sticker) and a document's name
+	ReplySender   string `json:"reply_sender"`
+	ReplyText     string `json:"reply_text"`
+	ReplyKind     string `json:"reply_kind"`
+	ReplyFilename string `json:"reply_filename"`
 	// people of a group the text names: each a jid or a number, written in the text as @<its user
 	// part> (@306912345678); the bridge writes them as the group names its members
 	Mentions []string `json:"mentions"`
@@ -86,7 +92,7 @@ type SendResponse struct {
 
 func (s *Sender) count(since time.Duration) int {
 	var n int
-	s.store.db.QueryRow("SELECT count(*) FROM sent WHERE at > ?", time.Now().Add(-since).Unix()).Scan(&n)
+	s.store.db.QueryRow("SELECT count(*) FROM whatsapp_sent WHERE store = ? AND at > ?", s.store.key, time.Now().Add(-since).Unix()).Scan(&n)
 	return n
 }
 
@@ -133,11 +139,9 @@ func (s *Sender) chatsFor(recipient string) ([]types.JID, error) {
 			continue
 		}
 		var n int
-		// someone wrote there (incoming_chats, kept when their messages have left the store), or the
-		// chat was started from here
-		s.store.db.QueryRow("SELECT (SELECT count(*) FROM incoming_chats WHERE jid = ?1) + "+
-			"(SELECT count(*) FROM messages WHERE chat_jid = ?1 AND NOT is_from_me) + "+
-			"(SELECT count(*) FROM started WHERE chat_jid = ?1)", c.String()).Scan(&n)
+		// someone wrote there, or the chat was started from here
+		s.store.db.QueryRow("SELECT (SELECT count(*) FROM whatsapp_chat WHERE store = ?1 AND jid = ?2 AND incoming) + "+
+			"(SELECT count(*) FROM whatsapp_started WHERE store = ?1 AND chat_jid = ?2)", s.store.key, c.String()).Scan(&n)
 		if n > 0 {
 			chats = append(chats, c)
 		}
@@ -197,7 +201,8 @@ func (s *Sender) start(recipient string) (types.JID, int, error) {
 	}
 	if n := s.limits.NewChats; n > 0 {
 		var count int
-		s.store.db.QueryRow("SELECT count(*) FROM started WHERE at > ?", time.Now().Add(-24*time.Hour).Unix()).Scan(&count)
+		s.store.db.QueryRow("SELECT count(*) FROM whatsapp_started WHERE store = ? AND at > ?", s.store.key,
+			time.Now().Add(-24*time.Hour).Unix()).Scan(&count)
 		if count >= n {
 			return types.JID{}, http.StatusTooManyRequests, fmt.Errorf("limit reached: %d new chats a day", n)
 		}
@@ -276,8 +281,8 @@ func (s *Sender) send(req SendRequest) (int, SendResponse) {
 	hash := hex.EncodeToString(sum[:])
 	if len(req.Media) > 0 || utf8.RuneCountInString(text) >= sameTextMinLength {
 		var others int
-		s.store.db.QueryRow("SELECT count(DISTINCT chat_jid) FROM sent WHERE text_hash = ? AND chat_jid != ? AND at > ?",
-			hash, chat.String(), time.Now().Add(-time.Hour).Unix()).Scan(&others)
+		s.store.db.QueryRow("SELECT count(DISTINCT chat_jid) FROM whatsapp_sent WHERE store = ? AND text_hash = ? AND chat_jid != ? AND at > ?",
+			s.store.key, hash, chat.String(), time.Now().Add(-time.Hour).Unix()).Scan(&others)
 		if s.limits.SameText > 0 && others >= s.limits.SameText {
 			return fail(http.StatusTooManyRequests, "the same text or file went to %d other chats this hour", others)
 		}
@@ -309,24 +314,31 @@ func (s *Sender) send(req SendRequest) (int, SendResponse) {
 	if err != nil {
 		return fail(http.StatusInternalServerError, "sending failed: %v", err)
 	}
-	s.store.db.Exec("INSERT INTO sent (at, chat_jid, id, text_hash) VALUES (?, ?, ?, ?)", time.Now().Unix(), chat.String(), resp.ID, hash)
+	s.store.sent(chat.String(), resp.ID, hash)
 	if started {
-		s.store.db.Exec("INSERT OR IGNORE INTO started (at, chat_jid) VALUES (?, ?)", time.Now().Unix(), chat.String())
+		s.store.exec("INSERT OR IGNORE INTO whatsapp_started (store, chat_jid, at) VALUES (?, ?, ?)", s.store.key, chat.String(),
+			time.Now().Unix())
 	}
-	// The bridge does not get its own messages back: store it as WhatsApp would show it.
-	var name string
-	s.store.db.QueryRow("SELECT name FROM chats WHERE jid = ?", chat.String()).Scan(&name)
-	s.store.storeChatTime(chat.String(), name, resp.Timestamp)
+	// The bridge does not get its own messages back: written as WhatsApp would show it.
 	stored.ID, stored.Timestamp, stored.Mentions = resp.ID, resp.Timestamp, mentioned
-	if err := s.store.storeMessage(stored); err != nil {
-		s.logger.Warnf("Sent, but failed to store: %v", err)
-	} else if len(req.Media) > 0 {
+	if len(req.Media) > 0 {
 		rel := mediaFile(stored.MediaType, stored.Filename, stored.ChatJID, stored.ID)
 		if err := s.store.writeMedia(rel, req.Media); err == nil {
-			s.store.db.Exec("UPDATE messages SET media_path = ? WHERE id = ? AND chat_jid = ?", rel, stored.ID, stored.ChatJID)
+			stored.MediaPath = filepath.ToSlash(rel)
 		}
 	}
+	b := &importers.WABatch{}
+	keep(s.store, b, stored, s.store.chatNameOf(chat.String()))
+	if !s.store.Write(b, s.logger) {
+		s.logger.Warnf("Sent, but not written into the archive")
+	}
 	return http.StatusOK, SendResponse{Success: true, Message: "sent", ID: resp.ID, ChatJID: chat.String(), Timestamp: resp.Timestamp}
+}
+
+// sent records a message sent (or a change: no text), for the limits of pace.
+func (store *Store) sent(chat, id, hash string) {
+	store.exec("INSERT INTO whatsapp_sent (store, at, chat_jid, id, text_hash) VALUES (?, ?, ?, ?, ?)", store.key, time.Now().Unix(),
+		chat, id, nullable(hash))
 }
 
 // mentions checks that each person named is in the group, and writes each @ in the text as the
@@ -408,10 +420,10 @@ func (s *Sender) quote(chat types.JID, req SendRequest, stored *StoredMessage) (
 	if req.ReplyTo == "" {
 		return nil, nil
 	}
-	var sender, content, kind, filename sql.NullString
+	var sender sql.NullString
 	var fromMe sql.NullBool
-	err := s.store.db.QueryRow("SELECT sender, is_from_me, content, kind, filename FROM messages WHERE id = ? AND chat_jid = ?",
-		req.ReplyTo, chat.String()).Scan(&sender, &fromMe, &content, &kind, &filename)
+	err := s.store.db.QueryRow("SELECT sender, from_me FROM whatsapp_recent WHERE store = ? AND chat_jid = ? AND id = ?",
+		s.store.key, chat.String(), req.ReplyTo).Scan(&sender, &fromMe)
 	var participant string
 	switch {
 	case err == nil && fromMe.Bool, err != nil && req.ReplySender == "me":
@@ -434,13 +446,10 @@ func (s *Sender) quote(chat types.JID, req SendRequest, stored *StoredMessage) (
 	default:
 		return nil, fmt.Errorf("who wrote the message answered is not known: give reply_sender")
 	}
-	text := content.String
-	if err != nil {
-		text, kind.String = req.ReplyText, "text"
-	}
+	text := req.ReplyText
 	stored.ReplyTo, stored.ReplyText = req.ReplyTo, text
 	return &waE2E.ContextInfo{StanzaID: proto.String(req.ReplyTo), Participant: proto.String(participant),
-		QuotedMessage: quotedMessage(kind.String, text, filename.String)}, nil
+		QuotedMessage: quotedMessage(req.ReplyKind, text, req.ReplyFilename)}, nil
 }
 
 func quotedMessage(kind, text, filename string) *waE2E.Message {

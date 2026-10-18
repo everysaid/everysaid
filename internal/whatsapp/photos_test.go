@@ -41,8 +41,9 @@ func (f *fakePhotos) GetProfilePictureInfo(_ context.Context, jid types.JID, p *
 	}
 }
 
-func photoRows(t *testing.T, store *MessageStore) string {
-	rows, err := store.db.Query("SELECT jid, picture_id, coalesce(path, '-'), first_seen = last_seen FROM profile_photo ORDER BY jid, first_seen, rowid")
+func photoRows(t *testing.T, store *Store) string {
+	rows, err := store.db.Query("SELECT jid, picture_id, coalesce(path, '-'), first_seen = last_seen FROM whatsapp_photo "+
+		"WHERE store = ? ORDER BY jid, first_seen, rowid", store.key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,16 +63,15 @@ func photoRows(t *testing.T, store *MessageStore) string {
 // questions wait.
 func TestPhotosAsked(t *testing.T) {
 	dir := t.TempDir()
-	store, err := OpenMessages(dir)
+	store, err := OpenStore(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
 	photoFetch = func(_ context.Context, url string) ([]byte, error) { return []byte("jpeg of " + url), nil }
 	defer func() { photoFetch = fetchPhoto }()
 	maria, group, hidden := "15557770001@s.whatsapp.net", "15557770001-1600000000@g.us", "15557770003@s.whatsapp.net"
 	for _, jid := range []string{maria, group, hidden, "status@broadcast", "123@newsletter"} {
-		store.StoreChat(jid, "x", time.Now())
+		store.storeChat(jid, "x", time.Now())
 	}
 	f := &fakePhotos{now: map[string]string{maria: "p1", group: "g1", hidden: "hidden"}}
 	log := &logger{b: &Bridge{}}
@@ -117,7 +117,7 @@ func TestPhotosAsked(t *testing.T) {
 	}
 
 	// into the archive: the files taken, the photos at their times (a second apart here: made apart)
-	store.db.Exec("UPDATE profile_photo SET first_seen = 1000 * rowid, last_seen = 1000 * rowid")
+	store.exec("UPDATE whatsapp_photo SET first_seen = 1000 * rowid, last_seen = 1000 * rowid WHERE store = ?", store.key)
 	t.Cleanup(config.Load)
 	t.Setenv("EVERYSAID_DATA", t.TempDir())
 	config.Load()
@@ -130,7 +130,7 @@ func TestPhotosAsked(t *testing.T) {
 	a.Address(h)
 	a.Conversation("whatsapp", []archive.Handle{h}, group, "Friends")
 	a.Commit()
-	step := importers.PhotosWhatsAppBridge(filepath.Join(dir, "messages.db"), nil)
+	step := importers.PhotosWhatsAppLive(store.db, store.key, dir)
 	if err := importers.Media(a, nil, step); err != nil {
 		t.Fatal(err)
 	}

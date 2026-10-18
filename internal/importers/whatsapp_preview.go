@@ -1,8 +1,8 @@
 package importers
 
 // The previews of links WhatsApp's apps made (the sender's app: title, description, picture), as
-// the iPhone keeps them (ZWAMESSAGEDATAITEM, the media item of a link message) and as the bridge
-// kept them (messages.preview_*). WhatsApp names no site.
+// the iPhone keeps them (ZWAMESSAGEDATAITEM, the media item of a link message) and as the live
+// connection reads them (WAMessage.Preview). WhatsApp names no site.
 
 import (
 	"cmp"
@@ -90,20 +90,6 @@ func iphonePreviews(iphone *sql.DB, folder string) map[int64]*archive.Preview {
 		}
 	}
 	return out
-}
-
-// bridgePreview is the preview the bridge kept of a message: its picture the high-quality one it
-// downloaded, else the small one the message carried; nil for none.
-func bridgePreview(r row) *archive.Preview {
-	p := &archive.Preview{URL: str(r["preview_url"]), Title: str(r["preview_title"]),
-		Description: str(r["preview_description"]), Image: asBytes(r["preview_image"])}
-	if len(p.Image) == 0 {
-		p.Image = asBytes(r["preview_thumb"])
-	}
-	if p.Title == "" && p.Description == "" && len(p.Image) == 0 {
-		return nil
-	}
-	return p
 }
 
 // setPreview brings the preview of a message the archive had already up to date (true: changed).

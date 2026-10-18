@@ -1,8 +1,8 @@
 package whatsapp
 
 // Ports the plugin WhatsappBridge of everysaid/plugins/sources.py. What it asked the bridge's REST
-// API it now asks the Bridge running in this process (Running); what it read of the bridge's
-// databases it still reads there, read only.
+// API it now asks the Bridge running in this process (Running); what the bridge keeps of its state
+// it reads in keys.db.
 
 import (
 	"context"
@@ -85,26 +85,25 @@ func limits(c *plugins.Context) SendLimits {
 		PerDay: int(c.Num("send_per_day")), SameText: int(c.Num("send_same_text")), NewChats: int(c.Num("send_new_chats"))}
 }
 
-// paths are the store folder's messages.db and keys.db, where whatsmeow keeps the device and the
-// chats' settings.
-func paths(c *plugins.Context) (string, string) {
-	return filepath.Join(storeDir(c), "messages.db"), keys.Path()
+// keysDB is keys.db where the bridge's tables are there (nil before it ever ran, or where keys.db
+// cannot be opened).
+func keysDB() *sql.DB {
+	d, err := keys.Open()
+	if err != nil || !db.Exists(d, "SELECT 1 FROM sqlite_master WHERE name = 'whatsapp_state'") {
+		return nil
+	}
+	return d
 }
 
-// bridgeState is what the bridge last recorded about its connection (bridge_state: connection,
-// send_enabled, send_blocked, ban_until); empty for a store from before that table.
+// bridgeState is what the bridge last recorded about its connection (whatsapp_state: connection,
+// send_enabled, send_blocked, ban_until); empty before it ever ran.
 func bridgeState(c *plugins.Context) (out map[string]string) {
 	out = map[string]string{}
-	path, _ := paths(c)
-	if _, err := os.Stat(path); err != nil {
+	d := keysDB()
+	if d == nil {
 		return out
 	}
-	d, err := sql.Open("sqlite", readOnly(path))
-	if err != nil {
-		return out
-	}
-	defer d.Close()
-	rows, err := d.Query("SELECT key, value FROM bridge_state")
+	rows, err := d.Query("SELECT key, value FROM whatsapp_state WHERE store = ?", key(storeDir(c)))
 	if err != nil {
 		return out
 	}
@@ -163,14 +162,13 @@ func cardStatus(c *plugins.Context) map[string]any {
 	st := bridgeState(c)
 	opts := ConfigOptions()
 	sent := map[string]int{}
-	path, _ := paths(c)
-	if d, err := sql.Open("sqlite", readOnly(path)); err == nil {
+	if d := keysDB(); d != nil {
 		for word, since := range map[string]time.Duration{"minute": time.Minute, "hour": time.Hour, "day": 24 * time.Hour} {
 			var n int
-			d.QueryRow("SELECT count(*) FROM sent WHERE at > ?", time.Now().Add(-since).Unix()).Scan(&n)
+			d.QueryRow("SELECT count(*) FROM whatsapp_sent WHERE store = ? AND at > ?", key(storeDir(c)),
+				time.Now().Add(-since).Unix()).Scan(&n)
 			sent[word] = n
 		}
-		d.Close()
 	}
 	return map[string]any{"connected": false, "connection": st["connection"], "send_blocked": st["send_blocked"],
 		"send_enabled": opts.Send, "limits": limits(c), "sent": sent, "linked": HasDevice(storeDir(c))}
@@ -251,8 +249,9 @@ func watchState(c *plugins.Context) {
 
 func (p Plugin) RunImport(c *plugins.Context) error { return runImport(c) }
 
-// Live runs the connection, and imports what it keeps (messages.db) and the chats' state, archived,
-// pinned, muted (whatsmeow's, in keys.db) as they change.
+// Live runs the connection, which writes what arrives into the archive as it comes, and imports what
+// it keeps of chats and people (keys.db: the chats' state, archived, pinned, muted, the names, the
+// groups' members) as it changes.
 func (p Plugin) Live(ctx context.Context, c *plugins.Context) error {
 	opts := ConfigOptions()
 	opts.Limits = limits(c)
@@ -268,7 +267,8 @@ func (p Plugin) Live(ctx context.Context, c *plugins.Context) error {
 		Event: func(event, code, detail string) {
 			c.Safe("event", func() { c.Logf("%s", strings.TrimSpace("[bridge] "+event+" "+code+" "+detail)) })
 		},
-		Warn: func(text string) { c.Safe("warning", func() { c.Logf("%s", text) }) },
+		Warn:  func(text string) { c.Safe("warning", func() { c.Logf("%s", text) }) },
+		Write: writeTo(c),
 	})
 	if !HasDevice(storeDir(c)) {
 		c.Log("Not linked to WhatsApp yet: use “Link a device” and scan the QR code with the phone", nil)
@@ -282,8 +282,8 @@ func (p Plugin) Live(ctx context.Context, c *plugins.Context) error {
 		done <- err
 	}()
 
-	messages, devices := paths(c)
-	ps := []string{messages, messages + "-wal", devices, devices + "-wal"}
+	devices := keys.Path()
+	ps := []string{devices, devices + "-wal"}
 	var last int64
 	for {
 		var m int64
@@ -438,44 +438,33 @@ func (p Plugin) MarkRead(ctx context.Context, c *plugins.Context, conv plugins.C
 }
 
 // FetchMedia downloads a message's file now through the bridge running here (only while the live
-// connection runs): the message by its id in the bridge's store, in whichever chat it has it.
+// connection runs): the message by its id in what the bridge keeps to download, in whichever chat
+// it has it.
 func (p Plugin) FetchMedia(ctx context.Context, c *plugins.Context, messageID int64) (string, error) {
 	b := Running(storeDir(c))
 	if b == nil {
 		return "", nil
 	}
-	var key sql.NullString
+	var msgKey sql.NullString
 	if !db.Row(c.Store().Read(), "SELECT m.key FROM message m JOIN service s ON s.id = m.service_id "+
-		"WHERE m.id = ? AND s.name = 'whatsapp'", []any{messageID}, &key) || key.String == "" {
+		"WHERE m.id = ? AND s.name = 'whatsapp'", []any{messageID}, &msgKey) || msgKey.String == "" {
 		return "", nil
 	}
 	if p := importers.StoredFile(c.Store().Read(), messageID); p != "" {
 		return p, nil
 	}
-	path, _ := paths(c)
-	if _, err := os.Stat(path); err != nil {
+	d := keysDB()
+	if d == nil {
 		return "", nil
 	}
-	bridge, err := db.ReadOnly(path)
-	if err != nil {
-		return "", err
-	}
-	chats := db.Strs(bridge, "SELECT chat_jid FROM messages WHERE id = ?", key.String)
-	bridge.Close()
+	chats := db.Strs(d, "SELECT chat_jid FROM whatsapp_media WHERE store = ? AND id = ? AND media_type IS NOT NULL",
+		key(storeDir(c)), msgKey.String)
 	var last error
 	for _, jid := range chats {
-		got, err := b.Download(key.String, jid)
-		if err == nil && got != "" {
-			// into the archive's store at once, where it stays the only copy
-			if err := runImport(c); err != nil {
-				return "", err
-			}
-			if p := importers.StoredFile(c.Store().Read(), messageID); p != "" {
-				return p, nil
-			}
-			return got, nil
+		// into the archive's store at once, where it stays the only copy
+		if last = b.Download(msgKey.String, jid); last == nil {
+			return importers.StoredFile(c.Store().Read(), messageID), nil
 		}
-		last = err
 	}
 	return "", last
 }
@@ -503,18 +492,20 @@ func request(c *plugins.Context, conv plugins.Conversation, text string, reply *
 		req.Media, req.Filename, req.MimeType, req.Animated = file.Data, file.Filename, file.MimeType, file.Animated
 	}
 	if reply != nil {
-		// the bridge quotes from its own copy; one from before it was linked, from the archive's
+		// the bridge quotes the archive's copy (who wrote it as its own record of the last week names
+		// them, where it has it)
 		req.ReplyTo = reply.Key
 		var outgoing sql.NullInt64
-		var sender, txt sql.NullString
-		if db.Row(c.Store().Read(), "SELECT m.outgoing, a.value, m.text FROM message m "+
-			"LEFT JOIN address a ON a.id = m.sender_id WHERE m.id = ?", []any{reply.ID}, &outgoing, &sender, &txt) {
+		var sender, txt, kind, name sql.NullString
+		if db.Row(c.Store().Read(), "SELECT m.outgoing, a.value, m.text, k.name, (SELECT t.name FROM attachment t "+
+			"WHERE t.message_id = m.id ORDER BY t.rowid LIMIT 1) FROM message m LEFT JOIN address a ON a.id = m.sender_id "+
+			"LEFT JOIN message_kind k ON k.id = m.kind_id WHERE m.id = ?", []any{reply.ID}, &outgoing, &sender, &txt, &kind, &name) {
 			if outgoing.Int64 != 0 {
 				req.ReplySender = "me"
 			} else {
 				req.ReplySender = sender.String
 			}
-			req.ReplyText = txt.String
+			req.ReplyText, req.ReplyKind, req.ReplyFilename = txt.String, waKind(kind.String), name.String
 		}
 	}
 	return req, nil
@@ -554,9 +545,6 @@ func (p Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conve
 			return nil, errs.Plugin("Sending failed", status)
 		}
 		return nil, errs.Plugin(answer.Message, status)
-	}
-	if err := runImport(c); err != nil { // the bridge stores what it sent
-		c.Log("error: {e}", map[string]any{"e": err})
 	}
 	return plugins.Sent{Keys: []string{answer.ID}}, nil
 }
@@ -610,19 +598,29 @@ func (p Plugin) DeleteForMe(ctx context.Context, c *plugins.Context, conv plugin
 	return change(c, conv, msg, ChangeRequest{Kind: "delete_me"})
 }
 
-// change asks the bridge to react, edit or delete (for everyone, or for the user) under the gates of sending (each is a message to
-// WhatsApp), then imports what the bridge stored of it, as Send does.
+// change asks the bridge to react, edit or delete (for everyone, or for the user) under the gates of
+// sending (each is a message to WhatsApp); the bridge writes it into the archive, as Send does.
 func change(c *plugins.Context, conv plugins.Conversation, msg plugins.Ref, req ChangeRequest) error {
 	if !c.Bool("send") {
 		return errs.Plugin("Sending is off in this source's settings", 0)
 	}
 	req.Recipient, req.ID, req.FromMe, req.TS = recipient(conv.Key), msg.Key, msg.Outgoing, msg.TS
-	if !msg.Outgoing { // for a message the bridge does not have: who wrote it, as the archive says
-		var sender sql.NullString
-		db.Row(c.Store().Read(), "SELECT a.value FROM message m JOIN address a ON a.id = m.sender_id WHERE m.id = ?",
-			[]any{msg.ID}, &sender)
+	// the message as the archive has it: who wrote it, its kind, whom it names
+	var sender, kind sql.NullString
+	req.Known = db.Row(c.Store().Read(), "SELECT a.value, k.name FROM message m LEFT JOIN address a ON a.id = m.sender_id "+
+		"LEFT JOIN message_kind k ON k.id = m.kind_id WHERE m.id = ?", []any{msg.ID}, &sender, &kind)
+	if !msg.Outgoing {
 		req.Sender = sender.String
 	}
+	req.MessageKind = waKind(kind.String)
+	db.Each(c.Store().Read(), "SELECT coalesce(n.token, ''), a.value FROM mention n JOIN address a ON a.id = n.address_id WHERE n.message_id = ?",
+		[]any{msg.ID}, func(scan func(...any)) {
+			var token, value string
+			scan(&token, &value)
+			if jid := mentionedJID(token, value); jid != "" {
+				req.Mentions = append(req.Mentions, jid)
+			}
+		})
 	b := Running(storeDir(c))
 	if b == nil {
 		return errs.Plugin("not connected to WhatsApp", 503)
@@ -635,8 +633,28 @@ func change(c *plugins.Context, conv plugins.Conversation, msg plugins.Ref, req 
 		}
 		return errs.Plugin(answer.Message, 0)
 	}
-	if err := runImport(c); err != nil {
-		c.Log("error: {e}", map[string]any{"e": err})
-	}
 	return nil
+}
+
+// waKind is the archive's kind of a message as WhatsApp names it (a file is a document).
+func waKind(kind string) string {
+	if kind == "file" {
+		return "document"
+	}
+	return kind
+}
+
+// mentionedJID is the jid a mention names, from its token in the text (@<number or LID>) and the
+// archive's address of whom it names: a number's when the token is their number, else a LID's.
+func mentionedJID(token, value string) string {
+	user := strings.TrimPrefix(token, "@")
+	switch {
+	case user == "":
+		return ""
+	case value == "+"+user:
+		return user + "@s.whatsapp.net"
+	case strings.HasSuffix(value, "@lid") || strings.Trim(user, "0123456789") == "":
+		return user + "@lid"
+	}
+	return ""
 }

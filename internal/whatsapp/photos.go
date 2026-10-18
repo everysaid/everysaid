@@ -4,9 +4,9 @@ package whatsapp
 // (not the members of groups it never wrote with: not asked for, for now): asked of WhatsApp gently, one
 // at a time with a pause between, each chat at most every few days, unless WhatsApp says one
 // changed (events.Picture), which is asked at once. Each photo is downloaded into
-// <store>/photos/<jid>/<picture id>.jpg and recorded in profile_photo (a row for each photo seen,
-// its last sighting moved while it stays; picture_id "" when there is none), for the importer
-// (importers.PhotosWhatsAppBridge) to take into the archive.
+// <store>/photos/<jid>/<picture id>.jpg and recorded in whatsapp_photo (keys.db: a row for each
+// photo seen, its last sighting moved while it stays; picture_id "" when there is none), for the
+// import (importers.PhotosWhatsAppLive) to take into the archive.
 
 import (
 	"context"
@@ -37,74 +37,58 @@ var (
 	photoHTTP  = &http.Client{Timeout: time.Minute}
 )
 
-func (store *MessageStore) migratePhotos() error {
-	_, err := store.db.Exec(`
-		CREATE TABLE IF NOT EXISTS profile_photo (   -- the photos seen of each jid, a row for each
-			jid TEXT NOT NULL,
-			picture_id TEXT NOT NULL,                -- WhatsApp's id of the photo; '': none
-			path TEXT,                               -- the file, relative to the store (gone once the archive has it)
-			sha256 TEXT,                             -- its content's
-			first_seen INTEGER NOT NULL,             -- Unix seconds
-			last_seen INTEGER NOT NULL
-		);
-		CREATE INDEX IF NOT EXISTS profile_photo_jid ON profile_photo (jid, first_seen);
-		CREATE TABLE IF NOT EXISTS profile_photo_check (  -- when each jid's photo was last asked for
-			jid TEXT PRIMARY KEY,
-			checked_at INTEGER,                      -- Unix seconds; NULL: never
-			due INTEGER NOT NULL DEFAULT 0           -- WhatsApp said it changed: asked first
-		)`)
-	return err
-}
-
 // photoNow is the jid's latest photo id ("" for none or none known).
-func (store *MessageStore) photoNow(jid string) string {
+func (store *Store) photoNow(jid string) string {
 	var id string
-	store.db.QueryRow("SELECT picture_id FROM profile_photo WHERE jid = ? ORDER BY first_seen DESC, rowid DESC LIMIT 1", jid).Scan(&id)
+	store.db.QueryRow("SELECT picture_id FROM whatsapp_photo WHERE store = ? AND jid = ? ORDER BY first_seen DESC, rowid DESC LIMIT 1",
+		store.key, jid).Scan(&id)
 	return id
 }
 
 // notePhoto records a photo (pictureID "": none) seen at `at`: the latest row's sighting moved when it
 // is the same, else a new row.
-func (store *MessageStore) notePhoto(jid, pictureID, path, sha string, at int64) error {
+func (store *Store) notePhoto(jid, pictureID, path, sha string, at int64) error {
 	var rowid int64
 	var latest string
-	err := store.db.QueryRow("SELECT rowid, picture_id FROM profile_photo WHERE jid = ? ORDER BY first_seen DESC, rowid DESC LIMIT 1",
-		jid).Scan(&rowid, &latest)
+	err := store.db.QueryRow("SELECT rowid, picture_id FROM whatsapp_photo WHERE store = ? AND jid = ? "+
+		"ORDER BY first_seen DESC, rowid DESC LIMIT 1", store.key, jid).Scan(&rowid, &latest)
 	if err == nil && latest == pictureID {
-		_, err = store.db.Exec("UPDATE profile_photo SET last_seen = max(last_seen, ?) WHERE rowid = ?", at, rowid)
+		_, err = store.db.Exec("UPDATE whatsapp_photo SET last_seen = max(last_seen, ?) WHERE rowid = ?", at, rowid)
 		return err
 	}
 	if errors.Is(err, sql.ErrNoRows) && pictureID == "" {
 		return nil // never seen with one: nothing to say
 	}
-	_, err = store.db.Exec("INSERT INTO profile_photo (jid, picture_id, path, sha256, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
-		jid, pictureID, nullable(path), nullable(sha), at, at)
+	_, err = store.db.Exec("INSERT INTO whatsapp_photo (store, jid, picture_id, path, sha256, first_seen, last_seen) "+
+		"VALUES (?, ?, ?, ?, ?, ?, ?)", store.key, jid, pictureID, nullable(path), nullable(sha), at, at)
 	return err
 }
 
 // photoChecked records that the jid's photo was asked for now.
-func (store *MessageStore) photoChecked(jid string, at int64) {
-	store.db.Exec(`INSERT INTO profile_photo_check (jid, checked_at, due) VALUES (?, ?, 0)
-		ON CONFLICT (jid) DO UPDATE SET checked_at = excluded.checked_at, due = 0`, jid, at)
+func (store *Store) photoChecked(jid string, at int64) {
+	store.exec(`INSERT INTO whatsapp_photo_check (store, jid, checked_at, due) VALUES (?, ?, ?, 0)
+		ON CONFLICT (store, jid) DO UPDATE SET checked_at = excluded.checked_at, due = 0`, store.key, jid, at)
 }
 
 // photoDue marks the jid's photo to be asked for first (WhatsApp said it changed); now false: only
 // added to those asked for, when it is not there yet.
-func (store *MessageStore) photoDue(jid string, now bool) {
+func (store *Store) photoDue(jid string, now bool) {
 	if now {
-		store.db.Exec(`INSERT INTO profile_photo_check (jid, due) VALUES (?, 1) ON CONFLICT (jid) DO UPDATE SET due = 1`, jid)
+		store.exec(`INSERT INTO whatsapp_photo_check (store, jid, due) VALUES (?, ?, 1) ON CONFLICT (store, jid) DO UPDATE SET due = 1`,
+			store.key, jid)
 	} else {
-		store.db.Exec(`INSERT OR IGNORE INTO profile_photo_check (jid) VALUES (?)`, jid)
+		store.exec(`INSERT OR IGNORE INTO whatsapp_photo_check (store, jid) VALUES (?, ?)`, store.key, jid)
 	}
 }
 
 // nextPhoto is the jid whose photo is to be asked for now: one WhatsApp said changed, else the chat
 // (a person's or a group's) asked for longest ago, if that was more than photoEvery ago; "" for none.
-func (store *MessageStore) nextPhoto(now time.Time) string {
-	rows, err := store.db.Query(`SELECT j.jid FROM (SELECT jid FROM chats UNION SELECT jid FROM group_info
-			UNION SELECT jid FROM profile_photo_check) j LEFT JOIN profile_photo_check c ON c.jid = j.jid
-		WHERE coalesce(c.due, 0) OR c.checked_at IS NULL OR c.checked_at < ?
-		ORDER BY coalesce(c.due, 0) DESC, coalesce(c.checked_at, 0), j.jid LIMIT 200`, now.Add(-photoEvery).Unix())
+func (store *Store) nextPhoto(now time.Time) string {
+	rows, err := store.db.Query(`SELECT j.jid FROM (SELECT jid FROM whatsapp_chat WHERE store = ?1
+			UNION SELECT jid FROM whatsapp_group WHERE store = ?1 UNION SELECT jid FROM whatsapp_photo_check WHERE store = ?1) j
+		LEFT JOIN whatsapp_photo_check c ON c.store = ?1 AND c.jid = j.jid
+		WHERE coalesce(c.due, 0) OR c.checked_at IS NULL OR c.checked_at < ?2
+		ORDER BY coalesce(c.due, 0) DESC, coalesce(c.checked_at, 0), j.jid LIMIT 200`, store.key, now.Add(-photoEvery).Unix())
 	if err != nil {
 		return ""
 	}
@@ -137,7 +121,7 @@ type photoAsker interface {
 
 // askPhoto asks WhatsApp for one jid's photo and records what it says. It gives how long to wait
 // before the next question.
-func askPhoto(ctx context.Context, client photoAsker, store *MessageStore, jidStr string, logger waLog.Logger) time.Duration {
+func askPhoto(ctx context.Context, client photoAsker, store *Store, jidStr string, logger waLog.Logger) time.Duration {
 	jid, err := types.ParseJID(jidStr)
 	if err != nil {
 		store.photoChecked(jidStr, time.Now().Unix())
@@ -213,7 +197,7 @@ type Photos struct {
 	wake chan struct{}
 }
 
-func startPhotos(ctx context.Context, client photoAsker, store *MessageStore, own string, logger waLog.Logger) *Photos {
+func startPhotos(ctx context.Context, client photoAsker, store *Store, own string, logger waLog.Logger) *Photos {
 	p := &Photos{wake: make(chan struct{}, 1)}
 	if own != "" {
 		store.photoDue(own, false) // the account's own, as anyone's
@@ -240,7 +224,7 @@ func startPhotos(ctx context.Context, client photoAsker, store *MessageStore, ow
 
 // changed is WhatsApp's word that a photo changed: a removal recorded at once, a new photo asked for
 // first.
-func (p *Photos) changed(store *MessageStore, v *events.Picture) {
+func (p *Photos) changed(store *Store, v *events.Picture) {
 	jid := v.JID.ToNonAD().String()
 	if v.Remove {
 		at := v.Timestamp.Unix()

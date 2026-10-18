@@ -1,7 +1,7 @@
 package whatsapp
 
 // Reactions, edits and deletions from the app: what goes to WhatsApp (a stand-in here: nothing is
-// ever sent), what the bridge stores of it, and that the import then shows it in the archive.
+// ever sent), and that the archive shows it at once.
 
 import (
 	"context"
@@ -18,7 +18,10 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 
+	waLog "go.mau.fi/whatsmeow/util/log"
+
 	"everysaid/internal/errs"
+	"everysaid/internal/importers"
 	"everysaid/internal/plugins"
 )
 
@@ -69,13 +72,10 @@ func TestReactEditAndDeleteReachTheArchive(t *testing.T) {
 	f := bridgeInstance(t)
 	_, sent := linked(t, f)
 	now := time.Now().Add(-time.Minute)
-	f.ms.storeMessage(StoredMessage{ID: "THEIRS", ChatJID: peer, Sender: peer, Content: "lunch?", Timestamp: now, Kind: "text"})
-	f.ms.storeMessage(StoredMessage{ID: "MINE", ChatJID: peer, Sender: "15550009999@s.whatsapp.net", Content: "at 1",
+	f.put(t, StoredMessage{ID: "THEIRS", ChatJID: peer, Sender: peer, Content: "lunch?", Timestamp: now, Kind: "text"})
+	f.put(t, StoredMessage{ID: "MINE", ChatJID: peer, Sender: "15550009999@s.whatsapp.net", Content: "at 1",
 		Timestamp: now.Add(time.Second), IsFromMe: true, Kind: "text"})
 	p := Plugin{}
-	if err := p.RunImport(f.ctx()); err != nil {
-		t.Fatal(err)
-	}
 	theirs, _, _, _ := archived(t, f, "THEIRS")
 	mine, _, _, _ := archived(t, f, "MINE")
 	var convID int64
@@ -120,20 +120,20 @@ func TestReactEditAndDeleteReachTheArchive(t *testing.T) {
 		t.Fatalf("deletion sent %v", d)
 	}
 	// each went to WhatsApp as a message, and counts for the pace
-	if n := count(t, f.ms, "SELECT count(*) FROM sent"); n != 5 {
+	if n := count(t, f.ms, "SELECT count(*) FROM whatsapp_sent WHERE store = ?", f.ms.key); n != 5 {
 		t.Fatalf("sent %d", n)
 	}
 }
 
-// A reaction to someone's message in a group names who wrote it; one the bridge does not have takes
-// its author from the archive; what is not the account's own is neither edited nor deleted.
+// A reaction to someone's message in a group names who wrote it; an older one takes its author from
+// the archive; what is not the account's own is neither edited nor deleted.
 func TestAChangeNamesTheRightMessage(t *testing.T) {
 	f := bridgeInstance(t)
 	b, sent := linked(t, f)
 	group, nikos := "120363000000000001@g.us", "15557654321@s.whatsapp.net"
-	f.ms.storeChatTime(group, "Friends", time.Now())
-	f.ms.storeMessage(StoredMessage{ID: "G1", ChatJID: group, Sender: nikos, Content: "hi all", Timestamp: time.Now(), Kind: "text"})
-	f.ms.storeMessage(StoredMessage{ID: "PIC", ChatJID: group, Sender: "15550009999@s.whatsapp.net", Content: "us",
+	f.ms.storeChat(group, "Friends", time.Now())
+	f.put(t, StoredMessage{ID: "G1", ChatJID: group, Sender: nikos, Content: "hi all", Timestamp: time.Now(), Kind: "text"})
+	f.put(t, StoredMessage{ID: "PIC", ChatJID: group, Sender: "15550009999@s.whatsapp.net", Content: "us",
 		Timestamp: time.Now(), IsFromMe: true, Kind: "image", Mentions: []string{nikos, "15550000001@s.whatsapp.net"}})
 
 	if code, a := b.Change(ChangeRequest{Kind: "react", Recipient: group, ID: "G1", Emoji: "😂"}); code != 200 {
@@ -143,10 +143,10 @@ func TestAChangeNamesTheRightMessage(t *testing.T) {
 	if k.GetParticipant() != nikos || k.GetFromMe() || k.GetRemoteJID() != group {
 		t.Fatalf("key %v", k)
 	}
-	if n := count(t, f.ms, "SELECT count(*) FROM reactions WHERE message_id = 'G1' AND is_from_me AND emoji = '😂'"); n != 1 {
-		t.Fatalf("stored %d", n)
+	if g1, _, _, _ := archived(t, f, "G1"); myReaction(f, g1) != "😂" {
+		t.Fatalf("in the archive %q", myReaction(f, g1))
 	}
-	// from before the bridge was linked: the author as the archive has them, or refused
+	// an older one: the author as the archive has them, or refused
 	if code, a := b.Change(ChangeRequest{Kind: "react", Recipient: group, ID: "OLD", Sender: "+15557654321", Emoji: "👍"}); code != 200 {
 		t.Fatalf("%d %s", code, a.Message)
 	}
@@ -162,33 +162,56 @@ func TestAChangeNamesTheRightMessage(t *testing.T) {
 	if code, _ := b.Change(ChangeRequest{Kind: "delete", Recipient: group, ID: "OLD", FromMe: true}); code != 404 {
 		t.Fatalf("an unknown one deleted: %d", code)
 	}
-	// a caption is edited as a caption; the people still named stay named
-	if code, a := b.Change(ChangeRequest{Kind: "edit", Recipient: group, ID: "PIC", Text: "us and @15557654321"}); code != 200 {
+	// a caption is edited as a caption (the kind as the archive has it); the people still named stay named
+	if code, a := b.Change(ChangeRequest{Kind: "edit", Recipient: group, ID: "PIC", Text: "us and @15557654321",
+		MessageKind: "image", Mentions: []string{nikos, "15550000001@s.whatsapp.net"}}); code != 200 {
 		t.Fatalf("%d %s", code, a.Message)
 	}
 	img := (*sent)[2].GetEditedMessage().GetMessage().GetProtocolMessage().GetEditedMessage().GetImageMessage()
 	if img.GetCaption() != "us and @15557654321" || strings.Join(img.GetContextInfo().GetMentionedJID(), ",") != nikos {
 		t.Fatalf("caption %v", img)
 	}
-	var content, mentions string
-	f.ms.db.QueryRow("SELECT content, mentions FROM messages WHERE id = 'PIC'").Scan(&content, &mentions)
-	if content != "us and @15557654321" || mentions != nikos {
-		t.Fatalf("stored %q %q", content, mentions)
+	if _, text, edited, _ := archived(t, f, "PIC"); text != "us and @15557654321" || !edited {
+		t.Fatalf("in the archive %q %v", text, edited)
 	}
 }
 
-// The account's reaction, once stored from the phone under its LID, is the one changed too: the
-// import would otherwise read two of them.
+// The plugin gives the bridge what the archive has of a message: its kind, whom it names (by the
+// jid its text names them by), who wrote it.
+func TestAChangeTakesTheMessageFromTheArchive(t *testing.T) {
+	if got := mentionedJID("@15557654321", "+15557654321"); got != "15557654321@s.whatsapp.net" {
+		t.Fatal(got)
+	}
+	if got := mentionedJID("@98765", "+15557654321"); got != "98765@lid" { // named by their LID, known by their number
+		t.Fatal(got)
+	}
+	if got := mentionedJID("@98765", "98765@lid"); got != "98765@lid" {
+		t.Fatal(got)
+	}
+	if waKind("file") != "document" || waKind("image") != "image" {
+		t.Fatal("kinds")
+	}
+}
+
+// The account's reaction, once it came from the phone under its LID, is the one changed too: the
+// account has one reaction on a message.
 func TestTheAccountsReactionIsOne(t *testing.T) {
 	f := bridgeInstance(t)
 	b, _ := linked(t, f)
-	f.ms.storeMessage(StoredMessage{ID: "M", ChatJID: peer, Sender: peer, Content: "x", Timestamp: time.Now(), Kind: "text"})
-	f.ms.storeReaction(peer, "M", "99990000@lid", true, "👍", time.Now().Add(-time.Hour))
+	f.put(t, StoredMessage{ID: "M", ChatJID: peer, Sender: peer, Content: "x", Timestamp: time.Now(), Kind: "text"})
+	if !f.ms.Write(&importers.WABatch{Reactions: []importers.WAReaction{{Chat: peer, Target: "M", Sender: "99990000@lid",
+		FromMe: true, Emoji: "👍", At: time.Now().Add(-time.Hour).UnixMilli()}}}, waLog.Noop) {
+		t.Fatal("not written")
+	}
+	m, _, _, _ := archived(t, f, "M")
+	if myReaction(f, m) != "👍" {
+		t.Fatal("the phone's reaction")
+	}
 	if code, a := b.Change(ChangeRequest{Kind: "react", Recipient: peer, ID: "M", Emoji: ""}); code != 200 {
 		t.Fatalf("%d %s", code, a.Message)
 	}
-	if n := count(t, f.ms, "SELECT count(*) FROM reactions WHERE message_id = 'M' AND is_from_me AND emoji != ''"); n != 0 {
-		t.Fatalf("still %d", n)
+	if got := myReaction(f, m); got != "" {
+		t.Fatalf("still %q", got)
 	}
 }
 
@@ -229,8 +252,8 @@ func TestChangesKeepTheGatesOfSending(t *testing.T) {
 }
 
 // A deletion for the user alone goes to the account's app state, no message to anyone: the right
-// index (a group's message of another names its author), stored as a deletion, the archive's copy
-// marked; one the bridge does not have waits for the import; one deleted so on the phone too.
+// index (a group's message of another names its author), the archive's copy marked deleted; one the
+// archive does not have waits for it; one deleted so on the phone too.
 func TestDeleteForMe(t *testing.T) {
 	f := bridgeInstance(t)
 	b, sent := linked(t, f)
@@ -241,11 +264,11 @@ func TestDeleteForMe(t *testing.T) {
 	}
 	group, nikos := "120363000000000001@g.us", "15557654321@s.whatsapp.net"
 	old := time.Now().Add(-72 * time.Hour) // long past deleting for everyone
-	f.ms.storeChatTime(group, "Friends", old)
-	f.ms.storeMessage(StoredMessage{ID: "G1", ChatJID: group, Sender: nikos, Content: "hi all", Timestamp: old, Kind: "text"})
-	f.ms.storeMessage(StoredMessage{ID: "MINE", ChatJID: peer, Sender: "15550009999@s.whatsapp.net", Content: "car papers",
+	f.ms.storeChat(group, "Friends", old)
+	f.put(t, StoredMessage{ID: "G1", ChatJID: group, Sender: nikos, Content: "hi all", Timestamp: old, Kind: "text"})
+	f.put(t, StoredMessage{ID: "MINE", ChatJID: peer, Sender: "15550009999@s.whatsapp.net", Content: "car papers",
 		Timestamp: old, IsFromMe: true, Kind: "image"})
-	f.ms.storeMessage(StoredMessage{ID: "P2", ChatJID: peer, Sender: peer, Content: "from the phone", Timestamp: old, Kind: "text"})
+	f.put(t, StoredMessage{ID: "P2", ChatJID: peer, Sender: peer, Content: "from the phone", Timestamp: old, Kind: "text"})
 
 	for _, c := range []struct {
 		req   ChangeRequest
@@ -265,24 +288,15 @@ func TestDeleteForMe(t *testing.T) {
 			t.Fatalf("%s: index %s, version %d, %v", c.req.ID, got, m.Version, m.Value)
 		}
 	}
-	if len(*sent) != 0 || count(t, f.ms, "SELECT count(*) FROM sent") != 0 {
+	if len(*sent) != 0 || count(t, f.ms, "SELECT count(*) FROM whatsapp_sent WHERE store = ?", f.ms.key) != 0 {
 		t.Fatal("a message went")
 	}
-	if n := count(t, f.ms, "SELECT count(*) FROM messages WHERE deleted AND id IN ('G1', 'MINE')"); n != 2 {
-		t.Fatalf("stored %d", n)
-	}
-	if n := count(t, f.ms, "SELECT count(*) FROM pending_changes WHERE target = 'OLD' AND change = 'delete_me'"); n != 1 {
-		t.Fatalf("pending %d", n)
+	if n := count(t, f.ms, "SELECT count(*) FROM whatsapp_pending WHERE store = ? AND target = 'OLD' AND kind = 'delete_me'", f.ms.key); n != 1 {
+		t.Fatalf("waiting %d", n)
 	}
 	// deleted for the user on the phone
 	b.handle(b.client, f.ms, &events.DeleteForMe{ChatJID: types.NewJID("15551234567", types.DefaultUserServer), MessageID: "P2", Timestamp: time.Now()})
-	if n := count(t, f.ms, "SELECT count(*) FROM messages WHERE deleted AND id = 'P2'"); n != 1 {
-		t.Fatalf("from the phone %d", n)
-	}
-	if err := (Plugin{}).RunImport(f.ctx()); err != nil {
-		t.Fatal(err)
-	}
-	for _, k := range []string{"MINE", "P2"} {
+	for _, k := range []string{"G1", "MINE", "P2"} {
 		if _, text, _, deleted := archived(t, f, k); !deleted || text == "" {
 			t.Fatalf("%s in the archive: %q %v", k, text, deleted)
 		}

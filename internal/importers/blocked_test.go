@@ -12,29 +12,29 @@ func blockedOf(a *archive.Archive, where string) []string {
 	return db.Strs(a.Tx(), "SELECT a.value FROM blocked b JOIN address a ON a.id = b.address_id WHERE b.phone = ? ORDER BY a.value", where)
 }
 
-// The people blocked on WhatsApp, as the bridge last heard, reach the archive by their number; one
-// unblocked since leaves it.
-func TestBridgeBlocklist(t *testing.T) {
+// The people blocked on WhatsApp, as the live connection last heard, reach the archive by their
+// number; one unblocked since leaves it.
+func TestLiveBlocklist(t *testing.T) {
 	a, _ := newArchive(t)
-	path, d := bridgeDB(t, t.TempDir(), newBridgeSchema+"CREATE TABLE blocklist (jid TEXT PRIMARY KEY);")
-	db.Exec(d, "INSERT INTO blocklist VALUES (?), ('15559876543@s.whatsapp.net')", waPeer)
-	runBridge(t, a, path)
+	keys := waKeys(t)
+	db.Exec(keys, "INSERT INTO whatsapp_blocked VALUES (?, ?), (?, '15559876543@s.whatsapp.net')", waStore, waPeer, waStore)
+	db.Exec(keys, "INSERT INTO whatsapp_state VALUES (?, 'blocklist', '1', 0)", waStore)
+	state(t, a, keys)
 	if got := blockedOf(a, "whatsapp"); !reflect.DeepEqual(got, []string{"+15551234567", "+15559876543"}) {
 		t.Fatalf("blocked: %v", got)
 	}
-	db.Exec(d, "DELETE FROM blocklist WHERE jid = ?", waPeer)
-	runBridge(t, a, path)
+	db.Exec(keys, "DELETE FROM whatsapp_blocked WHERE jid = ?", waPeer)
+	state(t, a, keys)
 	if got := blockedOf(a, "whatsapp"); !reflect.DeepEqual(got, []string{"+15559876543"}) {
 		t.Fatalf("after unblocking: %v", got)
 	}
 }
 
-// A bridge from before the blocklist leaves what the archive has of it.
-func TestBridgeWithoutBlocklist(t *testing.T) {
+// A connection that never had its blocklist from WhatsApp leaves what the archive has of it.
+func TestLiveWithoutBlocklist(t *testing.T) {
 	a, _ := newArchive(t)
 	a.Blocked("whatsapp", archive.H("phone", "+15559876543"), true)
-	path, _ := bridgeDB(t, t.TempDir(), newBridgeSchema)
-	runBridge(t, a, path)
+	state(t, a, waKeys(t))
 	if got := blockedOf(a, "whatsapp"); len(got) != 1 {
 		t.Fatalf("blocked: %v", got)
 	}

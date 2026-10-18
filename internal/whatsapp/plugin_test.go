@@ -1,8 +1,9 @@
 package whatsapp
 
 // The plugin's part of the WhatsApp connection (what the plugin reads of the store and asks of the
-// bridge); the importers' part is tested in internal/importers. Everything is made in
-// temporary folders: never a real store or archive, and no connection to WhatsApp.
+// bridge, and how the bridge writes into the archive); the writer itself is tested in
+// internal/importers. Everything is made in temporary folders: never a real store, keys.db or
+// archive, and no connection to WhatsApp.
 
 import (
 	"context"
@@ -19,10 +20,13 @@ import (
 	"go.mau.fi/whatsmeow/proto/waAdv"
 	"go.mau.fi/whatsmeow/types"
 
+	waLog "go.mau.fi/whatsmeow/util/log"
+
 	"everysaid/internal/archive"
 	"everysaid/internal/config"
 	"everysaid/internal/core"
 	"everysaid/internal/errs"
+	"everysaid/internal/importers"
 	"everysaid/internal/keys"
 	"everysaid/internal/plugins"
 )
@@ -94,8 +98,18 @@ type fixture struct {
 	h   *host
 	iid int64
 	dir string // the store folder
-	ms  *MessageStore
+	ms  *Store
 	a   *archive.Archive
+}
+
+// put writes a message into the archive as the bridge does when it arrives.
+func (f *fixture) put(t *testing.T, m StoredMessage) {
+	t.Helper()
+	b := &importers.WABatch{}
+	keep(f.ms, b, m, f.ms.chatNameOf(m.ChatJID))
+	if !f.ms.Write(b, waLog.Noop) {
+		t.Fatal("not written")
+	}
 }
 
 func (f *fixture) ctx() *plugins.Context {
@@ -122,18 +136,17 @@ func bridgeInstance(t *testing.T) *fixture {
 	}
 	t.Cleanup(store.Close)
 	wa := filepath.Join(dir, "store")
-	ms, err := OpenMessages(wa)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { ms.Close() })
-	ms.db.Exec("INSERT INTO chats VALUES (?, 'Peer', ?)", peer, ts(30))
-	ms.db.Exec("INSERT INTO bridge_state VALUES ('send_enabled', '1', ?)", ts(0))
 	iid, err := plugins.Create(store, "whatsapp-bridge", "WhatsApp", M{"store": wa, "send": true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &fixture{h: &host{store: store}, iid: iid, dir: wa, ms: ms, a: a}
+	f := &fixture{h: &host{store: store}, iid: iid, dir: wa, a: a}
+	if f.ms, err = OpenStore(wa, writeTo(f.ctx())); err != nil {
+		t.Fatal(err)
+	}
+	f.ms.storeChat(peer, "Peer", time.Now())
+	f.ms.setState("send_enabled", "1")
+	return f
 }
 
 func TestThePluginTurnsSendingOffWhenTheBridgeBlocksIt(t *testing.T) {
@@ -142,7 +155,7 @@ func TestThePluginTurnsSendingOffWhenTheBridgeBlocksIt(t *testing.T) {
 	if !plugins.Sending(p, f.ctx()) {
 		t.Fatalf("not sending: %q", p.NotSending(f.ctx()))
 	}
-	f.ms.db.Exec("INSERT INTO bridge_state VALUES ('send_blocked', 'temporary ban: sent to too many people', ?)", ts(1))
+	f.ms.setState("send_blocked", "temporary ban: sent to too many people")
 	c := f.ctx()
 	if plugins.Sending(p, c) {
 		t.Fatal("sending while blocked")
@@ -162,7 +175,7 @@ func TestThePluginTurnsSendingOffWhenTheBridgeBlocksIt(t *testing.T) {
 	if len(f.h.alerts) != 1 { // told once
 		t.Fatalf("alerts %v", f.h.alerts)
 	}
-	f.ms.db.Exec("UPDATE bridge_state SET value = '' WHERE key = 'send_blocked'") // cleared at the bridge
+	f.ms.setState("send_blocked", "") // cleared at the bridge
 	watchState(f.ctx())
 	if plugins.Sending(p, f.ctx()) { // still off: turning it on is the user's
 		t.Fatal("sending again by itself")
@@ -189,7 +202,7 @@ func TestItsCardSaysWhatTheStoreSays(t *testing.T) {
 	// a device linked, the connection last said connected: not so now (it does not run)
 	linkDevice(t, f.dir)
 	f.ms.setState("connection", "connected")
-	f.ms.db.Exec("INSERT INTO sent (at, chat_jid, id, text_hash) VALUES (?, 'c', 'x', 'h')", time.Now().Unix()-60)
+	f.ms.exec("INSERT INTO whatsapp_sent (store, at, chat_jid, id, text_hash) VALUES (?, ?, 'c', 'x', 'h')", f.ms.key, time.Now().Unix()-60)
 	facts = p.InfoFacts(f.ctx())
 	if want := []plugins.Fact{{Label: "Connection", Value: "not connected to WhatsApp"}, {Label: "Sending", Value: "on, 1 of 1000 today"}}; !reflect.DeepEqual(facts[:2], want) {
 		t.Fatalf("got %v", facts)
@@ -234,8 +247,8 @@ func TestAnAnswerTellsTheBridgeWhatItAnswers(t *testing.T) {
 	file, _ := request(f.ctx(), conv, "", nil, nil, &plugins.File{Data: []byte("\x89PNG"), Filename: "a.png", MimeType: "image/png"})
 	got = append(got, plain, file)
 	want := []SendRequest{
-		{Recipient: "15551234567", Message: "yes", ReplyTo: "THEIRS", ReplySender: "+15551234567", ReplyText: "a question"},
-		{Recipient: "15551234567", Message: "yes", ReplyTo: "MINE", ReplySender: "me", ReplyText: "an aside"},
+		{Recipient: "15551234567", Message: "yes", ReplyTo: "THEIRS", ReplySender: "+15551234567", ReplyText: "a question", ReplyKind: "text"},
+		{Recipient: "15551234567", Message: "yes", ReplyTo: "MINE", ReplySender: "me", ReplyText: "an aside", ReplyKind: "text"},
 		{Recipient: "15551234567", Message: "plain"},
 		{Recipient: "15551234567", Message: "", Media: []byte("\x89PNG"), Filename: "a.png", MimeType: "image/png"}}
 	if !reflect.DeepEqual(got, want) {
@@ -405,20 +418,22 @@ func TestRunWaitsToBeLinked(t *testing.T) {
 	if Running(dir) != nil {
 		t.Fatal("still running")
 	}
-	if _, err := os.Stat(filepath.Join(dir, "messages.db")); err != nil {
-		t.Fatal(err)
+	// the store folder holds no database: the bridge's tables are keys.db's
+	if _, err := os.Stat(filepath.Join(dir, "messages.db")); !os.IsNotExist(err) {
+		t.Fatalf("a database in the store folder: %v", err)
+	}
+	if st, err := os.Stat(dir); err != nil || st.Mode().Perm() != 0o700 {
+		t.Fatalf("the store folder: %v %v", st, err)
 	}
 }
 
-// An import brings the store's messages, ties their source to the instance, says what is new; again,
-// nothing.
-func TestTheImportBringsTheStoresMessages(t *testing.T) {
+// What arrives is written into the archive at once, its source tied to the instance, said as new;
+// the same again, nothing.
+func TestWhatArrivesIsWrittenAtOnce(t *testing.T) {
 	f := bridgeInstance(t)
-	f.ms.storeMessage(StoredMessage{ID: "HELLO", ChatJID: peer, Sender: peer, Content: "hello",
-		Timestamp: time.Date(2026, 10, 6, 10, 1, 0, 0, time.UTC), Kind: "text"})
-	if err := (Plugin{}).RunImport(f.ctx()); err != nil {
-		t.Fatal(err)
-	}
+	hello := StoredMessage{ID: "HELLO", ChatJID: peer, Sender: peer, Content: "hello",
+		Timestamp: time.Date(2026, 10, 6, 10, 1, 0, 0, time.UTC), Kind: "text"}
+	f.put(t, hello)
 	var n, tied int64
 	db := f.h.store.Read()
 	db.QueryRow("SELECT count(*) FROM message WHERE key = 'HELLO'").Scan(&n)
@@ -426,23 +441,25 @@ func TestTheImportBringsTheStoresMessages(t *testing.T) {
 	if n != 1 || tied == 0 {
 		t.Fatalf("messages %d, sources of the instance %d", n, tied)
 	}
-	news := 0
-	for _, e := range f.h.events {
-		if e["type"] == "new" {
-			news++
+	news := func() int {
+		n := 0
+		for _, e := range f.h.events {
+			if e["type"] == "new" {
+				n++
+			}
 		}
+		return n
 	}
-	if err := (Plugin{}).RunImport(f.ctx()); err != nil {
+	first := news()
+	f.put(t, hello)
+	if first != 1 || news() != 1 {
+		t.Fatalf("new events %d, then %d", first, news())
+	}
+	if err := (Plugin{}).RunImport(f.ctx()); err != nil { // what it keeps of chats and people: nothing new
 		t.Fatal(err)
 	}
-	again := 0
-	for _, e := range f.h.events {
-		if e["type"] == "new" {
-			again++
-		}
-	}
-	if news != 1 || again != 1 {
-		t.Fatalf("new events %d, then %d", news, again)
+	if news() != 1 {
+		t.Fatalf("the import said new: %d", news())
 	}
 }
 
@@ -486,31 +503,25 @@ func TestFirstMessageOnlyToContacts(t *testing.T) {
 	}
 }
 
-// Once the archive has a row and it was last written a week ago, it leaves messages.db; what the
-// bridge needs of the chat stays (someone wrote there: it sends there still), a file not in the
-// archive yet and a poll stay, and a read on the phone of a message gone reaches the archive.
-func TestTheStoreKeepsOnlyWhatTheArchiveLacks(t *testing.T) {
+// keys.db keeps what the connection needs, only while it needs it: its record of a message a week
+// (it sends, edits, deletes and marks read within that), sends a day; that someone wrote in a chat
+// stays (it sends only there), and so does a file still to download.
+func TestKeysKeepOnlyWhatTheConnectionNeeds(t *testing.T) {
 	f := bridgeInstance(t)
-	at := time.Now().Add(-30 * 24 * time.Hour)
-	for _, m := range []StoredMessage{
-		{ID: "OLD", Content: "old"},
-		{ID: "PIC", Kind: "image", MediaType: "image", Content: ""},
-		{ID: "POLL", Kind: "poll", Content: "When?"},
-	} {
-		m.ChatJID, m.Sender, m.Timestamp = peer, peer, at
-		if m.Kind == "" {
-			m.Kind = "text"
-		}
-		f.ms.storeMessage(m)
-	}
-	f.ms.db.Exec("UPDATE messages SET poll = ? WHERE id = 'POLL'", `{"name":"When?","options":["Mon"]}`) // as processMessage does
-	f.ms.storeMessage(StoredMessage{ID: "NEW", ChatJID: peer, Sender: peer, Content: "new", Timestamp: time.Now(), Kind: "text"})
+	old := time.Now().Add(-30 * 24 * time.Hour)
+	f.put(t, StoredMessage{ID: "OLD", ChatJID: peer, Sender: peer, Content: "old", Timestamp: old, Kind: "text"})
+	f.put(t, StoredMessage{ID: "PIC", ChatJID: peer, Sender: peer, Timestamp: old, Kind: "image", MediaType: "image",
+		URL: "https://mmg.whatsapp.net/v/p", MediaKey: []byte("k"), FileEncSHA256: []byte("e")})
+	f.put(t, StoredMessage{ID: "NEW", ChatJID: peer, Sender: peer, Content: "new", Timestamp: time.Now(), Kind: "text"})
+	f.ms.sent(peer, "S1", "h")
+	f.ms.exec("UPDATE whatsapp_sent SET at = ? WHERE store = ?", time.Now().Add(-25*time.Hour).Unix(), f.ms.key)
+	f.ms.sent(peer, "S2", "h")
 	if err := (Plugin{}).RunImport(f.ctx()); err != nil {
 		t.Fatal(err)
 	}
-	ids := func() string {
+	ids := func(query string) string {
 		var out []string
-		rows, _ := f.ms.db.Query("SELECT id FROM messages ORDER BY id")
+		rows, _ := f.ms.db.Query(query, f.ms.key)
 		defer rows.Close()
 		for rows.Next() {
 			var id string
@@ -519,60 +530,27 @@ func TestTheStoreKeepsOnlyWhatTheArchiveLacks(t *testing.T) {
 		}
 		return strings.Join(out, ",")
 	}
-	if got := ids(); got != "NEW,OLD,PIC,POLL" {
-		t.Fatalf("written now: all kept, %s", got)
+	if got := ids("SELECT id FROM whatsapp_recent WHERE store = ? ORDER BY id"); got != "NEW" {
+		t.Fatalf("the last week's: %s", got)
 	}
-	f.ms.db.Exec("UPDATE stored SET at = ?", time.Now().Add(-8*24*time.Hour).Unix()) // a week has gone
-	if err := (Plugin{}).RunImport(f.ctx()); err != nil {
-		t.Fatal(err)
+	if got := ids("SELECT id FROM whatsapp_sent WHERE store = ? ORDER BY id"); got != "S2" {
+		t.Fatalf("the last day's sends: %s", got)
 	}
-	if got := ids(); got != "PIC,POLL" {
-		t.Fatalf("after a week: %s", got)
+	if got := ids("SELECT id FROM whatsapp_media WHERE store = ? ORDER BY id"); got != "PIC" {
+		t.Fatalf("still to download: %s", got)
 	}
-	var incoming int
-	f.ms.db.QueryRow("SELECT count(*) FROM incoming_chats WHERE jid = ?", peer).Scan(&incoming)
-	if incoming != 1 { // what chatsFor goes by, the messages gone
-		t.Fatal("no longer sends there")
+	if got := ids("SELECT jid FROM whatsapp_chat WHERE store = ? AND incoming"); got != peer { // what chatsFor goes by
+		t.Fatalf("no longer sends there: %q", got)
 	}
-	// read on the phone, the message no longer in the store
-	readAt := time.Now()
-	f.ms.markedRead(peer, []string{"OLD"}, readAt)
-	if err := (Plugin{}).RunImport(f.ctx()); err != nil {
-		t.Fatal(err)
+	// read on the phone, the message out of the record: the archive's copy marks the chat read
+	b := &importers.WABatch{}
+	f.ms.markedRead(b, peer, []string{"OLD"}, time.Now())
+	if !f.ms.Write(b, waLog.Noop) {
+		t.Fatal("not written")
 	}
 	var until int64
 	f.h.store.Read().QueryRow("SELECT value FROM state_report WHERE field = 'read_until'").Scan(&until)
-	if until != at.UnixMilli() {
-		t.Fatalf("read until %d, want %d", until, at.UnixMilli())
-	}
-}
-
-// A week's messages large enough that taking them out spills to the file (the store's lock then
-// exclusive) leave at once: the pruning asked about the store's tables on another connection while
-// its own transaction held it, waited for itself until the busy timeout and was rolled back, at
-// every import, the archive held the while.
-func TestALargePruneDoesNotWaitForItself(t *testing.T) {
-	f := bridgeInstance(t)
-	at := time.Now().Add(-30 * 24 * time.Hour)
-	text := strings.Repeat("x", 1000)
-	for i := range 6000 { // the old among the new: the pages each keep some, all of them changed
-		f.ms.storeMessage(StoredMessage{ID: fmt.Sprintf("%c%d", "ON"[i%2], i), ChatJID: peer, Sender: peer, Content: text, Timestamp: at, Kind: "text"})
-	}
-	if err := (Plugin{}).RunImport(f.ctx()); err != nil {
-		t.Fatal(err)
-	}
-	f.ms.db.Exec("UPDATE stored SET at = ? WHERE rid IN (SELECT rowid FROM messages WHERE id LIKE 'O%')",
-		time.Now().Add(-8*24*time.Hour).Unix()) // a week has gone for the old ones
-	start := time.Now()
-	if err := (Plugin{}).RunImport(f.ctx()); err != nil {
-		t.Fatal(err)
-	}
-	if d := time.Since(start); d > 4*time.Second {
-		t.Fatalf("took %v", d)
-	}
-	var left int
-	f.ms.db.QueryRow("SELECT count(*) FROM messages").Scan(&left)
-	if left != 3000 {
-		t.Fatalf("%d messages left", left)
+	if until != old.UnixMilli() {
+		t.Fatalf("read until %d, want %d", until, old.UnixMilli())
 	}
 }

@@ -1,10 +1,10 @@
 package whatsapp
 
-// Tests run on an in-memory database or in temporary folders: never on a real store.
+// Tests run in temporary folders, keys.db among them: never on a real store.
 
 import (
 	"bytes"
-	"database/sql"
+	"errors"
 	"image"
 	"image/png"
 	"strings"
@@ -16,101 +16,41 @@ import (
 	"go.mau.fi/whatsmeow/proto/waWeb"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
+	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
+
+	"everysaid/internal/importers"
 )
 
-// oldStore is a store as the bridge made it before this version.
-func oldStore(t *testing.T) *MessageStore {
-	db, err := sql.Open("sqlite", "file::memory:?_pragma=foreign_keys(1)&_time_format=sqlite")
+// testStore is a store folder's part of keys.db, writing nowhere.
+func testStore(t *testing.T) *Store {
+	s, err := OpenStore(t.TempDir(), nil)
 	if err != nil {
-		t.Fatal(err)
-	}
-	db.SetMaxOpenConns(1)
-	_, err = db.Exec(`
-		CREATE TABLE chats (jid TEXT PRIMARY KEY, name TEXT, last_message_time TIMESTAMP);
-		CREATE TABLE messages (id TEXT, chat_jid TEXT, sender TEXT, content TEXT, timestamp TIMESTAMP,
-			is_from_me BOOLEAN, media_type TEXT, filename TEXT, url TEXT, media_key BLOB, file_sha256 BLOB,
-			file_enc_sha256 BLOB, file_length INTEGER, PRIMARY KEY (id, chat_jid), FOREIGN KEY (chat_jid) REFERENCES chats(jid));
-		INSERT INTO chats VALUES ('1@s.whatsapp.net', 'A', '2026-10-01 10:00:00+03:00');
-		INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me, media_type, filename)
-			VALUES ('OLD', '1@s.whatsapp.net', '1', 'hello', '2026-10-01 10:00:00+03:00', 0, 'image', 'image_1.jpg');
-	`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := &MessageStore{db: db, dir: t.TempDir()}
-	if err := s.migrate(); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.migrateStatus(); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.migrateGroups(); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.migrateReceipts(); err != nil {
 		t.Fatal(err)
 	}
 	return s
 }
 
-func TestMigrateKeepsRowsAndIsRepeatable(t *testing.T) {
-	s := oldStore(t)
-	if err := s.migrate(); err != nil {
-		t.Fatal("second migrate:", err)
-	}
-	var content string
-	var kind sql.NullString
-	if err := s.db.QueryRow("SELECT content, kind FROM messages WHERE id = 'OLD'").Scan(&content, &kind); err != nil {
+// count is the first column of a query on keys.db.
+func count(t *testing.T, s *Store, query string, args ...any) int {
+	t.Helper()
+	var n int
+	if err := s.db.QueryRow(query, args...).Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if content != "hello" || kind.Valid {
-		t.Fatalf("old row changed: %q %v", content, kind)
-	}
-}
-
-func TestStoreAgainKeepsFilenameAndEditedText(t *testing.T) {
-	s := oldStore(t)
-	ts := time.Now()
-	m := StoredMessage{ID: "OLD", ChatJID: "1@s.whatsapp.net", Sender: "1@s.whatsapp.net", Content: "hello",
-		Timestamp: ts, MediaType: "image", Filename: "image_2.jpg", Kind: "image"}
-	s.db.Exec("UPDATE messages SET content = 'hello (edited)', edited = 1 WHERE id = 'OLD'")
-	if err := s.storeMessage(m); err != nil {
-		t.Fatal(err)
-	}
-	var content, filename, kind string
-	s.db.QueryRow("SELECT content, filename, kind FROM messages WHERE id = 'OLD'").Scan(&content, &filename, &kind)
-	if content != "hello (edited)" || filename != "image_1.jpg" || kind != "image" {
-		t.Fatalf("got %q %q %q", content, filename, kind)
-	}
-}
-
-func TestReactionKeepsTheLatest(t *testing.T) {
-	s := oldStore(t)
-	t0 := time.Now()
-	s.storeReaction("c", "m", "p", false, "👍", t0)
-	s.storeReaction("c", "m", "p", false, "❤️", t0.Add(time.Second))
-	s.storeReaction("c", "m", "p", false, "😂", t0.Add(-time.Second)) // older: ignored
-	var emoji string
-	s.db.QueryRow("SELECT emoji FROM reactions WHERE chat_jid = 'c' AND message_id = 'm' AND sender = 'p'").Scan(&emoji)
-	if emoji != "❤️" {
-		t.Fatalf("got %q", emoji)
-	}
-	s.storeReaction("c", "m", "p", false, "", t0.Add(2*time.Second)) // taken back
-	s.db.QueryRow("SELECT emoji FROM reactions WHERE chat_jid = 'c' AND message_id = 'm' AND sender = 'p'").Scan(&emoji)
-	if emoji != "" {
-		t.Fatalf("taken back: got %q", emoji)
-	}
+	return n
 }
 
 func TestChatTimeKeepsTheNewest(t *testing.T) {
-	s := oldStore(t)
-	older, _ := time.Parse(time.RFC3339, "2026-09-01T10:00:00+03:00")
-	s.storeChatTime("1@s.whatsapp.net", "A", older)
-	var last time.Time
-	s.db.QueryRow("SELECT last_message_time FROM chats WHERE jid = '1@s.whatsapp.net'").Scan(&last)
-	if last.Month() != time.October {
-		t.Fatalf("went back to %v", last)
+	s := testStore(t)
+	newer := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	s.storeChat("1@s.whatsapp.net", "A", newer)
+	s.storeChat("1@s.whatsapp.net", "", newer.Add(-30*24*time.Hour)) // history, older: the name kept too
+	var last int64
+	var name string
+	s.db.QueryRow("SELECT last_at, name FROM whatsapp_chat WHERE store = ? AND jid = '1@s.whatsapp.net'", s.key).Scan(&last, &name)
+	if last != newer.UnixMilli() || name != "A" {
+		t.Fatalf("went back to %v %q", time.UnixMilli(last), name)
 	}
 }
 
@@ -150,17 +90,23 @@ func TestDescribe(t *testing.T) {
 	}
 	// a picture of an album, forwarded from a channel
 	m = StoredMessage{}
-	describe(&m, &waE2E.Message{ImageMessage: &waE2E.ImageMessage{ContextInfo: &waE2E.ContextInfo{IsForwarded: proto.Bool(true),
-		ForwardedNewsletterMessageInfo: &waE2E.ContextInfo_ForwardedNewsletterMessageInfo{NewsletterName: proto.String("News")}}},
+	describe(&m, &waE2E.Message{ImageMessage: &waE2E.ImageMessage{URL: proto.String("https://mmg.whatsapp.net/v/x"),
+		MediaKey: []byte("k"), ContextInfo: &waE2E.ContextInfo{IsForwarded: proto.Bool(true),
+			ForwardedNewsletterMessageInfo: &waE2E.ContextInfo_ForwardedNewsletterMessageInfo{NewsletterName: proto.String("News")}}},
 		MessageContextInfo: &waE2E.MessageContextInfo{MessageAssociation: &waE2E.MessageAssociation{
 			AssociationType: waE2E.MessageAssociation_MEDIA_ALBUM.Enum(), ParentMessageKey: &waCommon.MessageKey{ID: proto.String("ALB")}}}}, nil)
 	if m.Kind != "image" || m.ForwardFrom != "News" || m.Album != "ALB" {
 		t.Errorf("album: %+v", m)
 	}
+	// as the archive's writer takes it: its file, what downloads it
+	w := m.wa()
+	if w.File == nil || w.File.URL != "https://mmg.whatsapp.net/v/x" || string(w.File.MediaKey) != "k" || w.Album != "ALB" {
+		t.Errorf("for the archive: %+v %+v", w, w.File)
+	}
 }
 
 func TestBlockKeepsTheFirstReason(t *testing.T) {
-	s := oldStore(t)
+	s := testStore(t)
 	s.block("temporary ban: x")
 	s.block("logged out: y")
 	if v, _ := s.state("send_blocked"); v != "temporary ban: x" {
@@ -169,7 +115,7 @@ func TestBlockKeepsTheFirstReason(t *testing.T) {
 }
 
 func TestSendRefusesWhenOffOrBlocked(t *testing.T) {
-	s := oldStore(t)
+	s := testStore(t)
 	off := &Sender{store: s, enabled: false, limits: SendLimits{6, 60, 300, 3, 5}}
 	if code, _ := off.send(SendRequest{Recipient: "1", Message: "hi"}); code != 403 {
 		t.Fatalf("off: %d", code)
@@ -182,10 +128,10 @@ func TestSendRefusesWhenOffOrBlocked(t *testing.T) {
 }
 
 func TestLimitsCountRecentSends(t *testing.T) {
-	s := oldStore(t)
+	s := testStore(t)
 	now := time.Now().Unix()
 	for _, ago := range []int64{10, 30, 50, 3000, 90000} { // three in the last minute, four in the hour, four in a day
-		s.db.Exec("INSERT INTO sent (at, chat_jid, id, text_hash) VALUES (?, 'c', 'x', 'h')", now-ago)
+		s.exec("INSERT INTO whatsapp_sent (store, at, chat_jid, id, text_hash) VALUES (?, ?, 'c', 'x', 'h')", s.key, now-ago)
 	}
 	got := (&Sender{store: s}).counts()
 	if got["minute"] != 3 || got["hour"] != 4 || got["day"] != 4 {
@@ -194,25 +140,27 @@ func TestLimitsCountRecentSends(t *testing.T) {
 }
 
 func TestQuoteNamesWhoWroteTheAnsweredMessage(t *testing.T) {
-	s := oldStore(t)
+	s := testStore(t)
 	sender := &Sender{store: s}
 	group := types.NewJID("123", types.GroupServer)
-	s.db.Exec("INSERT INTO chats VALUES (?, 'G', '2026-10-01 10:00:00+03:00')", group.String())
-	s.storeMessage(StoredMessage{ID: "Q", ChatJID: group.String(), Sender: "2@s.whatsapp.net", Content: "",
-		Timestamp: time.Now(), Kind: "image", MediaType: "image"})
+	s.remember(StoredMessage{ID: "Q", ChatJID: group.String(), Sender: "2@lid", Timestamp: time.Now(), Kind: "image"})
 
 	var stored StoredMessage
-	ci, err := sender.quote(group, SendRequest{ReplyTo: "Q"}, &stored)
-	if err != nil || ci.GetParticipant() != "2@s.whatsapp.net" || ci.GetStanzaID() != "Q" || ci.GetQuotedMessage().GetImageMessage() == nil {
-		t.Fatalf("a message the bridge has: %v %v", ci, err)
+	ci, err := sender.quote(group, SendRequest{ReplyTo: "Q", ReplySender: "+302", ReplyKind: "image"}, &stored)
+	if err != nil || ci.GetParticipant() != "2@lid" || ci.GetStanzaID() != "Q" || ci.GetQuotedMessage().GetImageMessage() == nil {
+		t.Fatalf("a message of the last week: named as it came: %v %v", ci, err)
 	}
-	// one from before the bridge: who wrote it comes with the request
+	// an older one: who wrote it comes with the request, as the archive has it
 	ci, err = sender.quote(group, SendRequest{ReplyTo: "OLDER", ReplySender: "+306900000000", ReplyText: "hi"}, &stored)
 	if err != nil || ci.GetParticipant() != "306900000000@s.whatsapp.net" || ci.GetQuotedMessage().GetConversation() != "hi" {
-		t.Fatalf("a message from before: %v %v", ci, err)
+		t.Fatalf("an older message: %v %v", ci, err)
 	}
 	if stored.ReplyTo != "OLDER" || stored.ReplyText != "hi" {
 		t.Fatalf("the answer keeps what it answers: %+v", stored)
+	}
+	ci, _ = sender.quote(group, SendRequest{ReplyTo: "DOC", ReplySender: "+302", ReplyKind: "document", ReplyFilename: "a.pdf"}, &stored)
+	if ci.GetQuotedMessage().GetDocumentMessage().GetFileName() != "a.pdf" {
+		t.Fatalf("a document: %v", ci)
 	}
 	// in a group, without it, nobody can tell
 	if _, err := sender.quote(group, SendRequest{ReplyTo: "OLDER"}, &stored); err == nil {
@@ -262,25 +210,39 @@ func TestMediaFileNamesAreSafeAndPerMessage(t *testing.T) {
 	if got := mediaFile("document", "Report.PDF", "12:3@lid", "a/b"); got != "media/12_3@lid/a_b.pdf" {
 		t.Fatal(got)
 	}
+	if localFile("/s", "../x") != "" || localFile("/s", "") != "" || localFile("/s", "media/a.jpg") != "/s/media/a.jpg" {
+		t.Fatal("a file outside the store folder")
+	}
 }
 
+// A file with what downloads it incomplete is given up; one downloaded already goes into the
+// archive, not downloaded again.
 func TestDownloadAnswersFromWhatIsThere(t *testing.T) {
-	s := oldStore(t)
-	if _, err := s.download(nil, "OLD", "1@s.whatsapp.net"); err == nil || !strings.Contains(err.Error(), "incomplete") {
+	s := testStore(t)
+	s.exec("INSERT INTO whatsapp_media (store, chat_jid, id, at, media_type) VALUES (?, '1@s.whatsapp.net', 'OLD', 0, 'image')", s.key)
+	if err := s.download(nil, "OLD", "1@s.whatsapp.net"); err == nil || !strings.Contains(err.Error(), "incomplete") {
 		t.Fatalf("no keys yet: %v", err)
+	}
+	if count(t, s, "SELECT count(*) FROM whatsapp_media WHERE error IS NOT NULL") != 1 {
+		t.Fatal("not recorded")
 	}
 	rel := mediaFile("image", "", "1@s.whatsapp.net", "OLD")
 	if err := s.writeMedia(rel, []byte("x")); err != nil {
 		t.Fatal(err)
 	}
-	s.db.Exec("UPDATE messages SET media_path = ? WHERE id = 'OLD'", rel)
-	if path, err := s.download(nil, "OLD", "1@s.whatsapp.net"); err != nil || !strings.HasSuffix(path, rel) {
-		t.Fatalf("a file already there: %q %v", path, err)
+	s.exec("UPDATE whatsapp_media SET path = ? WHERE id = 'OLD'", rel)
+	taken := 0
+	s.write = func(fn func(w *importers.WhatsAppWriter) error) error { taken++; return nil }
+	if err := s.download(nil, "OLD", "1@s.whatsapp.net"); err != nil || taken != 1 {
+		t.Fatalf("a file already there: %v, taken %d", err, taken)
+	}
+	if err := s.download(nil, "NONE", "1@s.whatsapp.net"); err == nil {
+		t.Fatal("a file of no message")
 	}
 }
 
-func groupStore(t *testing.T, addressing types.AddressingMode) (*MessageStore, types.JID) {
-	s := oldStore(t)
+func groupStore(t *testing.T, addressing types.AddressingMode) (*Store, types.JID) {
+	s := testStore(t)
 	group := types.NewJID("123", types.GroupServer)
 	pn, lid := types.NewJID("306912345678", types.DefaultUserServer), types.NewJID("98765", types.HiddenUserServer)
 	primary := pn
@@ -343,72 +305,57 @@ func TestMentionsAreWrittenAsTheGroupNamesThem(t *testing.T) {
 }
 
 func TestIncomingMentionsAreKept(t *testing.T) {
-	s := oldStore(t)
 	m := StoredMessage{ID: "M", ChatJID: "1@s.whatsapp.net", Timestamp: time.Now()}
 	describe(&m, &waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{Text: proto.String("@98765 look"),
 		ContextInfo: &waE2E.ContextInfo{MentionedJID: []string{"98765@lid"}}}}, nil)
-	if err := s.storeMessage(m); err != nil {
-		t.Fatal(err)
-	}
-	var mentions string
-	s.db.QueryRow("SELECT mentions FROM messages WHERE id = 'M'").Scan(&mentions)
-	if mentions != "98765@lid" {
-		t.Fatalf("mentions %q", mentions)
+	if got := m.wa().Mentions; len(got) != 1 || got[0] != "98765@lid" {
+		t.Fatalf("mentions %q", got)
 	}
 }
 
 func TestReceiptsWhoGotAndReadAndWhatIRead(t *testing.T) {
-	s := oldStore(t)
+	s := testStore(t)
 	group := types.NewJID("123", types.GroupServer)
 	reader := types.JID{User: "306912345678", Server: types.DefaultUserServer, Device: 3}
 	at := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
 	receipt := func(kind types.ReceiptType, when time.Time, ids ...string) *events.Receipt {
 		return &events.Receipt{MessageSource: types.MessageSource{Chat: group, Sender: reader}, MessageIDs: ids, Timestamp: when, Type: kind}
 	}
-	handleReceipt(s, receipt(types.ReceiptTypeDelivered, at, "A", "B"), nil)
-	handleReceipt(s, receipt(types.ReceiptTypeRead, at.Add(time.Minute), "A"), nil)
-	handleReceipt(s, receipt(types.ReceiptTypeRead, at.Add(time.Hour), "A"), nil) // again: the first time stays
-	handleReceipt(s, receipt(types.ReceiptTypeSender, at, "A"), nil)              // to my own devices: not a receipt
-	var n int
-	s.db.QueryRow("SELECT count(*) FROM receipts").Scan(&n)
-	if n != 3 {
-		t.Fatalf("%d receipts", n)
-	}
-	var who string
-	var when time.Time
-	s.db.QueryRow("SELECT jid, timestamp FROM receipts WHERE message_id = 'A' AND type = 'read'").Scan(&who, &when)
-	if who != "306912345678@s.whatsapp.net" || !when.Equal(at.Add(time.Minute)) {
-		t.Fatalf("read by %s at %v", who, when)
+	b := &importers.WABatch{}
+	handleReceipt(s, b, receipt(types.ReceiptTypeDelivered, at, "A", "B"))
+	handleReceipt(s, b, receipt(types.ReceiptTypeRead, at.Add(time.Minute), "A"))
+	handleReceipt(s, b, receipt(types.ReceiptTypeSender, at, "A")) // to my own devices: not a receipt
+	if len(b.Receipts) != 3 || b.Receipts[2] != (importers.WAReceipt{Chat: group.String(), Target: "A",
+		Who: "306912345678@s.whatsapp.net", Kind: "read", At: at.Add(time.Minute).UnixMilli()}) {
+		t.Fatalf("receipts %+v", b.Receipts)
 	}
 	// read on the phone: the message from others is marked, once
-	handleReceipt(s, receipt(types.ReceiptTypeReadSelf, at, "OLD"), nil)
-	handleReceipt(s, receipt(types.ReceiptTypeReadSelf, at.Add(time.Hour), "OLD"), nil)
-	var read time.Time
-	s.db.QueryRow("SELECT read_at FROM messages WHERE id = 'OLD'").Scan(&read)
-	if !read.Equal(at) {
-		t.Fatalf("read at %v", read)
+	s.remember(StoredMessage{ID: "OLD", ChatJID: group.String(), Sender: "1@s.whatsapp.net", Timestamp: at.Add(-time.Hour)})
+	handleReceipt(s, b, receipt(types.ReceiptTypeReadSelf, at, "OLD"))
+	handleReceipt(s, b, receipt(types.ReceiptTypeReadSelf, at.Add(time.Hour), "OLD"))
+	if count(t, s, "SELECT read_at FROM whatsapp_recent WHERE id = 'OLD'") != int(at.UnixMilli()) {
+		t.Fatal("not marked read, or not the first time")
+	}
+	if len(b.Reads) != 2 || b.Reads[0].Chat != group.String() || b.Reads[0].IDs[0] != "OLD" || b.Reads[0].At != at.UnixMilli() {
+		t.Fatalf("reads %+v", b.Reads)
 	}
 }
 
 func TestHistoryReceipts(t *testing.T) {
-	s := oldStore(t)
+	b := &importers.WABatch{}
 	group := types.NewJID("123", types.GroupServer)
-	historyReceipts(s, group, &waWeb.WebMessageInfo{Key: &waCommon.MessageKey{ID: proto.String("G"), FromMe: proto.Bool(true)},
+	historyReceipts(b, group, &waWeb.WebMessageInfo{Key: &waCommon.MessageKey{ID: proto.String("G"), FromMe: proto.Bool(true)},
 		UserReceipt: []*waWeb.UserReceipt{{UserJID: proto.String("1@s.whatsapp.net"), ReceiptTimestamp: proto.Int64(100),
 			ReadTimestamp: proto.Int64(200)}}})
 	person := types.NewJID("2", types.DefaultUserServer)
 	status := waWeb.WebMessageInfo_READ
-	historyReceipts(s, person, &waWeb.WebMessageInfo{Key: &waCommon.MessageKey{ID: proto.String("P"), FromMe: proto.Bool(true)},
+	historyReceipts(b, person, &waWeb.WebMessageInfo{Key: &waCommon.MessageKey{ID: proto.String("P"), FromMe: proto.Bool(true)},
 		Status: &status})
-	historyReceipts(s, person, &waWeb.WebMessageInfo{Key: &waCommon.MessageKey{ID: proto.String("THEIRS")}, Status: &status})
+	historyReceipts(b, person, &waWeb.WebMessageInfo{Key: &waCommon.MessageKey{ID: proto.String("THEIRS")}, Status: &status})
 	got := map[string]bool{}
-	rows, _ := s.db.Query("SELECT message_id || ' ' || jid || ' ' || type FROM receipts")
-	for rows.Next() {
-		var r string
-		rows.Scan(&r)
-		got[r] = true
+	for _, r := range b.Receipts {
+		got[r.Target+" "+r.Who+" "+r.Kind] = true
 	}
-	rows.Close()
 	want := []string{"G 1@s.whatsapp.net delivered", "G 1@s.whatsapp.net read", "P 2@s.whatsapp.net read", "P 2@s.whatsapp.net delivered"}
 	if len(got) != len(want) {
 		t.Fatalf("receipts %v", got)
@@ -421,10 +368,9 @@ func TestHistoryReceipts(t *testing.T) {
 }
 
 func TestUnreadIsRecentMessagesFromOthersBySender(t *testing.T) {
-	s := oldStore(t)
+	s := testStore(t)
 	sender := &Sender{store: s}
 	group := types.NewJID("123", types.GroupServer)
-	s.db.Exec("INSERT INTO chats VALUES (?, 'G', ?)", group.String(), time.Now())
 	now := time.Now()
 	for _, m := range []StoredMessage{
 		{ID: "1", Sender: "a@s.whatsapp.net", Timestamp: now.Add(-time.Hour)},
@@ -436,20 +382,18 @@ func TestUnreadIsRecentMessagesFromOthersBySender(t *testing.T) {
 		{ID: "READ", Sender: "b@s.whatsapp.net", Timestamp: now.Add(-time.Minute)},
 	} {
 		m.ChatJID, m.Kind = group.String(), "text"
-		s.storeMessage(m)
+		s.remember(m)
 	}
-	s.markedRead(group.String(), []string{"READ"}, now)
+	s.markedRead(&importers.WABatch{}, group.String(), []string{"READ"}, now)
 	got, err := sender.unread(group, now)
 	if err != nil || len(got) != 2 || strings.Join(got["a@s.whatsapp.net"], ",") != "1,3" || strings.Join(got["b@s.whatsapp.net"], ",") != "2" {
 		t.Fatalf("%v %v", got, err)
 	}
 }
 
-// A link's preview is kept as the sender's app made it (its small picture, and where its
-// high-quality one is); a copy of the message seen again (history after live) keeps the
-// high-quality picture downloaded meanwhile.
+// A link's preview is kept as the sender's app made it: its small picture, and where its
+// high-quality one is (to download).
 func TestLinkPreviewKept(t *testing.T) {
-	s := oldStore(t)
 	msg := &waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{Text: proto.String("see https://x.org/a"),
 		MatchedText: proto.String("https://x.org/a"), Title: proto.String("A page"), Description: proto.String("About it"),
 		JPEGThumbnail: []byte("small"), ThumbnailDirectPath: proto.String("/v/t62/x"), ThumbnailSHA256: []byte("sha"),
@@ -458,28 +402,35 @@ func TestLinkPreviewKept(t *testing.T) {
 	if !describe(&m, msg, nil) || m.Subtype != "link" {
 		t.Fatalf("described: %+v", m)
 	}
-	if err := s.storeMessage(m); err != nil {
-		t.Fatal(err)
+	w := m.wa()
+	if p := w.Preview; p == nil || p.URL != "https://x.org/a" || p.Title != "A page" || p.Description != "About it" || string(p.Image) != "small" {
+		t.Errorf("preview %+v", w.Preview)
 	}
-	s.db.Exec("UPDATE messages SET preview_image = 'large' WHERE id = 'L'")
-	if err := s.storeMessage(m); err != nil {
-		t.Fatal(err)
-	}
-	var url, title, desc, path string
-	var thumb, image, key []byte
-	if err := s.db.QueryRow(`SELECT preview_url, preview_title, preview_description, preview_thumb, preview_direct_path,
-		preview_media_key, preview_image FROM messages WHERE id = 'L'`).Scan(&url, &title, &desc, &thumb, &path, &key, &image); err != nil {
-		t.Fatal(err)
-	}
-	if url != "https://x.org/a" || title != "A page" || desc != "About it" || string(thumb) != "small" || path != "/v/t62/x" ||
-		string(key) != "key" || string(image) != "large" {
-		t.Errorf("got %q %q %q %q %q %q %q", url, title, desc, thumb, path, key, image)
+	if f := w.PreviewFile; f == nil || f.DirectPath != "/v/t62/x" || string(f.Key) != "key" || string(f.EncSHA256) != "enc" {
+		t.Errorf("its picture %+v", w.PreviewFile)
 	}
 	// a link without a preview: nothing
 	m = StoredMessage{}
 	describe(&m, &waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{Text: proto.String("x.org"),
 		MatchedText: proto.String("x.org")}}, nil)
-	if m.Preview.URL != "" || m.Subtype != "link" {
+	if m.wa().Preview != nil || m.Subtype != "link" {
 		t.Errorf("no preview: %+v", m.Preview)
+	}
+}
+
+// What an event brings is written in one batch; one the archive could not take is not
+// acknowledged (WhatsApp gives it again).
+func TestABatchNotWrittenIsNotAcknowledged(t *testing.T) {
+	s := testStore(t)
+	if !s.Write(&importers.WABatch{}, waLog.Noop) {
+		t.Fatal("nothing to write, yet not written")
+	}
+	b := &importers.WABatch{Messages: []importers.WAMessage{{Chat: "1@s.whatsapp.net", ID: "X"}}}
+	if s.Write(b, waLog.Noop) {
+		t.Fatal("written nowhere, yet acknowledged")
+	}
+	s.write = func(fn func(w *importers.WhatsAppWriter) error) error { return errors.New("the archive is busy") }
+	if s.Write(b, waLog.Noop) {
+		t.Fatal("not written, yet acknowledged")
 	}
 }

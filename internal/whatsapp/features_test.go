@@ -16,7 +16,7 @@ import (
 // A message that could not be read leaves a trace until it comes; a view-once one is said as such;
 // one WhatsApp hides from linked devices is not kept.
 func TestUndecryptable(t *testing.T) {
-	b, client, store := offline(t)
+	b, client, store, in := offline(t)
 	person := types.NewJID("15551234567", types.DefaultUserServer)
 	info := types.MessageInfo{MessageSource: types.MessageSource{Chat: person, Sender: person}, ID: "U1", Timestamp: time.Now()}
 	b.handle(client, store, &events.UndecryptableMessage{Info: info})
@@ -26,20 +26,20 @@ func TestUndecryptable(t *testing.T) {
 	info3 := info
 	info3.ID = "H1"
 	b.handle(client, store, &events.UndecryptableMessage{Info: info3, DecryptFailMode: events.DecryptFailHide})
-	if n := count(t, store, "SELECT count(*) FROM chat_events WHERE code IN ('unreadable', 'view_once')"); n != 2 {
-		t.Fatalf("%d traces", n)
+	if count(t, store, "SELECT count(*) FROM whatsapp_unreadable WHERE store = ?", store.key) != 1 ||
+		in.Int("SELECT count(*) FROM notice WHERE code = 'view_once'") != 1 {
+		t.Fatal("not one trace and one view-once notice")
 	}
 	b.handle(client, store, text(person, person, "U1", "here after all", false))
-	if count(t, store, "SELECT count(*) FROM chat_events WHERE code = 'unreadable'") != 0 ||
-		count(t, store, "SELECT count(*) FROM messages WHERE id = 'U1'") != 1 {
+	if count(t, store, "SELECT count(*) FROM whatsapp_unreadable") != 0 || in.Int("SELECT count(*) FROM message WHERE key = 'U1'") != 1 {
 		t.Fatal("the message came, the trace stayed")
 	}
 }
 
-// A history notification is kept until its history is stored (not lost if the download fails, or
+// A history notification is kept until its history is written (not lost if the download fails, or
 // the bridge ends before).
 func TestHistoryKept(t *testing.T) {
-	b, client, store := offline(t)
+	b, client, store, _ := offline(t)
 	person := types.NewJID("15551234567", types.DefaultUserServer)
 	n := &waE2E.HistorySyncNotification{DirectPath: proto.String("/v/t62/h1"), FileEncSHA256: []byte{1}}
 	b.handle(client, store, &events.Message{Info: types.MessageInfo{MessageSource: types.MessageSource{
@@ -47,7 +47,8 @@ func TestHistoryKept(t *testing.T) {
 		Message: &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{
 			Type: waE2E.ProtocolMessage_HISTORY_SYNC_NOTIFICATION.Enum(), HistorySyncNotification: n}}})
 	var raw []byte
-	if err := store.db.QueryRow("SELECT notification FROM history_pending WHERE direct_path = '/v/t62/h1'").Scan(&raw); err != nil {
+	if err := store.db.QueryRow("SELECT notification FROM whatsapp_history WHERE store = ? AND direct_path = '/v/t62/h1'",
+		store.key).Scan(&raw); err != nil {
 		t.Fatal(err)
 	}
 	back := &waE2E.HistorySyncNotification{}
@@ -61,7 +62,7 @@ func TestHistoryKept(t *testing.T) {
 
 // Kinds mautrix-whatsapp says as text are kept as text; one not kept is said as unsupported.
 func TestMoreKinds(t *testing.T) {
-	b, client, store := offline(t)
+	b, client, store, in := offline(t)
 	person := types.NewJID("15551234567", types.DefaultUserServer)
 	msg := func(id string, m *waE2E.Message) {
 		b.handle(client, store, &events.Message{Info: types.MessageInfo{MessageSource: types.MessageSource{
@@ -74,38 +75,30 @@ func TestMoreKinds(t *testing.T) {
 	msg("S", &waE2E.Message{SpoilerMessage: &waE2E.FutureProofMessage{Message: &waE2E.Message{Conversation: proto.String("hidden")}}})
 	msg("X", &waE2E.Message{PlaceholderMessage: &waE2E.PlaceholderMessage{}})
 	msg("D", &waE2E.Message{DocumentMessage: &waE2E.DocumentMessage{FileName: proto.String("plan.pdf")}})
-	got := map[string]string{}
-	rows, _ := store.db.Query("SELECT id, kind || ':' || content FROM messages")
-	for rows.Next() {
-		var id, v string
-		rows.Scan(&id, &v)
-		got[id] = v
-	}
-	rows.Close()
-	want := map[string]string{"E": "text:Dinner\nat 8", "G": "text:Club\njoin", "P5": "poll:When?\n• Mon", "S": "text:hidden", "D": "document:📎 plan.pdf"}
+	want := map[string]string{"E": "text:Dinner\nat 8", "G": "text:Club\njoin", "P5": "text:When?\n• Mon", "S": "text:hidden", "D": "file:📎 plan.pdf"}
 	for k, v := range want {
-		if got[k] != v {
-			t.Errorf("%s: %q, want %q", k, got[k], v)
+		got := in.Str("SELECT k.name || ':' || m.text FROM message m JOIN message_kind k ON k.id = m.kind_id WHERE m.key = ?", k)
+		if got != v {
+			t.Errorf("%s: %q, want %q", k, got, v)
 		}
 	}
-	if count(t, store, "SELECT count(*) FROM chat_events WHERE id = 'X' AND code = 'unsupported'") != 1 {
+	if in.Int("SELECT count(*) FROM notice n JOIN message m ON m.id = n.message_id WHERE m.key = 'X' AND n.code = 'unsupported'") != 1 {
 		t.Fatal("not said as unsupported")
 	}
 }
 
 // The phone's answer that it no longer has a file is recorded as the file gone.
 func TestMediaRetryNotOnPhone(t *testing.T) {
-	_, _, store := offline(t)
+	_, _, store, _ := offline(t)
 	person := types.NewJID("15551234567", types.DefaultUserServer)
-	store.db.Exec("INSERT INTO chats (jid, name) VALUES (?, 'P')", person.String())
-	if _, err := store.db.Exec(`INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me, media_type, media_key, media_error)
-		VALUES ('IMG', ?, ?, '', ?, 0, 'image', x'01', 'asked again')`, person.String(), person.String(), time.Now()); err != nil {
+	if _, err := store.db.Exec(`INSERT INTO whatsapp_media (store, chat_jid, id, at, sender, media_type, media_key, error)
+		VALUES (?, ?, 'IMG', 0, ?, 'image', x'01', 'asked again')`, store.key, person.String(), person.String()); err != nil {
 		t.Fatal(err)
 	}
 	mediaRetried(store, &events.MediaRetry{MessageID: "IMG", ChatID: person, Error: &events.MediaRetryError{Code: 2}},
 		func(string, string) { t.Fatal("queued") }, nil)
 	var failed string
-	store.db.QueryRow("SELECT media_error FROM messages WHERE id = 'IMG'").Scan(&failed)
+	store.db.QueryRow("SELECT error FROM whatsapp_media WHERE id = 'IMG'").Scan(&failed)
 	if failed == "" || failed == askedAgain {
 		t.Fatalf("%q", failed)
 	}
@@ -113,7 +106,7 @@ func TestMediaRetryNotOnPhone(t *testing.T) {
 
 // The history's entries with no message: a missed call kept, a deletion applied; a poll's votes kept.
 func TestHistoryStubsAndVotes(t *testing.T) {
-	b, client, store := offline(t)
+	b, client, store, in := offline(t)
 	person := types.NewJID("15551234567", types.DefaultUserServer)
 	b.handle(client, store, text(person, person, "GONE", "soon deleted", false))
 	now := uint64(time.Now().Unix())
@@ -133,13 +126,16 @@ func TestHistoryStubsAndVotes(t *testing.T) {
 	}
 	b.handle(client, store, &events.HistorySync{Notification: &waE2E.HistorySyncNotification{},
 		Data: &waHistorySync.HistorySync{Conversations: []*waHistorySync.Conversation{{ID: proto.String(person.String()), Messages: msgs}}}})
-	if count(t, store, "SELECT count(*) FROM calls WHERE id = 'CALL' AND outcome = 'MISSED' AND video") != 1 {
+	if in.Int("SELECT count(*) FROM call WHERE detail = 'missed' AND video") != 1 {
 		t.Fatal("missed call")
 	}
-	if count(t, store, "SELECT count(*) FROM messages WHERE id = 'GONE' AND deleted") != 1 {
+	if in.Int("SELECT count(*) FROM message WHERE key = 'GONE' AND deleted") != 1 {
 		t.Fatal("deletion")
 	}
-	if count(t, store, "SELECT count(*) FROM poll_votes WHERE poll_id = 'POLL' AND options = '[\"ab\"]'") != 1 {
+	if count(t, store, "SELECT count(*) FROM whatsapp_vote WHERE poll_id = 'POLL' AND options = '[\"ab\"]'") != 1 {
 		t.Fatal("vote")
+	}
+	if in.Int("SELECT count(*) FROM notice n JOIN message m ON m.id = n.message_id WHERE m.key = 'POLL' AND n.code = 'poll'") != 1 {
+		t.Fatal("the poll's notice")
 	}
 }

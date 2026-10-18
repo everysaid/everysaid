@@ -70,7 +70,7 @@ func TestWhatsAppIphonePreviews(t *testing.T) {
 	must(t, os.WriteFile(filepath.Join(dir, WhatsAppPreviewFolder, "x", "a.thumb"), testJPEG(t, 30, 20), 0o600))
 
 	run := func() map[string]int {
-		got, err := WhatsApp(a, nil, WhatsAppOptions{IphoneDB: path, NoContacts: true, NoBridge: true, NoStore: true})
+		got, err := WhatsApp(a, nil, WhatsAppOptions{IphoneDB: path, NoContacts: true, NoStore: true})
 		must(t, err)
 		return got
 	}
@@ -98,26 +98,40 @@ func TestWhatsAppIphonePreviews(t *testing.T) {
 	eq(t, "W3 kept", previewOf(a, "W3"), []any{"https://example.org/c", "Only a title", nil, int64(0)})
 }
 
-func TestBridgePreviews(t *testing.T) {
+func TestLivePreviews(t *testing.T) {
 	a, _ := newArchive(t)
-	path, d := bridgeDB(t, t.TempDir(), newBridgeSchema+`
-ALTER TABLE messages ADD COLUMN preview_url TEXT; ALTER TABLE messages ADD COLUMN preview_title TEXT;
-ALTER TABLE messages ADD COLUMN preview_description TEXT; ALTER TABLE messages ADD COLUMN preview_thumb BLOB;
-ALTER TABLE messages ADD COLUMN preview_image BLOB;`)
-	waMessage(d, "L1", 1, "see https://x.org", 0, M{"kind": "text", "subtype": "link", "preview_url": "https://x.org",
-		"preview_title": "X", "preview_description": "All about x", "preview_thumb": testJPEG(t, 10, 10)})
-	waMessage(d, "L2", 2, "x.org", 1, M{"kind": "text", "subtype": "link"})
-	runBridge(t, a, path)
+	keys := waKeys(t)
+	l1 := waMsg("L1", 1, "see https://x.org", false, "text")
+	l1.Subtype = "link"
+	l1.Preview = &archive.Preview{URL: "https://x.org", Title: "X", Description: "All about x", Image: testJPEG(t, 10, 10)}
+	l1.PreviewFile = &WAPreviewFile{URL: "https://x.org", DirectPath: "/v/x"}
+	l2 := waMsg("L2", 2, "x.org", true, "text")
+	l2.Subtype = "link"
+	waWrite(t, a, keys, &WABatch{Messages: []WAMessage{l1, l2}})
 	eq(t, "L1", previewOf(a, "L1"), []any{"https://x.org", "X", "All about x", int64(10)})
 	eq(t, "L2", previewOf(a, "L2"), []any(nil))
 	eq(t, "kind", kindOf(a, "L1"), "text")
+	eq(t, "its picture to download", db.Strs(keys, "SELECT preview_direct_path FROM whatsapp_media WHERE id = 'L1'"), []string{"/v/x"})
 
-	// the high-quality picture, downloaded after the import, takes the small one's place
-	db.Exec(d, "UPDATE messages SET preview_image = ? WHERE id = 'L1'", testJPEG(t, 40, 20))
-	eq(t, "updated", runBridge(t, a, path)["preview"], 1)
+	// the high-quality picture, downloaded after the message was written, takes the small one's place
+	picture := func() bool {
+		changed := false
+		must(t, func() (err error) {
+			defer archive.Recover(&err)
+			w := NewWhatsAppWriter(a, keys, waStore)
+			changed = w.PreviewImage(w.MessageOf(waPeer, "L1"), "https://x.org", testJPEG(t, 40, 20))
+			a.Commit()
+			return nil
+		}())
+		return changed
+	}
+	eq(t, "updated", picture(), true)
 	eq(t, "L1 large", previewOf(a, "L1"), []any{"https://x.org", "X", "All about x", int64(40)})
 	eq(t, "pictures", a.Int("SELECT count(*) FROM link_preview_image"), int64(1))
-	eq(t, "the same again", runBridge(t, a, path)["preview"], 0)
+	eq(t, "the same again", picture(), false)
+	// seen again (history after live): the large one stays
+	eq(t, "again", waWrite(t, a, keys, &WABatch{Messages: []WAMessage{l1}})["preview"], 0)
+	eq(t, "L1 still large", previewOf(a, "L1"), []any{"https://x.org", "X", "All about x", int64(40)})
 }
 
 // A message in a backup made as it was being sent, before WhatsApp gave it its stanza id, is the
@@ -131,7 +145,7 @@ func TestWhatsAppIphoneSentBeforeItsID(t *testing.T) {
 	db.Exec(d, "INSERT INTO ZWAMESSAGE (Z_PK, ZCHATSESSION, ZMESSAGEDATE, ZISFROMME, ZMESSAGETYPE, ZTEXT, ZSTANZAID) "+
 		"VALUES (1, 1, ?, 1, 0, 'on my way', NULL)", at)
 	run := func() {
-		_, err := WhatsApp(a, nil, WhatsAppOptions{IphoneDB: path, NoContacts: true, NoBridge: true, NoStore: true})
+		_, err := WhatsApp(a, nil, WhatsAppOptions{IphoneDB: path, NoContacts: true, NoStore: true})
 		must(t, err)
 	}
 	run()

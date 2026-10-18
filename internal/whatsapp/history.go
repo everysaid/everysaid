@@ -3,7 +3,6 @@ package whatsapp
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"time"
 
@@ -14,34 +13,24 @@ import (
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
+
+	"everysaid/internal/importers"
 )
 
 // The history the phone sends comes as a notification (acknowledged to the phone at once) and a
-// file to download. As mautrix-whatsapp does, the notification is kept first (history_pending) and
-// the file downloaded apart, tried again until its history is stored: a failed download, or the
+// file to download. As mautrix-whatsapp does, the notification is kept first (whatsapp_history) and
+// the file downloaded apart, tried again until its history is written: a failed download, or the
 // bridge ending meanwhile, no longer loses it (whatsmeow's own way deletes the file on WhatsApp's
 // server after one try, whatever came of it).
 
-func (store *MessageStore) migrateHistory() error {
-	_, err := store.db.Exec(`
-		CREATE TABLE IF NOT EXISTS history_pending (  -- history the phone sent, not stored yet
-			direct_path TEXT PRIMARY KEY,
-			notification BLOB NOT NULL,   -- waE2E.HistorySyncNotification
-			tries INTEGER NOT NULL DEFAULT 0,
-			next_at INTEGER NOT NULL DEFAULT 0  -- Unix s: not tried before
-		);
-	`)
-	return err
-}
-
-// pendHistory keeps a history notification until its history is stored.
-func (store *MessageStore) pendHistory(n *waE2E.HistorySyncNotification) error {
+// pendHistory keeps a history notification until its history is written.
+func (store *Store) pendHistory(n *waE2E.HistorySyncNotification) error {
 	b, err := proto.Marshal(n)
 	if err != nil {
 		return err
 	}
-	_, err = store.db.Exec("INSERT OR IGNORE INTO history_pending (direct_path, notification) VALUES (?, ?)",
-		n.GetDirectPath(), b)
+	_, err = store.db.Exec("INSERT OR IGNORE INTO whatsapp_history (store, direct_path, notification) VALUES (?, ?, ?)",
+		store.key, n.GetDirectPath(), b)
 	return err
 }
 
@@ -54,9 +43,9 @@ func historyRetry(tries int) time.Duration {
 const historyTries = 20
 
 // fetchHistory downloads the pending histories, oldest first, and hands each to handle (true: it is
-// stored; nil: its download failed, it is tried again later); it runs until ctx ends, woken when one
-// is added.
-func fetchHistory(ctx context.Context, client *whatsmeow.Client, store *MessageStore, wake <-chan struct{},
+// written; nil: its download failed, it is tried again later); it runs until ctx ends, woken when
+// one is added.
+func fetchHistory(ctx context.Context, client *whatsmeow.Client, store *Store, wake <-chan struct{},
 	handle func(path string, h *events.HistorySync) bool, logger waLog.Logger) {
 	for {
 		next := time.Hour
@@ -64,14 +53,14 @@ func fetchHistory(ctx context.Context, client *whatsmeow.Client, store *MessageS
 			var path string
 			var raw []byte
 			var tries int
-			err := store.db.QueryRow("SELECT direct_path, notification, tries FROM history_pending WHERE next_at <= ? "+
-				"ORDER BY rowid LIMIT 1", time.Now().Unix()).Scan(&path, &raw, &tries)
+			err := store.db.QueryRow("SELECT direct_path, notification, tries FROM whatsapp_history WHERE store = ? AND next_at <= ? "+
+				"ORDER BY rowid LIMIT 1", store.key, time.Now().Unix()).Scan(&path, &raw, &tries)
 			if err != nil {
-				break // none due (or the store closed)
+				break // none due
 			}
 			n := &waE2E.HistorySyncNotification{}
 			if err := proto.Unmarshal(raw, n); err != nil {
-				store.db.Exec("DELETE FROM history_pending WHERE direct_path = ?", path)
+				store.exec("DELETE FROM whatsapp_history WHERE store = ? AND direct_path = ?", store.key, path)
 				continue
 			}
 			data, err := client.DownloadHistorySync(ctx, n, true)
@@ -79,7 +68,8 @@ func fetchHistory(ctx context.Context, client *whatsmeow.Client, store *MessageS
 				return
 			}
 			if err != nil && !client.IsConnected() { // not a try: when connected again (Connected wakes it)
-				store.db.Exec("UPDATE history_pending SET next_at = ? WHERE direct_path = ?", time.Now().Add(time.Minute).Unix(), path)
+				store.exec("UPDATE whatsapp_history SET next_at = ? WHERE store = ? AND direct_path = ?",
+					time.Now().Add(time.Minute).Unix(), store.key, path)
 				handle(path, nil)
 				break
 			}
@@ -87,30 +77,31 @@ func fetchHistory(ctx context.Context, client *whatsmeow.Client, store *MessageS
 				gone := errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith404) || errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith410)
 				if gone || tries+1 >= historyTries {
 					logger.Errorf("History from the phone could not be downloaded, given up: %v", err)
-					store.db.Exec("DELETE FROM history_pending WHERE direct_path = ?", path)
+					store.exec("DELETE FROM whatsapp_history WHERE store = ? AND direct_path = ?", store.key, path)
 				} else {
 					logger.Warnf("History from the phone could not be downloaded (tried again later): %v", err)
-					store.db.Exec("UPDATE history_pending SET tries = tries + 1, next_at = ? WHERE direct_path = ?",
-						time.Now().Add(historyRetry(tries)).Unix(), path)
+					store.exec("UPDATE whatsapp_history SET tries = tries + 1, next_at = ? WHERE store = ? AND direct_path = ?",
+						time.Now().Add(historyRetry(tries)).Unix(), store.key, path)
 				}
 				handle(path, nil) // what waits for it need not
 				continue
 			}
 			if !handle(path, &events.HistorySync{Data: data, Notification: n}) {
-				// the bridge ending, or not all of it stored: kept, tried again later
-				store.db.Exec("UPDATE history_pending SET next_at = ? WHERE direct_path = ?", time.Now().Add(time.Minute).Unix(), path)
+				// the bridge ending, or the archive not written: kept, tried again later
+				store.exec("UPDATE whatsapp_history SET next_at = ? WHERE store = ? AND direct_path = ?",
+					time.Now().Add(time.Minute).Unix(), store.key, path)
 				if ctx.Err() != nil {
 					return
 				}
 				continue
 			}
-			store.db.Exec("DELETE FROM history_pending WHERE direct_path = ?", path)
+			store.exec("DELETE FROM whatsapp_history WHERE store = ? AND direct_path = ?", store.key, path)
 			if err := client.DeleteMedia(ctx, whatsmeow.MediaHistory, n.GetDirectPath(), n.GetFileEncSHA256(), n.GetEncHandle()); err != nil {
 				logger.Warnf("Failed to delete history sync media from server: %v", err)
 			}
 		}
 		var at int64
-		if store.db.QueryRow("SELECT min(next_at) FROM history_pending").Scan(&at) == nil && at > 0 {
+		if store.db.QueryRow("SELECT coalesce(min(next_at), 0) FROM whatsapp_history WHERE store = ?", store.key).Scan(&at) == nil && at > 0 {
 			next = max(time.Until(time.Unix(at, 0)), time.Second)
 		}
 		select {
@@ -122,40 +113,33 @@ func fetchHistory(ctx context.Context, client *whatsmeow.Client, store *MessageS
 	}
 }
 
-// historyStub keeps what an entry of the history with no message stands for, where it is known: a
+// historyStub adds what an entry of the history with no message stands for, where it is known: a
 // missed call (as the call log's), a message deleted for everyone.
-func historyStub(client *whatsmeow.Client, store *MessageStore, chat types.JID, w *waWeb.WebMessageInfo, logger waLog.Logger) {
+func historyStub(client *whatsmeow.Client, b *importers.WABatch, chat types.JID, w *waWeb.WebMessageInfo) {
 	key := w.GetKey()
-	t := time.Unix(int64(w.GetMessageTimestamp()), 0)
+	at := int64(w.GetMessageTimestamp()) * 1000
 	switch st := w.GetMessageStubType(); st {
 	case waWeb.WebMessageInfo_CALL_MISSED_VOICE, waWeb.WebMessageInfo_CALL_MISSED_VIDEO,
 		waWeb.WebMessageInfo_CALL_MISSED_GROUP_VOICE, waWeb.WebMessageInfo_CALL_MISSED_GROUP_VIDEO:
 		video := st == waWeb.WebMessageInfo_CALL_MISSED_VIDEO || st == waWeb.WebMessageInfo_CALL_MISSED_GROUP_VIDEO
-		if _, err := store.db.Exec(`INSERT OR IGNORE INTO calls (id, source, chat_jid, is_from_me, is_group, video, timestamp, outcome, duration)
-			VALUES (?, 'log', ?, ?, ?, ?, ?, 'MISSED', 0)`, key.GetID(), chat.String(), key.GetFromMe(),
-			chat.Server == types.GroupServer, video, t); err != nil {
-			logger.Warnf("Failed to store a missed call from history: %v", err)
-		}
+		b.CallLogs = append(b.CallLogs, importers.WACallLog{ID: key.GetID(), Chat: chat.String(), FromMe: key.GetFromMe(),
+			Group: chat.Server == types.GroupServer, Video: video, At: at, Outcome: "MISSED"})
 	case waWeb.WebMessageInfo_REVOKE:
-		res, err := store.db.Exec("UPDATE messages SET deleted = 1 WHERE id = ? AND chat_jid = ?", key.GetID(), chat.String())
-		if n, _ := res.RowsAffected(); err == nil && n == 0 {
-			// a message the store no longer has (pruned): the deletion reaches the archive's copy
-			sender := key.GetParticipant()
-			if sender == "" {
-				sender = chat.String()
-				if key.GetFromMe() && client != nil && client.Store.ID != nil {
-					sender = client.Store.ID.ToNonAD().String()
-				}
+		// the message deleted is the one this entry stands in for: its author's
+		sender := key.GetParticipant()
+		if sender == "" {
+			sender = chat.String()
+			if key.GetFromMe() && client != nil && client.Store.ID != nil {
+				sender = client.Store.ID.ToNonAD().String()
 			}
-			store.db.Exec(`INSERT INTO pending_changes (chat_jid, target, change, sender, is_from_me, content, timestamp)
-				VALUES (?, ?, 'delete', ?, ?, '', ?) ON CONFLICT (chat_jid, target, change) DO NOTHING`,
-				chat.String(), key.GetID(), sender, key.GetFromMe(), t)
 		}
+		b.Changes = append(b.Changes, importers.WAChange{Chat: chat.String(), Target: key.GetID(), Change: "delete",
+			Sender: sender, FromMe: key.GetFromMe(), At: at})
 	}
 }
 
-// historyVotes keeps the votes a poll of the history carries (already read by the phone).
-func historyVotes(client *whatsmeow.Client, store *MessageStore, chat types.JID, w *waWeb.WebMessageInfo, logger waLog.Logger) {
+// historyVotes adds the votes a poll of the history carries (already read by the phone).
+func historyVotes(client *whatsmeow.Client, b *importers.WABatch, chat types.JID, w *waWeb.WebMessageInfo) {
 	for _, u := range w.GetPollUpdates() {
 		k := u.GetPollUpdateMessageKey()
 		voter := k.GetParticipant()
@@ -179,52 +163,16 @@ func historyVotes(client *whatsmeow.Client, store *MessageStore, chat types.JID,
 		for _, h := range u.GetVote().GetSelectedOptions() {
 			chosen = append(chosen, hex.EncodeToString(h))
 		}
-		js, _ := json.Marshal(chosen)
-		if _, err := store.db.Exec(`INSERT INTO poll_votes VALUES (?, ?, ?, ?, ?) ON CONFLICT (chat_jid, poll_id, voter)
-			DO UPDATE SET options = excluded.options, timestamp = excluded.timestamp WHERE excluded.timestamp >= poll_votes.timestamp`,
-			chat.String(), w.GetKey().GetID(), voter, string(js), time.UnixMilli(u.GetSenderTimestampMS())); err != nil {
-			logger.Warnf("Failed to store a poll vote from history: %v", err)
-		}
+		b.Votes = append(b.Votes, importers.WAVote{Chat: chat.String(), Poll: w.GetKey().GetID(), Voter: voter, Options: chosen,
+			At: u.GetSenderTimestampMS()})
 	}
 }
 
-// migratePending makes pending_changes: an edit or a deletion of a message this store does not have
-// (one from before the device was linked, which the archive may have from the iPhone), for the
-// import to apply where the author matches.
-func (store *MessageStore) migratePending() error {
-	_, err := store.db.Exec(`
-		CREATE TABLE IF NOT EXISTS pending_changes (
-			chat_jid TEXT,
-			target TEXT,              -- the message changed
-			change TEXT,              -- edit, delete, delete_me (by the user, for the user alone)
-			sender TEXT,              -- who did it
-			is_from_me BOOLEAN,
-			content TEXT,             -- an edit's new text
-			timestamp TIMESTAMP,
-			PRIMARY KEY (chat_jid, target, change)
-		);
-	`)
-	return err
-}
-
-// deletedForMe marks a message deleted for the user alone (from here or another of their devices),
-// as a deletion: in the first of its chat's jids that has it, else kept for the import to apply
-// to the archive's copy (any message of the chat, whoever wrote it).
-func (store *MessageStore) deletedForMe(chats []string, id, own string, at time.Time) {
+// deletedForMe adds a message deleted for the user alone (from here or another of their devices),
+// as a deletion of the archive's copy (any message of the chat, whoever wrote it).
+func deletedForMe(b *importers.WABatch, chats []string, id, own string, at time.Time) {
 	for _, chat := range chats {
-		if res, err := store.db.Exec("UPDATE messages SET deleted = 1 WHERE id = ? AND chat_jid = ?", id, chat); err == nil {
-			if n, _ := res.RowsAffected(); n > 0 {
-				return
-			}
-		}
+		b.Changes = append(b.Changes, importers.WAChange{Chat: chat, Target: id, Change: "delete_me", Sender: own, FromMe: true,
+			At: at.UnixMilli()})
 	}
-	store.db.Exec(`INSERT INTO pending_changes (chat_jid, target, change, sender, is_from_me, content, timestamp)
-		VALUES (?, ?, 'delete_me', ?, 1, '', ?) ON CONFLICT (chat_jid, target, change) DO NOTHING`, chats[0], id, own, at)
-}
-
-// pendChange keeps a change of a message not in the store (the newest edit).
-func (store *MessageStore) pendChange(evt *events.Message, target, change, content string) {
-	store.db.Exec(`INSERT INTO pending_changes VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (chat_jid, target, change)
-		DO UPDATE SET content = excluded.content, timestamp = excluded.timestamp WHERE excluded.timestamp >= pending_changes.timestamp`,
-		evt.Info.Chat.String(), target, change, evt.Info.Sender.ToNonAD().String(), evt.Info.IsFromMe, content, evt.Info.Timestamp)
 }

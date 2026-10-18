@@ -2,10 +2,10 @@ package whatsapp
 
 // The groups: their names, members and addressing.
 
-// The members of the groups the account is in, for mentions (send.go) and for whoever reads the
-// bridge: all of them once at each start (one query, as WhatsApp Web makes on connecting), and a
-// group again when WhatsApp says its members changed. A group the account has left keeps its last
-// members, marked by group_info.member = 0.
+// The members of the groups the account is in, for mentions (send.go) and the archive's members of
+// its groups (importers.WhatsAppState): all of them once at each start (one query, as WhatsApp Web
+// makes on connecting), and a group again when WhatsApp says its members changed. A group the
+// account has left keeps its last members, marked by whatsapp_group.member = 0.
 
 import (
 	"context"
@@ -16,38 +16,10 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
-)
 
-func (store *MessageStore) migrateGroups() error {
-	_, err := store.db.Exec(`
-		CREATE TABLE IF NOT EXISTS group_info (
-			jid TEXT PRIMARY KEY,
-			name TEXT,
-			addressing TEXT,          -- 'pn' or 'lid': how its members are named in messages and mentions
-			member BOOLEAN,           -- the account is in it now
-			updated_at TIMESTAMP
-		);
-		CREATE TABLE IF NOT EXISTS group_members (
-			group_jid TEXT,
-			jid TEXT,                 -- as the group names them (its addressing)
-			phone TEXT,               -- their phone number's jid, where known
-			lid TEXT,                 -- their LID, where known
-			is_admin BOOLEAN,
-			is_super_admin BOOLEAN,
-			PRIMARY KEY (group_jid, jid)
-		);
-		-- what changed in a group, as WhatsApp said it: its actions as notices say them
-		-- (docs/design.md, "Notices"), people by jid
-		CREATE TABLE IF NOT EXISTS group_event (
-			group_jid TEXT,
-			timestamp TIMESTAMP,
-			sender TEXT,              -- who made the change ("" where WhatsApp did not say)
-			actions TEXT,             -- JSON
-			PRIMARY KEY (group_jid, timestamp, actions)
-		);
-	`)
-	return err
-}
+	"everysaid/internal/db"
+	"everysaid/internal/importers"
+)
 
 func jidString(j types.JID) string {
 	if j.IsEmpty() {
@@ -57,24 +29,24 @@ func jidString(j types.JID) string {
 }
 
 // storeGroup replaces a group's members with what WhatsApp says now.
-func (store *MessageStore) storeGroup(g *types.GroupInfo) error {
+func (store *Store) storeGroup(g *types.GroupInfo) error {
 	tx, err := store.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	group := g.JID.String()
-	if _, err := tx.Exec(`INSERT INTO group_info (jid, name, addressing, member, updated_at) VALUES (?, ?, ?, 1, ?)
-		ON CONFLICT (jid) DO UPDATE SET name = excluded.name, addressing = excluded.addressing, member = 1,
-		updated_at = excluded.updated_at`, group, g.Name, string(g.AddressingMode), time.Now()); err != nil {
+	if _, err := tx.Exec(`INSERT INTO whatsapp_group (store, jid, name, addressing, member, updated_at) VALUES (?, ?, ?, ?, 1, ?)
+		ON CONFLICT (store, jid) DO UPDATE SET name = excluded.name, addressing = excluded.addressing, member = 1,
+		updated_at = excluded.updated_at`, store.key, group, g.Name, string(g.AddressingMode), time.Now().Unix()); err != nil {
 		return err
 	}
-	if _, err := tx.Exec("DELETE FROM group_members WHERE group_jid = ?", group); err != nil {
+	if _, err := tx.Exec("DELETE FROM whatsapp_group_member WHERE store = ? AND group_jid = ?", store.key, group); err != nil {
 		return err
 	}
 	for _, p := range g.Participants {
-		if _, err := tx.Exec(`INSERT OR REPLACE INTO group_members (group_jid, jid, phone, lid, is_admin, is_super_admin)
-			VALUES (?, ?, ?, ?, ?, ?)`, group, jidString(p.JID), jidString(p.PhoneNumber), jidString(p.LID),
+		if _, err := tx.Exec(`INSERT OR REPLACE INTO whatsapp_group_member (store, group_jid, jid, phone, lid, is_admin, is_super_admin)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`, store.key, group, jidString(p.JID), jidString(p.PhoneNumber), jidString(p.LID),
 			p.IsAdmin, p.IsSuperAdmin); err != nil {
 			return err
 		}
@@ -83,7 +55,7 @@ func (store *MessageStore) storeGroup(g *types.GroupInfo) error {
 }
 
 // refreshGroups reads all the groups the account is in; the others are marked as left.
-func refreshGroups(client *whatsmeow.Client, store *MessageStore, logger waLog.Logger) {
+func refreshGroups(client *whatsmeow.Client, store *Store, logger waLog.Logger) {
 	groups, err := client.GetJoinedGroups(context.Background())
 	if err != nil {
 		logger.Warnf("Failed to get the groups: %v", err)
@@ -96,35 +68,35 @@ func refreshGroups(client *whatsmeow.Client, store *MessageStore, logger waLog.L
 		}
 		in[g.JID.String()] = true
 	}
-	rows, err := store.db.Query("SELECT jid FROM group_info WHERE member")
-	if err != nil {
-		return
-	}
 	var left []string
-	for rows.Next() {
-		var jid string
-		if rows.Scan(&jid) == nil && !in[jid] {
-			left = append(left, jid)
+	func() {
+		defer db.Recover(new(error))
+		for _, jid := range db.Strs(store.db, "SELECT jid FROM whatsapp_group WHERE store = ? AND member", store.key) {
+			if !in[jid] {
+				left = append(left, jid)
+			}
 		}
-	}
-	rows.Close()
+	}()
 	for _, jid := range left {
-		store.db.Exec("UPDATE group_info SET member = 0 WHERE jid = ?", jid)
+		store.exec("UPDATE whatsapp_group SET member = 0 WHERE store = ? AND jid = ?", store.key, jid)
 	}
 	logger.Infof("Members of %d groups", len(groups))
 }
 
 // handleGroupEvent follows changes of members: a group joined comes with them, a change in one is
 // read again (rare, and exact whatever the change named people by).
-func handleGroupEvent(client *whatsmeow.Client, store *MessageStore, evt interface{}, logger waLog.Logger) {
+func handleGroupEvent(client *whatsmeow.Client, store *Store, b *importers.WABatch, evt interface{}, logger waLog.Logger) {
 	switch v := evt.(type) {
 	case *events.JoinedGroup:
 		if err := store.storeGroup(&v.GroupInfo); err != nil {
 			logger.Warnf("Failed to store group: %v", err)
 		}
-		store.storeJoined(client, v, logger)
+		if v.Name != "" {
+			store.storeChat(v.JID.String(), v.Name, time.Time{})
+		}
+		joined(client, b, v)
 	case *events.GroupInfo:
-		store.storeGroupEvent(v, logger)
+		groupEvent(b, v)
 		if len(v.Join) == 0 && len(v.Leave) == 0 && len(v.Promote) == 0 && len(v.Demote) == 0 && v.Name == nil {
 			return
 		}
@@ -132,7 +104,7 @@ func handleGroupEvent(client *whatsmeow.Client, store *MessageStore, evt interfa
 			g, err := client.GetGroupInfo(context.Background(), v.JID)
 			if err != nil {
 				// left or removed: no longer allowed to read it
-				store.db.Exec("UPDATE group_info SET member = 0 WHERE jid = ?", v.JID.String())
+				store.exec("UPDATE whatsapp_group SET member = 0 WHERE store = ? AND jid = ?", store.key, v.JID.String())
 				return
 			}
 			if err := store.storeGroup(g); err != nil {
@@ -144,12 +116,13 @@ func handleGroupEvent(client *whatsmeow.Client, store *MessageStore, evt interfa
 
 // mentionJID is how a group names one of its members, given any of their jids or a number:
 // "" when they are not in it.
-func (store *MessageStore) mentionJID(group types.JID, who string) string {
+func (store *Store) mentionJID(group types.JID, who string) string {
 	var addressing string
-	store.db.QueryRow("SELECT coalesce(addressing, '') FROM group_info WHERE jid = ?", group.String()).Scan(&addressing)
+	store.db.QueryRow("SELECT coalesce(addressing, '') FROM whatsapp_group WHERE store = ? AND jid = ?", store.key,
+		group.String()).Scan(&addressing)
 	var jid, phone, lid string
-	err := store.db.QueryRow(`SELECT jid, coalesce(phone, ''), coalesce(lid, '') FROM group_members
-		WHERE group_jid = ? AND ? IN (jid, phone, lid)`, group.String(), who).Scan(&jid, &phone, &lid)
+	err := store.db.QueryRow(`SELECT jid, coalesce(phone, ''), coalesce(lid, '') FROM whatsapp_group_member
+		WHERE store = ? AND group_jid = ? AND ? IN (jid, phone, lid)`, store.key, group.String(), who).Scan(&jid, &phone, &lid)
 	if err != nil {
 		return ""
 	}
@@ -162,10 +135,10 @@ func (store *MessageStore) mentionJID(group types.JID, who string) string {
 	return jid
 }
 
-// storeGroupEvent keeps what changed in a group, as the actions of a notice: who joined, was added,
-// left or was removed, made admin or not, the name, the description, the timer, who may edit the
+// groupEvent adds what changed in a group, as the actions of a notice: who joined, was added, left
+// or was removed, made admin or not, the name, the description, the timer, who may edit the
 // group's info or send, whether joining needs approval, the group's end.
-func (store *MessageStore) storeGroupEvent(v *events.GroupInfo, logger waLog.Logger) {
+func groupEvent(b *importers.WABatch, v *events.GroupInfo) {
 	sender, senderPN := "", ""
 	if v.Sender != nil {
 		sender = jidString(*v.Sender)
@@ -237,14 +210,12 @@ func (store *MessageStore) storeGroupEvent(v *events.GroupInfo, logger waLog.Log
 		return
 	}
 	js, _ := json.Marshal(actions)
-	if _, err := store.db.Exec("INSERT OR IGNORE INTO group_event VALUES (?, ?, ?, ?)",
-		v.JID.String(), v.Timestamp, sender, string(js)); err != nil {
-		logger.Warnf("Failed to store a group's change: %v", err)
-	}
+	b.GroupEvents = append(b.GroupEvents, importers.WAGroupEvent{Group: v.JID.String(), At: v.Timestamp.UnixMilli(),
+		Sender: sender, Actions: string(js)})
 }
 
-// storeJoined keeps the account's joining a group: added by someone, or by an invite link.
-func (store *MessageStore) storeJoined(client *whatsmeow.Client, v *events.JoinedGroup, logger waLog.Logger) {
+// joined adds the account's joining a group: added by someone, or by an invite link.
+func joined(client *whatsmeow.Client, b *importers.WABatch, v *events.JoinedGroup) {
 	me := ownJID(client)
 	if me == "" {
 		return
@@ -272,15 +243,12 @@ func (store *MessageStore) storeJoined(client *whatsmeow.Client, v *events.Joine
 		at = v.GroupCreated
 	}
 	// WhatsApp may say it again (on connecting): kept once a day (a later joining again is another)
-	if _, err := store.db.Exec(`INSERT INTO group_event SELECT ?, ?, ?, ? WHERE NOT EXISTS
-		(SELECT 1 FROM group_event WHERE group_jid = ? AND sender = ? AND actions = ? AND timestamp > ?)`,
-		v.JID.String(), at, sender, string(js), v.JID.String(), sender, string(js), time.Now().Add(-24*time.Hour)); err != nil {
-		logger.Warnf("Failed to store a group's change: %v", err)
-	}
+	b.GroupEvents = append(b.GroupEvents, importers.WAGroupEvent{Group: v.JID.String(), At: at.UnixMilli(), Sender: sender,
+		Actions: string(js), OncePerDay: true})
 }
 
-// storeGroupPicture keeps a group's new (or removed) photo as a change of it.
-func (store *MessageStore) storeGroupPicture(v *events.Picture, logger waLog.Logger) {
+// groupPicture adds a group's new (or removed) photo as a change of it.
+func groupPicture(b *importers.WABatch, v *events.Picture) {
 	if v.JID.Server != types.GroupServer {
 		return
 	}
@@ -288,8 +256,6 @@ func (store *MessageStore) storeGroupPicture(v *events.Picture, logger waLog.Log
 	if v.Remove {
 		action = `[{"removed":true,"type":"avatar"}]`
 	}
-	if _, err := store.db.Exec("INSERT OR IGNORE INTO group_event VALUES (?, ?, ?, ?)", v.JID.String(), v.Timestamp,
-		jidString(v.Author), action); err != nil {
-		logger.Warnf("Failed to store a group's change: %v", err)
-	}
+	b.GroupEvents = append(b.GroupEvents, importers.WAGroupEvent{Group: v.JID.String(), At: v.Timestamp.UnixMilli(),
+		Sender: jidString(v.Author), Actions: action})
 }

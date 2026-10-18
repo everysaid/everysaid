@@ -16,6 +16,7 @@ func init() {
 
 		"no source: neither {db} nor an Android export": "καμία πηγή: ούτε {db} ούτε export Android",
 		"no source: neither {a} nor {b}":                "καμία πηγή: ούτε {a} ούτε {b}",
+		"no source: {a}":                                "καμία πηγή: {a}",
 		"no source: {db} (telegram-sync)":               "καμία πηγή: {db} (telegram-sync)",
 
 		"iPhone: {n} rows ({dup} repeats)":                             "iPhone: {n} γραμμές ({dup} επαναλήψεις)",

@@ -1,14 +1,13 @@
 package whatsapp
 
 // Spam and the people the user blocked: someone removed as spam in the app is blocked on WhatsApp
-// (whatsmeow cannot report: only the phone can), and their chat dropped from messages.db (Forget);
-// the account's blocklist is kept in messages.db (`blocklist`, from every device), for the importer
-// to bring into the archive, where the app suggests removing them.
+// (whatsmeow cannot report: only the phone can), and what the bridge keeps of their chat dropped
+// (Forget); the account's blocklist is kept in keys.db (whatsapp_blocked, from every device), for
+// the import to bring into the archive, where the app suggests removing them.
 
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"go.mau.fi/whatsmeow"
@@ -22,35 +21,31 @@ import (
 	"everysaid/internal/plugins"
 )
 
-func (store *MessageStore) migrateBlocklist() error {
-	_, err := store.db.Exec(`
-		CREATE TABLE IF NOT EXISTS blocklist (    -- the people the account blocked, as WhatsApp last said
-			jid TEXT PRIMARY KEY
-		);
-	`)
-	return err
-}
-
 // setBlocklist keeps the whole blocklist as WhatsApp gives it.
-func (store *MessageStore) setBlocklist(jids []types.JID) error {
+func (store *Store) setBlocklist(jids []types.JID) error {
 	tx, err := store.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec("DELETE FROM blocklist"); err != nil {
+	if _, err := tx.Exec("DELETE FROM whatsapp_blocked WHERE store = ?", store.key); err != nil {
 		return err
 	}
 	for _, j := range jids {
-		if _, err := tx.Exec("INSERT OR IGNORE INTO blocklist (jid) VALUES (?)", j.ToNonAD().String()); err != nil {
+		if _, err := tx.Exec("INSERT OR IGNORE INTO whatsapp_blocked (store, jid) VALUES (?, ?)", store.key, j.ToNonAD().String()); err != nil {
 			return err
 		}
+	}
+	// WhatsApp has said it (an empty list too): the archive's is to be as it
+	if _, err := tx.Exec("INSERT OR REPLACE INTO whatsapp_state (store, key, value, at) VALUES (?, 'blocklist', '1', unixepoch())",
+		store.key); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
 
 // refreshBlocklist asks WhatsApp for the blocklist and keeps it.
-func refreshBlocklist(client *whatsmeow.Client, store *MessageStore, logger waLog.Logger) {
+func refreshBlocklist(client *whatsmeow.Client, store *Store, logger waLog.Logger) {
 	list, err := client.GetBlocklist(context.Background())
 	if err == nil {
 		err = store.setBlocklist(list.JIDs)
@@ -61,7 +56,7 @@ func refreshBlocklist(client *whatsmeow.Client, store *MessageStore, logger waLo
 }
 
 // handleBlocklist: someone blocked or unblocked on any device; "modify": the list is to be asked for again.
-func handleBlocklist(client *whatsmeow.Client, store *MessageStore, v *events.Blocklist, logger waLog.Logger) {
+func handleBlocklist(client *whatsmeow.Client, store *Store, v *events.Blocklist, logger waLog.Logger) {
 	if v.Action == events.BlocklistActionModify || len(v.Changes) == 0 {
 		refreshBlocklist(client, store, logger)
 		return
@@ -69,9 +64,9 @@ func handleBlocklist(client *whatsmeow.Client, store *MessageStore, v *events.Bl
 	for _, c := range v.Changes {
 		jid := c.JID.ToNonAD().String()
 		if c.Action == events.BlocklistChangeActionBlock {
-			store.db.Exec("INSERT OR IGNORE INTO blocklist (jid) VALUES (?)", jid)
+			store.exec("INSERT OR IGNORE INTO whatsapp_blocked (store, jid) VALUES (?, ?)", store.key, jid)
 		} else {
-			store.db.Exec("DELETE FROM blocklist WHERE jid = ?", jid)
+			store.exec("DELETE FROM whatsapp_blocked WHERE store = ? AND jid = ?", store.key, jid)
 		}
 	}
 }
@@ -106,39 +101,40 @@ func (p Plugin) ReportSpam(ctx context.Context, c *plugins.Context, conv plugins
 	return runImport(c)
 }
 
-// Forget drops the chat from messages.db (under its number and its LID), with its downloaded files.
+// Forget drops what the bridge keeps of the chat (under its number and its LID), with the files it
+// downloaded that the archive has not taken yet.
 func (p Plugin) Forget(c *plugins.Context, conv plugins.Conversation) (err error) {
 	defer db.Recover(&err)
-	messages, _ := paths(c)
-	if _, err := os.Stat(messages); err != nil {
-		return nil // no store: nothing kept
-	}
-	jids := chatJIDs(recipient(conv.Key))
-	store, err := OpenMessages(storeDir(c))
+	d, err := keys.Open()
 	if err != nil {
 		return err
 	}
-	defer store.Close()
-	tx, err := store.db.Begin()
+	if !db.Exists(d, "SELECT 1 FROM sqlite_master WHERE name = 'whatsapp_chat'") {
+		return nil // never connected: nothing kept
+	}
+	store := key(storeDir(c))
+	jids := chatJIDs(recipient(conv.Key))
+	tx, err := d.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	var files []string
 	for _, j := range jids {
-		files = append(files, db.Strs(tx, "SELECT media_path FROM messages WHERE chat_jid = ? AND coalesce(media_path, '') != ''", j)...)
-		db.Exec(tx, "DELETE FROM call_participants WHERE call_id IN (SELECT id FROM calls WHERE chat_jid = ?)", j)
-		for _, t := range []string{"messages", "reactions", "receipts", "calls"} {
-			db.Exec(tx, "DELETE FROM "+t+" WHERE chat_jid = ?", j)
+		files = append(files, db.Strs(tx, "SELECT path FROM whatsapp_media WHERE store = ? AND chat_jid = ? AND coalesce(path, '') != ''",
+			store, j)...)
+		for _, t := range []string{"whatsapp_media", "whatsapp_recent", "whatsapp_pending", "whatsapp_vote", "whatsapp_unreadable"} {
+			db.Exec(tx, "DELETE FROM "+t+" WHERE store = ? AND chat_jid = ?", store, j)
 		}
-		db.Exec(tx, "DELETE FROM chats WHERE jid = ?", j)
+		db.Exec(tx, "DELETE FROM whatsapp_call WHERE store = ? AND chat_jid = ?", store, j)
+		db.Exec(tx, "DELETE FROM whatsapp_chat WHERE store = ? AND jid = ?", store, j)
 	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
 	for _, f := range files {
-		if filepath.IsLocal(f) {
-			os.Remove(filepath.Join(storeDir(c), f))
+		if p := localFile(storeDir(c), f); p != "" {
+			os.Remove(p)
 		}
 	}
 	return nil

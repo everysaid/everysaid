@@ -182,7 +182,7 @@ func whatsappCalls(a *archive.Archive, calls *CallSet) {
 		}
 		return d
 	}
-	person := newWAPeople(open(WhatsAppContactsDB()), Devices(), iphone, open(BridgeDB()))
+	person := newWAPeople(open(WhatsAppContactsDB()), Devices(), iphone)
 	for _, d := range closers {
 		defer d.Close()
 	}
@@ -355,137 +355,8 @@ func whatsappCalls(a *archive.Archive, calls *CallSet) {
 	}
 }
 
-// The bridge's call-log outcomes (whatsmeow's CallLogMessage.CallOutcome) as our call.detail.
+// The live connection's call-log outcomes (whatsmeow's CallLogMessage.CallOutcome) as our call.detail.
 var bridgeOutcomes = map[string]string{"MISSED": "missed", "FAILED": "failed", "REJECTED": "rejected"}
-
-// BridgeCalls: WhatsApp calls the bridge saw: the call-log message every device gets after a call
-// (outcome, duration, video, participants), and the call signalling it receives itself (an incoming
-// call offered, accepted, ended), for calls no log message came for. One call in several of these,
-// or already in the archive from the iPhone, is kept once (same person and direction within a
-// minute). bridgeDB and storeDB "" are none.
-func BridgeCalls(a *archive.Archive, calls *CallSet, bridgeDB string, devices *sql.DB) (err error) {
-	defer archive.Recover(&err)
-	bridgeCalls(a, calls, bridgeDB, devices)
-	a.PurgeSpam()
-	return nil
-}
-
-func bridgeCalls(a *archive.Archive, calls *CallSet, bridgeDB string, store *sql.DB) {
-	bridge := roBridge(bridgeDB)
-	if bridge == nil {
-		return
-	}
-	defer bridge.Close()
-	if !hasTable(bridge, "calls") {
-		return
-	}
-	person := newWAPeople(nil, store, nil, bridge)
-	own := a.Own()
-	logSrc := a.Source("whatsapp-bridge/calls", bridgeDB, "whatsapp-bridge", "")
-	eventSrc := a.Source("whatsapp-bridge/call-events", bridgeDB, "whatsapp-bridge", "")
-
-	addr := func(jid string) int64 {
-		if jid == "" {
-			return 0
-		}
-		if p, ok := person.of(jid); ok && !own[p] {
-			return a.Address(p)
-		}
-		return 0
-	}
-	ms := func(v any) (int64, bool) {
-		if !truthy(v) {
-			return 0, false
-		}
-		return isoMS(str(v)), true
-	}
-
-	parts := map[string][][2]any{}
-	for _, r := range maps(bridge, "SELECT call_id, jid, outcome FROM call_participants") {
-		parts[str(r["call_id"])] = append(parts[str(r["call_id"])], [2]any{r["jid"], r["outcome"]})
-	}
-	for _, r := range maps(bridge, "SELECT "+selectAll(bridge, "calls", "")+" FROM calls ORDER BY timestamp") {
-		outgoing, isGroup := truthy(r["is_from_me"]), truthy(r["is_group"])
-		var conv, peer int64
-		if isGroup {
-			conv, _ = a.FindConversation("whatsapp", str(r["chat_jid"]))
-		} else {
-			peer = addr(str(r["chat_jid"]))
-		}
-		ts, _ := ms(r["timestamp"])
-		id := str(r["id"])
-		if str(r["source"]) == "log" {
-			outcome := str(r["outcome"])
-			detail := bridgeOutcomes[outcome]
-			if outcome == "MISSED" && outgoing {
-				detail = "unanswered"
-			}
-			code := ""
-			if detail != "" {
-				code = "whatsmeow:" + outcome
-			}
-			callID := calls.add(logSrc, []string{id}, archive.Call{Service: "whatsapp", AddressID: peer, TS: ts,
-				Outgoing: outgoing, Answered: outcome == "CONNECTED", Duration: toInt(r["duration"]), Detail: detail,
-				DetailCode: code, Video: truthy(r["video"]), ConversationID: conv})
-			if callID != 0 && isGroup {
-				for _, p := range parts[id] {
-					said := str(p[1])
-					member := bridgeOutcomes[said]
-					if said == "CONNECTED" {
-						member = "joined"
-					}
-					var c any
-					if said != "" {
-						c = "whatsmeow:" + said
-					}
-					a.Exec("INSERT OR IGNORE INTO call_member VALUES (?, ?, ?, ?)", callID, archive.NullID(addr(str(p[0]))),
-						archive.NullStr(member), c)
-				}
-			}
-		} else {
-			// still ringing, or under way: the next import has it; its end never seen (the bridge was
-			// down then) and an hour gone: taken as it stood, with no end
-			unended := r["ended_at"] == nil
-			if unended && (time.Since(time.UnixMilli(ts)) < time.Hour || truthy(r["accepted_at"])) {
-				continue // (one answered may go on for hours: its end, when seen, says how long)
-			}
-			accepted, wasAccepted := ms(r["accepted_at"])
-			wasAccepted = wasAccepted && accepted != 0
-			ended, _ := ms(r["ended_at"])
-			reason := str(r["end_reason"])
-			if unended {
-				ended, reason = accepted, "unended"
-			}
-			detail := ""
-			if !wasAccepted {
-				switch {
-				case reason == "reject":
-					detail = "rejected"
-				case outgoing:
-					detail = "unanswered"
-				default:
-					detail = "missed"
-				}
-			}
-			code := ""
-			if detail != "" && reason != "" {
-				code = "whatsmeow:" + reason
-			}
-			var duration int64
-			if wasAccepted {
-				duration = max(0, floorDiv(ended-accepted, 1000))
-			}
-			if peer == 0 && !isGroup {
-				peer = addr(str(r["creator"]))
-			}
-			calls.add(eventSrc, []string{id}, archive.Call{Service: "whatsapp", AddressID: peer, TS: ts, Outgoing: outgoing,
-				Answered: wasAccepted, Duration: duration, Key: id, Detail: detail, DetailCode: code,
-				Video: truthy(r["video"]), ConversationID: conv})
-		}
-	}
-	a.Imported(logSrc)
-	a.Imported(eventSrc)
-}
 
 func viberCalls(a *archive.Archive, calls *CallSet) {
 	if !exists(ViberIphoneDB()) {
@@ -616,10 +487,8 @@ func fromTimestamp(ms int64, loc *time.Location) time.Time {
 	return time.Unix(sec, micro*1000).In(loc)
 }
 
-// VoIPOptions: NoBridge leaves the WhatsApp bridge's calls out (the plugins read it apart);
-// Carriers nil is config [import] carrier_notices.
+// VoIPOptions: Carriers nil is config [import] carrier_notices.
 type VoIPOptions struct {
-	NoBridge bool
 	Carriers []string
 }
 
@@ -635,9 +504,6 @@ func VoIP(a *archive.Archive, out func(string), opt VoIPOptions) (err error) {
 	}
 	calls := NewCallSet(a)
 	whatsappCalls(a, calls)
-	if !opt.NoBridge && BridgeDB() != "" {
-		bridgeCalls(a, calls, BridgeDB(), Devices())
-	}
 	viberCalls(a, calls)
 	sipCalls(a, calls)
 	for _, c := range enabled {

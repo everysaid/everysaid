@@ -1,18 +1,14 @@
 package whatsapp
 
-// The messages as they arrive: what each says, its file, its changes.
-
-// What the bridge keeps of each message beyond text and media: its kind, the message it answers,
-// forwarding, a shared place, contact or poll; and, in tables of their own, reactions, calls and
-// the edits and deletions of earlier messages.
+// The messages as they arrive: what each says, its file, its changes, as a batch for the archive
+// (importers.WABatch): its kind, the message it answers, forwarding, a shared place, contact or
+// poll, a link's preview; reactions, calls, votes and the edits and deletions of earlier messages.
 
 import (
 	"cmp"
 	"context"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -23,9 +19,12 @@ import (
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
+
+	"everysaid/internal/archive"
+	"everysaid/internal/importers"
 )
 
-// StoredMessage is one row of the messages table.
+// StoredMessage is what a message says, as the bridge reads it.
 type StoredMessage struct {
 	ID, ChatJID, Sender, Content         string
 	Timestamp                            time.Time
@@ -33,6 +32,7 @@ type StoredMessage struct {
 	MediaType, Filename, URL, DirectPath string
 	MediaKey, FileSHA256, FileEncSHA256  []byte
 	FileLength                           uint64
+	MediaPath                            string // the file already in the store folder (sent from here), relative to it
 	Kind, Subtype, ReplyTo, ReplyText    string
 	Mentions                             []string // the jids the text names with @<user>
 	Forwarded                            bool
@@ -51,124 +51,6 @@ type LinkPreview struct {
 	Thumb                   []byte // JPEGThumbnail
 	DirectPath              string
 	SHA256, EncSHA256, Key  []byte
-}
-
-// migrate adds what this version keeps to a store made by an older one. Nothing is removed.
-func (store *MessageStore) migrate() error {
-	columns := map[string]string{
-		"kind":         "TEXT",    // text, image, video, audio, voice, document, sticker, location, contact, poll
-		"subtype":      "TEXT",    // gif, video_note, link, live_location, view_once
-		"reply_to":     "TEXT",    // the id of the message this one answers
-		"reply_text":   "TEXT",    // the text it quotes
-		"forwarded":    "BOOLEAN", // forwarded by the sender
-		"edited":       "BOOLEAN", // edited later by its sender: content is the last version
-		"deleted":      "BOOLEAN", // deleted later by its sender (or a group admin): content stays
-		"lat":          "REAL",
-		"lon":          "REAL",
-		"place":        "TEXT",
-		"direct_path":  "TEXT",      // where the encrypted file is on WhatsApp's servers
-		"media_path":   "TEXT",      // the downloaded file, relative to the store (media.go)
-		"media_error":  "TEXT",      // why it could not be downloaded
-		"mentions":     "TEXT",      // the jids the text names with @<user>, comma-separated
-		"read_at":      "TIMESTAMP", // when the account read it (a message from others), on any device
-		"poll":         "TEXT",      // a poll's question, options and whether several may be chosen (JSON)
-		"forward_from": "TEXT",      // the channel a forwarded message came from
-		"album":        "TEXT",      // the album's message id, for files sent together
-		// a link's preview, as the sender's app made it (one per message: the first link's)
-		"preview_url":         "TEXT", // the link as the text has it
-		"preview_title":       "TEXT",
-		"preview_description": "TEXT",
-		"preview_thumb":       "BLOB", // the small picture the message carries (JPEG)
-		"preview_direct_path": "TEXT", // where its high-quality picture is on WhatsApp's servers
-		"preview_sha256":      "BLOB",
-		"preview_enc_sha256":  "BLOB",
-		"preview_media_key":   "BLOB",
-		"preview_image":       "BLOB", // that picture, downloaded
-		"preview_error":       "TEXT", // why it could not be had
-	}
-	have := map[string]bool{}
-	rows, err := store.db.Query("PRAGMA table_info(messages)")
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var cid, notnull, pk int
-		var name, typ string
-		var dflt sql.NullString
-		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
-			rows.Close()
-			return err
-		}
-		have[name] = true
-	}
-	rows.Close()
-	for name, typ := range columns {
-		if !have[name] {
-			if _, err := store.db.Exec(fmt.Sprintf("ALTER TABLE messages ADD COLUMN %s %s", name, typ)); err != nil {
-				return err
-			}
-		}
-	}
-	_, err = store.db.Exec(`
-		CREATE TABLE IF NOT EXISTS reactions (
-			chat_jid TEXT,
-			message_id TEXT,          -- the message reacted to
-			sender TEXT,              -- who reacted (a jid)
-			is_from_me BOOLEAN,
-			emoji TEXT,               -- '' once taken back
-			timestamp TIMESTAMP,
-			PRIMARY KEY (chat_jid, message_id, sender)
-		);
-		CREATE TABLE IF NOT EXISTS calls (
-			id TEXT PRIMARY KEY,      -- the call id (from call events) or the call-log message id
-			source TEXT,              -- 'log': the call-log message every device gets after a call; 'event': the call signalling
-			chat_jid TEXT,            -- the person's or the group's chat
-			creator TEXT,             -- who started it (events)
-			is_from_me BOOLEAN,
-			is_group BOOLEAN,
-			video BOOLEAN,
-			timestamp TIMESTAMP,
-			outcome TEXT,             -- log: CONNECTED, MISSED, FAILED, REJECTED, ACCEPTED_ELSEWHERE, ...
-			duration INTEGER,         -- seconds (log)
-			accepted_at TIMESTAMP,    -- events
-			ended_at TIMESTAMP,       -- events
-			end_reason TEXT           -- events: the terminate reason, or 'reject'
-		);
-		CREATE TABLE IF NOT EXISTS call_participants (
-			call_id TEXT,
-			jid TEXT,
-			outcome TEXT,
-			PRIMARY KEY (call_id, jid)
-		);
-		CREATE TABLE IF NOT EXISTS poll_votes (   -- each voter's newest vote in a poll
-			chat_jid TEXT,
-			poll_id TEXT,
-			voter TEXT,
-			options TEXT,             -- JSON: the SHA-256 (hex) of each option chosen, as WhatsApp names them
-			timestamp TIMESTAMP,
-			PRIMARY KEY (chat_jid, poll_id, voter)
-		);
-		CREATE TABLE IF NOT EXISTS chat_events (  -- a pin, a timer set: what a notice says (docs/design.md, "Notices")
-			chat_jid TEXT,
-			id TEXT,                  -- the message that said it
-			sender TEXT,
-			is_from_me BOOLEAN,
-			timestamp TIMESTAMP,
-			code TEXT,                -- pin, unpin, timer
-			args TEXT,                -- JSON
-			target TEXT,              -- the message it is about, if any
-			PRIMARY KEY (chat_jid, id)
-		);
-	`)
-	return err
-}
-
-// storeChatEvent keeps a pin or a timer set, as a notice says it.
-func (store *MessageStore) storeChatEvent(evt *events.Message, code string, args map[string]any, target string) error {
-	js, _ := json.Marshal(args)
-	_, err := store.db.Exec(`INSERT OR IGNORE INTO chat_events VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, evt.Info.Chat.String(),
-		evt.Info.ID, evt.Info.Sender.ToNonAD().String(), evt.Info.IsFromMe, evt.Info.Timestamp, code, string(js), target)
-	return err
 }
 
 // joinLines joins the parts that say something, a line each.
@@ -190,69 +72,6 @@ func pollJSON(name string, options []*waE2E.PollCreationMessage_Option, selectab
 	}
 	js, _ := json.Marshal(map[string]any{"question": name, "options": names, "multiple": selectable != 1})
 	return string(js)
-}
-
-// storeChatTime records a chat, keeping its newest message time (history arrives newest first).
-func (store *MessageStore) storeChatTime(jid, name string, t time.Time) error {
-	var old sql.NullTime
-	err := store.db.QueryRow("SELECT last_message_time FROM chats WHERE jid = ?", jid).Scan(&old)
-	if err == nil && old.Valid && old.Time.After(t) {
-		t = old.Time
-	}
-	return store.StoreChat(jid, name, t)
-}
-
-// storeMessage writes a message; a message seen again (history after live) keeps its file name,
-// and its text once edited.
-func (store *MessageStore) storeMessage(m StoredMessage) error {
-	_, err := store.db.Exec(`
-		INSERT INTO messages (id, chat_jid, sender, content, timestamp, is_from_me, media_type, filename, url,
-			media_key, file_sha256, file_enc_sha256, file_length, kind, subtype, reply_to, reply_text, forwarded,
-			lat, lon, place, direct_path, mentions, forward_from, album, preview_url, preview_title, preview_description,
-			preview_thumb, preview_direct_path, preview_sha256, preview_enc_sha256, preview_media_key)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (id, chat_jid) DO UPDATE SET
-			sender = excluded.sender,
-			content = CASE WHEN messages.edited THEN messages.content ELSE excluded.content END,
-			timestamp = excluded.timestamp, is_from_me = excluded.is_from_me, media_type = excluded.media_type,
-			filename = coalesce(nullif(messages.filename, ''), excluded.filename),
-			url = excluded.url, media_key = excluded.media_key, file_sha256 = excluded.file_sha256,
-			file_enc_sha256 = excluded.file_enc_sha256, file_length = excluded.file_length,
-			kind = excluded.kind, subtype = excluded.subtype, reply_to = excluded.reply_to,
-			reply_text = excluded.reply_text, forwarded = excluded.forwarded,
-			lat = excluded.lat, lon = excluded.lon, place = excluded.place,
-			direct_path = coalesce(excluded.direct_path, messages.direct_path),
-			-- a new place for the file: worth trying again
-			media_error = CASE WHEN excluded.direct_path IS NOT messages.direct_path AND excluded.direct_path IS NOT NULL
-				THEN NULL ELSE messages.media_error END,
-			mentions = CASE WHEN messages.edited THEN messages.mentions ELSE excluded.mentions END,
-			forward_from = coalesce(excluded.forward_from, messages.forward_from),
-			album = coalesce(excluded.album, messages.album),
-			preview_url = coalesce(excluded.preview_url, messages.preview_url),
-			preview_title = coalesce(excluded.preview_title, messages.preview_title),
-			preview_description = coalesce(excluded.preview_description, messages.preview_description),
-			preview_thumb = coalesce(excluded.preview_thumb, messages.preview_thumb),
-			preview_direct_path = coalesce(excluded.preview_direct_path, messages.preview_direct_path),
-			preview_sha256 = coalesce(excluded.preview_sha256, messages.preview_sha256),
-			preview_enc_sha256 = coalesce(excluded.preview_enc_sha256, messages.preview_enc_sha256),
-			preview_media_key = coalesce(excluded.preview_media_key, messages.preview_media_key)`,
-		m.ID, m.ChatJID, m.Sender, m.Content, m.Timestamp, m.IsFromMe, m.MediaType, m.Filename, m.URL,
-		m.MediaKey, m.FileSHA256, m.FileEncSHA256, m.FileLength, m.Kind, m.Subtype, m.ReplyTo, m.ReplyText,
-		m.Forwarded, m.Lat, m.Lon, m.Place, nullable(m.DirectPath), nullable(strings.Join(m.Mentions, ",")),
-		nullable(m.ForwardFrom), nullable(m.Album), nullable(m.Preview.URL), nullable(m.Preview.Title),
-		nullable(m.Preview.Description), blob(m.Preview.Thumb), nullable(m.Preview.DirectPath), blob(m.Preview.SHA256),
-		blob(m.Preview.EncSHA256), blob(m.Preview.Key))
-	return err
-}
-
-// storeReaction keeps each person's latest reaction to a message (an empty emoji once taken back).
-func (store *MessageStore) storeReaction(chatJID, messageID, sender string, fromMe bool, emoji string, t time.Time) error {
-	_, err := store.db.Exec(`
-		INSERT INTO reactions (chat_jid, message_id, sender, is_from_me, emoji, timestamp) VALUES (?, ?, ?, ?, ?, ?)
-		ON CONFLICT (chat_jid, message_id, sender) DO UPDATE SET emoji = excluded.emoji, timestamp = excluded.timestamp
-		WHERE excluded.timestamp >= reactions.timestamp`,
-		chatJID, messageID, sender, fromMe, emoji, t)
-	return err
 }
 
 func messageText(msg *waE2E.Message) string {
@@ -505,23 +324,12 @@ func nullable(s string) interface{} {
 	return s
 }
 
-// blob is b, NULL where empty.
-func blob(b []byte) interface{} {
-	if len(b) == 0 {
-		return nil
-	}
-	return b
-}
-
 // isChannel: channels (newsletters) and status (everyone's, status@broadcast) are never kept: not
 // wanted in the archive, and their files would be downloaded for nothing. A broadcast list of the
 // account's own is not one: what was sent through it is kept.
 func isChannel(jid types.JID) bool {
 	return jid.Server == types.NewsletterServer || jid == types.StatusBroadcastJID
 }
-
-// channelsSQL is isChannel for a chat_jid column.
-const channelsSQL = "(chat_jid LIKE '%@newsletter' OR chat_jid = 'status@broadcast')"
 
 // ownJID is the account's own jid, as reactions and calls name it.
 func ownJID(client *whatsmeow.Client) string {
@@ -559,54 +367,57 @@ func alternates(client *whatsmeow.Client, jid, alt types.JID) []string {
 	return out
 }
 
-// changeable is the chat of the earlier message an edit or a deletion names, and whether whoever
-// sent it may change it, as WhatsApp allows: an edit only its author; a deletion its author, or in
-// a group an admin. Anything else (another member forging one) is ignored, as the apps do.
-func changeable(client *whatsmeow.Client, store *MessageStore, evt *events.Message, id string, deletion bool) (string, bool) {
-	info := evt.Info
-	group := info.Chat.Server == types.GroupServer
-	chats := []string{info.Chat.String()}
-	if !group {
-		alt := info.SenderAlt
-		if info.IsFromMe {
-			alt = info.RecipientAlt
-		}
-		chats = alternates(client, info.Chat, alt)
+// others are a jid's other jids (alternates), without it.
+func others(client *whatsmeow.Client, jid, alt types.JID) []string {
+	all := alternates(client, jid, alt)
+	if len(all) > 0 && all[0] == jidString(jid) {
+		return all[1:]
 	}
-	for _, chat := range chats {
-		var sender sql.NullString
-		var fromMe sql.NullBool
-		if store.db.QueryRow("SELECT sender, is_from_me FROM messages WHERE id = ? AND chat_jid = ?", id, chat).Scan(&sender, &fromMe) != nil {
-			continue
-		}
-		var author bool
-		switch {
-		case fromMe.Bool || info.IsFromMe:
-			author = fromMe.Bool == info.IsFromMe
-		case sender.String == "":
-			author = !group // a person's chat has one other side
-		default:
-			author = slices.Contains(alternates(client, info.Sender, info.SenderAlt), sender.String)
-		}
-		return chat, author || (deletion && group)
-	}
-	return "", false
+	return all
 }
 
-// processMessage stores a message, or applies what it does to an earlier one (an edit, a
-// deletion, a reaction), or records the call it logs. name: the chat's name where already known.
-// false: it could not be stored (not acknowledged, WhatsApp gives it again).
-func processMessage(client *whatsmeow.Client, store *MessageStore, evt *events.Message, name string, logger waLog.Logger) bool {
+// wa is the message as the archive's writer takes it, its file what downloads it.
+func (m StoredMessage) wa() importers.WAMessage {
+	out := importers.WAMessage{Chat: m.ChatJID, ID: m.ID, Sender: m.Sender, FromMe: m.IsFromMe, At: m.Timestamp.UnixMilli(),
+		Kind: m.Kind, Subtype: m.Subtype, Text: m.Content, MediaType: m.MediaType, ReplyTo: m.ReplyTo, ReplyText: m.ReplyText,
+		Mentions: m.Mentions, Forwarded: m.Forwarded, ForwardFrom: m.ForwardFrom, Album: m.Album, Lat: m.Lat, Lon: m.Lon,
+		Place: m.Place, Poll: m.Poll}
+	if p := m.Preview; p.Title != "" || p.Description != "" || len(p.Thumb) > 0 {
+		out.Preview = &archive.Preview{URL: p.URL, Title: p.Title, Description: p.Description, Image: p.Thumb}
+	}
+	if m.Preview.DirectPath != "" {
+		out.PreviewFile = &importers.WAPreviewFile{URL: m.Preview.URL, DirectPath: m.Preview.DirectPath,
+			SHA256: m.Preview.SHA256, EncSHA256: m.Preview.EncSHA256, Key: m.Preview.Key}
+	}
+	if m.MediaType != "" {
+		out.File = &importers.WAFile{MediaType: m.MediaType, Filename: m.Filename, URL: m.URL, DirectPath: m.DirectPath,
+			MediaKey: m.MediaKey, FileSHA256: m.FileSHA256, FileEncSHA256: m.FileEncSHA256, FileLength: m.FileLength,
+			Path: m.MediaPath}
+	}
+	return out
+}
+
+// remember keeps where a message is and who wrote it, for a week (whatsapp_recent): what the
+// bridge answers, edits, deletes or marks read is found there.
+func (store *Store) remember(m StoredMessage) {
+	store.exec(`INSERT INTO whatsapp_recent (store, chat_jid, id, sender, from_me, at) VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT (store, chat_jid, id) DO UPDATE SET sender = excluded.sender, from_me = excluded.from_me, at = excluded.at`,
+		store.key, m.ChatJID, m.ID, nullable(m.Sender), m.IsFromMe, m.Timestamp.UnixMilli())
+}
+
+// processMessage adds to the batch a message, or what it does to an earlier one (an edit, a
+// deletion, a reaction, a vote), or the call it logs. name: the chat's name where already known.
+func processMessage(client *whatsmeow.Client, store *Store, b *importers.WABatch, evt *events.Message, name string, logger waLog.Logger) {
 	msg := evt.Message
 	if msg == nil || isChannel(evt.Info.Chat) {
-		return true
+		return
 	}
 	// a reaction or an edit sent encrypted with the message's secret (newer clients): what it says
 	if er := msg.GetEncReactionMessage(); er != nil {
 		r, err := client.DecryptReaction(context.Background(), evt)
 		if err != nil {
 			logger.Warnf("Failed to read an encrypted reaction: %v", err)
-			return true
+			return
 		}
 		r.Key = er.GetTargetMessageKey()
 		msg = &waE2E.Message{ReactionMessage: r}
@@ -615,20 +426,34 @@ func processMessage(client *whatsmeow.Client, store *MessageStore, evt *events.M
 		inner, err := client.DecryptSecretEncryptedMessage(context.Background(), evt)
 		if err != nil {
 			logger.Warnf("Failed to read a secret-encrypted message: %v", err)
-			return true
+			return
 		}
 		e := *evt
 		e.RawMessage, e.Message = inner, nil
 		evt = e.UnwrapRaw()
 		msg = evt.Message
 		if msg == nil {
-			return true
+			return
 		}
 	}
 	chatJID := evt.Info.Chat.String()
 	sender := evt.Info.Sender.ToNonAD().String()
+	at := evt.Info.Timestamp.UnixMilli()
+	notice := func(code string, args map[string]any, target string) {
+		b.Notices = append(b.Notices, importers.WANotice{Chat: chatJID, ID: evt.Info.ID, Sender: sender,
+			FromMe: evt.Info.IsFromMe, At: at, Code: code, Args: args, Target: target})
+	}
 
 	if pm := msg.GetProtocolMessage(); pm != nil {
+		// a person's chat, and who changed it, may be kept under their number or their LID
+		var alt, senderAlt []string
+		if info := evt.Info; info.Chat.Server != types.GroupServer {
+			chatAlt := info.SenderAlt
+			if info.IsFromMe {
+				chatAlt = info.RecipientAlt
+			}
+			alt, senderAlt = others(client, info.Chat, chatAlt), others(client, info.Sender, info.SenderAlt)
+		}
 		switch pm.GetType() {
 		case waE2E.ProtocolMessage_MESSAGE_EDIT:
 			edited := pm.GetEditedMessage()
@@ -636,45 +461,36 @@ func processMessage(client *whatsmeow.Client, store *MessageStore, evt *events.M
 			if ci := contextInfo(edited); ci != nil {
 				mentions = ci.GetMentionedJID()
 			}
-			if chat, ok := changeable(client, store, evt, pm.GetKey().GetID(), false); ok {
-				if _, err := store.db.Exec("UPDATE messages SET content = ?, mentions = ?, edited = 1 WHERE id = ? AND chat_jid = ?",
-					messageText(edited), nullable(strings.Join(mentions, ",")), pm.GetKey().GetID(), chat); err != nil {
-					logger.Warnf("Failed to store edit: %v", err)
-				}
-			} else if chat == "" {
-				store.pendChange(evt, pm.GetKey().GetID(), "edit", messageText(edited))
-			}
+			b.Changes = append(b.Changes, importers.WAChange{Chat: chatJID, Target: pm.GetKey().GetID(), Change: "edit",
+				Sender: sender, FromMe: evt.Info.IsFromMe, Text: messageText(edited), Mentions: mentions, At: at,
+				Alt: alt, SenderAlt: senderAlt})
 		case waE2E.ProtocolMessage_EPHEMERAL_SETTING: // the timer of a chat (a group's comes as its change)
 			if evt.Info.Chat.Server != types.GroupServer {
-				if err := store.storeChatEvent(evt, "timer", map[string]any{"seconds": pm.GetEphemeralExpiration()}, ""); err != nil {
-					logger.Warnf("Failed to store a timer: %v", err)
-				}
+				notice("timer", map[string]any{"seconds": pm.GetEphemeralExpiration()}, "")
 			}
 		case waE2E.ProtocolMessage_REVOKE:
-			if chat, ok := changeable(client, store, evt, pm.GetKey().GetID(), true); ok {
-				if _, err := store.db.Exec("UPDATE messages SET deleted = 1 WHERE id = ? AND chat_jid = ?",
-					pm.GetKey().GetID(), chat); err != nil {
-					logger.Warnf("Failed to store deletion: %v", err)
-				}
-			} else if chat == "" {
-				store.pendChange(evt, pm.GetKey().GetID(), "delete", "")
-			}
+			b.Changes = append(b.Changes, importers.WAChange{Chat: chatJID, Target: pm.GetKey().GetID(), Change: "delete",
+				Sender: sender, FromMe: evt.Info.IsFromMe, At: at, Alt: alt, SenderAlt: senderAlt})
 		}
-		return true
+		return
 	}
 	if rm := msg.GetReactionMessage(); rm != nil {
-		t := evt.Info.Timestamp
+		t := at
 		if ms := rm.GetSenderTimestampMS(); ms > 0 {
-			t = time.UnixMilli(ms)
+			t = ms
 		}
-		if err := store.storeReaction(chatJID, rm.GetKey().GetID(), sender, evt.Info.IsFromMe, rm.GetText(), t); err != nil {
-			logger.Warnf("Failed to store reaction: %v", err)
-		}
-		return true
+		b.Reactions = append(b.Reactions, importers.WAReaction{Chat: chatJID, Target: rm.GetKey().GetID(), Sender: sender,
+			FromMe: evt.Info.IsFromMe, Emoji: rm.GetText(), At: t})
+		return
 	}
 	if cl := msg.GetCallLogMesssage(); cl != nil {
-		storeCallLog(store, evt, cl, logger)
-		return true
+		c := importers.WACallLog{ID: evt.Info.ID, Chat: chatJID, FromMe: evt.Info.IsFromMe, Group: evt.Info.IsGroup,
+			Video: cl.GetIsVideo(), At: at, Outcome: cl.GetCallOutcome().String(), Duration: cl.GetDurationSecs()}
+		for _, p := range cl.GetParticipants() {
+			c.Participants = append(c.Participants, [2]string{p.GetJID(), p.GetCallOutcome().String()})
+		}
+		b.CallLogs = append(b.CallLogs, c)
+		return
 	}
 	if pin := msg.GetPinInChatMessage(); pin != nil {
 		code, args := "pin", map[string]any{"seconds": nil}
@@ -683,16 +499,14 @@ func processMessage(client *whatsmeow.Client, store *MessageStore, evt *events.M
 		} else if d := msg.GetMessageContextInfo().GetMessageAddOnDurationInSecs(); d > 0 {
 			args["seconds"] = d
 		}
-		if err := store.storeChatEvent(evt, code, args, pin.GetKey().GetID()); err != nil {
-			logger.Warnf("Failed to store a pin: %v", err)
-		}
-		return true
+		notice(code, args, pin.GetKey().GetID())
+		return
 	}
 	if pu := msg.GetPollUpdateMessage(); pu != nil {
 		vote, err := client.DecryptPollVote(context.Background(), evt)
 		if err != nil {
 			logger.Warnf("Failed to read a poll vote: %v", err)
-			return true
+			return
 		}
 		// one voter by one jid: their number's where the vote came from a LID and names it
 		voter := sender
@@ -703,13 +517,9 @@ func processMessage(client *whatsmeow.Client, store *MessageStore, evt *events.M
 		for _, h := range vote.GetSelectedOptions() {
 			chosen = append(chosen, hex.EncodeToString(h))
 		}
-		js, _ := json.Marshal(chosen)
-		if _, err := store.db.Exec(`INSERT INTO poll_votes VALUES (?, ?, ?, ?, ?) ON CONFLICT (chat_jid, poll_id, voter)
-			DO UPDATE SET options = excluded.options, timestamp = excluded.timestamp WHERE excluded.timestamp >= poll_votes.timestamp`,
-			chatJID, pu.GetPollCreationMessageKey().GetID(), voter, string(js), evt.Info.Timestamp); err != nil {
-			logger.Warnf("Failed to store a poll vote: %v", err)
-		}
-		return true
+		b.Votes = append(b.Votes, importers.WAVote{Chat: chatJID, Poll: pu.GetPollCreationMessageKey().GetID(), Voter: voter,
+			Options: chosen, At: at})
+		return
 	}
 
 	m := StoredMessage{ID: evt.Info.ID, ChatJID: chatJID, Sender: sender, Timestamp: evt.Info.Timestamp, IsFromMe: evt.Info.IsFromMe}
@@ -719,33 +529,33 @@ func processMessage(client *whatsmeow.Client, store *MessageStore, evt *events.M
 		if msg.GetPlaceholderMessage() != nil || msg.GetSendPaymentMessage() != nil || msg.GetRequestPaymentMessage() != nil ||
 			msg.GetProductMessage() != nil || msg.GetOrderMessage() != nil || msg.GetStickerPackMessage() != nil ||
 			msg.GetMusicMessage() != nil || msg.GetHighlyStructuredMessage() != nil || msg.GetConditionalRevealMessage() != nil {
-			if err := store.storeChatEvent(evt, "unsupported", map[string]any{}, ""); err != nil {
-				logger.Warnf("Failed to store a message of a kind not kept: %v", err)
-				return false
-			}
+			notice("unsupported", map[string]any{}, "")
 		}
-		return true
+		return
 	}
 	if name == "" {
 		name = chatName(client, store, evt.Info.Chat, chatJID, nil, evt.Info.Sender.User, logger)
 	}
-	if err := store.storeChatTime(chatJID, name, evt.Info.Timestamp); err != nil {
-		logger.Warnf("Failed to store chat: %v", err)
-	}
-	if err := store.storeMessage(m); err != nil {
-		logger.Warnf("Failed to store message: %v", err)
-		return false
-	}
-	store.readAfterAll(m.ChatJID, m.ID)
-	if m.Poll != "" {
-		store.db.Exec("UPDATE messages SET poll = ? WHERE id = ? AND chat_jid = ?", m.Poll, m.ID, m.ChatJID)
-	}
-	logger.Debugf("stored a message: %s", m.Kind) // its kind, never its text or who wrote it
-	return true
+	keep(store, b, m, name)
+	logger.Debugf("a message: %s", m.Kind) // its kind, never its text or who wrote it
 }
 
-// historyReactions stores the reactions a history-sync message carries.
-func historyReactions(client *whatsmeow.Client, store *MessageStore, chatJID types.JID, webMsg *waWeb.WebMessageInfo, logger waLog.Logger) {
+// keep adds a message to the batch, its chat named, and keeps what the bridge needs of it.
+func keep(store *Store, b *importers.WABatch, m StoredMessage, name string) {
+	if b.Chats == nil {
+		b.Chats = map[string]string{}
+	}
+	b.Chats[m.ChatJID] = name
+	store.storeChat(m.ChatJID, name, m.Timestamp)
+	if !m.IsFromMe {
+		store.incoming(m.ChatJID)
+	}
+	store.remember(m)
+	b.Messages = append(b.Messages, m.wa())
+}
+
+// historyReactions adds the reactions a history-sync message carries.
+func historyReactions(client *whatsmeow.Client, b *importers.WABatch, chatJID types.JID, webMsg *waWeb.WebMessageInfo) {
 	for _, r := range webMsg.GetReactions() {
 		key := r.GetKey()
 		sender := key.GetParticipant()
@@ -758,46 +568,26 @@ func historyReactions(client *whatsmeow.Client, store *MessageStore, chatJID typ
 		if j, err := types.ParseJID(sender); err == nil {
 			sender = j.ToNonAD().String()
 		}
-		t := time.UnixMilli(r.GetSenderTimestampMS())
-		if err := store.storeReaction(chatJID.String(), webMsg.GetKey().GetID(), sender, key.GetFromMe(), r.GetText(), t); err != nil {
-			logger.Warnf("Failed to store history reaction: %v", err)
-		}
+		b.Reactions = append(b.Reactions, importers.WAReaction{Chat: chatJID.String(), Target: webMsg.GetKey().GetID(),
+			Sender: sender, FromMe: key.GetFromMe(), Emoji: r.GetText(), At: r.GetSenderTimestampMS(), History: true})
 	}
 }
 
-func storeCallLog(store *MessageStore, evt *events.Message, cl *waE2E.CallLogMessage, logger waLog.Logger) {
-	id := evt.Info.ID
-	_, err := store.db.Exec(`
-		INSERT OR REPLACE INTO calls (id, source, chat_jid, is_from_me, is_group, video, timestamp, outcome, duration)
-		VALUES (?, 'log', ?, ?, ?, ?, ?, ?, ?)`,
-		id, evt.Info.Chat.String(), evt.Info.IsFromMe, evt.Info.IsGroup, cl.GetIsVideo(), evt.Info.Timestamp,
-		cl.GetCallOutcome().String(), cl.GetDurationSecs())
-	if err != nil {
-		logger.Warnf("Failed to store call log: %v", err)
-		return
-	}
-	for _, p := range cl.GetParticipants() {
-		store.db.Exec("INSERT OR REPLACE INTO call_participants (call_id, jid, outcome) VALUES (?, ?, ?)",
-			id, p.GetJID(), p.GetCallOutcome().String())
-	}
-}
-
-// handleCallEvent records the call signalling the bridge sees: offers (one-to-one, and notices of
+// handleCallEvent adds the call signalling the bridge sees: offers (one-to-one, and notices of
 // group calls), acceptance, rejection and the end.
-func handleCallEvent(client *whatsmeow.Client, store *MessageStore, evt interface{}, logger waLog.Logger) {
+func handleCallEvent(client *whatsmeow.Client, b *importers.WABatch, evt interface{}) {
 	offer := func(meta types.BasicCallMeta, video bool) {
 		chat, isGroup := meta.From.ToNonAD(), !meta.GroupJID.IsEmpty()
 		if isGroup {
 			chat = meta.GroupJID
 		}
 		creator := meta.CallCreator.ToNonAD().String()
-		_, err := store.db.Exec(`
-			INSERT OR IGNORE INTO calls (id, source, chat_jid, creator, is_from_me, is_group, video, timestamp)
-			VALUES (?, 'event', ?, ?, ?, ?, ?, ?)`,
-			meta.CallID, chat.String(), creator, creator == ownJID(client), isGroup, video, meta.Timestamp)
-		if err != nil {
-			logger.Warnf("Failed to store call: %v", err)
-		}
+		b.CallSignals = append(b.CallSignals, importers.WACallSignal{ID: meta.CallID, Kind: "offer", Chat: chat.String(),
+			Creator: creator, FromMe: creator == ownJID(client), Group: isGroup, Video: video, At: meta.Timestamp.UnixMilli()})
+	}
+	signal := func(kind string, meta types.BasicCallMeta, reason string) {
+		b.CallSignals = append(b.CallSignals, importers.WACallSignal{ID: meta.CallID, Kind: kind, At: meta.Timestamp.UnixMilli(),
+			Reason: reason})
 	}
 	switch v := evt.(type) {
 	case *events.CallOffer:
@@ -811,12 +601,10 @@ func handleCallEvent(client *whatsmeow.Client, store *MessageStore, evt interfac
 	case *events.CallOfferNotice:
 		offer(v.BasicCallMeta, v.Media == "video")
 	case *events.CallAccept:
-		store.db.Exec("UPDATE calls SET accepted_at = coalesce(accepted_at, ?) WHERE id = ?", v.Timestamp, v.CallID)
+		signal("accept", v.BasicCallMeta, "")
 	case *events.CallReject:
-		store.db.Exec("UPDATE calls SET ended_at = coalesce(ended_at, ?), end_reason = coalesce(end_reason, 'reject') WHERE id = ?",
-			v.Timestamp, v.CallID)
+		signal("reject", v.BasicCallMeta, "")
 	case *events.CallTerminate:
-		store.db.Exec("UPDATE calls SET ended_at = coalesce(ended_at, ?), end_reason = coalesce(end_reason, ?) WHERE id = ?",
-			v.Timestamp, v.Reason, v.CallID)
+		signal("terminate", v.BasicCallMeta, v.Reason)
 	}
 }
