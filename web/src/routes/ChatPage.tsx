@@ -1067,7 +1067,8 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
     }
   }, [editing?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
-    setSvc((cur) => (picked.current && cur && services.includes(cur) ? cur
+    // what is being written stays on its service: one arriving elsewhere does not take the field
+    setSvc((cur) => ((picked.current || text.trim()) && cur && services.includes(cur) ? cur
       : preferred && services.includes(preferred) ? preferred : services[0] ?? null));
   }, [services.join(), preferred]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {

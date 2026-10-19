@@ -42,6 +42,59 @@ test("answers where the chat was last active, with a lock where it cannot send",
   await expect(page.locator("[data-composer-body] textarea")).toBeEnabled();
 });
 
+// A message arriving on a service that cannot send, while the user is writing: the text stays on
+// the service it was being written for, the field open (Backspace still deletes, nothing locks under
+// the text), and it goes there.
+test("a message arriving where nothing can send, while writing: the field stays on its service", async ({ page }, info) => {
+  await signedIn(page, info.project.name);
+  const chat = await page.evaluate(async () => {
+    const h = { "X-Everysaid": "1" };
+    const chats = (await (await fetch("/api/chats", { headers: h })).json()).items;
+    for (const c of chats) {
+      const d = await (await fetch(`/api/chats/${c.id}`, { headers: h })).json();
+      if (c.type === "person" && d.services.includes("imessage") && !d.sendable.includes("imessage") && d.sendable.length)
+        return { id: c.id as string, last: (d.sendable.includes(d.last_service) ? d.last_service : d.sendable[0]) as string };
+    }
+    return null;
+  });
+  test.skip(!chat, "no chat with iMessage and a service that can send");
+  await page.goto(`/chat/${chat!.id}`);
+  const via = page.locator("[data-via]");
+  const field = page.locator("[data-composer-body] textarea");
+  if ((await via.getAttribute("data-via")) !== chat!.last) {
+    // last active over iMessage (as an earlier run leaves it): a message sent elsewhere first, then
+    // the chat opened again, with nothing picked
+    await via.click();
+    await page.getByRole("menuitem").filter({ has: page.locator(`[data-icon="${chat!.last}"]`) }).click();
+    await field.fill(`quiet: first ${info.project.name} ${Date.now()}`);
+    await page.locator("[data-send]").click();
+    await expect(page.locator("[data-stream] [data-sending]")).toHaveCount(0, { timeout: 10000 });
+    await page.reload();
+  }
+  await expect(via).toHaveAttribute("data-via", chat!.last);
+  await field.click();
+  const text = `quiet: written meanwhile ${info.project.name} ${Date.now()}`;
+  await page.keyboard.type(`${text}xy`);
+  const asked = `over iMessage ${Date.now()}`;
+  await page.request.post("/api/demo/incoming", { data: { chat: chat!.id, text: asked, service: "imessage" }, headers: { "X-Everysaid": "1" } });
+  await expect(page.locator("[data-stream]").getByText(asked, { exact: true })).toBeVisible({ timeout: 10000 });
+  await expect(via).toHaveAttribute("data-via", chat!.last);
+  await expect(field).toBeEnabled();
+  await expect(field).toBeFocused();
+  await expect(page.locator("[data-locked]")).toHaveCount(0);
+  await page.keyboard.press("Backspace");
+  await page.keyboard.press("Backspace");
+  await expect(field).toHaveValue(text);
+  await page.locator("[data-send]").click();
+  await expect(field).toHaveValue("");
+  await expect(page.locator("[data-stream] [data-sending]")).toHaveCount(0, { timeout: 10000 });
+  const sent = await page.evaluate(async ([id, x]) => {
+    const r = await fetch(`/api/chats/${id}/stream?limit=40`, { headers: { "X-Everysaid": "1" } });
+    return (await r.json()).items.filter((i: any) => i.text === x).map((i: any) => i.service);
+  }, [chat!.id, text]);
+  expect(sent).toEqual([chat!.last]);                  // once, on the service it was written for
+});
+
 test("a person's services, all on at first: one turned off leaves its messages out, and comes back", async ({ page }, info) => {
   await signedIn(page, info.project.name);
   const chat = await page.evaluate(async () => {
