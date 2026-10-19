@@ -481,6 +481,84 @@ func TestMediaIsFetchedThroughASourceAtWork(t *testing.T) {
 	must(t, errors.Is(err, mcp.ErrNoFetch) && asked.Load() == 1, "a disabled source: %v", err)
 }
 
+// waiter is a source of one service still getting the files of the messages it was told of,
+// recording what it is asked.
+type waiter struct {
+	id, service string
+	live        bool
+	coming      map[int64]bool
+	asked       *[][]int64
+}
+
+func (w waiter) Info() *plugins.Info {
+	i := &plugins.Info{ID: w.id, Name: w.id, Kind: "source", Services: []string{w.service}}
+	if w.live {
+		i.Modes = []string{"import", "live"}
+	}
+	return i
+}
+
+func (w waiter) FilesPending(ctx context.Context, c *plugins.Context, ids []int64) map[int64]bool {
+	*w.asked = append(*w.asked, ids)
+	out := map[int64]bool{}
+	for _, id := range ids {
+		out[id] = w.coming[id]
+	}
+	return out
+}
+
+func (w waiter) Live(ctx context.Context, c *plugins.Context) error { <-ctx.Done(); return nil }
+
+// A message whose file a source is still getting is marked in the chat's stream as on its way; one
+// without a file kind, or with its file, or of a source not at work, is not asked about.
+func TestStreamMarksFilesComing(t *testing.T) {
+	c := newServer(t)
+	c.login()
+	var chat string
+	var conv int64
+	var svc string
+	for _, x := range items(c.getJSON("/api/chats")) {
+		if x["type"] != "person" {
+			continue
+		}
+		for _, it := range items(c.getJSON("/api/chats/" + x["id"].(string) + "/stream?limit=5")) {
+			if it["type"] == "message" {
+				chat, conv, svc = x["id"].(string), int64(num(it["conversation_id"])), it["service"].(string)
+			}
+		}
+		if chat != "" {
+			break
+		}
+	}
+	must(t, chat != "", "a person's chat")
+	var mids []int64
+	c.s.Store.MustWrite(func(tx *sql.Tx) {
+		for i, kind := range []string{"image", "voice", "text"} {
+			r := db.Exec(tx, "INSERT INTO message (service_id, conversation_id, ts, outgoing, kind_id, text) VALUES "+
+				"((SELECT id FROM service WHERE name = ?), ?, ?, 0, (SELECT id FROM message_kind WHERE name = ?), NULL)",
+				svc, conv, time.Now().UnixMilli()+int64(i), kind)
+			id, _ := r.LastInsertId()
+			mids = append(mids, id)
+		}
+	})
+	var asked, liveAsked [][]int64
+	plugins.Register(waiter{"test-waiter", svc, false, map[int64]bool{mids[0]: true}, &asked})
+	plugins.Register(waiter{"test-live-waiter", svc, true, map[int64]bool{mids[0]: true, mids[1]: true}, &liveAsked})
+	plugins.Create(c.s.Store, "test-waiter", "Waiter", M{})
+	plugins.Create(c.s.Store, "test-live-waiter", "Live waiter", M{}) // not connected
+	coming := map[int64]bool{}
+	for _, it := range items(c.getJSON("/api/chats/" + chat + "/stream?limit=20")) {
+		if it["file_coming"] == true {
+			coming[int64(num(it["id"]))] = true
+		}
+	}
+	must(t, len(coming) == 1 && coming[mids[0]], "on its way: %v of %v", coming, mids)
+	must(t, len(asked) == 1 && len(liveAsked) == 0, "asked %v, the live one (not connected) %v", asked, liveAsked)
+	for _, id := range asked[0] {
+		must(t, id == mids[0] || id == mids[1], "asked of %d, not a message waiting for its file", id)
+	}
+}
+
 // A sending the app gives up on half way (its page closed, its connection lost) goes on, and is sent
 // once: not cut short to go again later, the chat's next messages waiting behind it.
 func TestSendingGoesOnWhenTheAppGoes(t *testing.T) {

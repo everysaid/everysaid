@@ -627,6 +627,63 @@ func downloads(c *plugins.Context) bool {
 	return on || !set
 }
 
+// FilesPending: the messages whose file the live connection still downloads (as fileQueue.recent
+// queues them, at each connection): stored in the last mediaBackfill without their file, carrying
+// one, of a chat imported, while downloads are on.
+func (Plugin) FilesPending(ctx context.Context, c *plugins.Context, messageIDs []int64) map[int64]bool {
+	out := map[int64]bool{}
+	if !downloads(c) || len(messageIDs) == 0 {
+		return out
+	}
+	type msg struct {
+		chat int64
+		id   int
+	}
+	mids := map[msg]int64{}
+	var pairs []any
+	db.Each(c.Store().Read(), "SELECT m.id, m.key, cv.key FROM message m JOIN service s ON s.id = m.service_id "+
+		"JOIN conversation cv ON cv.id = m.conversation_id WHERE s.name = 'telegram' AND m.id IN ("+
+		db.Marks(len(messageIDs))+")", db.Args(messageIDs), func(scan func(...any)) {
+		var mid int64
+		var key, chatKey sql.NullString
+		scan(&mid, &key, &chatKey)
+		id, err1 := strconv.Atoi(key.String)
+		chat, err2 := strconv.ParseInt(chatKey.String, 10, 64)
+		if err1 == nil && err2 == nil {
+			mids[msg{chat, id}] = mid
+			pairs = append(pairs, chat, id)
+		}
+	})
+	if len(mids) == 0 {
+		return out
+	}
+	store, err := readStore()
+	if err != nil {
+		return out
+	}
+	defer store.Close()
+	skip := idSet(currentSettings(c)["skip_chats"])
+	values := strings.TrimSuffix(strings.Repeat("(?, ?),", len(mids)), ",")
+	db.Each(store, "SELECT chat_id, id, json FROM telegram_message m WHERE file IS NULL AND date >= ? "+
+		"AND (chat_id, id) IN (VALUES "+values+") "+
+		"AND NOT EXISTS (SELECT 1 FROM telegram_deleted d WHERE d.chat_id = m.chat_id AND d.id = m.id)",
+		append([]any{time.Now().Add(-mediaBackfill).Unix()}, pairs...), func(scan func(...any)) {
+			var k msg
+			var js string
+			scan(&k.chat, &k.id, &js)
+			var m map[string]any
+			dec := json.NewDecoder(strings.NewReader(js))
+			dec.UseNumber()
+			if skip[k.chat] || dec.Decode(&m) != nil {
+				return
+			}
+			if ok, _ := wanted(m); ok {
+				out[mids[k]] = true
+			}
+		})
+	return out
+}
+
 // fileQueue downloads the files of the messages the live connection stores, apart from it (a
 // video takes a while), and brings them into the archive.
 type fileQueue struct {

@@ -1318,6 +1318,56 @@ func (h *Host) FetchMedia(ctx context.Context, _ *core.Store, messageID int64) (
 	return "", mcp.ErrNoFetch
 }
 
+// fileKinds are the kinds of message that carry a file.
+var fileKinds = map[string]bool{"image": true, "video": true, "voice": true, "file": true, "sticker": true}
+
+// MarkFilesComing sets file_coming on the stream's messages whose file the archive does not have yet
+// and a source at work is still getting (as FetchMedia chooses them: enabled, of the message's
+// service, a live one while its connection runs), one question to each such source for the page.
+func (h *Host) MarkFilesComing(ctx context.Context, items []M) {
+	bySvc := map[string][]int64{}
+	byID := map[int64]M{}
+	for _, it := range items {
+		if it["type"] != "message" {
+			continue
+		}
+		kind, _ := it["kind"].(string)
+		atts, _ := it["attachments"].([]M)
+		id, _ := it["id"].(int64)
+		svc, _ := it["service"].(string)
+		if !fileKinds[kind] || len(atts) > 0 || id == 0 || it["deleted"] == true {
+			continue
+		}
+		bySvc[svc] = append(bySvc[svc], id)
+		byID[id] = it
+	}
+	if len(bySvc) == 0 {
+		return
+	}
+	for _, row := range h.sourcesAndAnalysis() {
+		p := plugins.Get(row.Plugin)
+		w, ok := p.(plugins.FilesWaiter)
+		if !ok || !row.Enabled || p.Info().HasMode("live") && !h.isLive(row.ID) {
+			continue
+		}
+		var ids []int64
+		for _, svc := range p.Info().Services {
+			ids = append(ids, bySvc[svc]...)
+		}
+		if len(ids) == 0 {
+			continue
+		}
+		func() {
+			defer func() { recover() }() // a source's fault leaves the page as it is
+			for id, coming := range w.FilesPending(ctx, plugins.NewContext(h, row), ids) {
+				if it := byID[id]; it != nil && coming {
+					it["file_coming"] = true
+				}
+			}
+		}()
+	}
+}
+
 // --- helpers -------------------------------------------------------------------------------------
 
 func contains[T comparable](xs []T, x T) bool {

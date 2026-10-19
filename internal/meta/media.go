@@ -40,8 +40,12 @@ import (
 // maxFile is the largest file downloaded (Meta's own limit for a file is 100 MB, a video more).
 const maxFile = 2 << 30
 
-// tooOld: a file waiting longer than this is given up (its address has expired long ago).
-const tooOld = 7 * 24 * time.Hour
+// tooOld: a file waiting longer than this is given up (its address has expired long ago); so is
+// one tried maxTries times.
+const (
+	tooOld   = 7 * 24 * time.Hour
+	maxTries = 5
+)
 
 // mediaDir is the instance's download folder.
 func mediaDir(iid int64) string {
@@ -259,13 +263,16 @@ func link(c *plugins.Context, service string, files map[string]pendingFile) (map
 			}
 			if f.N == previewN {
 				if b, err := os.ReadFile(path); err == nil {
-					w.PreviewImage(mid, f.Name, b)
+					if w.PreviewImage(mid, f.Name, b) {
+						a.Changed = true
+					}
 					linked[path] = true
 				}
 				continue
 			}
 			st.LinkNamed(w.SourceName, w.Source, path, filepath.Base(path), mid, f.Name)
 			linked[path] = true
+			a.Changed = true // its message, shown without it, is told (the chat refetched)
 		}
 		a.Commit()
 		st.Release()
@@ -290,7 +297,7 @@ func (s *liveSession) fetchFiles(ctx context.Context, message string) int {
 		if f.N != previewN && message == "" && !s.c.Bool("media") {
 			continue
 		}
-		if time.Since(time.Unix(f.At, 0)) > tooOld || f.Tries >= 5 {
+		if time.Since(time.Unix(f.At, 0)) > tooOld || f.Tries >= maxTries {
 			s.c.Log("{file}: not downloaded ({e})", map[string]any{"file": fileName(f), "e": "gave up"})
 			fileDone(s.c.ID, f)
 			continue

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -697,5 +698,58 @@ func TestSearchGIFs(t *testing.T) {
 	}
 	if _, err := p.GIF(newTestCtx(), c, "999"); err == nil {
 		t.Fatal("a GIF never found")
+	}
+}
+
+// A file the live connection still downloads is on its way: a stored message carrying one, of the
+// last week, of a chat imported, while downloads are on; not once downloaded.
+func TestFilesPending(t *testing.T) {
+	in := newInstance(t, M{"skip_chats": []any{-10}})
+	c := in.ctx()
+	peer := &tg.PeerUser{UserID: 2}
+	now := int(time.Now().Unix())
+	fresh := func(m *tg.Message) *tg.Message { m.Date = now - 60; return m }
+	bob, group := user(2, "Bob", 22), &tg.Chat{ID: 10, Title: "Left out"}
+	_, err1 := storeMessages(c, bob, []sent{{fresh(video(400, peer, 80, "image/jpeg")), nil},
+		{video(401, peer, 81, "image/jpeg"), nil}, {fresh(text(403, peer, 0, now-60, "no file", false)), nil}})
+	_, err2 := storeMessages(c, group, []sent{{fresh(video(402, &tg.PeerChat{ChatID: 10}, 82, "image/jpeg")), nil}})
+	if err1 != nil || err2 != nil {
+		t.Fatal(err1, err2)
+	}
+	store, _ := openStore(DBPath())
+	db.Exec(store, "UPDATE telegram_message SET date = ? WHERE id = 401", now-8*86400)
+	store.Close()
+	// the archive's copies (the importer is not run here)
+	a, err := archive.Open(in.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := a.Source("telegram/test", "telegram", "", "")
+	mids := map[int]int64{}
+	for id, chat := range map[int]string{400: "2", 401: "2", 402: "-10", 403: "2"} {
+		conv := a.Conversation("telegram", []archive.Handle{archive.H("id", chat, "telegram")}, chat, "")
+		mids[id] = a.AddMessage(src, chat+"/"+strconv.Itoa(id), archive.Message{Service: "telegram", ConversationID: conv,
+			TS: int64(now) * 1000, Kind: "image", Key: strconv.Itoa(id)})
+	}
+	a.Commit()
+	a.Close()
+	ids := []int64{mids[400], mids[401], mids[402], mids[403]}
+	if got := (Plugin{}).FilesPending(newTestCtx(), c, ids); !reflect.DeepEqual(got, map[int64]bool{mids[400]: true}) {
+		t.Fatalf("pending %v, of %v", got, mids)
+	}
+	store, _ = openStore(DBPath())
+	db.Exec(store, "UPDATE telegram_message SET file = '2/400.jpg' WHERE id = 400")
+	store.Close()
+	if got := (Plugin{}).FilesPending(newTestCtx(), c, ids); len(got) != 0 {
+		t.Fatalf("downloaded, still pending: %v", got)
+	}
+	store, _ = openStore(DBPath())
+	db.Exec(store, "UPDATE telegram_message SET file = NULL WHERE id = 400")
+	store.Close()
+	if err := plugins.Update(in.h.store, in.iid, nil, M{"media": false}, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := (Plugin{}).FilesPending(newTestCtx(), in.ctx(), ids); len(got) != 0 {
+		t.Fatalf("downloads off: %v", got)
 	}
 }

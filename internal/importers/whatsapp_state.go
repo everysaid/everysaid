@@ -11,8 +11,8 @@ import (
 )
 
 // Files takes the files the connection downloaded (whatsapp_media's rows with a path, within the
-// store folder) into the archive's store, linked to their messages; those whose message the
-// archive does not have yet wait. It gives how many it took.
+// store folder) into the archive's store, linked to their messages (a change to messages shown:
+// a.Changed); those whose message the archive does not have yet wait. It gives how many it took.
 func (w *WhatsAppWriter) Files(folder string) int {
 	type file struct{ chat, id, rel, name string }
 	var files []file
@@ -47,6 +47,9 @@ func (w *WhatsAppWriter) Files(folder string) int {
 		}
 		st.LinkNamed(WhatsAppSource, w.Source, path, f.rel, mid, f.name)
 		taken = append(taken, f)
+	}
+	if len(taken) > 0 { // a picture its message, already shown, waited for
+		w.A.Changed = true
 	}
 	w.A.Commit()
 	st.Release()

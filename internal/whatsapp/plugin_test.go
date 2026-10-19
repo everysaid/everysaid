@@ -554,3 +554,70 @@ func TestKeysKeepOnlyWhatTheConnectionNeeds(t *testing.T) {
 		t.Fatalf("read until %d, want %d", until, old.UnixMilli())
 	}
 }
+
+// A file still to download is on its way (also once the phone was asked again for it), not one given
+// up on, nor an old one the connection no longer looks for; once downloaded it joins its message,
+// which the open chats are told of.
+func TestFilesPending(t *testing.T) {
+	f := bridgeInstance(t)
+	pic := func(id string, at time.Time) {
+		f.put(t, StoredMessage{ID: id, ChatJID: peer, Sender: peer, Timestamp: at, Kind: "image", MediaType: "image",
+			URL: "https://mmg.whatsapp.net/v/p", MediaKey: []byte("k"), FileEncSHA256: []byte("e")})
+	}
+	pic("PIC", time.Now())
+	pic("OLDPIC", time.Now().Add(-30*24*time.Hour))
+	f.put(t, StoredMessage{ID: "TXT", ChatJID: peer, Sender: peer, Content: "hi", Timestamp: time.Now(), Kind: "text"})
+	mid := func(key string) int64 {
+		var id int64
+		f.h.store.Read().QueryRow("SELECT id FROM message WHERE key = ?", key).Scan(&id)
+		return id
+	}
+	coming := func() map[int64]bool {
+		return Plugin{}.FilesPending(context.Background(), f.ctx(), []int64{mid("PIC"), mid("OLDPIC"), mid("TXT")})
+	}
+	if got := coming(); !reflect.DeepEqual(got, map[int64]bool{mid("PIC"): true}) {
+		t.Fatalf("pending %v", got)
+	}
+	f.ms.mediaError("PIC", peer, askedAgain)
+	if !coming()[mid("PIC")] {
+		t.Fatal("asked again of the phone: still coming")
+	}
+	f.ms.mediaError("PIC", peer, "the phone no longer has the file")
+	if coming()[mid("PIC")] {
+		t.Fatal("given up, still coming")
+	}
+	f.ms.exec("UPDATE whatsapp_media SET error = NULL WHERE store = ?", f.ms.key)
+	// downloaded: it joins its message, the chats are told, and it is no longer on its way
+	rel := mediaFile("image", "", peer, "PIC")
+	if err := f.ms.writeMedia(rel, []byte("a picture")); err != nil {
+		t.Fatal(err)
+	}
+	f.ms.exec("UPDATE whatsapp_media SET path = ? WHERE store = ? AND id = 'PIC'", filepath.ToSlash(rel), f.ms.key)
+	f.h.events = nil
+	if err := f.ms.takeFiles(); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	f.h.store.Read().QueryRow("SELECT count(*) FROM attachment WHERE message_id = ?", mid("PIC")).Scan(&n)
+	if n != 1 || coming()[mid("PIC")] {
+		t.Fatalf("attachments %d, still coming %v", n, coming())
+	}
+	changed := false
+	for _, e := range f.h.events {
+		changed = changed || e["type"] == "changed"
+	}
+	if !changed {
+		t.Fatalf("not told: %v", f.h.events)
+	}
+	// files not downloaded: nothing is on its way
+	pic("PIC2", time.Now())
+	if !(Plugin{}).FilesPending(context.Background(), f.ctx(), []int64{mid("PIC2")})[mid("PIC2")] {
+		t.Fatal("a second picture not on its way")
+	}
+	os.WriteFile(config.ConfigFile, []byte("[whatsapp]\nsend = true\ndownload = false\n"), 0o600)
+	config.Load()
+	defer sendInConfig(t, true)
+	if got := (Plugin{}).FilesPending(context.Background(), f.ctx(), []int64{mid("PIC2")}); len(got) != 0 {
+		t.Fatalf("downloads off: %v", got)
+	}
+}

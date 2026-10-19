@@ -740,7 +740,7 @@ func TestRemovedFromThePhone(t *testing.T) {
 func TestFetchAgain(t *testing.T) {
 	msg := map[string]any{"event": "message", "chat": contact(anna), "sender": anna, "ts": time.Now().UnixMilli(),
 		"attachments": []any{map[string]any{"content_type": "image/jpeg", "error": "timed out"}}}
-	c, _ := linked(t, nil, []map[string]any{msg})
+	c, h := linked(t, nil, []map[string]any{msg})
 	p := Plugin{}
 	os.WriteFile(filepath.Join(StoreDir(c), "fetch-fails"), nil, 0o600)
 	num := func(q string) int64 { return db.Int(c.Store().Read(), q) }
@@ -776,11 +776,26 @@ func TestFetchAgain(t *testing.T) {
 	db.Exec(st.DB, "DELETE FROM signal_fetch_try")
 	db.Exec(st.DB, "DELETE FROM signal_fetch_at")
 	st.Close()
+	h.mu.Lock()
+	h.events = nil
+	h.mu.Unlock()
 	if err := p.RunImport(c); err != nil {
 		t.Fatal(err)
 	}
 	if num("SELECT count(*) FROM attachment") != 1 {
 		t.Fatal("the file did not join its message")
+	}
+	// the chat showing it is told, by the import (not only the connection's phases before it)
+	told := false
+	for _, e := range h.events {
+		if e["type"] == "plugin_log" && e["line"] == "== Signal" {
+			told = false
+		} else if e["type"] == "changed" {
+			told = true
+		}
+	}
+	if !told {
+		t.Fatalf("not told: %v", h.events)
 	}
 }
 

@@ -123,3 +123,35 @@ func TestSplitext(t *testing.T) {
 		}
 	}
 }
+
+// A picture that comes on its way: a picture with no file, which the demo's sender says is coming;
+// then its file arrives, the apps are told, and it is no longer on its way.
+func TestPictureOnItsWay(t *testing.T) {
+	h := demoHost(t)
+	r := h.store.Read()
+	conv := db.Int(r, "SELECT c.id FROM conversation c JOIN service s ON s.id = c.service_id "+
+		"WHERE s.name = 'whatsapp' ORDER BY c.id LIMIT 1")
+	mid, err := IncomingPicture(h, conv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := plugins.NewContext(h, plugins.Instance{Plugin: "demo-sender"})
+	if db.Str(r, "SELECT k.name FROM message m JOIN message_kind k ON k.id = m.kind_id WHERE m.id = ?", mid) != "image" ||
+		db.Int(r, "SELECT count(*) FROM attachment WHERE message_id = ?", mid) != 0 ||
+		!(Sender{}).FilesPending(context.Background(), c, []int64{mid, mid - 1})[mid] {
+		t.Fatal("not a picture on its way")
+	}
+	if err := PictureArrives(h, mid); err != nil {
+		t.Fatal(err)
+	}
+	if db.Int(r, "SELECT count(*) FROM attachment WHERE message_id = ?", mid) != 1 ||
+		len((Sender{}).FilesPending(context.Background(), c, []int64{mid})) != 0 {
+		t.Fatal("its file did not arrive")
+	}
+	if e := h.events[len(h.events)-1]; e["type"] != "changed" {
+		t.Fatalf("not told: %v", h.events)
+	}
+	if PictureArrives(h, mid) == nil {
+		t.Fatal("arrived twice")
+	}
+}

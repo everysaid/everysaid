@@ -469,6 +469,42 @@ func (p Plugin) FetchMedia(ctx context.Context, c *plugins.Context, messageID in
 	return "", last
 }
 
+// FilesPending: the messages whose file the connection still downloads (as it does at each start,
+// those of the last week): a row of whatsapp_media with no file taken yet, and none given up on but
+// for the phone asked again for it; none where files are not downloaded.
+func (p Plugin) FilesPending(ctx context.Context, c *plugins.Context, messageIDs []int64) map[int64]bool {
+	out := map[int64]bool{}
+	d := keysDB()
+	if d == nil || !ConfigOptions().Download || len(messageIDs) == 0 {
+		return out
+	}
+	byKey := map[string][]int64{}
+	db.Each(c.Store().Read(), "SELECT m.id, m.key FROM message m JOIN service s ON s.id = m.service_id "+
+		"WHERE s.name = 'whatsapp' AND m.key IS NOT NULL AND m.id IN ("+db.Marks(len(messageIDs))+")", db.Args(messageIDs),
+		func(scan func(...any)) {
+			var mid int64
+			var k string
+			scan(&mid, &k)
+			byKey[k] = append(byKey[k], mid)
+		})
+	if len(byKey) == 0 {
+		return out
+	}
+	args := []any{key(storeDir(c)), askedAgain, time.Now().Add(-downloadBackfill).UnixMilli()}
+	for k := range byKey {
+		args = append(args, k)
+	}
+	db.Each(d, "SELECT id FROM whatsapp_media WHERE store = ? AND media_type IS NOT NULL AND (error IS NULL OR error = ?) "+
+		"AND at > ? AND id IN ("+db.Marks(len(byKey))+")", args, func(scan func(...any)) {
+		var k string
+		scan(&k)
+		for _, mid := range byKey[k] {
+			out[mid] = true
+		}
+	})
+	return out
+}
+
 // floorDiv is Python's //.
 func floorDiv(a, b int64) int64 {
 	q := a / b

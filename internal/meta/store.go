@@ -18,6 +18,7 @@ import (
 
 	"everysaid/internal/db"
 	"everysaid/internal/keys"
+	"everysaid/internal/plugins"
 )
 
 const schema = `
@@ -283,6 +284,44 @@ func fileTried(iid int64, f pendingFile) error {
 	}
 	_, err = d.Exec("UPDATE meta_file SET tries = tries + 1 WHERE instance = ? AND message = ? AND n = ?", iid, f.Message, f.N)
 	return err
+}
+
+// filesPending: the archive's messages (of the service) whose file is still to download: a row of
+// meta_file (not a preview's picture) neither too old nor tried too often, which fetchFiles gives up.
+func filesPending(c *plugins.Context, service string, messageIDs []int64) map[int64]bool {
+	out := map[int64]bool{}
+	if !c.Bool("media") || len(messageIDs) == 0 {
+		return out
+	}
+	d, err := keysDB()
+	if err != nil {
+		return out
+	}
+	byKey := map[string][]int64{}
+	db.Each(c.Store().Read(), "SELECT m.id, m.key FROM message m JOIN service s ON s.id = m.service_id "+
+		"WHERE s.name = ? AND m.key IS NOT NULL AND m.id IN ("+db.Marks(len(messageIDs))+")",
+		append([]any{service}, db.Args(messageIDs)...), func(scan func(...any)) {
+			var mid int64
+			var k string
+			scan(&mid, &k)
+			byKey[k] = append(byKey[k], mid)
+		})
+	if len(byKey) == 0 {
+		return out
+	}
+	args := []any{c.ID, previewN, maxTries, time.Now().Add(-tooOld).Unix()}
+	for k := range byKey {
+		args = append(args, k)
+	}
+	db.Each(d, "SELECT DISTINCT message FROM meta_file WHERE instance = ? AND n != ? AND tries < ? AND at > ? "+
+		"AND message IN ("+db.Marks(len(byKey))+")", args, func(scan func(...any)) {
+		var k string
+		scan(&k)
+		for _, mid := range byKey[k] {
+			out[mid] = true
+		}
+	})
+	return out
 }
 
 func nullStr(s string) any {

@@ -247,6 +247,9 @@ func (s *Server) chatRoutes() {
 		if err != nil {
 			return nil, is404(err, func(e error) error { return failed(400, e.Error()) })
 		}
+		if s.Host != nil { // the files a source is still getting: shown as on their way
+			s.Host.MarkFilesComing(q.r.Context(), page["items"].([]M))
+		}
 		return page, nil
 	})
 

@@ -435,3 +435,56 @@ func TestTranslateKeepsFoldersAndSpamOut(t *testing.T) {
 		t.Errorf("an encrypted group's Facebook key not mapped: %+v", o.titles)
 	}
 }
+
+// A file still to download is on its way, while files are downloaded, until it is given up (too
+// old, tried too often); once linked to its message, the open chats are told.
+func TestFilesPending(t *testing.T) {
+	in := newInstance(t, "messenger", M{"media": true})
+	a, err := archive.Open(in.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := a.Source("messenger/test", "messenger", "", "")
+	conv := a.Conversation("messenger", []archive.Handle{archive.H("id", "200", "messenger")}, "200", "")
+	add := func(key, kind string) int64 {
+		return a.AddMessage(src, key, archive.Message{Service: "messenger", ConversationID: conv, TS: time.Now().UnixMilli(),
+			SenderID: a.Address(archive.H("id", "200", "messenger")), Kind: kind, Key: key})
+	}
+	pic, old, tried, text := add("mid.pic", "image"), add("mid.old", "image"), add("mid.tried", "video"), add("mid.text", "text")
+	a.Commit()
+	a.Close()
+	now := time.Now().Unix()
+	if err := queueFiles(in.iid, []pendingFile{{Thread: "200", Message: "mid.pic", N: 0, URL: "https://cdn/p", At: now},
+		{Thread: "200", Message: "mid.old", N: 0, URL: "https://cdn/o", At: now - 8*24*3600},
+		{Thread: "200", Message: "mid.tried", N: 0, URL: "https://cdn/t", At: now},
+		{Thread: "200", Message: "mid.text", N: previewN, URL: "https://cdn/l", At: now}}); err != nil {
+		t.Fatal(err)
+	}
+	for range maxTries {
+		fileTried(in.iid, pendingFile{Message: "mid.tried", N: 0})
+	}
+	p := Plugin{"messenger"}
+	ids := []int64{pic, old, tried, text}
+	if got := p.FilesPending(context.Background(), in.ctx(), ids); !reflect.DeepEqual(got, map[int64]bool{pic: true}) {
+		t.Fatalf("pending %v", got)
+	}
+	// linked: the chats are told
+	path := filepath.Join(t.TempDir(), "pic.jpg")
+	os.WriteFile(path, []byte("jpeg bytes"), 0o600)
+	linked, err := link(in.ctx(), "messenger", map[string]pendingFile{path: {Thread: "200", Message: "mid.pic", N: 0}})
+	if err != nil || !linked[path] {
+		t.Fatalf("not linked: %v %v", linked, err)
+	}
+	told := false
+	for _, e := range in.h.events {
+		told = told || e["type"] == "changed"
+	}
+	if !told || db.Int(in.q(), "SELECT count(*) FROM attachment WHERE message_id = ?", pic) != 1 {
+		t.Fatalf("not told, or not linked: %v", in.h.events)
+	}
+	// files not downloaded: none on its way
+	off := newInstance(t, "messenger", M{"media": false})
+	if got := p.FilesPending(context.Background(), off.ctx(), ids); len(got) != 0 {
+		t.Fatalf("media off: %v", got)
+	}
+}

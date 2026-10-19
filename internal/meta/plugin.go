@@ -391,6 +391,10 @@ func (p Plugin) FetchMedia(ctx context.Context, c *plugins.Context, messageID in
 	return fetchMedia(ctx, c, messageID)
 }
 
+func (p Plugin) FilesPending(ctx context.Context, c *plugins.Context, messageIDs []int64) map[int64]bool {
+	return filesPending(c, p.service, messageIDs)
+}
+
 // liveLabel, exportLabel: the import steps' names, as the log says them.
 func liveLabel(service string) string {
 	if service == "instagram" {

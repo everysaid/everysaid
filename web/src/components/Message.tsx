@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Check, CheckCheck, Clock, Copy, CornerUpLeft, EllipsisVertical, FileText, Forward, ImageOff, Link2, MapPin, Pencil, Phone, Pin, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Plus, Trash2, TriangleAlert, Video } from "lucide-react";
+import { Check, CheckCheck, Clock, Copy, CornerUpLeft, EllipsisVertical, FileText, Forward, ImageOff, Link2, Loader2, MapPin, Mic, Pencil, Phone, Pin, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Plus, Trash2, TriangleAlert, Video } from "lucide-react";
 import { api, thumbUrl, type Attachment, type LinkPreview, type Local, type CallItem, type Mention, type MessageItem, type Receipts } from "@/lib/api";
 import { bytes, duration, time } from "@/lib/format";
 import { service } from "@/lib/services";
@@ -147,6 +147,30 @@ export function LocalThumb({ l }: { l: Local }) {
         ? <video src={`${l.url}#t=0.1`} muted playsInline preload="metadata" className={thumbSize} />
         : <img src={l.url} alt="" decoding="async" className={thumbSize}
             onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")} />}
+    </div>
+  );
+}
+
+// Coming is the place of a file its source is still getting, until it comes (the chat is told then):
+// a picture's place for a picture, a video or a sticker, a line for a voice message or a file
+function Coming({ kind, out }: { kind: string; out: boolean }) {
+  const { t } = useTranslation();
+  const tint = out ? "bg-white/15" : "bg-accent/8";
+  if (["image", "video", "sticker"].includes(kind)) {
+    return (
+      <div data-file-coming role="status" aria-label={t("chat.fileComing")} title={t("chat.fileComing")}
+        className={cn("relative mx-auto grid place-items-center overflow-hidden rounded-xl", tint, kind === "sticker" ? "size-32" : "h-48 w-64 max-w-full")}>
+        <span className="absolute inset-0 animate-pulse bg-black/5" />
+        <Loader2 className="size-7 animate-spin opacity-60" />
+      </div>
+    );
+  }
+  return (
+    <div data-file-coming role="status" aria-label={t("chat.fileComing")} title={t("chat.fileComing")}
+      className={cn("my-1 flex w-56 max-w-full items-center gap-2 rounded-xl px-3 py-2 text-sm", tint)}>
+      {kind === "voice" ? <Mic className="size-5 shrink-0 opacity-70" /> : <FileText className="size-5 shrink-0 opacity-70" />}
+      <span className="min-w-0 flex-1 truncate opacity-70">{t(`kind.${kind}`, { defaultValue: kind })}</span>
+      <Loader2 className="size-4 shrink-0 animate-spin opacity-60" />
     </div>
   );
 }
@@ -492,7 +516,10 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
   const others = m.attachments.filter((a) => !media.includes(a));
   // pictures alone: the time over them (not when none of them is there any more: a line of text then)
   const local = !media.length ? m.local : undefined;
-  const onlyMedia = !(m.deleted && !reveal) && (media.some((a) => a.available !== "gone") || !!local) && !m.text && !others.length && !m.reply;
+  // its file still on its way: its place shown, in that of the kind's word
+  const coming = !!m.file_coming && !m.attachments.length && !local && !m.deleted;
+  const comingPicture = coming && ["image", "video", "sticker"].includes(m.kind);
+  const onlyMedia = !(m.deleted && !reveal) && (media.some((a) => a.available !== "gone") || !!local || comingPicture) && !m.text && !others.length && !m.reply;
   const poll = pollOf(m.notice);
   const emoji = !m.deleted && !m.reply && !m.attachments.length && !local && !m.preview && !m.location && !poll ? emojiOnly(m.text) : 0;
   const bare = emoji === 1;
@@ -503,7 +530,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
   const width = useWidth(m.id), widthAbove = useWidth(above), widthBelow = useWidth(below);
   const tightTop = width > 0 && widthAbove > 0 && widthAbove >= width - REACH;
   const tightBottom = width > 0 && widthBelow > 0 && widthBelow >= width - REACH;
-  const label = m.kind !== "text" && !m.attachments.length && !local && !m.text && !m.location ? t(`kind.${m.kind}`, { defaultValue: m.kind }) : null;
+  const label = m.kind !== "text" && !m.attachments.length && !local && !coming && !m.text && !m.location ? t(`kind.${m.kind}`, { defaultValue: m.kind }) : null;
   return (
     <div id={`m${m.id}`} data-pending-item={m.outbox ? m.status ?? undefined : undefined} className={cn("group/msg flex gap-2 px-3 md:px-6", out ? "justify-end" : "justify-start", first ? "mt-2" : "mt-0.5")}>
       {group && !out && (
@@ -584,6 +611,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
             </div>
           )}
           {local && <LocalThumb l={local} />}
+          {coming && <Coming kind={m.kind} out={out} />}
           {others.map((a) => <div key={a.sha256} className="my-1"><AttachmentView a={a} onOpen={(x) => onOpen(x, m)} /></div>)}
           {m.location && (
             <a

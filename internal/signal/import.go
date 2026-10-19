@@ -736,7 +736,10 @@ func Import(a *archive.Archive, s *Store, mediaDir string, iid int64, skip map[s
 		if !ok || json.Unmarshal([]byte(r.js), &e) != nil {
 			return
 		}
-		linkFiles(mid, e.Attachments)
+		before := files.Added[SourceName(own)]
+		if linkFiles(mid, e.Attachments); files.Added[SourceName(own)] > before {
+			n.Changes++ // a file its message, already shown, waited for
+		}
 		if e.LongText && edits[Key(r.author, r.ts)] == "" { // its whole text, fetched after it was imported
 			_, _, text := describe(e)
 			text, _ = withMentions(text, e.Mentions, p.mentionName)
