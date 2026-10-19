@@ -1568,3 +1568,27 @@ func TestRecentKeepsTheirWords(t *testing.T) {
 	}
 	t.Fatal("the courier not listed")
 }
+
+func TestChatListLastCarriesMentions(t *testing.T) {
+	s := store(t)
+	var conv, addr int64
+	db.Row(s.Read(), "SELECT m.conversation_id, k.address_id FROM mention k JOIN message m ON m.id = k.message_id LIMIT 1", nil, &conv, &addr)
+	if conv == 0 {
+		t.Fatal("the demo has no mention")
+	}
+	const text = "@103770755191007 see you"
+	write(t, s, func(tx *sql.Tx) {
+		db.Exec(tx, "INSERT INTO message (service_id, conversation_id, ts, outgoing, kind_id, text) "+
+			"SELECT service_id, conversation_id, (SELECT max(ts) FROM message WHERE conversation_id = ?) + 1000, 0, kind_id, ? FROM message WHERE conversation_id = ? LIMIT 1",
+			conv, text, conv)
+		db.Exec(tx, "INSERT INTO mention SELECT id, ?, '@103770755191007' FROM message WHERE conversation_id = ? AND text = ?", addr, conv, text)
+	})
+	c := firstChat(t, chats(s, nil), func(c core.M) bool {
+		last, _ := c["last"].(core.M)
+		return last != nil && last["text"] == text
+	})
+	ms, _ := c["last"].(core.M)["mentions"].([]core.M)
+	if c["type"] != "group" || len(ms) != 1 || ms[0]["token"] != "@103770755191007" || ms[0]["name"] == nil || ms[0]["name"] == "" {
+		t.Fatal(c["type"], ms)
+	}
+}

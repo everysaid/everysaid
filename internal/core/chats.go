@@ -730,9 +730,23 @@ func lastItem(s *Store, chat *Chat, calls bool) M {
 	if tables(s)["notice"] && db.Row(q, "SELECT code, args FROM notice WHERE message_id = ?", []any{row.id}, &code, &args) {
 		notice = noticeOf(PeopleOf(s), code, args)
 	}
+	mentions := []M{} // said by name in the list as in the chat, not as the service's token
+	if tables(s)["mention"] {
+		ppl := PeopleOf(s)
+		db.Each(q, "SELECT address_id, token FROM mention WHERE message_id = ?", []any{row.id}, func(scan func(...any)) {
+			var who int64
+			var token sql.NullString
+			scan(&who, &token)
+			var pid any
+			if p, ok := ppl.PersonOf[who]; ok {
+				pid = p
+			}
+			mentions = append(mentions, M{"token": nullString(token), "person_id": pid, "me": ppl.OwnAddresses[who], "name": ppl.NameOfAddress(who)})
+		})
+	}
 	return M{"type": "message", "id": row.id, "ts": row.ts, "outgoing": row.outgoing, "kind": lk.Kind[row.kind],
 		"text": Cut(txt, 160), "service": lk.Service[row.sid], "subtype": nullString(row.subtype),
-		"deleted": row.deleted, "sender": sender, "notice": notice}
+		"deleted": row.deleted, "sender": sender, "notice": notice, "mentions": mentions}
 }
 
 func nullString(v sql.NullString) any {

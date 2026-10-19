@@ -15,6 +15,7 @@ import { service } from "@/lib/services";
 import { Avatar, Button, Empty, Menu, MenuContent, MenuItem, MenuTrigger, Segmented, ServiceDot, Spinner } from "./ui";
 import { avatarUrl } from "@/lib/avatar";
 import { Logo } from "./Logo";
+import { mentionsSaid } from "./Message";
 import { GroupSuggestions } from "./GroupMerge";
 import { ChatFiltersButton, filterParams, keepFilters, savedFilters, type ChatFilters } from "./ChatFilters";
 
@@ -38,7 +39,7 @@ function Preview({ c }: { c: ChatSummary }) {
   }
   const icon = l.kind === "image" ? <Image className="size-3.5 shrink-0" /> : l.kind === "voice" ? <Mic className="size-3.5 shrink-0" /> : l.kind === "video" ? <Video className="size-3.5 shrink-0" /> : null;
   const said = l.notice && l.kind === "system" ? noticeLines(l.notice, t)[0] : null;
-  const body = l.deleted ? t("chat.deleted") : said || l.text || (l.kind && l.kind !== "text" ? t(`kind.${l.kind}`, { defaultValue: l.kind }) : "");
+  const body = l.deleted ? t("chat.deleted") : said || (l.text && mentionsSaid(l.text, l.mentions, t("common.me"))) || (l.kind && l.kind !== "text" ? t(`kind.${l.kind}`, { defaultValue: l.kind }) : "");
   return (
     <span className="flex min-w-0 items-center gap-1">
       {l.outgoing && <Check className="size-3.5 shrink-0 text-muted" />}

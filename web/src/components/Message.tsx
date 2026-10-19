@@ -40,23 +40,40 @@ export function RichText({ text, marks, mentions }: { text: string; marks?: [str
   );
 }
 
-/** A piece of text with each mention's token (as the service writes it) said as the person's name. */
-function Named({ text, mentions }: { text: string; mentions?: Mention[] }) {
-  const { t } = useTranslation();
+/** The text cut at each mention's token (as the service writes it), the tokens at the odd places;
+ *  null when it names no one. */
+function mentionParts(text: string, mentions?: Mention[]): { text: string; mention?: Mention }[] | null {
   const known = (mentions ?? []).filter((m) => m.token && text.includes(m.token));
-  if (!known.length) return <span>{text}</span>;
+  if (!known.length) return null;
   const by = new Map(known.map((m) => [m.token!, m]));
   // each a whole: a name not inside a longer word (one name the start of another), a number not inside a longer one
   const re = new RegExp(`(?<![\\p{L}\\p{N}_])(${[...by.keys()].sort((a, b) => b.length - a.length)
     .map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})(?![\\p{L}\\p{N}_])`, "u");
+  return text.split(re).map((p, i) => ({ text: p, mention: i % 2 === 1 ? by.get(p) : undefined }));
+}
+
+function mentionLabel(bare: string, m: Mention, me: string) {
+  const name = m.me ? me : m.name || bare.replace(/^@/, "");
+  return bare.startsWith("@") ? `@${name}` : name;
+}
+
+/** A text with each mention said by name, as plain text (where a chat is listed). */
+export function mentionsSaid(text: string, mentions: Mention[] | undefined, me: string) {
+  return mentionParts(text, mentions)?.map((p) => (p.mention ? mentionLabel(p.text.replace(BIDI, ""), p.mention, me) : p.text)).join("") ?? text;
+}
+
+/** A piece of text with each mention's token (as the service writes it) said as the person's name. */
+function Named({ text, mentions }: { text: string; mentions?: Mention[] }) {
+  const { t } = useTranslation();
+  const parts = mentionParts(text, mentions);
+  if (!parts) return <span>{text}</span>;
   return (
     <span>
-      {text.split(re).map((p, i) => {
-        const m = i % 2 === 1 ? by.get(p) : undefined;
-        if (!m) return p;
-        const bare = p.replace(BIDI, "");
-        const name = m.me ? t("common.me") : m.name || bare.replace(/^@/, "");
-        const label = bare.startsWith("@") ? `@${name}` : name;
+      {parts.map((p, i) => {
+        const m = i % 2 === 1 ? p.mention : undefined;
+        if (!m) return p.text;
+        const bare = p.text.replace(BIDI, "");
+        const label = mentionLabel(bare, m, t("common.me"));
         return m.person_id && !m.me ? (
           <Link key={i} to="/people/$personId" params={{ personId: String(m.person_id) }} data-mention className="mention" title={bare}>{label}</Link>
         ) : (
