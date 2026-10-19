@@ -54,6 +54,35 @@ export async function signIn(page: Page) {
   await expect(page.getByRole("heading", { name: /Συνομιλίες|Chats/ })).toBeVisible({ timeout: 15000 });
 }
 
+/** The person chats the demo's sources can send into now, all of them (whatever earlier tests did to
+ *  their order and last services), each with a service to send by: where it was last active if that
+ *  can send, else another that can; one where the person has a single handle (no handle to pick). */
+export async function sendableChats(page: Page) {
+  const found = await page.evaluate(async () => {
+    const h = { "X-Everysaid": "1" };
+    const chats = (await (await fetch("/api/chats", { headers: h })).json()).items.filter((c: any) => c.type === "person");
+    const found: { id: string; service: string; messages: number }[] = [];
+    for (const c of chats) {
+      const d = await (await fetch(`/api/chats/${c.id}`, { headers: h })).json();
+      const service = [d.last_service, ...d.sendable].find((s: string) =>
+        d.sendable.includes(s) && d.accounts.filter((a: any) => a.service === s).length < 2);
+      if (service) found.push({ id: c.id, service, messages: d.person.stats.messages });
+    }
+    return found;
+  });
+  expect(found.length, "a person chat the demo can send into").toBeGreaterThan(0);
+  return found;
+}
+
+/** The composer set to send by service, picked in its menu (the service it starts on is the chat's
+ *  last message's, which may be one that cannot send). */
+export async function sendBy(page: Page, service: string) {
+  const via = page.locator("[data-via]");
+  await via.click();
+  await page.getByRole("menuitem").filter({ has: page.locator(`[data-icon="${service}"]`) }).click();
+  await expect(via).toHaveAttribute("data-via", service);
+}
+
 /** Signed in, once per project and demo run: the session is kept and reused by the next tests (each
  *  sign-in counts against the server's limit on attempts, as it should). */
 export async function signedIn(page: Page, project: string) {

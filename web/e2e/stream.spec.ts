@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { signedIn } from "./demo";
+import { sendBy, sendableChats, signedIn } from "./demo";
 
 // A chat as messages come and go: sending (from the end, from higher up, while still typing) and
 // receiving (one, then another; at the end, or higher up). The demo's own source "sends" into the
@@ -8,7 +8,7 @@ import { signedIn } from "./demo";
 // /api/demo/incoming brings a message from the other side whenever a test wants one.
 
 const SCROLLER = "[data-stream] [data-virtuoso-scroller]";
-let chat = "";
+let chat = "", service = "";
 
 const gap = (page: Page) => page.evaluate((s) => {
   const sc = document.querySelector(s)!;
@@ -38,21 +38,14 @@ async function y(page: Page, text: string) {
 test.beforeEach(async ({ page }, info) => {
   await signedIn(page, info.project.name);
   if (!chat) {
-    // the person with the most messages, last active where something can send: a long chat to scroll in
-    chat = await page.evaluate(async () => {
-      const h = { "X-Everysaid": "1" };
-      const chats = (await (await fetch("/api/chats", { headers: h })).json()).items.filter((c: any) => c.type === "person");
-      let best = "", most = -1;
-      for (const c of chats.slice(0, 12)) {
-        const d = await (await fetch(`/api/chats/${c.id}`, { headers: h })).json();
-        if (d.sendable.includes(d.last_service) && d.person.stats.messages > most) [best, most] = [c.id, d.person.stats.messages];
-      }
-      return best;
-    });
+    // the person with the most messages that the demo can send to: a long chat to scroll in
+    const best = (await sendableChats(page)).reduce((a, b) => (b.messages > a.messages ? b : a));
+    [chat, service] = [best.id, best.service];
   }
   await page.goto(`/chat/${chat}`);
   await expect(page.locator(SCROLLER)).toBeVisible();
   await page.waitForTimeout(800);
+  await sendBy(page, service);
 });
 
 test("at the end, sending: it shows at once, once, and the chat stays at its end", async ({ page }, info) => {
