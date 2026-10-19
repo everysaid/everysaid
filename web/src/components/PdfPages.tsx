@@ -29,7 +29,9 @@ export default function PdfPages({ sha256, name }: { sha256: string; name: strin
       if (gone || !container.current) return;
       const eventBus = new EventBus();
       const links = new PDFLinkService({ eventBus, externalLinkTarget: LinkTarget.BLANK, externalLinkRel: "noopener noreferrer nofollow" });
-      const v = new PDFViewer({ container: container.current, eventBus, linkService: links });
+      // shown only, never edited: no editing of pdf.js's own (its keys and copy, taken on the whole page)
+      const v = new PDFViewer({ container: container.current, eventBus, linkService: links,
+        annotationEditorMode: pdfjsLib.AnnotationEditorType.DISABLE });
       links.setViewer(v);
       viewer.current = v;
       eventBus.on("pagesinit", () => { v.currentScaleValue = "page-width"; });
@@ -48,6 +50,7 @@ export default function PdfPages({ sha256, name }: { sha256: string; name: strin
     })().catch(() => !gone && setState("failed"));
     return () => {
       gone = true;
+      viewer.current?.setDocument(null);     // let go, with what it listens to on the page
       viewer.current = null;
       task?.destroy();
     };

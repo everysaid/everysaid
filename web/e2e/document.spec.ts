@@ -43,6 +43,37 @@ test("a PDF opens in the document viewer, its words there, its download beside",
   await expect(page.locator("[data-document-viewer] a[download]")).toHaveAttribute("href", /\/original$/);
   await page.keyboard.press("Escape");
   await expect(pages).toHaveCount(0);
+
+  // closed, it leaves nothing behind: a picture dropped on the chat afterwards goes to the composer
+  // alone, and in the message field Backspace, Delete, Ctrl+A and Ctrl+C do what they do (a viewer
+  // never let go took the picture for itself, as a stamp on the PDF, and from then on its editing keys
+  // and copy ate them, while letters still went in)
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
+  const drop = await page.evaluateHandle((b64) => {
+    const d = new DataTransfer();
+    d.items.add(new File([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], "dropped.png", { type: "image/png" }));
+    return d;
+  }, png);
+  await page.locator("[data-stream]").dispatchEvent("dragover", { dataTransfer: drop });
+  await page.locator("[data-stream]").dispatchEvent("drop", { dataTransfer: drop });
+  await expect(page.locator("[data-file]")).toContainText("dropped.png");
+  await page.getByRole("button", { name: /Αφαίρεση αρχείου|Remove the file/ }).click();
+  const field = page.locator("[data-composer-body] textarea");
+  await field.click();
+  await page.keyboard.type("after the PDF");
+  await page.keyboard.press("Backspace");
+  await expect(field).toHaveValue("after the PD");
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Delete");
+  await expect(field).toHaveValue("fter the PD");
+  await page.keyboard.press("Control+a");
+  await expect.poll(() => field.evaluate((el: HTMLTextAreaElement) => [el.selectionStart, el.selectionEnd])).toEqual([0, 11]);
+  const copied = page.evaluate(() => new Promise<boolean>((ok) =>
+    document.addEventListener("copy", (e) => setTimeout(() => ok(e.defaultPrevented)), { once: true })));
+  await page.keyboard.press("Control+c");
+  expect(await copied).toBe(false);                     // the browser's own copy, not cancelled
+  await page.keyboard.press("Backspace");
+  await expect(field).toHaveValue("");
 });
 
 test("a text file as it is, an old one in its language's old encoding", async ({ page }, info) => {
