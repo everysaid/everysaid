@@ -11,7 +11,8 @@ import { Avatar, Button, Input, Segmented, ServiceBadge, ServiceIcon, Textarea }
 import { avatarUrl } from "./ChatList";
 import { GroupParts } from "./GroupMerge";
 import { ChatLabels } from "./Labels";
-import { PhotoFrom } from "./Photos";
+import { ImageViewer } from "./ImageViewer";
+import { PhotoFrom, photoViews } from "./Photos";
 import { caps } from "@/lib/caps";
 
 export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => void }) {
@@ -20,6 +21,10 @@ export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => 
   const p = chat.person;
   const [name, setName] = useState(p?.given_name ?? "");
   const [note, setNote] = useState(p?.note ?? "");
+  // the main photo looked at whole: a person's from each source, the arrows between them
+  const photo = avatarUrl({ id: chat.id, type: chat.type, person_id: chat.person_id, avatar: chat.avatar ?? p?.avatar });
+  const views = p?.photo_choices.length ? photoViews(p, t) : { images: photo ? [{ src: photo, label: chat.title }] : [], shown: 0 };
+  const [viewing, setViewing] = useState<number | null>(null);
   useEffect(() => {
     setName(p?.given_name ?? "");
     setNote(p?.note ?? "");
@@ -52,7 +57,14 @@ export function ChatInfo({ chat, onClose }: { chat: ChatDetail; onClose?: () => 
         </div>
       )}
       <div className="flex flex-col items-center gap-3 text-center">
-        <Avatar name={chat.title} src={avatarUrl({ id: chat.id, type: chat.type, person_id: chat.person_id, avatar: chat.avatar ?? p?.avatar })} group={chat.type === "group"} size={96} />
+        {photo ? (
+          <button type="button" className="rounded-full" onClick={() => setViewing(views.shown)} aria-label={t("kind.image")} data-main-photo>
+            <Avatar name={chat.title} src={photo} group={chat.type === "group"} size={96} />
+          </button>
+        ) : (
+          <Avatar name={chat.title} src={photo} group={chat.type === "group"} size={96} />
+        )}
+        <ImageViewer images={views.images} index={viewing} onIndex={setViewing} onClose={() => setViewing(null)} />
         <div>
           <div className="text-lg font-semibold">{chat.title}</div>
           {p?.contact && <div className="text-xs text-muted">{t(p.contact.gone ? "people.contactGone" : "people.contact")}{p.contact.organization ? ` · ${p.contact.organization}` : ""}</div>}

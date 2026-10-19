@@ -1,4 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { api, thumbUrl, type Person } from "@/lib/api";
@@ -6,7 +8,22 @@ import { pinnedAvatarUrl } from "@/lib/avatar";
 import { dateOnly } from "@/lib/format";
 import { service } from "@/lib/services";
 import { cn } from "@/lib/utils";
+import { ImageViewer, type ViewerImage } from "./ImageViewer";
 import { Avatar, ServiceBadge } from "./ui";
+
+/** A person's photo from each source it may be pinned to, to look at whole, and which of them is
+ *  the one shown. */
+export function photoViews(p: Person, t: TFunction): { images: ViewerImage[]; shown: number } {
+  const key = p.photo_history[0]?.sha.slice(0, 12) ?? p.avatar;
+  const sourceName = (s: string) => (s === "contacts" ? t("people.photoContacts") : service(s).name);
+  const images = p.photo_choices.map((c) => ({
+    src: pinnedAvatarUrl(p.id, c.pin, key),
+    label: c.address_id ? `${sourceName(c.source)} · ${c.label ?? ""}` : sourceName(c.source),
+  }));
+  const from = p.photo_source ?? p.photo_from;
+  const shown = Math.max(0, p.photo_choices.findIndex((c) => c.pin === from || (!p.photo_source && c.source === from && !c.address_id)));
+  return { images, shown };
+}
 
 /** Where a person's photo comes from: by the order of names (automatic), a source, one handle, or none. */
 export function PhotoFrom({ p }: { p: Person }) {
@@ -53,7 +70,10 @@ export function PhotoFrom({ p }: { p: Person }) {
 /** Every photo the services have shown for the person, the latest first, old ones too. */
 export function PhotoHistory({ p }: { p: Person }) {
   const { t } = useTranslation();
+  const [open, setOpen] = useState<number | null>(null);
   if (p.photo_history.length === 0) return null;
+  const shown = p.photo_history.filter((h) => h.available);
+  const images = shown.map((h) => ({ src: `/api/media/${h.sha}/preview`, label: [service(h.source).name, h.label, dateOnly(h.first_seen * 1000)].filter(Boolean).join(" · ") }));
   return (
     <div className="space-y-2" data-photo-history>
       <div className="text-sm font-semibold">{t("people.photoHistory")}</div>
@@ -62,7 +82,9 @@ export function PhotoHistory({ p }: { p: Person }) {
           <div key={`${h.address_id}:${h.source}:${h.sha}:${h.first_seen}`} className="space-y-1 text-xs">
             <div className={cn("aspect-square overflow-hidden rounded-xl bg-panel-2", !h.current && "opacity-80")}>
               {h.available ? (
-                <img src={thumbUrl(h.sha)} alt="" loading="lazy" className="size-full object-cover" />
+                <button type="button" className="size-full" onClick={() => setOpen(shown.indexOf(h))} aria-label={t("kind.image")}>
+                  <img src={thumbUrl(h.sha)} alt="" loading="lazy" className="size-full object-cover" />
+                </button>
               ) : (
                 <div className="grid size-full place-items-center p-2 text-center text-muted">{t("people.photoGone")}</div>
               )}
@@ -78,6 +100,7 @@ export function PhotoHistory({ p }: { p: Person }) {
           </div>
         ))}
       </div>
+      <ImageViewer images={images} index={open} onIndex={setOpen} onClose={() => setOpen(null)} />
     </div>
   );
 }

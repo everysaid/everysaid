@@ -52,3 +52,47 @@ test("photos: a group's in the list, a person's choice and history", async ({ pa
   await expect(history.locator("img")).toHaveCount(2);
   await page.screenshot({ path: `${SHOTS}/${tag}-photo-history.png` });
 });
+
+test("photos: the main photo and the history's open whole, the arrows go on, the black closes", async ({ page }, info) => {
+  await signedIn(page, info.project.name);
+  const found = await page.evaluate(async () => {
+    const h = { "X-Everysaid": "1" };
+    const chats = (await (await fetch("/api/chats?limit=500", { headers: h })).json()).items;
+    let several = null, history = null;
+    for (const c of chats.filter((c: any) => c.type === "person" && c.avatar)) {
+      const p = await (await fetch(`/api/people/${c.person_id}`, { headers: h })).json();
+      if (!several && p.photo_choices.length > 1) several = c.person_id;
+      if (!history && p.photo_history.some((x: any) => x.available)) history = c.person_id;
+    }
+    return { several, history };
+  });
+  expect(found.several).not.toBeNull();
+  expect(found.history).not.toBeNull();
+  const viewer = page.locator("[data-image-viewer]");
+  const close = async () => {            // the top bar's empty right end is black, away from the arrows
+    const box = (await viewer.boundingBox())!;
+    await page.mouse.click(box.x + box.width - 6, box.y + 28);
+    await expect(viewer).toBeHidden();
+  };
+
+  await page.goto(`/chat/p${found.several}`);
+  await page.getByRole("button", { name: /Πληροφορίες|Info/ }).first().click();
+  await page.locator("[data-main-photo]").click();
+  await expect(viewer).toBeVisible();
+  await viewer.locator("img").click();                       // the picture itself does not close it
+  await expect(viewer).toBeVisible();
+  const src = await viewer.locator("img").getAttribute("src");
+  const next = viewer.getByRole("button", { name: /Επόμενο|Next/ });
+  const previous = viewer.getByRole("button", { name: /Προηγούμενο|Previous/ });
+  if (await next.count()) await next.click();
+  else await previous.click();
+  await expect.poll(() => viewer.locator("img").getAttribute("src")).not.toBe(src);
+  await close();
+
+  await page.goto(`/people/${found.history}`);
+  const history = page.locator("[data-photo-history]");
+  await history.scrollIntoViewIfNeeded();
+  await history.getByRole("button").first().click();
+  await expect(viewer).toBeVisible();
+  await close();
+});
