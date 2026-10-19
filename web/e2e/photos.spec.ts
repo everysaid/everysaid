@@ -22,14 +22,16 @@ test("photos: a group's in the list, a person's choice and history", async ({ pa
       if (!chosen && p.photo_choices.length > 1) chosen = c.person_id;
       if (!history && p.photo_history.length > 1) history = c.person_id;
     }
-    return { group: group?.id ?? null, chosen, history };
+    return { group: group?.id ?? null, title: group?.title ?? "", chosen, history };
   });
   expect(found.group).not.toBeNull();
   expect(found.chosen).not.toBeNull();
   expect(found.history).not.toBeNull();
 
-  // the group's photo where the chats are listed
+  // the group's photo where the chats are listed: found by its name, as the list shows only the
+  // chats near its top, and which group is there depends on what was sent before
   await page.goto("/");
+  await page.getByRole("textbox", { name: /Αναζήτηση συνομιλιών|Search chats/ }).fill(found.title);
   await expect(page.locator(`img[src^="/api/chats/${found.group}/avatar"]`).first()).toBeVisible();
 
   // a person with an address book's photo and a service's: one chosen, then automatic again

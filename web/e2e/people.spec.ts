@@ -93,9 +93,17 @@ test("people: back from a person, the list is where it was", async ({ page }, in
 // done stays in place, marked. Both are undone afterwards, so the demo stays as it was.
 test("people: without a name, one named and one the same as someone", async ({ page }, info) => {
   await signedIn(page, info.project.name);
+  // the latest words in the courier's chat, shown with them: on a fresh demo the courier's own ("Your
+  // parcel will be delivered..."), after other tests' sendings what those sent there
+  const latest = await page.evaluate(async () => {
+    const h = { "X-Everysaid": "1" };
+    const p = (await (await fetch("/api/people?q=15550100010", { headers: h })).json()).items[0];
+    const items = (await (await fetch(`/api/chats/p${p.id}/stream?limit=20`, { headers: h })).json()).items;
+    return items.filter((x: any) => x.type === "message" && x.text).at(-1).text as string;
+  });
   await page.goto("/people/unnamed");
   const courier = page.locator("[data-unnamed]", { hasText: "+1 555-010-0010" });
-  await expect(courier).toContainText("Your parcel will be delivered");
+  await expect(courier).toContainText(latest.slice(0, 40));
   await courier.locator("[data-unnamed-name]").fill("The courier");
   await courier.getByRole("button", { name: /^(Αποθήκευση|Save)$/ }).click();
   await expect(courier.locator("[data-unnamed-done]")).toContainText("The courier");

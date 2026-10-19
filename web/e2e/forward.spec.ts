@@ -49,7 +49,11 @@ test("a message forwarded to a chat of its service and to one of another", async
   await page.locator("[data-forward-send]").click();
   await expect(page.locator("[data-sonner-toast]").filter({ hasText: /2/ })).toBeVisible();
 
-  // in the chat of its service: forwarded; in the other: a message of its own
+  // in the chat of its service: forwarded; in the other: a message of its own. Both read first: a
+  // chat with unread messages (answers to other tests' sendings) opens at the first of them, far
+  // above what was just forwarded
+  for (const c of [same, other])
+    expect((await page.request.post(`/api/chats/${c.id}/read`, { data: {}, headers: { "X-Everysaid": "1" } })).status()).toBe(200);
   await page.goto(`/chat/${same.id}`);
   const there = page.locator('[id^="m"]').filter({ hasText: text });
   await expect(there).toHaveCount(1);
