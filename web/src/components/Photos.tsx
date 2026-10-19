@@ -11,9 +11,26 @@ import { cn } from "@/lib/utils";
 import { ImageViewer, type ViewerImage } from "./ImageViewer";
 import { Avatar, ServiceBadge } from "./ui";
 
+/** The main photo of a person or a chat: a click shows it whole, a person's with the arrows to
+ *  the photo of each other source it may come from. */
+export function MainPhoto({ name, src, p, group, size }: { name: string; src: string | null; p?: Person | null; group?: boolean; size: number }) {
+  const { t } = useTranslation();
+  const [viewing, setViewing] = useState<number | null>(null);
+  if (!src) return <Avatar name={name} src={src} group={group} size={size} />;
+  const views = p?.photo_choices.length ? photoViews(p, t) : { images: [{ src, label: name }], shown: 0 };
+  return (
+    <>
+      <button type="button" className="shrink-0 rounded-full" onClick={() => setViewing(views.shown)} aria-label={t("kind.image")} data-main-photo>
+        <Avatar name={name} src={src} group={group} size={size} />
+      </button>
+      <ImageViewer images={views.images} index={viewing} onIndex={setViewing} onClose={() => setViewing(null)} />
+    </>
+  );
+}
+
 /** A person's photo from each source it may be pinned to, to look at whole, and which of them is
  *  the one shown. */
-export function photoViews(p: Person, t: TFunction): { images: ViewerImage[]; shown: number } {
+function photoViews(p: Person, t: TFunction): { images: ViewerImage[]; shown: number } {
   const key = p.photo_history[0]?.sha.slice(0, 12) ?? p.avatar;
   const sourceName = (s: string) => (s === "contacts" ? t("people.photoContacts") : service(s).name);
   const images = p.photo_choices.map((c) => ({

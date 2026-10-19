@@ -95,4 +95,8 @@ test("photos: the main photo and the history's open whole, the arrows go on, the
   await history.getByRole("button").first().click();
   await expect(viewer).toBeVisible();
   await close();
+
+  await page.locator("[data-main-photo]").click();           // the person page's main photo opens whole too
+  await expect(viewer).toBeVisible();
+  await close();
 });
