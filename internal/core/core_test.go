@@ -1527,3 +1527,44 @@ func TestAccountsSaidReadably(t *testing.T) {
 		t.Fatalf("not taken away: %v", err)
 	}
 }
+
+// An unnamed person's latest messages are the user's latest and the rest theirs: three of the user's
+// written after do not push away what tells who they are.
+func TestRecentKeepsTheirWords(t *testing.T) {
+	s := store(t)
+	var pid int64
+	for _, p := range core.UnnamedPeople(s, 100, 0, nil)["items"].([]core.M) {
+		if p["name"] == "+1 555-010-0010" {
+			pid = i64(p["id"])
+		}
+	}
+	conv := core.GetChat(s, fmt.Sprintf("p%d", pid))["conversations"].([]int64)[0]
+	write(t, s, func(tx *sql.Tx) {
+		for i := 1; i <= 3; i++ {
+			db.Exec(tx, "INSERT INTO message (service_id, conversation_id, ts, outgoing, kind_id, text) "+
+				"SELECT service_id, conversation_id, (SELECT max(ts) FROM message WHERE conversation_id = ?) + 1000, 1, kind_id, ? FROM message WHERE conversation_id = ? LIMIT 1",
+				conv, fmt.Sprintf("mine %d", i), conv)
+		}
+	})
+	theirs := int(db.Int(s.Read(), "SELECT count(*) FROM message WHERE conversation_id = ? AND outgoing = 0 AND text != ''", conv))
+	for _, p := range core.UnnamedPeople(s, 100, 0, nil)["items"].([]core.M) {
+		if i64(p["id"]) != pid {
+			continue
+		}
+		recent := p["recent"].([]core.M)
+		var out int
+		for i, m := range recent {
+			if m["outgoing"] == true {
+				out++
+			}
+			if i > 0 && recent[i-1]["ts"].(int64) < m["ts"].(int64) {
+				t.Fatal("not the latest first", recent)
+			}
+		}
+		if len(recent) != 3 || out != 3-min(theirs, 2) || recent[0]["text"] != "mine 3" {
+			t.Fatal(theirs, recent)
+		}
+		return
+	}
+	t.Fatal("the courier not listed")
+}

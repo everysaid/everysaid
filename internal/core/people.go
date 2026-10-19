@@ -597,22 +597,33 @@ func MergesDismissed(s *Store) []M {
 	return out
 }
 
-// recentOf is a person's latest messages with text: [{ts, outgoing, text}].
+// recentOf is a person's latest messages with text, the latest first: [{ts, outgoing, text}]; the
+// user's latest one among them and the rest theirs (what tells who they are), the other side filling
+// in where one has too few.
 func recentOf(s *Store, personID int64, n int) []M {
 	out := []M{}
 	c := Index(s).Chats[fmt.Sprintf("p%d", personID)]
-	if c == nil || len(c.Conversations) == 0 {
+	if c == nil || len(c.Conversations) == 0 || n <= 0 {
 		return out
 	}
-	db.Each(s.Read(), "SELECT ts, outgoing, text FROM message WHERE conversation_id IN ("+db.Marks(len(c.Conversations))+
-		") AND text IS NOT NULL AND text != '' ORDER BY ts DESC LIMIT ?", append(db.Args(c.Conversations), n),
-		func(scan func(...any)) {
-			var ts int64
-			var o bool
-			var t string
-			scan(&ts, &o, &t)
-			out = append(out, M{"ts": ts, "outgoing": o, "text": Cut(t, 160)})
-		})
+	side := func(outgoing bool) []M {
+		var got []M
+		db.Each(s.Read(), "SELECT ts, text FROM message WHERE conversation_id IN ("+db.Marks(len(c.Conversations))+
+			") AND outgoing = ? AND text IS NOT NULL AND text != '' ORDER BY ts DESC LIMIT ?", append(db.Args(c.Conversations), outgoing, n),
+			func(scan func(...any)) {
+				var ts int64
+				var t string
+				scan(&ts, &t)
+				got = append(got, M{"ts": ts, "outgoing": outgoing, "text": Cut(t, 160)})
+			})
+		return got
+	}
+	theirs, mine := side(false), side(true)
+	m := min(len(mine), 1)
+	t := min(len(theirs), n-m)
+	m = min(len(mine), n-t)
+	out = append(append(out, theirs[:t]...), mine[:m]...)
+	sort.SliceStable(out, func(i, j int) bool { return out[i]["ts"].(int64) > out[j]["ts"].(int64) })
 	return out
 }
 
