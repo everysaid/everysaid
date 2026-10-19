@@ -737,11 +737,7 @@ func lastItem(s *Store, chat *Chat, calls bool) M {
 			var who int64
 			var token sql.NullString
 			scan(&who, &token)
-			var pid any
-			if p, ok := ppl.PersonOf[who]; ok {
-				pid = p
-			}
-			mentions = append(mentions, M{"token": nullString(token), "person_id": pid, "me": ppl.OwnAddresses[who], "name": ppl.NameOfAddress(who)})
+			mentions = append(mentions, mentionOf(ppl, who, token))
 		})
 	}
 	return M{"type": "message", "id": row.id, "ts": row.ts, "outgoing": row.outgoing, "kind": lk.Kind[row.kind],

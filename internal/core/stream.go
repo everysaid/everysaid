@@ -391,12 +391,7 @@ func Hydrate(s *Store, rows []Item, chat *Chat) []M {
 					var mid, who int64
 					var token sql.NullString
 					scan(&mid, &who, &token)
-					var pid any
-					if p, ok := ppl.PersonOf[who]; ok {
-						pid = p
-					}
-					msgs[mid]["mentions"] = append(msgs[mid]["mentions"].([]M), M{"token": nullString(token),
-						"person_id": pid, "me": ppl.OwnAddresses[who], "name": ppl.NameOfAddress(who)})
+					msgs[mid]["mentions"] = append(msgs[mid]["mentions"].([]M), mentionOf(ppl, who, token))
 				})
 		}
 		if tbl["notice"] {
@@ -752,4 +747,17 @@ func PreviewImage(s *Store, sha string) []byte {
 	var jpg []byte
 	db.Row(s.Read(), "SELECT jpeg FROM link_preview_image WHERE sha256 = ?", []any{sha}, &jpg)
 	return jpg
+}
+
+// mentionOf is one mention in a message: {token (as the service writes it), person_id, me, name}; the
+// user's own only by a name they have (not a number of theirs: the app says them otherwise).
+func mentionOf(ppl *People, who int64, token sql.NullString) M {
+	var pid, name any
+	if p, ok := ppl.PersonOf[who]; ok {
+		pid = p
+		if n, source := ppl.Info(p); !ppl.OwnAddresses[who] || source != "handle" {
+			name = n
+		}
+	}
+	return M{"token": nullString(token), "person_id": pid, "me": ppl.OwnAddresses[who], "name": name}
 }

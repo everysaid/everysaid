@@ -74,6 +74,7 @@
 }
 .mention { font-weight: 600; text-decoration: none; }
 .mention:hover { text-decoration: underline; }
+.mention-me { color: var(--accent); }    /* the user named in it */
 .mark { background: color-mix(in oklab, var(--accent) 28%, transparent); color: inherit; border-radius: 3px; padding: 0 1px; }
 /* a Markdown document in the document viewer */
 .markdown { line-height: 1.6; overflow-wrap: anywhere; }

@@ -1592,3 +1592,44 @@ func TestChatListLastCarriesMentions(t *testing.T) {
 		t.Fatal(c["type"], ms)
 	}
 }
+
+// A mention of the user's own address says a name only when their person has a real one (not just a
+// handle): otherwise the app says them by the name they sign in with.
+func TestMentionOfTheUserNamesOnlyARealName(t *testing.T) {
+	s := store(t)
+	var conv, own, pid int64
+	db.Row(s.Read(), "SELECT m.conversation_id FROM mention k JOIN message m ON m.id = k.message_id LIMIT 1", nil, &conv)
+	db.Row(s.Read(), "SELECT address_id FROM account LIMIT 1", nil, &own)
+	db.Row(s.Read(), "SELECT person_id FROM person_address WHERE address_id = ?", []any{own}, &pid)
+	if conv == 0 || own == 0 || pid == 0 {
+		t.Fatal("the demo has no group mention or no person of its own", conv, own, pid)
+	}
+	const text = "@me see you"
+	write(t, s, func(tx *sql.Tx) {
+		db.Exec(tx, "INSERT INTO message (service_id, conversation_id, ts, outgoing, kind_id, text) "+
+			"SELECT service_id, conversation_id, (SELECT max(ts) FROM message WHERE conversation_id = ?) + 1000, 0, kind_id, ? FROM message WHERE conversation_id = ? LIMIT 1",
+			conv, text, conv)
+		db.Exec(tx, "INSERT INTO mention SELECT id, ?, '@me' FROM message WHERE conversation_id = ? AND text = ?", own, conv, text)
+	})
+	mention := func() core.M {
+		t.Helper()
+		var id string
+		db.Row(s.Read(), "SELECT 'c' || ?", []any{conv}, &id)
+		for _, it := range items(stream(t, s, id, core.StreamOptions{Limit: 5})) {
+			if ms, _ := it["mentions"].([]core.M); it["text"] == text && len(ms) == 1 {
+				return ms[0]
+			}
+		}
+		t.Fatal("the mention is not in the stream")
+		return nil
+	}
+	if m := mention(); m["me"] != true || m["name"] != nil || m["token"] != "@me" {
+		t.Fatal("no name of theirs:", m)
+	}
+	if err := core.SetPerson(s, pid, core.To("Ο Ιδιοκτήτης"), core.Opt[string]{}, core.Opt[string]{}, core.Opt[string]{}); err != nil {
+		t.Fatal(err)
+	}
+	if m := mention(); m["me"] != true || m["name"] != "Ο Ιδιοκτήτης" {
+		t.Fatal("with a name:", m)
+	}
+}

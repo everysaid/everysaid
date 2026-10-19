@@ -1,7 +1,7 @@
 import { lazy, memo, Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Check, CheckCheck, Clock, Copy, CornerUpLeft, EllipsisVertical, FileText, Forward, ImageOff, Link2, MapPin, Pencil, Phone, Pin, PhoneIncoming, PhoneMissed, PhoneOutgoing, Play, Plus, Trash2, TriangleAlert, Video } from "lucide-react";
 import { api, thumbUrl, type Attachment, type LinkPreview, type Local, type CallItem, type Mention, type MessageItem, type Receipts } from "@/lib/api";
@@ -14,6 +14,7 @@ import { EmojiPicker } from "./EmojiPicker";
 import { copyFile, copyText } from "@/lib/clip";
 import { Sending } from "./Sending";
 import type { DocumentKind } from "./DocumentViewer";
+import type { AuthStatus } from "@/routes/Root";
 
 const URL_RE = /(https?:\/\/[^\s<>"')\]]+)/g;
 const BIDI = /[\u202a-\u202e\u2066-\u2069]/g;      // direction marks around a name (Viber writes "\u202a@Name\u202c")
@@ -53,8 +54,15 @@ function mentionParts(text: string, mentions?: Mention[]): { text: string; menti
 }
 
 function mentionLabel(bare: string, m: Mention, me: string) {
-  const name = m.me ? me : m.name || bare.replace(/^@/, "");
+  const name = m.me ? m.name || me : m.name || bare.replace(/^@/, "");
   return bare.startsWith("@") ? `@${name}` : name;
+}
+
+/** How the user is said where someone mentions them with no name of theirs known: by the name they
+ *  sign in with, else "me". */
+export function useMeSaid() {
+  const { t } = useTranslation();
+  return useQueryClient().getQueryData<AuthStatus>(["auth"])?.user?.name || t("common.me");
 }
 
 /** A text with each mention said by name, as plain text (where a chat is listed). */
@@ -64,7 +72,7 @@ export function mentionsSaid(text: string, mentions: Mention[] | undefined, me: 
 
 /** A piece of text with each mention's token (as the service writes it) said as the person's name. */
 function Named({ text, mentions }: { text: string; mentions?: Mention[] }) {
-  const { t } = useTranslation();
+  const me = useMeSaid();
   const parts = mentionParts(text, mentions);
   if (!parts) return <span>{text}</span>;
   return (
@@ -73,11 +81,11 @@ function Named({ text, mentions }: { text: string; mentions?: Mention[] }) {
         const m = i % 2 === 1 ? p.mention : undefined;
         if (!m) return p.text;
         const bare = p.text.replace(BIDI, "");
-        const label = mentionLabel(bare, m, t("common.me"));
+        const label = mentionLabel(bare, m, me);
         return m.person_id && !m.me ? (
           <Link key={i} to="/people/$personId" params={{ personId: String(m.person_id) }} data-mention className="mention" title={bare}>{label}</Link>
         ) : (
-          <span key={i} data-mention className="mention" title={bare}>{label}</span>
+          <span key={i} data-mention className={cn("mention", m.me && "mention-me")} title={bare}>{label}</span>
         );
       })}
     </span>
