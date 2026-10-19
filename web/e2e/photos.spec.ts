@@ -70,6 +70,9 @@ test("photos: the main photo and the history's open whole, the arrows go on, the
   expect(found.history).not.toBeNull();
   const viewer = page.locator("[data-image-viewer]");
   const close = async () => {            // the top bar's empty right end is black, away from the arrows
+    // a viewer just opened takes the pointer only once Radix's layer has rendered again (a few ms):
+    // a click before that lands on the overlay
+    await expect(viewer).toHaveCSS("pointer-events", "auto");
     const box = (await viewer.boundingBox())!;
     await page.mouse.click(box.x + box.width - 6, box.y + 28);
     await expect(viewer).toBeHidden();
