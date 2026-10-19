@@ -96,7 +96,12 @@ test("setup, chats, a chat, search, media, sources, settings", async ({ page }, 
   await page.locator("img[src*='/thumb']").first().click();
   await page.waitForTimeout(700);
   await page.screenshot({ path: `${SHOTS}/${tag}-16-lightbox.png` });
-  await page.keyboard.press("Escape");
+  // a click on the picture leaves it open, one on the black around it closes it
+  const dialog = page.getByRole("dialog");
+  await dialog.locator("img[src*='/preview']").click();
+  await expect(dialog).toBeVisible();
+  await dialog.click({ position: { x: 5, y: (page.viewportSize()?.height ?? 600) / 2 } });
+  await expect(dialog).toBeHidden();
 
   // a reaction sits on the bubble's edge, whole, above it
   const withReaction = await page.evaluate(async () => {

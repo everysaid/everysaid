@@ -20,7 +20,8 @@ export default function DocumentViewer({ sha256, name, kind, onClose }: { sha256
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/95" />
         <DialogPrimitive.Content className="fixed inset-0 z-50 flex flex-col text-white outline-none" aria-describedby={undefined} data-document-viewer>
-          <div className="flex items-center gap-1 p-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
+          {/* the pages fill the rest: only a click on the black bar's empty part closes */}
+          <div className="flex items-center gap-1 p-2 pt-[max(0.5rem,env(safe-area-inset-top))]" onClick={(e) => !(e.target as HTMLElement).closest("button, a") && onClose()}>
             <button onClick={onClose} className={button} aria-label={t("common.close")}><X /></button>
             <DialogPrimitive.Title className="min-w-0 flex-1 truncate px-2 text-sm opacity-80">{name || t("kind.file")}</DialogPrimitive.Title>
             <a href={`/api/media/${sha256}/original`} download={name} className={button} title={t("common.download")} aria-label={t("common.download")}><Download className="size-5" /></a>

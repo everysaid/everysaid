@@ -78,7 +78,12 @@ export function Lightbox({ items, index, onClose, onIndex, onOpenChat }: {
     <DialogPrimitive.Root open onOpenChange={(o) => !o && onClose()}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/95" />
-        <DialogPrimitive.Content className="fixed inset-0 z-50 flex flex-col text-white outline-none" aria-describedby={undefined}>
+        <DialogPrimitive.Content
+          className="fixed inset-0 z-50 flex flex-col text-white outline-none"
+          aria-describedby={undefined}
+          // a click on the black around the picture closes it; one on the picture or a button does not
+          onClick={(e) => !(e.target as HTMLElement).closest("button, a, img, video") && onClose()}
+        >
           <DialogPrimitive.Title className="sr-only">{t("kind.image")}</DialogPrimitive.Title>
           <div className="flex items-center gap-1 p-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
             <button onClick={onClose} className="grid size-11 place-items-center rounded-full hover:bg-white/10" aria-label={t("common.close")}><X /></button>
