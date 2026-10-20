@@ -127,6 +127,11 @@ export function ChatList() {
   const [filters, setFiltersNow] = useState<ChatFilters>(savedFilters);
   const setFilters = (f: ChatFilters) => { setFiltersNow(f); keepFilters(f); };
   const archived = filters.archived;
+  useEffect(() => {                                   // the app's icon: back to the list, not the archived
+    const home = () => setFiltersNow((f) => ({ ...f, archived: false }));
+    window.addEventListener("everysaid:home", home);
+    return () => window.removeEventListener("everysaid:home", home);
+  }, []);
   const dq = useDebounced(q, 150);
   const narrowed = useDebounced(filters, 250);         // the slider moves on, the list follows
   const chats = useChats({ q: dq || undefined, ...filterParams(narrowed) });

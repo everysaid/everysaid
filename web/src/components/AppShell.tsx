@@ -9,6 +9,7 @@ import { useConnected } from "@/lib/events";
 import { closeRead } from "@/lib/push";
 import { lastChat } from "@/lib/memory";
 import { Logo } from "./Logo";
+import { keepFilters, savedFilters } from "./ChatFilters";
 import { Menu, MenuContent, MenuItem, MenuTrigger, Tip } from "./ui";
 import { ChatList } from "./ChatList";
 import { useNavigate } from "@tanstack/react-router";
@@ -43,6 +44,12 @@ function useCloseRead() {
   }, [chats.data]);
 }
 
+/** The icon brings the plain list back: no chat open, not the archived ones. */
+function leaveArchived() {
+  keepFilters({ ...savedFilters(), archived: false });
+  window.dispatchEvent(new Event("everysaid:home"));
+}
+
 function Rail() {
   const { t } = useTranslation();
   const section = useSection();
@@ -53,7 +60,7 @@ function Rail() {
     <nav className="flex w-[72px] shrink-0 flex-col items-center gap-1 border-r border-line bg-panel pb-1 pt-3">
       {/* the connection to the server: the icon in colour, grey until it is there */}
       <Tip label={t(connected ? "nav.live" : "nav.offline")}>
-        <Link to="/" className="mb-3" aria-label="Everysaid" data-connected={connected || undefined}>
+        <Link to="/" onClick={leaveArchived} className="mb-3" aria-label="Everysaid" data-connected={connected || undefined}>
           <Logo className={cn("size-10 transition-[filter,opacity] duration-500", !connected && "opacity-60 grayscale")} />
         </Link>
       </Tip>
