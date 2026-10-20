@@ -36,15 +36,13 @@ test("a chat keeps its unsent text and its place; the Chats tab comes back to it
   if (info.project.name === "desktop") {       // the list beside the chat: the wide screen's
   const archivedSwitch = page.getByRole("switch", { name: /^(Αρχειοθετημένες συνομιλίες|Archived chats)$/ });
   await page.locator("[data-chat-filters]").click();                // the list as it is left
-  await archivedSwitch.click();
-  await page.keyboard.press("Escape");
+  await archivedSwitch.click();                                     // (the panel closes with it)
   await page.locator('nav a[href="/overview"]').click();
   await page.locator('nav a[aria-label="Συνομιλίες"], nav a[aria-label="Chats"]').click();
   await expect(page).toHaveURL(new RegExp(`/chat/${b}`));          // the chat open last
   await page.locator("[data-chat-filters]").click();
   await expect(archivedSwitch).toHaveAttribute("aria-checked", "true");
-  await archivedSwitch.click();
-  await page.keyboard.press("Escape");
+  await archivedSwitch.click();                                     // (the panel closes with it)
   }
 
   await page.goto(`/chat/${a}`);

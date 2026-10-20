@@ -82,7 +82,7 @@ export function ChatFiltersButton({ value, onChange, seen, archivedUnread }: { v
           className="z-50 max-h-[80dvh] w-[min(22rem,calc(100vw-1rem))] space-y-4 overflow-y-auto rounded-2xl border border-line bg-panel p-4 shadow-xl" data-filters-panel>
           <label className="flex items-center justify-between gap-3 text-sm">
             {t("chats.showArchived")}
-            <Switch checked={value.archived} onChange={(v) => set({ archived: v })} label={t("chats.showArchived")} />
+            <Switch checked={value.archived} onChange={(v) => { set({ archived: v }); setOpen(false); }} label={t("chats.showArchived")} />
           </label>
           <div className="space-y-1.5">
             <div className="flex items-center justify-between gap-2 text-sm">
