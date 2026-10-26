@@ -593,7 +593,14 @@ func (s *Server) mcpEnv(token string) (mcp.Env, bool) {
 	if u == nil || u.Archive != s.Store.Path {
 		return mcp.Env{}, false
 	}
-	return mcp.Env{Store: s.Store, Library: librarian{s.Host}, Fetcher: s.Host, Inline: true}, true
+	return mcp.Env{Store: s.Store, Library: librarian{s.Host}, Fetcher: s.Host, Sender: textSender{s.Host}, Inline: true}, true
+}
+
+// textSender is the host's Send of text alone, as the MCP tools want it.
+type textSender struct{ h *Host }
+
+func (t textSender) Send(ctx context.Context, chatID, service, text string) (core.M, error) {
+	return t.h.Send(ctx, chatID, SendRequest{Text: text, Service: service})
 }
 
 // librarian is the host's ToLibrary into the default library, as the MCP tools want it.
