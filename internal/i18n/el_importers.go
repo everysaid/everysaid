@@ -15,9 +15,8 @@ func init() {
 		"unknown carrier in [import] carrier_notices":    "άγνωστος πάροχος στο [import] carrier_notices",
 
 		"no source: neither {db} nor an Android export": "καμία πηγή: ούτε {db} ούτε export Android",
-		"no source: neither {a} nor {b}":                "καμία πηγή: ούτε {a} ούτε {b}",
-		"no source: {a}":                                "καμία πηγή: {a}",
-		"no source: {db} (telegram-sync)":               "καμία πηγή: {db} (telegram-sync)",
+		"no source: {a}":                  "καμία πηγή: {a}",
+		"no source: {db} (telegram-sync)": "καμία πηγή: {db} (telegram-sync)",
 
 		"iPhone: {n} rows ({dup} repeats)":                             "iPhone: {n} γραμμές ({dup} επαναλήψεις)",
 		"Android ({devices}): {n} rows of SMS and MMS ({dup} repeats)": "Android ({devices}): {n} γραμμές SMS και MMS ({dup} επαναλήψεις)",
@@ -30,7 +29,7 @@ func init() {
 		"new:   {n} {source} {service}":                                "νέες:   {n} {source} {service}",
 		"new:   {n} {service}":                                         "νέες:   {n} {service}",
 		"new:   none":                                                  "νέες:   καμία",
-		"iPhone:  {n} messages, Desktop (Android): {events}":           "iPhone:  {n} μηνύματα, Desktop (Android): {events}",
+		"iPhone:  {n} messages":                                        "iPhone:  {n} μηνύματα",
 		"new:     {n} {source}":                                        "νέα:     {n} {source}",
 		"new:     {n} {source} ({skipped} were already there from another source)": "νέα:     {n} {source} ({skipped} υπήρχαν ήδη από άλλη πηγή)",
 		"changes to what was there: {list}":                                        "αλλαγές σε όσα υπήρχαν: {list}",
