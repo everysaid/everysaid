@@ -124,11 +124,15 @@ test("styles in the composer: marks turned, the menu, a style taken off in part,
   await select(field, 4, 7);
   await field.dispatchEvent("keydown", { key: "β", code: "KeyB", ctrlKey: true, bubbles: true, cancelable: true });
   await expect(styled(field, "bold")).toHaveText("δύο");
-  // Esc closes the styles' bar, the selection kept; a new selection shows it again
+  // Esc closes the styles' bar, the selection kept; a new selection shows it again, the same words too
   await styleButton(page, '[data-style="bold"]');
   await field.press("Escape");
   await expect(page.locator("[data-format]")).toHaveCount(0);
   expect(await page.evaluate(() => window.getSelection()!.toString())).toBe("δύο");
+  await select(field, 7, 7);
+  await expect(page.locator("[data-format-open]")).toHaveCount(0);   // let go: nothing selected seen
+  await select(field, 4, 7);
+  await styleButton(page, '[data-style="bold"]');
   await select(field, 0, 3);
   await styleButton(page, '[data-style="bold"]');
 

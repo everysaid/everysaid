@@ -1511,7 +1511,11 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
             role={listOpen ? "combobox" : undefined}
             aria-expanded={listOpen || undefined}
             onText={typedIn}
-            onSelect={(a, b) => { setCaret(a); setSelection([a, b]); }}
+            onSelect={(a, b) => {
+              setCaret(a);
+              setSelection([a, b]);
+              setHidden((h) => (h && (h[0] !== a || h[1] !== b) ? null : h));   // any move lets the bar come back, the same words selected again too
+            }}
             onRestore={(d, at) => { styled.current = turned.current = null; setDoc(d); setCaret(at); setSelection([at, at]); caretTo.current = at; }}
             onKeyDown={(e) => {
               if (gifQuery !== null && !listOpen) {     // "@gif" and words: picked above by the keys, not sent as text
