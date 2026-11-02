@@ -54,15 +54,20 @@ type CallSet struct {
 
 func NewCallSet(a *archive.Archive) *CallSet { return &CallSet{a: a, Added: map[string]int{}} }
 
-// existing is the same call from another source (calls of one source are all distinct, even a
-// minute apart): same person and direction. Calls without a person (hidden numbers, groups) are
-// never taken for one another.
-func (c *CallSet) existing(sourceID int64, service string, addressID, ts int64, outgoing bool) (int64, bool, bool) {
+// existing is the same call from another source: first the one with the service's own call id
+// (e.g. the live connection's), else (calls of one source are all distinct, even a minute apart)
+// same person and direction. Calls without a person (hidden numbers, groups) are never taken for one
+// another by time.
+func (c *CallSet) existing(sourceID int64, service string, addressID, ts int64, outgoing bool, key string) (int64, bool, bool) {
+	var id int64
+	var answered bool
+	if key != "" && c.a.Row("SELECT id, answered FROM call WHERE service_id = ? AND key = ?",
+		[]any{c.a.Service.ID(service), key}, &id, &answered) {
+		return id, answered, true
+	}
 	if addressID == 0 {
 		return 0, false, false
 	}
-	var id int64
-	var answered bool
 	found := c.a.Row("SELECT id, answered FROM call WHERE service_id = ? AND address_id = ? AND outgoing = ? "+
 		"AND abs(ts - ?) <= ? AND id NOT IN (SELECT call_id FROM call_origin WHERE source_id = ?) "+
 		"ORDER BY abs(ts - ?)", []any{c.a.Service.ID(service), addressID, archive.B2I(outgoing), ts, sameCallMS, sourceID, ts},
@@ -79,7 +84,7 @@ func (c *CallSet) add(sourceID int64, rowKeys []string, call archive.Call, added
 			return 0
 		}
 	}
-	id, answered, found := c.existing(sourceID, call.Service, call.AddressID, call.TS, call.Outgoing)
+	id, answered, found := c.existing(sourceID, call.Service, call.AddressID, call.TS, call.Outgoing, call.Key)
 	if found {
 		// a call log that says answered is not overruled by "missed" or "busy" from elsewhere
 		detail, code := call.Detail, call.DetailCode

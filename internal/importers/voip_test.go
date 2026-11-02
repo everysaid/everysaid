@@ -178,3 +178,20 @@ CREATE TABLE EventAttributes (eventId INTEGER, key TEXT, type INTEGER, value TEX
 		"LEFT JOIN address ad ON ad.id = c.address_id ORDER BY c.ts"),
 		[]string{"+15557770001 01  13 a@sip", "+15557770001 00 missed 0 ", "- 00 rejected 0 ", "+15557770002 10 unanswered 0 "})
 }
+
+// TestCallSameKeyFromAnotherSource: a call the live connection recorded comes again from the
+// iPhone's log with the same call id; it is that call (a second origin), also a group call, which
+// has no person to match by time: before, the import stopped on the call's unique key.
+func TestCallSameKeyFromAnotherSource(t *testing.T) {
+	a, _ := newArchive(t)
+	live := a.Source("whatsapp-bridge/call-events", "", "", "")
+	log := a.Source("iphone/whatsapp-calls", "", "", "")
+	calls := NewCallSet(a)
+	group := a.Conversation("whatsapp", []archive.Handle{archive.H("phone", "+15557770001")}, "", "")
+	first := calls.add(live, []string{"ABC"}, archive.Call{Service: "whatsapp", TS: pairTS, Key: "ABC", ConversationID: group})
+	again := calls.add(log, []string{"7"}, archive.Call{Service: "whatsapp", TS: pairTS + 90_000, Key: "ABC",
+		ConversationID: group, Duration: 30, Answered: true})
+	eq(t, "the same call", again, first)
+	eq(t, "calls", a.Int("SELECT count(*) FROM call"), int64(1))
+	eq(t, "origins", a.Int("SELECT count(*) FROM call_origin WHERE call_id = ?", first), int64(2))
+}
