@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import * as Popover from "@radix-ui/react-popover";
-import { ArrowDown, ArrowLeft, BellOff, Bold, CalendarDays, Check, ChevronDown, ChevronRight, Code, CornerUpLeft, Archive, ArchiveRestore, EyeOff, FileText, Info, Italic, Lock, MoreVertical, Paperclip, Pencil, Pin, PinOff, RemoveFormatting, Search, SendHorizontal, Smile, Strikethrough, Underline, X } from "lucide-react";
+import { ALargeSmall, ArrowDown, ArrowLeft, BellOff, Bold, CalendarDays, Check, ChevronDown, ChevronRight, Code, CornerUpLeft, Archive, ArchiveRestore, EyeOff, FileText, Info, Italic, Lock, MoreVertical, Paperclip, Pencil, Pin, PinOff, RemoveFormatting, Search, SendHorizontal, Smile, Strikethrough, Underline, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError, qs, type Attachment, type ChatDetail, type Local, type Member, type MessageItem, type StreamItem, type StreamPage } from "@/lib/api";
 import { useBack } from "@/lib/back";
@@ -1056,6 +1057,8 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   const pending = useRef<{ at: number; kinds: Kind[] } | null>(null);
   const [selection, setSelection] = useState<[number, number]>([0, 0]);
   const [focused, setFocused] = useState(false);
+  const [formatOpen, setFormatOpen] = useState(false);        // on a touch screen, the styles asked for (Aa)
+  useEffect(() => { if (selection[0] === selection[1]) setFormatOpen(false); }, [selection]);
   // the caret where the text was changed under it (an emoji in place of what was typed), as soon as the
   // field has the new text (not a frame later: by then more may have been typed)
   const caretTo = useRef<number | null>(null);
@@ -1311,6 +1314,43 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
     setNoList(false);
     if (d.text !== next) caretTo.current = c;
   };
+  // the styles' bar: with something selected in the field; a touch screen's behind Aa
+  const selected = can && focused && selection[0] < selection[1];
+  const touch = window.matchMedia("(pointer: coarse)").matches;
+  let barAt: React.CSSProperties | undefined;
+  if (selected && !touch) {
+    const box = ref.current?.rectAt(selection[0]);
+    if (box) {
+      const width = 280, height = 44;
+      const top = box.top - height - 6 >= 8 ? box.top - height - 6 : box.bottom + 6;
+      barAt = { top, left: Math.max(8, Math.min(box.left - 6, window.innerWidth - width - 8)) };
+    }
+  }
+  const bar = (
+    // above where the selection starts (it stays there as the selection grows; its end follows the
+    // pointer); on a touch screen above the field, where the system's own menu is not
+    <div data-format role="toolbar" aria-label={t("format.styles")} style={barAt}
+      className={cn("z-30 flex items-center gap-0.5 rounded-xl border border-line bg-panel p-1 shadow-xl",
+        touch ? "absolute bottom-full left-3 mb-1" : "fixed")}>
+      {([["bold", Bold, "format.bold", "Ctrl+B"], ["italic", Italic, "format.italic", "Ctrl+I"], ["underline", Underline, "format.underline", "Ctrl+U"],
+        ["strike", Strikethrough, "format.strike", "Ctrl+Shift+X"],
+        ["code", Code, "format.code", "Ctrl+Shift+M"], ["spoiler", EyeOff, "format.spoiler", ""]] as const).map(([kind, Icon, label, keys]) => {
+        const on = has(styles, selection[0], selection[1], kind);
+        const name = `${t(label)}${keys && ` (${keys})`}${off.includes(kind) ? ` · ${t("format.notShown", { service: service(via).name })}` : ""}`;
+        return (
+          <button key={kind} data-style={kind} aria-pressed={on} aria-label={name} title={name}
+            onMouseDown={(e) => e.preventDefault()} onClick={() => format(kind)}
+            className={cn("grid size-8 cursor-pointer place-items-center rounded-lg text-muted hover:bg-panel-2 hover:text-fg", on && "bg-panel-2 text-accent hover:text-accent", off.includes(kind) && "opacity-50")}>
+            <Icon className="size-4" />
+          </button>
+        );
+      })}
+      <button data-style-clear aria-label={t("format.clear")} title={t("format.clear")} onMouseDown={(e) => e.preventDefault()} onClick={() => format(null)}
+        className="grid size-8 cursor-pointer place-items-center rounded-lg text-muted hover:bg-panel-2 hover:text-fg">
+        <RemoveFormatting className="size-4" />
+      </button>
+    </div>
+  );
   const listOpen = atCount > 0 || emojiOptions.length > 0;
   const choices = atCount || emojiOptions.length;
   return (
@@ -1393,27 +1433,8 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
           <Button variant="ghost" size="iconSm" className="rounded-full" onClick={() => setFile(null)} aria-label={t("chat.removeFile")}><X className="size-4" /></Button>
         </div>
       )}
-      {can && focused && selection[0] < selection[1] && (
-        <div data-format role="toolbar" aria-label={t("format.styles")} className="mb-2 flex items-center gap-0.5 rounded-xl bg-panel-2 p-1 w-fit">
-          {([["bold", Bold, "format.bold", "Ctrl+B"], ["italic", Italic, "format.italic", "Ctrl+I"], ["underline", Underline, "format.underline", "Ctrl+U"],
-            ["strike", Strikethrough, "format.strike", "Ctrl+Shift+X"],
-            ["code", Code, "format.code", "Ctrl+Shift+M"], ["spoiler", EyeOff, "format.spoiler", ""]] as const).map(([kind, Icon, label, keys]) => {
-            const on = has(styles, selection[0], selection[1], kind);
-            const name = `${t(label)}${keys && ` (${keys})`}${off.includes(kind) ? ` · ${t("format.notShown", { service: service(via).name })}` : ""}`;
-            return (
-              <button key={kind} data-style={kind} aria-pressed={on} aria-label={name} title={name}
-                onMouseDown={(e) => e.preventDefault()} onClick={() => format(kind)}
-                className={cn("grid size-8 place-items-center rounded-lg hover:bg-panel", on && "bg-panel text-accent", off.includes(kind) && "opacity-50")}>
-                <Icon className="size-4" />
-              </button>
-            );
-          })}
-          <button data-style-clear aria-label={t("format.clear")} title={t("format.clear")} onMouseDown={(e) => e.preventDefault()} onClick={() => format(null)}
-            className="grid size-8 place-items-center rounded-lg hover:bg-panel">
-            <RemoveFormatting className="size-4" />
-          </button>
-        </div>
-      )}
+      {selected && touch && formatOpen && bar}
+      {selected && !touch && barAt && createPortal(bar, document.body)}
       <div className="flex items-end gap-2">
         <div data-composer-body className="flex min-w-0 flex-1 items-end rounded-3xl bg-panel-2 pr-1"
           onFocus={(e) => { if (ref.current?.el?.contains(e.target)) setFocused(true); }}
@@ -1566,6 +1587,13 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
             placeholder={!can ? t("chat.cannotSend", { service: service(via).name }) : file ? t("chat.caption") : t("chat.messageVia", { service: viaName })}
             className="max-h-44 py-2.5 pl-2"
           />
+          {selected && touch && (
+            <button data-format-open aria-label={t("format.styles")} title={t("format.styles")} aria-pressed={formatOpen}
+              onMouseDown={(e) => e.preventDefault()} onClick={() => setFormatOpen((o) => !o)}
+              className={cn("mb-1 grid size-9 shrink-0 place-items-center rounded-full text-muted hover:bg-panel hover:text-fg", formatOpen && "bg-panel text-accent")}>
+              <ALargeSmall className="size-5" />
+            </button>
+          )}
           {can && (
             <Popover.Root open={emojiOpen} onOpenChange={setEmojiOpen}>
               <Popover.Trigger asChild>

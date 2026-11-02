@@ -10,6 +10,8 @@ export type FieldHandle = {
   readonly selectionStart: number;
   readonly selectionEnd: number;
   setSelectionRange: (start: number, end: number) => void;
+  /** Where a place of the text is on the screen (its line's box), null where it cannot say. */
+  rectAt: (at: number) => DOMRect | null;
 };
 
 /** A text and its styles, with where the caret is: what undo brings back. */
@@ -158,6 +160,16 @@ export const RichField = forwardRef<FieldHandle, Props>(function RichField(
     get selectionStart() { return selection()[0]; },
     get selectionEnd() { return selection()[1]; },
     setSelectionRange: (start: number, end: number) => select(start, end),
+    rectAt: (at: number) => {
+      const el = div.current;
+      if (!el) return null;
+      const [node, offset] = placeOf(el, at);
+      const r = document.createRange();
+      r.setStart(node, offset);
+      r.setEnd(node, offset);
+      const box = r.getClientRects()[0] ?? (node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element))?.getBoundingClientRect();
+      return box ?? null;
+    },
   }));
 
   // the text as its styles show it, written anew where it is not so already (not while a word is

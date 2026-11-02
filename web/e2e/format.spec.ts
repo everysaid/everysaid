@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { signedIn } from "./demo";
 
 // Styles in the composer, the same whatever service it goes to: a pair of marks typed at the edges
@@ -26,6 +26,15 @@ async function select(field: Locator, start: number, end: number) {
 }
 
 const styled = (field: Locator, kind: string) => field.locator(`[data-k~="${kind}"]`);
+
+/** A button of the styles' bar: on a touch screen, the bar asked for first (Aa). */
+async function styleButton(page: Page, which: string): Promise<Locator> {
+  const bar = page.locator("[data-format]");
+  const aa = page.locator("[data-format-open]");
+  if (!(await bar.isVisible()) && (await aa.isVisible())) await aa.click();
+  await expect(bar).toBeVisible();
+  return bar.locator(which);
+}
 
 test("styles in the composer: marks turned, the menu, a style taken off in part, undo, and what goes", async ({ page }, info) => {
   await signedIn(page, info.project.name);
@@ -66,14 +75,21 @@ test("styles in the composer: marks turned, the menu, a style taken off in part,
   await field.fill("");
   await field.pressSequentially("hello world");
   await select(field, 2, 4);
-  await page.locator('[data-format] [data-style="italic"]').click();
+  if (!(await page.locator("[data-format-open]").isVisible())) {   // with a mouse: above where the selection starts, nothing moved
+    const top = (await field.boundingBox())!.y;
+    await expect(page.locator("[data-format]")).toBeVisible();
+    const bar = (await page.locator("[data-format]").boundingBox())!;
+    expect(bar.y + bar.height).toBeLessThanOrEqual(top + 4);
+    expect((await field.boundingBox())!.y).toBe(top);
+  }
+  await (await styleButton(page, '[data-style="italic"]')).click();
   await expect(styled(field, "italic")).toHaveText("ll");
   await select(field, 0, 11);
-  await page.locator('[data-format] [data-style="bold"]').click();
+  await (await styleButton(page, '[data-style="bold"]')).click();
   await expect(styled(field, "bold")).toHaveText(["he", "ll", "o world"]);
   await select(field, 4, 7);
-  await expect(page.locator('[data-format] [data-style="bold"]')).toHaveAttribute("aria-pressed", "true");
-  await page.locator("[data-format] [data-style-clear]").click();
+  await expect(await styleButton(page, '[data-style="bold"]')).toHaveAttribute("aria-pressed", "true");
+  await (await styleButton(page, "[data-style-clear]")).click();
   await expect(styled(field, "bold")).toHaveText(["he", "ll", "orld"]);
   await expect(styled(field, "italic")).toHaveText("ll");
   // undo: the styles back as they were
@@ -128,7 +144,7 @@ test("styles sent through WhatsApp come back shown, not as marks", async ({ page
   const tag = `${info.project.name}${Date.now()}`;
   await field.pressSequentially(`quiet: *strong* ${tag}`);
   await select(field, 7 + 2, 7 + 4);                       // "ro" of "strong" in italic too: within a word
-  await page.locator('[data-format] [data-style="italic"]').click();
+  await (await styleButton(page, '[data-style="italic"]')).click();
   await page.locator("[data-send]").click();
   await expect(page.locator("[data-stream] [data-sending]")).toHaveCount(0, { timeout: 10000 });
   const bubble = page.locator("[data-stream] [data-cursor]").filter({ hasText: tag }).last();
