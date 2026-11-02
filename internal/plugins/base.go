@@ -149,7 +149,11 @@ type Info struct {
 	CanMention     bool // can name people of a group in what it sends (@)
 	CanMarkRead    bool // can tell the service a chat was read (read receipts), where the user allows
 	CanSendFiles   bool // can send a file with a caption
-	CanReact       bool // can put the user's reaction on a message, change it and take it back
+	// Styles: the kinds of Style its service shows in a text sent; StyleMarks: written in the text
+	// as WhatsApp's marks ("*bold*", MarkStyles), where it is not a StyledSender.
+	Styles     []string
+	StyleMarks bool
+	CanReact   bool // can put the user's reaction on a message, change it and take it back
 	// Reactions: the emoji it can put, the service's own first (its quick ones); nil with CanReact,
 	// any emoji. FreeReactions: any emoji besides these.
 	Reactions     []string

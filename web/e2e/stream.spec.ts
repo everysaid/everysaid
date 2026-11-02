@@ -20,7 +20,7 @@ const up = async (page: Page, px = 1500) => {
   await page.waitForTimeout(500);
 };
 const inStream = (page: Page, text: string) => page.locator("[data-stream]").getByText(text, { exact: true });
-const field = (page: Page) => page.locator("[data-composer-body] textarea");
+const field = (page: Page) => page.locator("[data-composer-field]");
 const incoming = (page: Page, text: string, service?: string) =>
   page.request.post("/api/demo/incoming", { data: { chat, text, service }, headers: { "X-Everysaid": "1" } });
 const row = (page: Page, text: string) => page.locator("[data-stream] [id^=m]", { has: page.getByText(text, { exact: true }) });
@@ -54,11 +54,11 @@ test("at the end, sending: it shows at once, once, and the chat stays at its end
   const words = `quiet: at the end ${Date.now()}`;
   await send(page, words, phone);
   await expect(inStream(page, words)).toBeVisible();
-  await expect(field(page)).toHaveValue("");
+  await expect(field(page)).toHaveText("");
   await expect(page.locator("[data-stream] [data-sending]")).toHaveCount(0, { timeout: 10000 });
   await expect(inStream(page, words)).toHaveCount(1);
   expect(await gap(page)).toBeLessThan(40);
-  if (!phone) expect(await page.evaluate(() => document.activeElement?.tagName)).toBe("TEXTAREA");
+  if (!phone) await expect(field(page)).toBeFocused();
 });
 
 test("the message in before the sending says done: shown once", async ({ page }, info) => {
@@ -105,7 +105,7 @@ test("typing while it sends: the new text is kept, the sent one shows once", asy
   await send(page, words, info.project.name === "mobile");
   await field(page).pressSequentially("the next one");
   await expect(page.locator("[data-stream] [data-sending]")).toHaveCount(0, { timeout: 10000 });
-  await expect(field(page)).toHaveValue("the next one");
+  await expect(field(page)).toHaveText("the next one");
   await expect(inStream(page, words)).toHaveCount(1);
 });
 

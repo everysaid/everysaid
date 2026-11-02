@@ -23,7 +23,7 @@ test("a sending whose answer is lost: asked again, sent once", async ({ page }, 
   await page.goto(`/chat/${chat}`);
   await sendBy(page, service);
   const text = `quiet: lost answer ${info.project.name} ${Date.now()}`;
-  await page.locator("[data-composer-body] textarea").fill(text);
+  await page.locator("[data-composer-field]").fill(text);
   await page.locator("[data-send]").click();
   const stream = page.locator("[data-stream]");
   await expect(stream.getByText(text, { exact: true })).toBeVisible();
@@ -45,7 +45,7 @@ test("two sendings answered in the other order: in the order sent", async ({ pag
   });
   await page.goto(`/chat/${chat}`);
   await sendBy(page, service);
-  const field = page.locator("[data-composer-body] textarea");
+  const field = page.locator("[data-composer-field]");
   const stamp = Date.now();
   const one = `quiet: first ${info.project.name} ${stamp}`, two = `quiet: second ${info.project.name} ${stamp}`;
   await field.fill(one);
@@ -90,7 +90,7 @@ test("sent, the next page not had: not said as failed", async ({ page }, info) =
   await page.route("**/api/chats/*/send", async (route) => { await route.continue(); sent = true; });
   await page.route("**/api/chats/*/stream?*", (route) => (sent ? route.abort() : route.continue()));
   const text = `quiet: then no page ${info.project.name} ${Date.now()}`;
-  await page.locator("[data-composer-body] textarea").fill(text);
+  await page.locator("[data-composer-field]").fill(text);
   await page.locator("[data-send]").click();
   await expect(page.locator("[data-stream]").getByText(text, { exact: true })).toBeVisible();
   await page.waitForTimeout(2000);

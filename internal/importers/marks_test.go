@@ -68,7 +68,8 @@ func telegramDB(t *testing.T, path string) *sql.DB {
 		{tgGroup, 1, M{"_": "Message", "id": 1, "message": text, "from_id": M{"user_id": tgBob},
 			"entities": []M{{"_": "MessageEntityMention", "offset": 6, "length": 8},
 				{"_": "MessageEntityMentionName", "offset": 19, "length": 3, "user_id": tgBob},
-				{"_": "MessageEntityBold", "offset": 0, "length": 2}}}},
+				{"_": "MessageEntityBold", "offset": 0, "length": 2},
+				{"_": "MessageEntityTextUrl", "offset": 15, "length": 3, "url": "https://x.org"}}}},
 		{tgGroup, 2, M{"_": "Message", "id": 2, "message": "from Maria", "from_id": M{"user_id": tgMaria}}},
 		{tgGroup, 3, M{"_": "Message", "id": 3, "message": "anonymous admin", "from_id": M{"channel_id": 77}}},
 		{tgMaria, 10, M{"_": "Message", "id": 10, "message": "mine 1", "out": true}},
@@ -111,6 +112,11 @@ func TestTelegramMentionsMembersAndReads(t *testing.T) {
 		"JOIN message m ON m.id = n.message_id WHERE m.conversation_id = ? ORDER BY n.token", group), "value", "token")
 	if want := [][2]any{{"+15557770001", "@maria_k"}, {fmt.Sprint(tgBob), "Bob"}}; !reflect.DeepEqual(named, want) {
 		t.Fatalf("mentions %v", named)
+	}
+	// its styles, in UTF-16 units as Telegram gives them; a mention is not one
+	first, _ := a.MessageByKey("telegram", "1", group)
+	if got, want := a.StylesOf(first), []archive.Style{{Start: 0, Length: 2, Kind: "bold"}, {Start: 15, Length: 3, Kind: "link", URL: "https://x.org"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("styles %+v", got)
 	}
 	members := db.Strs(a.Tx(), "SELECT a.value FROM conversation_member cm JOIN address a ON a.id = cm.address_id "+
 		"WHERE cm.conversation_id = ? ORDER BY a.value", group)

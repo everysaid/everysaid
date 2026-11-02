@@ -19,30 +19,30 @@ test("emoticons turn into emoji; a ':' finds emoji by name", async ({ page }, in
   });
   test.skip(!chat, "no chat that can send where it was last active");
   await page.goto(`/chat/${chat}`);
-  const box = page.locator("[data-composer-body] textarea");
+  const box = page.locator("[data-composer-field]");
   await box.click();
   await box.fill("");
 
   await box.pressSequentially("hi :) and :-P.");
-  await expect(box).toHaveValue("hi 🙂 and 😛.");
+  await expect(box).toHaveText("hi 🙂 and 😛.");
   await box.press("Backspace");                                    // right after: back as typed
-  await expect(box).toHaveValue("hi 🙂 and :-P");
+  await expect(box).toHaveText("hi 🙂 and :-P");
   await box.pressSequentially(" ok");
-  await expect(box).toHaveValue("hi 🙂 and :-P ok");                // and not turned again
+  await expect(box).toHaveText("hi 🙂 and :-P ok");                // and not turned again
 
   await box.fill("");
   await box.pressSequentially("at 10:30 see http://x.org/a :D ");   // only one standing alone
-  await expect(box).toHaveValue("at 10:30 see http://x.org/a 😄 ");
+  await expect(box).toHaveText("at 10:30 see http://x.org/a 😄 ");
 
   await box.fill("");
   await box.pressSequentially("so :jo");
   const list = page.locator("[data-emoji-list]");
   await expect(list.locator('[data-emoji-suggestion="😂"]')).toBeVisible();
   await box.press("Enter");                                        // the list's, not sending
-  await expect(box).toHaveValue("so 😂");
+  await expect(box).toHaveText("so 😂");
   await expect(list).toHaveCount(0);
   await box.pressSequentially(" and :heart:");
-  await expect(box).toHaveValue("so 😂 and ❤️");
+  await expect(box).toHaveText("so 😂 and ❤️");
   await box.pressSequentially(" :ro");
   await expect(list).toBeVisible();
   await box.press("Escape");
@@ -64,7 +64,7 @@ test("emoticons turn into emoji; a ':' finds emoji by name", async ({ page }, in
     await page.reload();
     await box.click();
     await box.pressSequentially("hi :) ");
-    await expect(box).toHaveValue("hi :) ");
+    await expect(box).toHaveText("hi :) ");
   } finally {
     await set(true);
     await box.fill("");

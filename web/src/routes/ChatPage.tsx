@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import * as Popover from "@radix-ui/react-popover";
-import { ArrowDown, ArrowLeft, BellOff, CalendarDays, Check, ChevronDown, ChevronRight, CornerUpLeft, Archive, ArchiveRestore, FileText, Info, Lock, MoreVertical, Paperclip, Pencil, Pin, PinOff, Search, SendHorizontal, Smile, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, BellOff, Bold, CalendarDays, Check, ChevronDown, ChevronRight, Code, CornerUpLeft, Archive, ArchiveRestore, EyeOff, FileText, Info, Italic, Lock, MoreVertical, Paperclip, Pencil, Pin, PinOff, RemoveFormatting, Search, SendHorizontal, Smile, Strikethrough, Underline, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError, qs, type Attachment, type ChatDetail, type Local, type Member, type MessageItem, type StreamItem, type StreamPage } from "@/lib/api";
 import { useBack } from "@/lib/back";
@@ -16,7 +16,8 @@ import { service } from "@/lib/services";
 import { accountShort } from "@/lib/accounts";
 import { cn } from "@/lib/utils";
 import { chatRoute } from "@/router";
-import { Avatar, Button, Center, Dialog, IconButton, Menu, MenuContent, MenuItem, MenuSub, MenuSubContent, MenuSubTrigger, MenuTrigger, ServiceBadge, ServiceIcon, Spinner, Textarea } from "@/components/ui";
+import { Avatar, Button, Center, Dialog, IconButton, Menu, MenuContent, MenuItem, MenuSub, MenuSubContent, MenuSubTrigger, MenuTrigger, ServiceBadge, ServiceIcon, Spinner } from "@/components/ui";
+import { RichField, type Doc, type FieldHandle } from "@/components/RichField";
 import { Bubble, CallLine, SystemLine, deleteLabel, type DeleteFor } from "@/components/Message";
 import { Lightbox, type LightboxItem } from "@/components/Lightbox";
 import { ChatInfo } from "@/components/ChatInfo";
@@ -29,6 +30,7 @@ import { byCode, emoticonAt, ENDS, findEmoji, shortcodes } from "@/lib/emoji";
 import { dropUnsent, flushUnsent, flying, isFlying, keepUnsent, sendUnsent, unreached, useKept, useUnsent, type Kept, type Unsent, type Went } from "@/lib/outbox";
 import { avatarUrl } from "@/components/ChatList";
 import { isFileLink, pastedFile } from "@/lib/clip";
+import { clear, follow, has, inCharacters, KINDS, marked, tidy, toggle, type Kind, type Style } from "@/lib/styles";
 
 const START = 1_000_000_000;
 const PAGE = 80;
@@ -189,7 +191,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   const answer = useCallback((m: MessageItem) => {
     setEditing(null);
     setReplyTo(m);
-    requestAnimationFrame(() => (document.querySelector("[data-composer-body] textarea") as HTMLElement | null)?.focus());
+    requestAnimationFrame(() => (document.querySelector("[data-composer-field]") as HTMLElement | null)?.focus());
   }, []);
 
   // what is done to a message shows at once; the service's answer then comes in its place (or it
@@ -221,9 +223,10 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   const startEdit = useCallback((m: MessageItem) => {
     setReplyTo(null);
     setEditing(m);
-    requestAnimationFrame(() => (document.querySelector("[data-composer-body] textarea") as HTMLElement | null)?.focus());
+    requestAnimationFrame(() => (document.querySelector("[data-composer-field]") as HTMLElement | null)?.focus());
   }, []);
-  const edit = useCallback((m: MessageItem, text: string) => act(m, () => api.post(`/api/messages/${m.id}/edit`, { text }), (i) => ({ ...i, text, edited: true })), [act]);
+  const edit = useCallback((m: MessageItem, text: string, styles: Style[]) => act(m, () => api.post(`/api/messages/${m.id}/edit`, { text, styles: styles.length ? styles : undefined }),
+    (i) => ({ ...i, text, edited: true })), [act]);
   const remove = useCallback((m: MessageItem, forMe: boolean) => act(m, () => api.post(`/api/messages/${m.id}/delete`, forMe ? { for_me: true } : {}),
     (i) => ({ ...i, deleted: true })), [act]);
 
@@ -433,7 +436,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
   // one); it is replaced by itself when it arrives, or by what the answer says went, or marked as
   // not sent
   const send = useCallback(async (body: string, service: string | null, answered: MessageItem | null, mentions: Mentioned[], file: File | null,
-    conversationId: number | null, animated = false) => {
+    conversationId: number | null, animated = false, styles: Style[] = []) => {
     if (hasNewer) navigate({ to: "/chat/$chatId", params: { chatId }, search: { hide } });
     setNewFrom(null);                                  // answered: what was new is seen
     const id = -Date.now() - Math.random();
@@ -449,7 +452,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
     // kept on this device until the server has it: if it cannot be reached, it waits there
     const unsent: Unsent = { id: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`, chatId, text: body,
       service: answered ? answered.service : service, conversationId: answered ? null : conversationId, replyTo: answered?.id ?? null,
-      mentions: mentions.map((m) => ({ start: m.start, length: m.length, address_id: m.address_id })),
+      mentions: mentions.map((m) => ({ start: m.start, length: m.length, address_id: m.address_id })), styles,
       file, fileName: file?.name ?? null, animated, createdAt: Date.now(), state: "waiting", error: null };
     placed.current.add(unsent.id);
     flying(unsent.id, true);
@@ -458,7 +461,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       type: "message", id, ts: Date.now(), cursor: `tmp:${id}`, service: service ?? "", conversation_id: 0, outgoing: true,
       kind, subtype: animated ? "gif" : null, text: body, sender_id: null, sender: null, reply_to: null, reply_text: null, edited: false,
       deleted: false, forwarded: false, starred: false, status: "sending", location: null, reactions: [], attachments: [],
-      loose: mentions.length > 0 || !!file, local, outbox: unsent.id,
+      loose: mentions.length > 0 || styles.length > 0 || !!file, local, outbox: unsent.id,
       reply: answered ? { id: answered.id, text: answered.text ?? "", outgoing: answered.outgoing, sender: answered.sender, kind: answered.kind } : undefined,
     }]);
     try {
@@ -823,6 +826,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
             findable={!!detail.data.findable} reach={detail.data.reach ?? {}} replyable={detail.data.replyable} missing={detail.data.unsendable}
             accounts={detail.data.accounts ?? []}
             mentionable={isGroup ? detail.data.mentionable ?? [] : []} fileable={detail.data.fileable ?? []} members={detail.data.members ?? []}
+            carries={detail.data.styles ?? {}}
             chatId={chatId} onSend={send} take={take} replyTo={replyTo} onCancelReply={() => setReplyTo(null)}
             editing={editing} onEdit={edit} onCancelEdit={() => setEditing(null)}
             preferred={(!hasNewer && [...items].reverse().find((i) => i.type === "message")?.service) || detail.data.last_service} />
@@ -984,29 +988,35 @@ type Taker = { ok: () => boolean; put: (f: File) => void };
  * active, the way to answer until the user picks another. One it cannot send through still shows,
  * closed, with a lock for Send. accounts: the conversations a message may go to (a person's handles,
  * the groups merged into one); a service with more than one opens a menu of them, by name, the last
- * active picked until the user picks another. */
-function Composer({ chatId, services, sendable, replyable, mentionable, fileable, members, missing, preferred, findable, reach, accounts, onSend, take, replyTo, onCancelReply, editing, onEdit, onCancelEdit }: {
+ * active picked until the user picks another. carries: the styles a text sent (or edited) shows, by
+ * service; the text keeps all it was given whatever service it goes to, those that one does not
+ * show marked so. */
+function Composer({ chatId, services, sendable, replyable, mentionable, fileable, members, missing, preferred, findable, reach, accounts, onSend, take, replyTo, onCancelReply, editing, onEdit, onCancelEdit, carries }: {
   chatId: string; services: string[]; sendable: string[]; replyable: string[]; mentionable: string[]; fileable: string[];
+  carries: Record<string, string[]>;
   findable: boolean; reach: Record<string, string>;
   accounts: NonNullable<ChatDetail["accounts"]>;
   members: Member[]; missing: Record<string, string>;
   preferred?: string | null;
   onSend: (text: string, service: string | null, replyTo: MessageItem | null, mentions: Mentioned[], file: File | null, conversationId: number | null,
-    animated?: boolean) => void;
+    animated?: boolean, styles?: Style[]) => void;
   take: React.MutableRefObject<Taker | null>;          // set here: where a dropped or pasted file goes
   replyTo: MessageItem | null; onCancelReply: () => void;
-  editing: MessageItem | null; onEdit: (m: MessageItem, text: string) => void; onCancelEdit: () => void;
+  editing: MessageItem | null; onEdit: (m: MessageItem, text: string, styles: Style[]) => void; onCancelEdit: () => void;
 }) {
   const { t } = useTranslation();
   const settings = useSettings();
   const wide = useWide();
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const [text, setText] = useState(() => draft(chatId));       // what was left unsent here, kept
-  useEffect(() => { if (!editing) keepDraft(chatId, text); }, [chatId, text, editing]);
+  const [doc, setDoc] = useState<Doc>(() => draft(chatId));       // what was left unsent here, kept
+  const { text, styles } = doc;
+  // the text changed by the composer itself: the styles follow it
+  const setText = (next: string) => setDoc((d) => ({ text: next, styles: follow(d.text, next, d.styles) }));
+  useEffect(() => { if (!editing) keepDraft(chatId, text, styles); }, [chatId, text, styles, editing]);
   const [svc, setSvc] = useState<string | null>(null);
   const [conv, setConv] = useState<number | null>(null);      // the handle picked, where the service has more than one
-  const ref = useRef<HTMLTextAreaElement>(null);
+  const ref = useRef<FieldHandle>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const fileOk = useRef(false);                         // a file can go now (known below, at each render)
@@ -1018,7 +1028,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
     take.current = { ok: () => fileOk.current, put };
     const on = (e: ClipboardEvent) => {
       const el = e.target as HTMLElement | null;
-      if (el !== ref.current && el?.closest?.("input, textarea, [contenteditable]")) return;
+      if (!ref.current?.el?.contains(el) && el?.closest?.("input, textarea, [contenteditable]")) return;
       const text = e.clipboardData?.getData("text/plain") ?? "";
       const f = e.clipboardData?.files?.[0];
       if (!isFileLink(text) && (!f || text.trim())) return;
@@ -1038,6 +1048,14 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   // (not turned again where it is)
   const turned = useRef<{ from: number; emoticon: string; emoji: string; end: string } | null>(null);
   const kept = useRef<{ from: number; emoticon: string } | null>(null);
+  // the same for a pair of marks just turned into a style ("*γεια*" bold: a Backspace right after
+  // brings the marks back), and where the one turned back opens (not turned again there)
+  const styled = useRef<{ before: Doc; caret: number; after: string; at: number } | null>(null);
+  const keptMark = useRef<number | null>(null);
+  // styles to put on what is typed next where the caret is (a key pressed with nothing selected)
+  const pending = useRef<{ at: number; kinds: Kind[] } | null>(null);
+  const [selection, setSelection] = useState<[number, number]>([0, 0]);
+  const [focused, setFocused] = useState(false);
   // the caret where the text was changed under it (an emoji in place of what was typed), as soon as the
   // field has the new text (not a frame later: by then more may have been typed)
   const caretTo = useRef<number | null>(null);
@@ -1054,15 +1072,19 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
     window.addEventListener("keydown", off);
     return () => window.removeEventListener("keydown", off);
   }, [replyTo, editing, onCancelReply, onCancelEdit]);
-  // an edit takes the field with the message's text; what was being written comes back after it
-  const before = useRef<string | null>(null);
+  // an edit takes the field with the message's text and styles; what was being written comes back
+  // after it, with its styles
+  const before = useRef<Doc | null>(null);
+  const edited = useRef<Doc | null>(null);           // the edit as it started: sent only if changed
   useEffect(() => {
     if (editing) {
-      if (before.current === null) before.current = text;
-      setText(editing.text ?? "");
+      if (before.current === null) before.current = doc;
+      const t = editing.text ?? "";
+      edited.current = { text: t, styles: tidy(editing.styles ?? [], t.length) };
+      setDoc(edited.current);
       setFile(null);
     } else if (before.current !== null) {
-      setText(before.current);
+      setDoc(before.current);
       before.current = null;
     }
   }, [editing?.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1071,12 +1093,6 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
     setSvc((cur) => ((picked.current || text.trim()) && cur && services.includes(cur) ? cur
       : preferred && services.includes(preferred) ? preferred : services[0] ?? null));
   }, [services.join(), preferred]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 180)}px`;
-  }, [text]);
   const via = editing?.service ?? replyTo?.service ?? svc ?? "";          // an answer goes where the message came from
   const accountsOf = (s: string) => accounts.filter((a) => a.service === s);
   type Account = (typeof accounts)[number];
@@ -1232,20 +1248,68 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   };
   const go = () => {
     const body = finished(text.trim());
-    kept.current = turned.current = null;
+    // the styles of what goes: past the spaces left out before it, and the emoticon turned at its end
+    const lead = text.length - text.trimStart().length;
+    const bodyStyles = follow(text.trim(), body, tidy(styles.map((s) => ({ ...s, start: s.start - lead })), text.trim().length));
+    const sent = inCharacters(body, bodyStyles);
+    kept.current = turned.current = styled.current = keptMark.current = pending.current = null;
     if (editing) {
-      if (body && body !== (editing.text ?? "").trim()) onEdit(editing, body);
+      const was = edited.current;
+      if (body && (body !== was?.text.trim() || JSON.stringify(bodyStyles) !== JSON.stringify(was?.styles))) onEdit(editing, body, sent);
       onCancelEdit();
       ref.current?.focus();
       return;
     }
     if ((!body && !file) || !can || (file && !canFile)) return;
-    setText("");                        // free for the next one at once
+    setDoc({ text: "", styles: [] });   // free for the next one at once
     setFile(null);
     const named = members.filter((m) => m.name && there(m)).map((m) => ({ label: `@${m.name}`, address_id: m.address_id }));
-    onSend(body, svc, replyTo, mentionable.includes(via) ? placeMentions(body, named) : [], file, account?.conversation_id ?? null);
+    onSend(body, svc, replyTo, mentionable.includes(via) ? placeMentions(body, named) : [], file, account?.conversation_id ?? null, false, sent);
     onCancelReply();
     ref.current?.focus();
+  };
+  // the kinds the service it goes to does not show
+  const shows = carries[via] ?? [];
+  const off = KINDS.filter((k) => !shows.includes(k));
+  // a style over what is selected, or off it where all of it has it; with nothing selected, on (or
+  // off) for what is typed next there
+  const format = (kind: Kind | null) => {
+    const el = ref.current;
+    const a = el?.selectionStart ?? selection[0], b = el?.selectionEnd ?? selection[1];
+    if (a === b) {
+      if (!kind) return;
+      const p = pending.current?.at === a ? pending.current.kinds : [];
+      pending.current = { at: a, kinds: p.includes(kind) ? p.filter((k) => k !== kind) : [...p, kind] };
+      return;
+    }
+    styled.current = null;
+    setDoc((d) => ({ ...d, styles: kind ? toggle(d.styles, a, b, kind, d.text.length) : clear(d.styles, a, b, d.text.length) }));
+  };
+  // what the user typed: emoticons and shortcodes turned, a pair of marks just closed at the edges of
+  // words turned into its style, what is typed where a style was asked for (format) given it
+  const typedIn = (next: string, at: number) => {
+    const [turnedText, caretAt] = typed(next, at);
+    let d: Doc = { text: turnedText, styles: follow(text, turnedText, styles) };
+    let c = caretAt;
+    const p = pending.current;
+    pending.current = null;
+    if (p && turnedText.length > text.length && c - (turnedText.length - text.length) === p.at) {
+      for (const k of p.kinds) d = { ...d, styles: toggle(d.styles, p.at, c, k, d.text.length) };   // on, or off what it took from before it
+    }
+    styled.current = null;
+    if (next.length === text.length + 1 && turnedText === next) {
+      const m = marked(d.text, d.styles, c, keptMark.current);
+      if (m) {
+        styled.current = { before: d, caret: c, after: m.text, at: m.caret };
+        d = { text: m.text, styles: m.styles };
+        c = m.caret;
+        pending.current = { at: c, kinds: [m.kind] };   // closed by its mark: what is typed next is not in it
+      }
+    }
+    setDoc(d);
+    setCaret(c);
+    setNoList(false);
+    if (d.text !== next) caretTo.current = c;
   };
   const listOpen = atCount > 0 || emojiOptions.length > 0;
   const choices = atCount || emojiOptions.length;
@@ -1329,8 +1393,31 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
           <Button variant="ghost" size="iconSm" className="rounded-full" onClick={() => setFile(null)} aria-label={t("chat.removeFile")}><X className="size-4" /></Button>
         </div>
       )}
+      {can && focused && selection[0] < selection[1] && (
+        <div data-format role="toolbar" aria-label={t("format.styles")} className="mb-2 flex items-center gap-0.5 rounded-xl bg-panel-2 p-1 w-fit">
+          {([["bold", Bold, "format.bold", "Ctrl+B"], ["italic", Italic, "format.italic", "Ctrl+I"], ["underline", Underline, "format.underline", "Ctrl+U"],
+            ["strike", Strikethrough, "format.strike", "Ctrl+Shift+X"],
+            ["code", Code, "format.code", "Ctrl+Shift+M"], ["spoiler", EyeOff, "format.spoiler", ""]] as const).map(([kind, Icon, label, keys]) => {
+            const on = has(styles, selection[0], selection[1], kind);
+            const name = `${t(label)}${keys && ` (${keys})`}${off.includes(kind) ? ` · ${t("format.notShown", { service: service(via).name })}` : ""}`;
+            return (
+              <button key={kind} data-style={kind} aria-pressed={on} aria-label={name} title={name}
+                onMouseDown={(e) => e.preventDefault()} onClick={() => format(kind)}
+                className={cn("grid size-8 place-items-center rounded-lg hover:bg-panel", on && "bg-panel text-accent", off.includes(kind) && "opacity-50")}>
+                <Icon className="size-4" />
+              </button>
+            );
+          })}
+          <button data-style-clear aria-label={t("format.clear")} title={t("format.clear")} onMouseDown={(e) => e.preventDefault()} onClick={() => format(null)}
+            className="grid size-8 place-items-center rounded-lg hover:bg-panel">
+            <RemoveFormatting className="size-4" />
+          </button>
+        </div>
+      )}
       <div className="flex items-end gap-2">
-        <div data-composer-body className="flex min-w-0 flex-1 items-end rounded-3xl bg-panel-2 pr-1">
+        <div data-composer-body className="flex min-w-0 flex-1 items-end rounded-3xl bg-panel-2 pr-1"
+          onFocus={(e) => { if (ref.current?.el?.contains(e.target)) setFocused(true); }}
+          onBlur={(e) => { if (ref.current?.el?.contains(e.target)) setFocused(false); }}>
           <Menu>
             <MenuTrigger asChild disabled={!!replyTo || !!editing}>
               <button data-via={via} aria-label={t("chat.sendVia")} title={`${t("chat.sendVia")} ${viaName}`}
@@ -1388,22 +1475,18 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
               )}
             </MenuContent>
           </Menu>
-          <Textarea
+          <RichField
             ref={ref}
-            rows={1}
             value={text}
+            styles={styles}
+            off={off}
+            offTitle={t("format.notShown", { service: service(via).name })}
             disabled={!can}                      // nothing to write where it cannot go
             role={listOpen ? "combobox" : undefined}
             aria-expanded={listOpen || undefined}
-            onChange={(e) => {
-              const el = e.target;
-              const [next, at] = typed(el.value, el.selectionStart ?? el.value.length);
-              setText(next);
-              setCaret(at);
-              setNoList(false);
-              if (next !== el.value) caretTo.current = at;
-            }}
-            onSelect={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
+            onText={typedIn}
+            onSelect={(a, b) => { setCaret(a); setSelection([a, b]); }}
+            onRestore={(d, at) => { styled.current = turned.current = null; setDoc(d); setCaret(at); caretTo.current = at; }}
             onKeyDown={(e) => {
               if (gifQuery !== null && !listOpen) {     // "@gif" and words: picked above by the keys, not sent as text
                 if (e.key === "Escape") {
@@ -1438,8 +1521,32 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
                   return;
                 }
               }
+              const el = ref.current!;
+              // a Backspace right after a pair of marks was turned into its style: the marks back, as typed
+              // (not turned again there)
+              const m = styled.current;
+              if (e.key === "Backspace" && m && text === m.after && el.selectionStart === m.at && el.selectionEnd === m.at) {
+                e.preventDefault();
+                keptMark.current = marked(m.before.text, m.before.styles, m.caret, null)?.from ?? null;
+                styled.current = null;
+                setDoc(m.before);
+                setCaret(m.caret);
+                caretTo.current = m.caret;
+                return;
+              }
+              // the keys of the styles (those of Telegram's apps): on what is selected, or on what is typed next
+              if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+                const k = e.key.toLowerCase();
+                const kind: Kind | null | undefined = !e.shiftKey ? ({ b: "bold", i: "italic", u: "underline" } as const)[k as "b" | "i" | "u"]
+                  : ({ x: "strike", m: "code" } as const)[k as "x" | "m"];
+                if (kind) {
+                  e.preventDefault();
+                  format(kind);
+                  return;
+                }
+              }
               // a Backspace right after an emoticon was turned: the emoticon back, as typed (not turned again there)
-              const w = turned.current, el = e.currentTarget;
+              const w = turned.current;
               if (e.key === "Backspace" && w && el.selectionStart === el.selectionEnd
                 && text.slice(w.from, el.selectionStart) === w.emoji + w.end) {
                 e.preventDefault();
@@ -1457,7 +1564,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
               }
             }}
             placeholder={!can ? t("chat.cannotSend", { service: service(via).name }) : file ? t("chat.caption") : t("chat.messageVia", { service: viaName })}
-            className="max-h-44 border-0 bg-transparent py-2.5 pl-2 focus:ring-0 focus-visible:outline-none disabled:cursor-not-allowed"
+            className="max-h-44 py-2.5 pl-2"
           />
           {can && (
             <Popover.Root open={emojiOpen} onOpenChange={setEmojiOpen}>

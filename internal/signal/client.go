@@ -264,17 +264,18 @@ func (c *client) Call(ctx context.Context, cmd string, args map[string]any) (jso
 		}
 	case "edit":
 		var r struct {
-			Chat       chatRef `json:"chat"`
-			TargetTS   uint64  `json:"target_ts"`
-			OriginalTS *uint64 `json:"original_ts"`
-			Text       string  `json:"text"`
+			Chat       chatRef    `json:"chat"`
+			TargetTS   uint64     `json:"target_ts"`
+			OriginalTS *uint64    `json:"original_ts"`
+			Text       string     `json:"text"`
+			Styles     []outStyle `json:"styles"`
 		}
 		if err = json.Unmarshal(raw, &r); err == nil {
 			original := r.TargetTS
 			if r.OriginalTS != nil {
 				original = *r.OriginalTS
 			}
-			result, err = c.edit(ctx, r.Chat, r.TargetTS, original, r.Text)
+			result, err = c.edit(ctx, r.Chat, r.TargetTS, original, r.Text, r.Styles)
 		}
 	case "delete":
 		var r struct {
@@ -1301,6 +1302,7 @@ type sendRequest struct {
 		Text   *string `json:"text"`
 	} `json:"quote"`
 	Mentions    []mentionEv `json:"mentions"`
+	Styles      []outStyle  `json:"styles"`
 	Attachments []struct {
 		Path        string `json:"path"`
 		ContentType string `json:"content_type"`
@@ -1342,6 +1344,23 @@ func (c *client) sendTo(ctx context.Context, cli *signalmeow.Client, chat chatRe
 
 func chatJSON(chat chatRef) M { return M{"kind": chat.Kind, "id": chat.ID} }
 
+// bodyStyles are the styles of a text as Signal names them.
+var bodyStyles = map[string]signalpb.BodyRange_Style{"bold": signalpb.BodyRange_BOLD,
+	"italic": signalpb.BodyRange_ITALIC, "strike": signalpb.BodyRange_STRIKETHROUGH,
+	"code": signalpb.BodyRange_MONOSPACE, "spoiler": signalpb.BodyRange_SPOILER}
+
+// styleRanges are a text's styles as Signal has them.
+func styleRanges(styles []outStyle) []*signalpb.BodyRange {
+	var out []*signalpb.BodyRange
+	for _, x := range styles {
+		if style, ok := bodyStyles[x.Style]; ok {
+			out = append(out, &signalpb.BodyRange{Start: proto.Uint32(uint32(x.Start)),
+				Length: proto.Uint32(uint32(x.Length)), AssociatedValue: &signalpb.BodyRange_Style_{Style: style}})
+		}
+	}
+	return out
+}
+
 func (c *client) send(ctx context.Context, req sendRequest) (any, error) {
 	cli, err := c.online(ctx)
 	if err != nil {
@@ -1360,6 +1379,7 @@ func (c *client) send(ctx context.Context, req sendRequest) (any, error) {
 		dm.BodyRanges = append(dm.BodyRanges, &signalpb.BodyRange{Start: proto.Uint32(uint32(x.Start)),
 			Length: proto.Uint32(uint32(x.Length)), AssociatedValue: &signalpb.BodyRange_MentionAci{MentionAci: x.ACI}})
 	}
+	dm.BodyRanges = append(dm.BodyRanges, styleRanges(req.Styles)...)
 	var local [][]byte
 	for _, a := range req.Attachments {
 		data, err := os.ReadFile(a.Path)
@@ -1456,7 +1476,7 @@ func (c *client) sayBack(cli *signalmeow.Client, chat chatRef, content *signalpb
 // edit gives the owner's message a new text. Signal's edit replaces the whole message, so it is made
 // from the one the store holds (its files and quote kept): the version edited (target), else the
 // first.
-func (c *client) edit(ctx context.Context, chat chatRef, target, original uint64, text string) (any, error) {
+func (c *client) edit(ctx context.Context, chat chatRef, target, original uint64, text string, styles []outStyle) (any, error) {
 	cli, err := c.online(ctx)
 	if err != nil {
 		return nil, err
@@ -1478,8 +1498,9 @@ func (c *client) edit(ctx context.Context, chat chatRef, target, original uint64
 		return nil, refuse("bad_request", "an edit leaves nothing of the message")
 	}
 	ts := now()
-	content := signalmeow.WrapEditMessage(&signalpb.EditMessage{TargetSentTimestamp: proto.Uint64(target),
-		DataMessage: edited(old, text, ts)})
+	dm := edited(old, text, ts)
+	dm.BodyRanges = styleRanges(styles)
+	content := signalmeow.WrapEditMessage(&signalpb.EditMessage{TargetSentTimestamp: proto.Uint64(target), DataMessage: dm})
 	if err := c.sendTo(ctx, cli, chat, content); err != nil {
 		return nil, err
 	}

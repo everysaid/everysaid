@@ -79,21 +79,21 @@ test("@gif and words: GIFs above the text, one sent with a tap, the text gone", 
   await signedIn(page, info.project.name);
   const chat = await sendableChat(page);
   test.skip(!chat, "no chat to send to");
-  const field = page.locator("[data-composer-body] textarea");
+  const field = page.locator("[data-composer-field]");
   await field.fill("");
   await field.pressSequentially("@g");
   await expect(page.locator("[data-command-option='gif']")).toBeVisible();     // among what @ offers
   await field.press("Enter");
-  await expect(field).toHaveValue("@gif ");
+  await expect(field).toHaveText("@gif ");
   await field.pressSequentially("dog");
   const results = page.locator("[data-gif-results]");
   await results.locator(searcherTab).click();                                  // the plugin's (the History comes first)
   await expect(results.locator("[data-gif-option]")).toHaveCount(1);
   await field.press("Enter");                                                  // not sent as text
-  await expect(field).toHaveValue("@gif dog");
+  await expect(field).toHaveText("@gif dog");
   await results.locator("[data-gif-option]").click();
   await lastWentAsGif(page, chat!);
-  await expect(field).toHaveValue("");
+  await expect(field).toHaveText("");
   await expect(results).toHaveCount(0);
 });
 
@@ -101,7 +101,7 @@ test("@gif by keys: a tab a plugin's and one the emoji's, the one chosen last op
   await signedIn(page, info.project.name);
   const chat = await sendableChat(page);
   test.skip(!chat, "no chat to send to");
-  const field = page.locator("[data-composer-body] textarea");
+  const field = page.locator("[data-composer-field]");
   const results = page.locator("[data-gif-results]");
   await field.fill("@gif cat");
   await results.locator(searcherTab).click();
@@ -111,7 +111,7 @@ test("@gif by keys: a tab a plugin's and one the emoji's, the one chosen last op
   await expect(field).toBeFocused();
   await field.press("Enter");                                                  // sent
   await lastWentAsGif(page, chat!);
-  await expect(field).toHaveValue("");
+  await expect(field).toHaveText("");
 
   await field.fill("@gif cat");
   await field.press("Tab");                                                    // the emoji's tab
@@ -120,7 +120,7 @@ test("@gif by keys: a tab a plugin's and one the emoji's, the one chosen last op
   const first = await results.locator("[data-emoji-result]").first().getAttribute("data-emoji-result");
   await field.press("ArrowDown");
   await field.press("Enter");                                                  // the emoji in place of "@gif cat"
-  await expect(field).toHaveValue(first!);
+  await expect(field).toHaveText(first!);
   await expect(results).toHaveCount(0);
 
   await field.fill("@gif dog");                                               // opened at the tab chosen last
@@ -134,7 +134,7 @@ test("@gif's emoji as the button's: all of them by category, ↓ a row down, the
   await signedIn(page, info.project.name);
   const chat = await sendableChat(page);
   test.skip(!chat, "no chat to send to");
-  const field = page.locator("[data-composer-body] textarea");
+  const field = page.locator("[data-composer-field]");
   const results = page.locator("[data-gif-results]");
   await field.fill("@gif ");
   const tabs = results.locator("[data-results-tab]");
@@ -157,7 +157,7 @@ test("@gif's window gives way to what '@' offers with the caret back in '@gif'",
   await signedIn(page, info.project.name);
   const chat = await sendableChat(page);
   test.skip(!chat, "no chat to send to");
-  const field = page.locator("[data-composer-body] textarea");
+  const field = page.locator("[data-composer-field]");
   const results = page.locator("[data-gif-results]");
   await field.fill("");
   await field.pressSequentially("@gif ");

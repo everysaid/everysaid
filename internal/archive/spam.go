@@ -51,7 +51,7 @@ func PurgeSpam(q db.Querier, only []int64) (out Purged) {
 			shas[s] = true
 		}
 		db.Exec(q, "UPDATE message SET reply_to = NULL WHERE reply_to IN "+marks, ids...)
-		for _, t := range []string{"reaction", "mention", "receipt", "attachment", "notice", "link_preview"} {
+		for _, t := range []string{"reaction", "mention", "style", "receipt", "attachment", "notice", "link_preview"} {
 			db.Exec(q, "DELETE FROM "+t+" WHERE message_id IN "+marks, ids...)
 		}
 		db.Exec(q, "DELETE FROM message_fts WHERE rowid IN "+marks, ids...)

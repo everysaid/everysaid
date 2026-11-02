@@ -69,6 +69,7 @@ func (Plugin) Info() *plugins.Info {
 				Help: "A first message to someone found on WhatsApp, only to people in your contacts or in a group with you"},
 		},
 		CanSend: true, CanReply: true, CanMention: true, CanMarkRead: true, CanSendFiles: true,
+		Styles: []string{plugins.Bold, plugins.Italic, plugins.Strike, plugins.Code}, StyleMarks: true,
 		// any emoji, the app's six quick ones first
 		CanReact: true, Reactions: []string{"👍", "❤️", "😂", "😮", "😢", "🙏"}, FreeReactions: true,
 		CanEdit: true, CanDelete: true, CanDeleteForMe: true, EditWindow: editWindow, DeleteWindow: deleteWindow, CanReportSpam: true,

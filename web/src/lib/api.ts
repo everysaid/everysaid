@@ -2,6 +2,7 @@
 // request says the interface's language (X-Lang), in which the server words a source's errors.
 import i18n from "./i18n";
 import type { Notice } from "./notice";
+import type { Style } from "./styles";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -201,6 +202,7 @@ export interface ChatDetail {
   replyable: string[];      // those where an answer to a given message can be sent
   mentionable: string[];    // those where people of a group can be named with @
   fileable: string[];       // those where a file can be sent
+  styles?: Record<string, string[]>;   // the styles a text sent shows, by service (bold, italic, strike, code, spoiler)
   unsendable: Record<string, string>;   // those a source reaches but may not send to now: what it says is missing
   findable?: boolean;       // a person's chat that a source could look for on a service it has none of
   reach?: Record<string, "asking" | "found" | "none" | "failed">;   // what was asked lately, by service: found, a first message can go there
@@ -325,6 +327,7 @@ export interface MessageItem {
   attachments: Attachment[];
   file_coming?: boolean;    // its file not in the archive yet, a source still getting it (shown as on its way)
   mentions?: Mention[];
+  styles?: Style[];         // of its text: bold, a link... (in UTF-16 units, as the text counts)
   receipts?: Receipts | null;
   chat_id?: string;
   chat_title?: string;

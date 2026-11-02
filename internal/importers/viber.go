@@ -280,8 +280,9 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 			return
 		}
 		// Without a token (system events) the row key is all there is.
+		kept, _ := archive.Styled("viber", m.text, nil) // as the archive keeps it, without its marks
 		if m.key == "" && a.Exists("SELECT 1 FROM message WHERE conversation_id = ? AND ts = ? AND key IS NULL AND text IS ? "+
-			"AND service_id = ?", m.conv, m.ts, archive.NullStr(m.text), viberID) {
+			"AND service_id = ?", m.conv, m.ts, archive.NullStr(kept), viberID) {
 			skipped[source]++
 			return
 		}

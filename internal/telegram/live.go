@@ -1172,6 +1172,60 @@ func mentionEntities(c *plugins.Context, cn *conn, text string, mentions []plugi
 	return string(out), entities, nil
 }
 
+// maxEntities is the most a message may have (the server's limit, MAX_USER_ENTITY_COUNT in TDLib).
+const maxEntities = 100
+
+// styleEntities are the styles of a text as Telegram has them in it as written (its mentions as
+// their names, without "@", as mentionEntities writes them), each wholly in another or apart,
+// counted in UTF-16 units; at most room of them.
+func styleEntities(text, written string, mentions []plugins.Mention, styles []plugins.Style, room int) []tg.MessageEntityClass {
+	if len(styles) == 0 || room <= 0 {
+		return nil
+	}
+	runes := []rune(text)
+	var parts []plugins.Replaced
+	for _, m := range mentions {
+		start, end := min(max(m.Start, 0), len(runes)), min(max(m.Start+m.Length, 0), len(runes))
+		if end <= start {
+			continue
+		}
+		n := end - start
+		if runes[start] == '@' {
+			n--
+		}
+		parts = append(parts, plugins.Replaced{Start: start, Length: end - start, Runes: n})
+	}
+	out := []rune(written)
+	var entities []tg.MessageEntityClass
+	for _, s := range plugins.NestStyles(plugins.MoveStyles(plugins.WholeMentions(styles, mentions), parts)) {
+		if s.Start+s.Length > len(out) || len(entities) == room {
+			break
+		}
+		off, n := plugins.UTF16(out, s.Start, s.Length)
+		switch s.Kind {
+		case plugins.Bold:
+			entities = append(entities, &tg.MessageEntityBold{Offset: off, Length: n})
+		case plugins.Italic:
+			entities = append(entities, &tg.MessageEntityItalic{Offset: off, Length: n})
+		case plugins.Underline:
+			entities = append(entities, &tg.MessageEntityUnderline{Offset: off, Length: n})
+		case plugins.Link:
+			entities = append(entities, &tg.MessageEntityTextURL{Offset: off, Length: n, URL: s.URL})
+		case plugins.Strike:
+			entities = append(entities, &tg.MessageEntityStrike{Offset: off, Length: n})
+		case plugins.Spoiler:
+			entities = append(entities, &tg.MessageEntitySpoiler{Offset: off, Length: n})
+		case plugins.Code:
+			if strings.ContainsRune(string(out[s.Start:s.Start+s.Length]), '\n') {
+				entities = append(entities, &tg.MessageEntityPre{Offset: off, Length: n})
+			} else {
+				entities = append(entities, &tg.MessageEntityCode{Offset: off, Length: n})
+			}
+		}
+	}
+	return entities
+}
+
 var imageExt = regexp.MustCompile(`(?i)^\.(png|jpe?g)`)
 
 // maxPhoto is the largest picture Telegram takes as a photo; a larger one goes as a file, as
@@ -1361,7 +1415,7 @@ func fetchEntity(ctx context.Context, cn *conn, peer tg.InputPeerClass) (any, er
 }
 
 func send(ctx context.Context, c *plugins.Context, conv plugins.Conversation, text string, reply *plugins.Reply,
-	mentions []plugins.Mention, file *plugins.File) (any, error) {
+	mentions []plugins.Mention, styles []plugins.Style, file *plugins.File) (any, error) {
 	var out any
 	err := withConn(ctx, func(ctx context.Context, cn *conn) error {
 		chatID, err := strconv.ParseInt(conv.Key, 10, 64)
@@ -1373,11 +1427,14 @@ func send(ctx context.Context, c *plugins.Context, conv plugins.Conversation, te
 			return err
 		}
 		var entities []tg.MessageEntityClass
+		written := text
 		if len(mentions) > 0 {
-			if text, entities, err = mentionEntities(c, cn, text, mentions, conv.ID); err != nil {
+			if written, entities, err = mentionEntities(c, cn, text, mentions, conv.ID); err != nil {
 				return err
 			}
 		}
+		entities = append(entities, styleEntities(text, written, mentions, styles, maxEntities-len(entities))...)
+		text = written
 		replyTo := 0
 		if reply != nil {
 			n, err := strconv.Atoi(reply.Key)

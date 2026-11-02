@@ -413,6 +413,31 @@ func tgMentions(m map[string]any, person *tgPeople) []tgMention {
 	return out
 }
 
+// tgStyleKinds are the entities that style a text, as the archive names them.
+var tgStyleKinds = map[string]string{"MessageEntityBold": "bold", "MessageEntityItalic": "italic",
+	"MessageEntityUnderline": "underline", "MessageEntityStrike": "strike", "MessageEntityCode": "code",
+	"MessageEntityPre": "code", "MessageEntitySpoiler": "spoiler", "MessageEntityTextUrl": "link"}
+
+// tgStyles: how the text is styled (its entities that do; in UTF-16 units, as the archive keeps them).
+func tgStyles(m map[string]any) []archive.Style {
+	var out []archive.Style
+	for _, e := range list(m["entities"]) {
+		em := obj(e)
+		kind, ok := tgStyleKinds[pyStr(em["_"])]
+		if !ok {
+			continue
+		}
+		s := archive.Style{Start: int(toInt(em["offset"])), Length: int(toInt(em["length"])), Kind: kind}
+		if kind == "link" {
+			if s.URL = pyStr(em["url"]); s.URL == "" {
+				continue
+			}
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
 // TelegramReads: how far each chat was read (the store's telegram_chat_read): the owner's reading as the
 // chat's read_until; the other's, in a chat with one person, as receipts of the owner's messages
 // (when, where the live connection saw it happen; else 0, known but not when). chats: only these
@@ -729,6 +754,9 @@ func Telegram(a *archive.Archive, out func(string), opt TelegramOptions) (err er
 			text := ""
 			if truthy(m["message"]) {
 				text = pyStr(m["message"])
+				if x.Text == "" {
+					x.Styles = tgStyles(m)
+				}
 			}
 			a.AddMessage(src, rowKey, archive.Message{Service: "telegram", ConversationID: conv, TS: ts, Outgoing: outgoing,
 				SenderID: senderID, Kind: k.kind, Text: text, Key: fmt.Sprint(mid), Extras: x})
@@ -886,13 +914,14 @@ func telegramChanges(a *archive.Archive, src int64, rowKey string, m map[string]
 	}
 	if truthy(m["edit_date"]) { // edit_hide only hides that it was edited (a bot's, a live location's)
 		k := telegramKindOf(m)
-		var t string // the text as the import makes it: a poll's or a contact's, else the message's
+		var t string // the text as the import makes it: a poll's or a contact's, else the message's (and its styles)
+		var styles []archive.Style
 		if k.text != nil {
 			t = pyStr(k.text)
 		} else if truthy(m["message"]) {
-			t = pyStr(m["message"])
+			t, styles = pyStr(m["message"]), tgStyles(m)
 		}
-		for _, c := range ApplyChange(a, mid, Change{Text: &t, Edited: !truthy(m["edit_hide"])}) {
+		for _, c := range ApplyChange(a, mid, Change{Text: &t, Styles: styles, Edited: !truthy(m["edit_hide"])}) {
 			updated[c]++
 		}
 		// what it is may change too (a picture replaced by a video, a live location moving)

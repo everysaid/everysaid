@@ -185,6 +185,14 @@ CREATE TABLE IF NOT EXISTS mention (
                                         -- or the name itself (Telegram), "@Name" (Viber); NULL: not known
     PRIMARY KEY (message_id, address_id)
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS style (              -- a part of a message's text shown so (bold, a link...)
+    message_id INTEGER NOT NULL REFERENCES message,
+    start INTEGER NOT NULL,             -- where in the text, in UTF-16 units (as Telegram, Signal and browsers count)
+    length INTEGER NOT NULL,
+    kind TEXT NOT NULL,                 -- bold, italic, underline, strike, code, spoiler, link
+    url TEXT,                           -- a link's address
+    PRIMARY KEY (message_id, start, length, kind)
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS receipt (           -- who got and read the owner's messages, where the service says
     message_id INTEGER NOT NULL REFERENCES message,
     address_id INTEGER NOT NULL REFERENCES address,
@@ -391,7 +399,7 @@ CREATE TABLE IF NOT EXISTS analysis (   -- the people the local analysis has rea
 CREATE TABLE IF NOT EXISTS outbox (     -- a message sent from the app that could not go at once, tried again
     id TEXT PRIMARY KEY,                -- the app's own id of the message (server/outbox.go)
     chat TEXT NOT NULL,
-    request TEXT NOT NULL,              -- JSON: text, conversation_id, service, reply_to, mentions, file_name, file_type
+    request TEXT NOT NULL,              -- JSON: text, conversation_id, service, reply_to, mentions, styles, file_name, file_type
     file BLOB,                          -- the file to send, until it has gone
     created_at INTEGER NOT NULL,        -- Unix ms
     state TEXT NOT NULL,                -- queued, sending, sent, failed

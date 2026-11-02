@@ -63,6 +63,7 @@ var info = &plugins.Info{
 	},
 	Actions: []plugins.Action{{ID: "login", Label: "Log in"}},
 	CanSend: true, CanReply: true, CanMention: true, CanMarkRead: true, CanSendFiles: true,
+	Styles:   []string{plugins.Bold, plugins.Italic, plugins.Underline, plugins.Strike, plugins.Code, plugins.Spoiler, plugins.Link},
 	CanReact: true, Reactions: reactions, CanEdit: true, CanDelete: true, CanDeleteForMe: true, CanReportSpam: true,
 	// Telegram's edit_time_limit (its apps offer no edit after it, but in Saved Messages); deleting
 	// for everyone has had no limit in private chats and groups since 2019
@@ -206,7 +207,12 @@ func (Plugin) Live(ctx context.Context, c *plugins.Context) error { return live(
 
 func (Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conversation, text string, reply *plugins.Reply,
 	mentions []plugins.Mention, file *plugins.File) (any, error) {
-	return send(ctx, c, conv, text, reply, mentions, file)
+	return send(ctx, c, conv, text, reply, mentions, nil, file)
+}
+
+func (Plugin) SendStyled(ctx context.Context, c *plugins.Context, conv plugins.Conversation, text string, reply *plugins.Reply,
+	mentions []plugins.Mention, styles []plugins.Style, file *plugins.File) (any, error) {
+	return send(ctx, c, conv, text, reply, mentions, styles, file)
 }
 
 // Find asks Telegram who has each number (contacts.resolvePhone: nothing changes in the account; one

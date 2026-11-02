@@ -213,6 +213,10 @@
    "rows": 1,
    "sha256": "8db471128a00fa8709d1f0d8f8e4667bab41d5aa8ec9b461a0b6ab09e5d36a6f"
   },
+  "style": {
+   "rows": 0,
+   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
   "term": {
    "rows": 201,
    "sha256": "6a13c5b33461d66670414c152d2c1fca7a52d49c2a656759fc647034c95128eb"

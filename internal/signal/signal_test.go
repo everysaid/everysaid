@@ -10,11 +10,13 @@ import (
 	pngenc "image/png"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf16"
 
 	"github.com/zalando/go-keyring"
 
@@ -258,6 +260,23 @@ func TestWithMentions(t *testing.T) {
 	}
 	if text, _ := withMentions("x", []mentionEv{{5, 1, "a"}}, name); text != "x" {
 		t.Fatal("out of range")
+	}
+}
+
+// Styles move with the mentions written by name: "and" after the first, bold over a mention takes
+// all of its name, one out of the text is left out.
+func TestWithStyles(t *testing.T) {
+	name := func(aci string) string { return map[string]string{"a": "Μαρία", "b": "Bob"}[aci] }
+	text := "😀 \uFFFC and \uFFFC"
+	ms := []mentionEv{{3, 1, "a"}, {9, 1, "b"}}
+	got := withStyles(text, []styleEv{{5, 3, "bold"}, {3, 1, "italic"}, {0, 2, "code"}, {20, 2, "bold"}}, ms, name)
+	want := []archive.Style{{Start: 10, Length: 3, Kind: "bold"}, {Start: 3, Length: 6, Kind: "italic"}, {Start: 0, Length: 2, Kind: "code"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%+v", got)
+	}
+	written, _ := withMentions(text, ms, name)
+	if u := utf16.Encode([]rune(written)); string(utf16.Decode(u[10:13])) != "and" || string(utf16.Decode(u[3:9])) != "@Μαρία" {
+		t.Fatalf("%q", written)
 	}
 }
 

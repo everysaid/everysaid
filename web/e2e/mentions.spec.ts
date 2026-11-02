@@ -24,7 +24,7 @@ test("@ names a member, the message gets its ticks and says who read it", async 
   test.skip(!group, "no WhatsApp group the demo can send to");
   await page.goto(`/chat/${group.id}`);
   const member = group.members.find((m: any) => m.services.includes("whatsapp") && m.name);
-  const box = page.locator("[data-composer-body] textarea");
+  const box = page.locator("[data-composer-field]");
   await box.fill("quiet: hi ");
   await box.press("End");
   await box.pressSequentially(`@${member.name.slice(0, 3)}`);
@@ -32,7 +32,7 @@ test("@ names a member, the message gets its ticks and says who read it", async 
   await expect(list).toBeVisible();
   await expect(list.locator("[data-mention-option]", { hasText: member.name })).toBeVisible();
   await list.locator("[data-mention-option]", { hasText: member.name }).click();
-  await expect(box).toHaveValue(`quiet: hi @${member.name} `);
+  await expect(box).toHaveText(`quiet: hi @${member.name} `);
   await expect(list).toHaveCount(0);
   await box.pressSequentially("see you");
   await page.locator("[data-send]").click();
@@ -52,7 +52,7 @@ test("Esc closes the @ list, and a file goes with its caption", async ({ page },
   const group = await whatsappGroup(page);
   test.skip(!group, "no WhatsApp group the demo can send to");
   await page.goto(`/chat/${group.id}`);
-  const box = page.locator("[data-composer-body] textarea");
+  const box = page.locator("[data-composer-field]");
   await box.fill("");
   await box.pressSequentially("@");
   await expect(page.locator("[data-mention-list]")).toBeVisible();
@@ -100,7 +100,7 @@ test("a file dropped on the chat or pasted goes to the composer; one copied from
   await page.getByRole("button", { name: /Αφαίρεση αρχείου|Remove the file/ }).click();
 
   // pasted in the field
-  const box = page.locator("[data-composer-body] textarea");
+  const box = page.locator("[data-composer-field]");
   await box.evaluate((el, d) => el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: d, bubbles: true, cancelable: true })), await files("pasted.png"));
   await expect(page.locator("[data-file]")).toContainText("pasted.png");
   await box.fill("quiet: a pasted dot");
@@ -131,14 +131,14 @@ test("a file dropped on the chat or pasted goes to the composer; one copied from
     await via.click();
     await page.getByRole("menuitem").filter({ has: page.locator(`[data-icon="${other!.service}"]`) }).click();
   }
-  const field = page.locator("[data-composer-body] textarea");
+  const field = page.locator("[data-composer-field]");
   await field.evaluate((el, text) => {
     const d = new DataTransfer();
     d.setData("text/plain", text);
     el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: d, bubbles: true, cancelable: true }));
   }, link);
   await expect(page.locator("[data-file]")).toContainText(".png");
-  await expect(field).toHaveValue("");
+  await expect(field).toHaveText("");
 });
 
 test("a mention in what arrived shows the person's name, a link to them", async ({ page }, info) => {

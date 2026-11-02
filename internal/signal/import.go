@@ -290,6 +290,46 @@ func withMentions(text string, ms []mentionEv, name func(string) string) (string
 	return string(utf16.Decode(u)), toks
 }
 
+// withStyles are a text's styles where they are once its mentions are written by name (as
+// withMentions writes them), as the archive keeps them.
+func withStyles(text string, ss []styleEv, ms []mentionEv, name func(string) string) []archive.Style {
+	if len(ss) == 0 {
+		return nil
+	}
+	size := len(utf16.Encode([]rune(text)))
+	var out []archive.Style
+	for _, s := range ss {
+		if s.Start < 0 || s.Length <= 0 || s.Start+s.Length > size {
+			continue
+		}
+		out = append(out, archive.Style{Start: s.Start, Length: s.Length, Kind: s.Style})
+	}
+	sorted := append([]mentionEv(nil), ms...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Start > sorted[j].Start })
+	for _, m := range sorted { // from the end, as withMentions: the places before stay as they are
+		if m.Start < 0 || m.Length <= 0 || m.Start+m.Length > size {
+			continue
+		}
+		end, n := m.Start+m.Length, len(utf16.Encode([]rune("@"+name(m.ACI))))
+		at := func(p int, isEnd bool) int {
+			switch {
+			case p >= end:
+				return p + n - m.Length
+			case p > m.Start && isEnd:
+				return m.Start + n
+			case p > m.Start:
+				return m.Start
+			}
+			return p
+		}
+		for i, s := range out {
+			start, stop := at(s.Start, false), at(s.Start+s.Length, true)
+			out[i].Start, out[i].Length = start, stop-start
+		}
+	}
+	return out
+}
+
 // asEdited puts an edit's content (its event, "" for none) into a message's event; it says whether
 // there was one.
 func asEdited(e *event, edit string) bool {
@@ -297,7 +337,7 @@ func asEdited(e *event, edit string) bool {
 	if edit == "" || json.Unmarshal([]byte(edit), &ed) != nil {
 		return false
 	}
-	e.Text, e.Mentions = ed.Text, ed.Mentions
+	e.Text, e.Mentions, e.Styles = ed.Text, ed.Mentions, ed.Styles
 	if len(ed.Attachments) > 0 {
 		e.Attachments = ed.Attachments
 	}
@@ -656,6 +696,9 @@ func Import(a *archive.Archive, s *Store, mediaDir string, iid int64, skip map[s
 		if x.Preview, f = previewOf(e, mediaDir); f != "" {
 			previewFiles = append(previewFiles, f)
 		}
+		if x.Text == "" {
+			x.Styles = withStyles(text, e.Styles, e.Mentions, p.mentionName)
+		}
 		text, toks := withMentions(text, e.Mentions, p.mentionName)
 		var sender int64
 		if !r.outgoing {
@@ -813,11 +856,12 @@ func changes(a *archive.Archive, s *Store, p *people, own string, ownSet map[arc
 			continue
 		}
 		_, x, text := describe(e)
+		styles := withStyles(text, e.Styles, e.Mentions, p.mentionName)
 		text, toks := withMentions(text, e.Mentions, p.mentionName)
 		if x.Text != "" {
-			text = x.Text
+			text, styles = x.Text, nil
 		}
-		changed := importers.ApplyChange(a, mid, importers.Change{Text: &text, Edited: true})
+		changed := importers.ApplyChange(a, mid, importers.Change{Text: &text, Styles: styles, Edited: true})
 		if slices.Contains(changed, "text") {
 			a.Exec("DELETE FROM mention WHERE message_id = ?", mid)
 			for _, t := range toks {

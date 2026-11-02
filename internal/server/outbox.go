@@ -53,6 +53,7 @@ type outboxRequest struct {
 	Service        string            `json:"service,omitempty"`
 	ReplyTo        int64             `json:"reply_to,omitempty"`
 	Mentions       []plugins.Mention `json:"mentions,omitempty"`
+	Styles         []plugins.Style   `json:"styles,omitempty"`
 	FileName       string            `json:"file_name,omitempty"`
 	FileType       string            `json:"file_type,omitempty"`
 	Animated       bool              `json:"animated,omitempty"`
@@ -128,7 +129,8 @@ func (h *Host) SendKept(ctx context.Context, chatID, id string, r SendRequest) (
 		}
 		db.Exec(o, "DELETE FROM outbox WHERE id = ? AND state = 'failed'", id) // tried again by the user
 	}
-	kept := outboxRequest{Text: r.Text, ConversationID: r.ConversationID, Service: r.Service, ReplyTo: r.ReplyTo, Mentions: r.Mentions}
+	kept := outboxRequest{Text: r.Text, ConversationID: r.ConversationID, Service: r.Service, ReplyTo: r.ReplyTo, Mentions: r.Mentions,
+		Styles: r.Styles}
 	var file []byte
 	if r.File != nil {
 		kept.FileName, kept.FileType, kept.Animated, file = r.File.Filename, r.File.MimeType, r.File.Animated, r.File.Data
@@ -308,7 +310,8 @@ func (h *Host) sendKept(ctx context.Context) {
 			waiting[r.chat] = true
 			continue
 		}
-		req := SendRequest{Text: k.Text, ConversationID: k.ConversationID, Service: k.Service, ReplyTo: k.ReplyTo, Mentions: k.Mentions}
+		req := SendRequest{Text: k.Text, ConversationID: k.ConversationID, Service: k.Service, ReplyTo: k.ReplyTo, Mentions: k.Mentions,
+			Styles: k.Styles}
 		if k.FileName != "" || len(r.file) > 0 {
 			req.File = &plugins.File{Data: r.file, Filename: k.FileName, MimeType: k.FileType, Animated: k.Animated}
 		}

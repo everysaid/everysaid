@@ -250,9 +250,11 @@ var senderInfo = &plugins.Info{
 	CanMention:   true,
 	CanMarkRead:  true,
 	CanSendFiles: true,
-	CanReact:     true, // any emoji
-	CanEdit:      true,
-	CanDelete:    true,
+	// as the services with the most, carried as given
+	Styles:    plugins.StyleKinds,
+	CanReact:  true, // any emoji
+	CanEdit:   true,
+	CanDelete: true,
 	// any message, for the user alone
 	CanDeleteForMe: true,
 }
@@ -346,6 +348,51 @@ func after(c *plugins.Context, d time.Duration, fn func() error) {
 			c.Logf("%v", err)
 		}
 	})
+}
+
+// SendStyled sends with the text's styles as the service has them: written as marks where its apps
+// read them so (WhatsApp, Viber: the archive reads them back), else as ranges kept beside the text.
+func (s Sender) SendStyled(ctx context.Context, c *plugins.Context, conv plugins.Conversation, text string, reply *plugins.Reply,
+	mentions []plugins.Mention, styles []plugins.Style, file *plugins.File) (any, error) {
+	if archive.Marked[conv.Service] {
+		text, mentions = plugins.MarkStyles(text, mentions, styles)
+		return s.Send(ctx, c, conv, text, reply, mentions, file)
+	}
+	out, err := s.Send(ctx, c, conv, text, reply, mentions, file)
+	if sent, ok := out.(plugins.Sent); ok && err == nil {
+		err = change(c, func(a *archive.Archive) {
+			for _, id := range sent.IDs {
+				a.SetStyles(id, unitStyles(text, styles))
+			}
+		})
+	}
+	return out, err
+}
+
+// EditStyled changes the text with its styles, as SendStyled sends them.
+func (s Sender) EditStyled(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref, text string,
+	styles []plugins.Style) error {
+	kept := unitStyles(text, styles)
+	if archive.Marked[conv.Service] { // read back from the marks by the archive
+		text, _ = plugins.MarkStyles(text, nil, styles)
+		kept = nil
+	}
+	return change(c, func(a *archive.Archive) {
+		importers.ApplyChange(a, msg.ID, importers.Change{Text: &text, Styles: kept, Edited: true})
+	})
+}
+
+// unitStyles are styles (in characters) as the archive keeps them, in UTF-16 units.
+func unitStyles(text string, styles []plugins.Style) []archive.Style {
+	runes := []rune(text)
+	var out []archive.Style
+	for _, s := range styles {
+		if s.Start+s.Length <= len(runes) {
+			off, n := plugins.UTF16(runes, s.Start, s.Length)
+			out = append(out, archive.Style{Start: off, Length: n, Kind: s.Kind, URL: s.URL})
+		}
+	}
+	return out
 }
 
 // busyOnce: the "busy:" texts refused once already.

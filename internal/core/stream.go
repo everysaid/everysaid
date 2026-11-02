@@ -321,7 +321,7 @@ func Hydrate(s *Store, rows []Item, chat *Chat) []M {
 				"pinned":    pinned.Valid && (pinned.Int64 < 0 || pinned.Int64 > now), // pinned now
 				"keyed":     keyed,                                                    // the service's own id is known: an answer to it can be sent
 				"location":  location,
-				"reactions": []M{}, "attachments": []M{}, "mentions": []M{}, "receipts": nil, "notice": nil,
+				"reactions": []M{}, "attachments": []M{}, "mentions": []M{}, "styles": []M{}, "receipts": nil, "notice": nil,
 				"preview": nil,
 			}
 			ex[mid] = &extra{replyTo: replyTo, conv: conv, ts: ts, outgoing: outgoing}
@@ -393,6 +393,20 @@ func Hydrate(s *Store, rows []Item, chat *Chat) []M {
 					scan(&mid, &who, &token)
 					msgs[mid]["mentions"] = append(msgs[mid]["mentions"].([]M), mentionOf(ppl, who, token))
 				})
+		}
+		if tbl["style"] { // in UTF-16 units of the text, as the browser counts
+			db.Each(q, "SELECT message_id, start, length, kind, url FROM style WHERE message_id IN ("+marks+") "+
+				"ORDER BY message_id, start, length DESC, kind", db.Args(mids), func(scan func(...any)) {
+				var mid, start, length int64
+				var kind string
+				var url sql.NullString
+				scan(&mid, &start, &length, &kind, &url)
+				st := M{"start": start, "length": length, "kind": kind}
+				if url.Valid {
+					st["url"] = url.String
+				}
+				msgs[mid]["styles"] = append(msgs[mid]["styles"].([]M), st)
+			})
 		}
 		if tbl["notice"] {
 			db.Each(q, "SELECT message_id, code, args FROM notice WHERE message_id IN ("+marks+")", db.Args(mids),

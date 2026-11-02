@@ -26,7 +26,7 @@ test("a reaction, an edit and a deletion of the user's own message", async ({ pa
     await page.getByRole("menuitem").filter({ has: page.locator(`[data-icon="${chat!.service}"]`) }).click();
   }
   const text = `quiet: to be changed ${info.project.name} ${Date.now()}`;
-  await page.locator("[data-composer-body] textarea").fill(text);
+  await page.locator("[data-composer-field]").fill(text);
   await page.locator("[data-send]").click();
   const bubble = page.locator('[id^="m"]').filter({ hasText: text }).last();
   await expect(bubble).toBeVisible();
@@ -46,26 +46,26 @@ test("a reaction, an edit and a deletion of the user's own message", async ({ pa
   await expect(bubble.locator("[data-reaction]")).toHaveCount(0);
 
   // an emoji written where the caret is, from the composer's picker (the one used lately first)
-  const field = page.locator("[data-composer-body] textarea");
+  const field = page.locator("[data-composer-field]");
   await field.fill("hi ");
   await page.locator("[data-emoji]").click();
   await expect(page.locator("[data-emoji-recent] button").first()).toHaveText("🦄");
   await page.locator("[data-emoji-recent] button").first().click();
-  await expect(field).toHaveValue("hi 🦄");
+  await expect(field).toHaveText("hi 🦄");
   await page.keyboard.press("Escape");
   await field.fill("");
 
   // an edit: the composer takes the text, then has what it had again
-  const composer = page.locator("[data-composer-body] textarea");
+  const composer = page.locator("[data-composer-field]");
   await composer.fill("a draft");
   await bubble.locator("[data-actions]").click();
   await page.getByRole("menuitem", { name: /Επεξεργασία|Edit/ }).click();
   await expect(page.locator("[data-editing]")).toBeVisible();
-  await expect(composer).toHaveValue(text);
+  await expect(composer).toHaveText(text);
   await composer.fill(`${text} (fixed)`);
   await page.locator("[data-send]").click();
   await expect(page.locator("[data-editing]")).toHaveCount(0);
-  await expect(composer).toHaveValue("a draft");
+  await expect(composer).toHaveText("a draft");
   const fixed = page.locator('[id^="m"]').filter({ hasText: `${text} (fixed)` });
   await expect(fixed).toContainText(/επεξεργασμένο|edited/);
 
@@ -103,7 +103,7 @@ test("another's message deleted for the user alone", async ({ page }, info) => {
     await page.getByRole("menuitem").filter({ has: page.locator(`[data-icon="${chat!.service}"]`) }).click();
   }
   const text = `to be answered ${info.project.name} ${Date.now()}`;
-  await page.locator("[data-composer-body] textarea").fill(text);
+  await page.locator("[data-composer-field]").fill(text);
   await page.locator("[data-send]").click();
   // the demo's other side answers it
   const answer = page.locator('[id^="m"]').filter({ hasText: `↩ ${text}` }).last();

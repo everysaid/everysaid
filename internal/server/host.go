@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -725,6 +726,24 @@ func (h *Host) Able(flag string) map[string]bool {
 	})
 }
 
+// Styles is {service: kinds}: the styles a text sent (or edited) to each service now shows there
+// (Info.Styles).
+func (h *Host) Styles() map[string][]string {
+	return core.CachedFor(h.store, "styles", time.Minute, func() map[string][]string {
+		out := map[string][]string{}
+		for _, s := range h.Senders() {
+			for _, svc := range s.p.Info().Services {
+				for _, k := range s.p.Info().Styles {
+					if !slices.Contains(out[svc], k) {
+						out[svc] = append(out[svc], k)
+					}
+				}
+			}
+		}
+		return out
+	})
+}
+
 // Unsendable is {service: why}: the services an enabled source reaches but may not send to now, each
 // with what its source says is missing (English, as plugins word it).
 func (h *Host) Unsendable() map[string]string {
@@ -753,6 +772,7 @@ type SendRequest struct {
 	Service        string // through this service ("" any)
 	ReplyTo        int64  // the message of the chat it answers (0: none)
 	Mentions       []plugins.Mention
+	Styles         []plugins.Style
 	File           *plugins.File
 }
 
@@ -761,6 +781,7 @@ type SendRequest struct {
 // showed while it was sent).
 // ReplyTo: then through its conversation, by a plugin that can reply. Mentions: members of the
 // group the text names (left out where the plugin cannot mention: the text says them anyway).
+// Styles: as the service carries them (its kinds only: ranges, or marks in the text), else left out.
 // File: the text its caption, only through a plugin that can send files.
 func (h *Host) Send(ctx context.Context, chatID string, r SendRequest) (out M, err error) {
 	defer db.Recover(&err)
@@ -861,7 +882,19 @@ func (h *Host) Send(ctx context.Context, chatID string, r SendRequest) (out M, e
 	if len(r.Mentions) > 0 && o.s.p.Info().CanMention {
 		mentions = r.Mentions
 	}
-	result, err := snd.Send(ctx, pc, plugins.Conversation{ID: o.conv, Key: o.key, Service: o.service}, r.Text, answered, mentions, r.File)
+	conv := plugins.Conversation{ID: o.conv, Key: o.key, Service: o.service}
+	text := r.Text
+	styles := plugins.FitStyles(text, r.Styles, o.s.p.Info().Styles)
+	styled, ranges := snd.(plugins.StyledSender)
+	if len(styles) > 0 && !ranges && o.s.p.Info().StyleMarks {
+		text, mentions = plugins.MarkStyles(text, mentions, styles)
+	}
+	var result any
+	if ranges && len(styles) > 0 {
+		result, err = styled.SendStyled(ctx, pc, conv, text, answered, mentions, styles, r.File)
+	} else {
+		result, err = snd.Send(ctx, pc, conv, text, answered, mentions, r.File)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -896,9 +929,10 @@ func (h *Host) sent(conv int64, result any) []M {
 // MessageAction is what the user does to one message: a reaction ("" takes the user's back), an
 // edit, a deletion for everyone, a deletion for the user alone.
 type MessageAction struct {
-	Kind  string // react, edit, delete, delete_me
-	Emoji string
-	Text  string
+	Kind   string // react, edit, delete, delete_me
+	Emoji  string
+	Text   string
+	Styles []plugins.Style // of an edit: as the service carries them (ranges, or marks in the text), else left out
 }
 
 // able says whether a plugin's manifest allows an action ("" for sending at all).
@@ -990,7 +1024,18 @@ func (h *Host) Act(ctx context.Context, messageID int64, a MessageAction) (out M
 		}
 	case "edit":
 		if r, ok := chosen.p.(plugins.Editor); ok {
-			err = r.Edit(ctx, pc, c, ref, a.Text)
+			text, i := a.Text, chosen.p.Info()
+			styles := plugins.FitStyles(text, a.Styles, i.Styles)
+			styled, ranges := chosen.p.(plugins.StyledEditor)
+			switch {
+			case ranges:
+				err = styled.EditStyled(ctx, pc, c, ref, text, styles)
+			case len(styles) > 0 && i.StyleMarks:
+				text, _ = plugins.MarkStyles(text, nil, styles)
+				fallthrough
+			default:
+				err = r.Edit(ctx, pc, c, ref, text)
+			}
 		} else {
 			err = errs.New("message.cannot_edit", 409, nil)
 		}

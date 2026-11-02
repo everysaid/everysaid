@@ -17,7 +17,7 @@ test("a chat keeps its unsent text and its place; the Chats tab comes back to it
     }
     return out;
   });
-  const field = page.locator("[data-composer-body] textarea");
+  const field = page.locator("[data-composer-field]");
   const scroller = "[data-stream] [data-virtuoso-scroller]";
   await page.goto(`/chat/${a}`);
   await expect(page.locator(scroller)).toBeVisible();
@@ -32,7 +32,7 @@ test("a chat keeps its unsent text and its place; the Chats tab comes back to it
   }, scroller);
 
   await page.goto(`/chat/${b}`);
-  await expect(field).toHaveValue("");
+  await expect(field).toHaveText("");
   if (info.project.name === "desktop") {       // the list beside the chat: the wide screen's
   const archivedSwitch = page.getByRole("switch", { name: /^(Αρχειοθετημένες συνομιλίες|Archived chats)$/ });
   await page.locator("[data-chat-filters]").click();                // the list as it is left
@@ -46,7 +46,7 @@ test("a chat keeps its unsent text and its place; the Chats tab comes back to it
   }
 
   await page.goto(`/chat/${a}`);
-  await expect(field).toHaveValue("half written");
+  await expect(field).toHaveText("half written");
   await page.waitForTimeout(1200);
   await expect(page.locator(`[id="${topText}"]`)).toBeInViewport();  // where it was left
   await field.fill("");

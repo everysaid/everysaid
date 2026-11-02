@@ -225,6 +225,12 @@ type chatRef struct {
 	ID   string `json:"id"`
 }
 
+type styleEv struct {
+	Start  int    `json:"start"`
+	Length int    `json:"length"`
+	Style  string `json:"style"`
+}
+
 type mentionEv struct {
 	Start  int    `json:"start"`
 	Length int    `json:"length"`
@@ -317,6 +323,7 @@ type event struct {
 	Text          *string         `json:"text"`
 	LongText      bool            `json:"long_text"` // the whole text of a long message (its body was the first 2 KiB)
 	Mentions      []mentionEv     `json:"mentions"`
+	Styles        []styleEv       `json:"styles"`
 	Quote         *quoteEv        `json:"quote"`
 	Attachments   []attachmentEv  `json:"attachments"`
 	Contacts      []sharedContact `json:"contacts"`

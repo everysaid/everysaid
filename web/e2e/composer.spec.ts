@@ -23,7 +23,7 @@ test("answers where the chat was last active, with a lock where it cannot send",
   await expect(via.locator(`[data-icon="${chat!.last}"]`)).toHaveCount(1);   // the service's own icon
   await expect(page.locator("[data-locked]")).toBeVisible();
   await expect(page.locator("[data-send]")).toHaveCount(0);
-  await expect(page.locator("[data-composer-body] textarea")).toBeDisabled();   // nothing to write there
+  await expect(page.locator("[data-composer-field]")).toBeDisabled();   // nothing to write there
   await page.locator("[data-locked]").click();
   await expect(page.locator("[data-sonner-toast]")).toBeVisible();      // it says why, and where to look
 
@@ -39,7 +39,7 @@ test("answers where the chat was last active, with a lock where it cannot send",
   await expect(via).toHaveAttribute("data-via", chat!.other);
   await expect(page.locator("[data-send]")).toBeVisible();
   await expect(page.locator("[data-locked]")).toHaveCount(0);
-  await expect(page.locator("[data-composer-body] textarea")).toBeEnabled();
+  await expect(page.locator("[data-composer-field]")).toBeEnabled();
 });
 
 // A message arriving on a service that cannot send, while the user is writing: the text stays on
@@ -60,7 +60,7 @@ test("a message arriving where nothing can send, while writing: the field stays 
   test.skip(!chat, "no chat with iMessage and a service that can send");
   await page.goto(`/chat/${chat!.id}`);
   const via = page.locator("[data-via]");
-  const field = page.locator("[data-composer-body] textarea");
+  const field = page.locator("[data-composer-field]");
   if ((await via.getAttribute("data-via")) !== chat!.last) {
     // last active over iMessage (as an earlier run leaves it): a message sent elsewhere first, then
     // the chat opened again, with nothing picked
@@ -84,9 +84,9 @@ test("a message arriving where nothing can send, while writing: the field stays 
   await expect(page.locator("[data-locked]")).toHaveCount(0);
   await page.keyboard.press("Backspace");
   await page.keyboard.press("Backspace");
-  await expect(field).toHaveValue(text);
+  await expect(field).toHaveText(text);
   await page.locator("[data-send]").click();
-  await expect(field).toHaveValue("");
+  await expect(field).toHaveText("");
   await expect(page.locator("[data-stream] [data-sending]")).toHaveCount(0, { timeout: 10000 });
   const sent = await page.evaluate(async ([id, x]) => {
     const r = await fetch(`/api/chats/${id}/stream?limit=40`, { headers: { "X-Everysaid": "1" } });
@@ -155,7 +155,7 @@ test("a person found on another service, and a first message there", async ({ pa
   await expect(page.getByRole("menuitem", { name: viber })).toBeVisible({ timeout: 10_000 });
   await page.getByRole("menuitem", { name: viber }).click();
   await expect(via).toHaveAttribute("data-via", "viber");
-  await page.locator("[data-composer-body] textarea").fill("quiet: a first message");
+  await page.locator("[data-composer-field]").fill("quiet: a first message");
   await page.locator("[data-send]").click();
   await expect(page.locator('[id^="m-"]').getByText("quiet: a first message")).toBeVisible();
   await expect.poll(async () => page.evaluate(async (id) =>
@@ -181,7 +181,7 @@ test("a message that cannot go now waits, and goes", async ({ page }, info) => {
   const via = page.locator("[data-via]");
   await via.click();
   await page.getByRole("menuitem", { name: "WhatsApp" }).click();
-  const field = page.locator("[data-composer-body] textarea");
+  const field = page.locator("[data-composer-field]");
   const stream = page.locator('[id^="m"]');
   // with a picture, shown as it waits (loaded: not a broken image)
   const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
@@ -258,7 +258,7 @@ test("messages sent one after another: one bubble each", async ({ page }, info) 
     await via.click();
     await page.getByRole("menuitem", { name: "WhatsApp" }).click();
   }
-  const field = page.locator("[data-composer-body] textarea");
+  const field = page.locator("[data-composer-field]");
   const stream = page.locator('[id^="m"]');
   const texts = [1, 2, 3].map((n) => `quiet: quick ${n} ${info.project.name} ${Date.now()}`);
   for (const text of texts) {
@@ -329,8 +329,8 @@ test("a service where they have two handles: a menu of them, and the one picked 
     await expect(handles.filter({ hasText: chat!.newer }).locator("svg")).toHaveCount(1);   // the last active, ticked
     if (chat!.olderName) await expect(handles.filter({ hasText: chat!.older })).toContainText(chat!.olderName);   // by the name it goes by
     await handles.filter({ hasText: chat!.older }).click();
-    const field = page.locator("[data-composer-body] textarea");
-    await expect(field).toHaveAttribute("placeholder", new RegExp(chat!.older.replace(/[+]/g, "\\+")));
+    const field = page.locator("[data-composer-field]");
+    await expect(field).toHaveAttribute("aria-placeholder", new RegExp(chat!.older.replace(/[+]/g, "\\+")));
     await expect(via).toHaveAttribute("title", new RegExp(chat!.older.replace(/[+]/g, "\\+")));
     const text = `quiet: to the older number ${info.project.name} ${Date.now()}`;
     await field.fill(text);

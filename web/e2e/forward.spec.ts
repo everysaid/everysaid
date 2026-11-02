@@ -29,7 +29,7 @@ test("a message forwarded to a chat of its service and to one of another", async
     await page.getByRole("menuitem", { name: "WhatsApp" }).click();
   }
   const text = `quiet: forward me ${info.project.name} ${Date.now()}`;
-  await page.locator("[data-composer-body] textarea").fill(text);
+  await page.locator("[data-composer-field]").fill(text);
   await page.locator("[data-send]").click();
   const bubble = page.locator('[id^="m"]').filter({ hasText: text }).last();
   await expect.poll(async () => Number((await bubble.getAttribute("id"))!.slice(1)), { timeout: 10000 }).toBeGreaterThan(0);

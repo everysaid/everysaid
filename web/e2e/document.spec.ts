@@ -27,7 +27,7 @@ async function open(page: Page, name: string, mimeType: string, project: string,
   await page.locator("[data-file-input]").setInputFiles({ name, mimeType, buffer: buffer ?? readFileSync(`e2e/files/${name}`) });
   await expect(page.locator("[data-file]")).toContainText(name);
   const caption = `quiet: ${name} ${project} ${Date.now()}`;
-  await page.locator("[data-composer-body] textarea").fill(caption);
+  await page.locator("[data-composer-field]").fill(caption);
   await page.locator("[data-send]").click();
   return page.locator("[id^=m]", { hasText: caption }).last();
 }
@@ -58,22 +58,22 @@ test("a PDF opens in the document viewer, its words there, its download beside",
   await page.locator("[data-stream]").dispatchEvent("drop", { dataTransfer: drop });
   await expect(page.locator("[data-file]")).toContainText("dropped.png");
   await page.getByRole("button", { name: /Αφαίρεση αρχείου|Remove the file/ }).click();
-  const field = page.locator("[data-composer-body] textarea");
+  const field = page.locator("[data-composer-field]");
   await field.click();
   await page.keyboard.type("after the PDF");
   await page.keyboard.press("Backspace");
-  await expect(field).toHaveValue("after the PD");
+  await expect(field).toHaveText("after the PD");
   await page.keyboard.press("Home");
   await page.keyboard.press("Delete");
-  await expect(field).toHaveValue("fter the PD");
+  await expect(field).toHaveText("fter the PD");
   await page.keyboard.press("Control+a");
-  await expect.poll(() => field.evaluate((el: HTMLTextAreaElement) => [el.selectionStart, el.selectionEnd])).toEqual([0, 11]);
+  await expect.poll(() => page.evaluate(() => window.getSelection()?.toString())).toBe("fter the PD");
   const copied = page.evaluate(() => new Promise<boolean>((ok) =>
     document.addEventListener("copy", (e) => setTimeout(() => ok(e.defaultPrevented)), { once: true })));
   await page.keyboard.press("Control+c");
   expect(await copied).toBe(false);                     // the browser's own copy, not cancelled
   await page.keyboard.press("Backspace");
-  await expect(field).toHaveValue("");
+  await expect(field).toHaveText("");
 });
 
 test("a text file as it is, an old one in its language's old encoding", async ({ page }, info) => {

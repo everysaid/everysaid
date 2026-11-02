@@ -74,9 +74,10 @@ func TestGroupMessageWithMentionQuoteAndAttachment(t *testing.T) {
 	}
 	dm := &signalpb.DataMessage{
 		Body: proto.String("hi ￼"), Timestamp: proto.Uint64(2000),
-		GroupV2:    &signalpb.GroupContextV2{MasterKey: key, Revision: proto.Uint32(3)},
-		BodyRanges: []*signalpb.BodyRange{{Start: proto.Uint32(3), Length: proto.Uint32(1), AssociatedValue: &signalpb.BodyRange_MentionAci{MentionAci: bob}}},
-		Quote:      &signalpb.DataMessage_Quote{Id: proto.Uint64(1500), AuthorAci: proto.String(me), Text: proto.String("q")},
+		GroupV2: &signalpb.GroupContextV2{MasterKey: key, Revision: proto.Uint32(3)},
+		BodyRanges: []*signalpb.BodyRange{{Start: proto.Uint32(3), Length: proto.Uint32(1), AssociatedValue: &signalpb.BodyRange_MentionAci{MentionAci: bob}},
+			{Start: proto.Uint32(0), Length: proto.Uint32(2), AssociatedValue: &signalpb.BodyRange_Style_{Style: signalpb.BodyRange_BOLD}}},
+		Quote: &signalpb.DataMessage_Quote{Id: proto.Uint64(1500), AuthorAci: proto.String(me), Text: proto.String("q")},
 		Attachments: []*signalpb.AttachmentPointer{{ContentType: proto.String("image/jpeg"), Size: proto.Uint32(10), Flags: proto.Uint32(1),
 			AttachmentIdentifier: &signalpb.AttachmentPointer_CdnKey{CdnKey: "abc"}, Key: []byte{1, 2}}},
 	}
@@ -91,9 +92,12 @@ func TestGroupMessageWithMentionQuoteAndAttachment(t *testing.T) {
 	if chat["kind"] != "group" || chat["id"] != groupIDOf(key) || chat["id"] == base64Std(key) {
 		t.Fatalf("the group's id, not its master key: %v", chat)
 	}
-	ms := e["mentions"].([]any)[0].(map[string]any)
-	if ms["start"].(float64) != 3 || ms["aci"] != bob {
+	ms := e["mentions"].([]any)
+	if m := ms[0].(map[string]any); len(ms) != 1 || m["start"].(float64) != 3 || m["aci"] != bob {
 		t.Fatalf("mention %v", ms)
+	}
+	if ss := e["styles"].([]any); len(ss) != 1 || ss[0].(map[string]any)["style"] != "bold" || ss[0].(map[string]any)["length"].(float64) != 2 {
+		t.Fatalf("styles %v", ss)
 	}
 	if q := e["quote"].(map[string]any); q["ts"].(float64) != 1500 || q["author"] != me || q["text"] != "q" {
 		t.Fatalf("quote %v", q)

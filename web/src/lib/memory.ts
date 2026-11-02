@@ -1,10 +1,13 @@
 // What the chats keep while the user is elsewhere: each chat's unsent text (on this device), where
 // each was being read (this tab, a reload included), and the chat open last, for the Chats tab.
 
+import type { Style } from "./styles";
+
 const DRAFTS = "chat-drafts";
 const LAST = "chat-last";
 
-function drafts(): Record<string, string> {
+// a draft: its text, or its text and styles where it has some
+function drafts(): Record<string, string | { text: string; styles: Style[] }> {
   try {
     return JSON.parse(localStorage.getItem(DRAFTS) ?? "{}");
   } catch {
@@ -12,13 +15,14 @@ function drafts(): Record<string, string> {
   }
 }
 
-export function draft(chat: string) {
-  return drafts()[chat] ?? "";
+export function draft(chat: string): { text: string; styles: Style[] } {
+  const d = drafts()[chat] ?? "";
+  return typeof d === "string" ? { text: d, styles: [] } : d;
 }
 
-export function keepDraft(chat: string, text: string) {
+export function keepDraft(chat: string, text: string, styles: Style[] = []) {
   const all = drafts();
-  if (text) all[chat] = text;
+  if (text) all[chat] = styles.length ? { text, styles } : text;
   else delete all[chat];
   localStorage.setItem(DRAFTS, JSON.stringify(all));
 }

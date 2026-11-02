@@ -54,10 +54,17 @@ func (Plugin) React(ctx context.Context, c *plugins.Context, conv plugins.Conver
 	})
 }
 
-func (Plugin) Edit(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref, text string) error {
+func (p Plugin) Edit(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref, text string) error {
+	return p.EditStyled(ctx, c, conv, msg, text, nil)
+}
+
+// EditStyled is Edit with the new text's styles, as entities (none: the text plain).
+func (Plugin) EditStyled(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref, text string,
+	styles []plugins.Style) error {
 	return onMessage(ctx, c, conv, msg, func(ctx context.Context, cn *conn, peer tg.InputPeerClass, chat int64, id int) error {
 		req := &tg.MessagesEditMessageRequest{Peer: peer, ID: id}
 		req.SetMessage(text)
+		req.SetEntities(styleEntities(text, text, nil, styles, maxEntities))
 		r, err := cn.api.MessagesEditMessage(ctx, req)
 		switch {
 		case tgerr.Is(err, "MESSAGE_NOT_MODIFIED"): // the same text: nothing to do

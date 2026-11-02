@@ -160,6 +160,13 @@ func (s *Server) chatRoutes() {
 			}
 		}
 		c["sendable"], c["replyable"], c["mentionable"], c["fileable"], c["unsendable"] = sendable, replyable, mentionable, fileable, unsendable
+		styles := M{} // the kinds of style a text sent there shows, by service
+		for svc, kinds := range s.Host.Styles() {
+			if contains(services, svc) {
+				styles[svc] = kinds
+			}
+		}
+		c["styles"] = styles
 		c["findable"], c["reach"] = s.Host.Findable(q.r.PathValue("chat_id")), s.Host.Reach(q.r.PathValue("chat_id"))
 		// what can be done to a message, by service: the emoji (null: any), whether any other emoji
 		// may be put too, how long after sending an edit or a deletion for everyone is allowed, and
@@ -301,8 +308,8 @@ func (s *Server) chatRoutes() {
 		return M{"services": services}, nil
 	})
 
-	// A JSON body {text, conversation_id, service, reply_to, mentions}, or a form with the same
-	// fields (mentions as JSON) and a `file`, sent with the text as its caption (`animated`: as a
+	// A JSON body {text, conversation_id, service, reply_to, mentions, styles}, or a form with the
+	// same fields (mentions and styles as JSON) and a `file`, sent with the text as its caption (`animated`: as a
 	// GIF, a video without sound).
 	h("POST /api/chats/{chat_id}/send", bodyNone, func(q *req) (any, error) {
 		var file *plugins.File
@@ -338,7 +345,11 @@ func (s *Server) chatRoutes() {
 		if err != nil {
 			return nil, err
 		}
-		r := SendRequest{Text: text, Service: q.text("service"), Mentions: mentions, File: file}
+		styles, err := checkStyles(text, q.get("styles"))
+		if err != nil {
+			return nil, err
+		}
+		r := SendRequest{Text: text, Service: q.text("service"), Mentions: mentions, Styles: styles, File: file}
 		id := q.text("client_id")
 		if len(id) > 64 {
 			return nil, failed(400, "client_id")
@@ -428,7 +439,11 @@ func (s *Server) chatRoutes() {
 		if text == "" {
 			return nil, errs.New("empty_message", 400, nil)
 		}
-		return act(q, MessageAction{Kind: "edit", Text: text})
+		styles, err := checkStyles(text, q.get("styles"))
+		if err != nil {
+			return nil, err
+		}
+		return act(q, MessageAction{Kind: "edit", Text: text, Styles: styles})
 	})
 
 	// deleted for everyone in the chat, through its service; {for_me: true}: for the user alone
@@ -634,6 +649,15 @@ func readForm(q *req) (map[string]any, *plugins.File, error) {
 	} else {
 		body["mentions"] = nil
 	}
+	if s := stringOf(body["styles"]); s != "" {
+		v, err := decodeJSON([]byte(s))
+		if err != nil {
+			return nil, nil, failed(400, "styles")
+		}
+		body["styles"] = v
+	} else {
+		body["styles"] = nil
+	}
 	return body, file, nil
 }
 
@@ -701,6 +725,38 @@ func checkMentions(text string, given any) ([]plugins.Mention, error) {
 			return nil, bad
 		}
 		end = m.Start + m.Length
+	}
+	return out, nil
+}
+
+// checkStyles is [{start, length, kind, url}] as given, each within the text (in characters), of a
+// kind there is (a link with its address); they may lie over each other. Else the request is refused.
+func checkStyles(text string, given any) ([]plugins.Style, error) {
+	bad := failed(400, "styles")
+	if given == nil {
+		return nil, nil
+	}
+	list, ok := given.([]any)
+	if !ok || len(list) > 1000 {
+		return nil, bad
+	}
+	n := len([]rune(text))
+	var out []plugins.Style
+	for _, x := range list {
+		m, ok := x.(map[string]any)
+		if !ok {
+			return nil, bad
+		}
+		start, e1 := pyInt(m["start"])
+		length, e2 := pyInt(m["length"])
+		kind, _ := m["kind"].(string)
+		url, _ := m["url"].(string)
+		// as written, never start+length: huge numbers would wrap around
+		if e1 != nil || e2 != nil || !slices.Contains(plugins.StyleKinds, kind) || start < 0 || length < 1 ||
+			start > int64(n) || length > int64(n)-start || (kind == plugins.Link) != (url != "") {
+			return nil, bad
+		}
+		out = append(out, plugins.Style{Start: int(start), Length: int(length), Kind: kind, URL: url})
 	}
 	return out, nil
 }

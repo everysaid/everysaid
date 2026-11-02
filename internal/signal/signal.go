@@ -61,6 +61,7 @@ func (Plugin) Info() *plugins.Info {
 				Help: "When a chat is opened here, the others see it read (it is marked read on the phone in any case)"},
 		},
 		CanSend: true, CanReply: true, CanMention: true, CanMarkRead: true, CanSendFiles: true,
+		Styles: []string{plugins.Bold, plugins.Italic, plugins.Strike, plugins.Code, plugins.Spoiler},
 		// any emoji, Signal's own quick ones first; edits and deletions for everyone within the day
 		// Signal's apps allow (global.normalDeleteMaxAgeInSeconds, a day by default, for both)
 		CanReact: true, Reactions: []string{"❤️", "👍", "👎", "😂", "😮", "😢"}, FreeReactions: true,
@@ -894,11 +895,48 @@ func mentionsOut(c *plugins.Context, text string, ms []plugins.Mention, conversa
 	return string(out), placed, nil
 }
 
+// stylesOut are the styles of a text where they are in it as written (each mention one character,
+// as mentionsOut writes it), in UTF-16 units.
+func stylesOut(text, written string, mentions []plugins.Mention, styles []plugins.Style) []outStyle {
+	runes := []rune(text)
+	var parts []plugins.Replaced
+	at := 0
+	for _, m := range mentions { // as mentionsOut takes them: in order, none over the one before
+		start, end := min(max(m.Start, at), len(runes)), min(max(m.Start+m.Length, m.Start), len(runes))
+		if end > start {
+			parts = append(parts, plugins.Replaced{Start: start, Length: end - start, Runes: 1})
+		}
+		at = max(end, start)
+	}
+	out := []rune(written)
+	var placed []outStyle
+	for _, s := range plugins.MoveStyles(plugins.WholeMentions(styles, mentions), parts) {
+		if s.Start+s.Length <= len(out) {
+			off, n := plugins.UTF16(out, s.Start, s.Length)
+			placed = append(placed, outStyle{Start: off, Length: n, Style: s.Kind})
+		}
+	}
+	return placed
+}
+
+type outStyle struct {
+	Start  int    `json:"start"`
+	Length int    `json:"length"`
+	Style  string `json:"style"`
+}
+
 // Send sends into a conversation (a reply quoting a message, mentions, a file with the text as its
 // caption); what was sent comes into the archive as Signal's other messages do. A conversation
 // with no ID yet (someone Find found) is the person's by its key, their ACI or PNI.
 func (p Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conversation, text string,
 	reply *plugins.Reply, mentions []plugins.Mention, file *plugins.File) (any, error) {
+	return p.SendStyled(ctx, c, conv, text, reply, mentions, nil, file)
+}
+
+// SendStyled is Send with the text's styles, as Signal has them: ranges (in UTF-16 units) of the
+// text as sent, each mention in it one character.
+func (p Plugin) SendStyled(ctx context.Context, c *plugins.Context, conv plugins.Conversation, text string,
+	reply *plugins.Reply, mentions []plugins.Mention, styles []plugins.Style, file *plugins.File) (any, error) {
 	if removed(c) {
 		return nil, errs.Plugin(removedText, 0)
 	}
@@ -918,6 +956,9 @@ func (p Plugin) Send(ctx context.Context, c *plugins.Context, conv plugins.Conve
 			return nil, err
 		}
 		req["text"], req["mentions"] = t, placed
+	}
+	if len(styles) > 0 {
+		req["styles"] = stylesOut(text, req["text"].(string), mentions, styles)
 	}
 	if reply != nil {
 		author, ts, ok := SplitKey(reply.Key)
@@ -1124,6 +1165,12 @@ func (p Plugin) React(ctx context.Context, c *plugins.Context, conv plugins.Conv
 // sticker, a voice note, a shared contact, a poll or a view-once message, not one deleted, and so
 // many times.
 func (p Plugin) Edit(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref, text string) error {
+	return p.EditStyled(ctx, c, conv, msg, text, nil)
+}
+
+// EditStyled is Edit with the new text's styles, as ranges of it (in UTF-16 units).
+func (p Plugin) EditStyled(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg plugins.Ref, text string,
+	styles []plugins.Style) error {
 	return act(ctx, c, conv, msg, "edit", func(n *conn, author string, times []int64) (M, error) {
 		if e, ok := n.store.Message(author, times[0]); ok {
 			for _, a := range e.Attachments {
@@ -1141,7 +1188,11 @@ func (p Plugin) Edit(ctx context.Context, c *plugins.Context, conv plugins.Conve
 		if len(times)-1 >= maxEdits && conv.Key != n.own {
 			return nil, errs.Plugin("Signal lets a message be edited only 10 times", 0)
 		}
-		return M{"target_ts": times[len(times)-1], "original_ts": times[0], "text": text}, nil
+		req := M{"target_ts": times[len(times)-1], "original_ts": times[0], "text": text}
+		if len(styles) > 0 {
+			req["styles"] = stylesOut(text, text, nil, styles)
+		}
+		return req, nil
 	})
 }
 

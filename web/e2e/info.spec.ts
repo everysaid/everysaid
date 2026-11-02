@@ -19,7 +19,7 @@ test("a long message's text in its info: three lines, no part of a fourth", asyn
   await page.locator("[data-via]").click();                 // through WhatsApp, which says who got it
   await page.getByRole("menuitem", { name: "WhatsApp" }).click();
   const words = "quiet: " + Array.from({ length: 60 }, (_, i) => `word${i}`).join(" ");
-  await page.locator("[data-composer-body] textarea").fill(words);
+  await page.locator("[data-composer-field]").fill(words);
   await page.locator("[data-send]").click();
   const sent = page.locator("[id^=m]", { hasText: "word59" }).last();
   await sent.locator("[data-ticks]").click({ timeout: 15000 });

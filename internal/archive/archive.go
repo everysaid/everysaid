@@ -770,7 +770,8 @@ type ReactsTo struct{ Key, Emoji, Code string }
 
 // Extras is what a message carries beyond its text (see package extras).
 type Extras struct {
-	Text                 string // the content of a shared contact or a poll, where the message has none
+	Text                 string  // the content of a shared contact or a poll, where the message has none
+	Styles               []Style // of the text (of a service with marks, read from them: Styled)
 	Lat, Lon             *float64
 	Place                string
 	Subtype, SubtypeCode string
@@ -846,6 +847,7 @@ func (a *Archive) AddMessage(sourceID int64, rowKey string, m Message) int64 {
 	if x.Text != "" {
 		txt = x.Text
 	}
+	txt, styles := Styled(m.Service, txt, x.Styles)
 	var lat, lon, slat, slon any
 	if m.Kind == "location" {
 		lat, lon = fptr(x.Lat), fptr(x.Lon)
@@ -870,6 +872,9 @@ func (a *Archive) AddMessage(sourceID int64, rowKey string, m Message) int64 {
 		lat, lon, nullStr(x.Place), slat, slon, nullStr(x.ForwardFrom), nullStr(x.Album), nullID(x.Pinned)).LastInsertId()
 	if txt != "" {
 		a.IndexText(mid, text.Fold(txt))
+	}
+	if len(styles) > 0 {
+		a.SetStyles(mid, styles)
 	}
 	if rowKey != "" {
 		a.Exec("INSERT INTO message_origin VALUES (?, ?, ?)", sourceID, rowKey, mid)

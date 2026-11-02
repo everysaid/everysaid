@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -20,6 +21,7 @@ import (
 // said (kept); "" is no text.
 type Change struct {
 	Text            *string
+	Styles          []archive.Style // of Text (of a service with marks, read from it)
 	Edited, Deleted bool
 }
 
@@ -27,7 +29,7 @@ type Change struct {
 // ("text", "edited", "deleted"). Flags are only ever set, never taken back.
 func ApplyChange(a *archive.Archive, messageID int64, c Change) []string {
 	var changed []string
-	if c.Text != nil && setText(a, messageID, *c.Text) {
+	if c.Text != nil && setText(a, messageID, *c.Text, c.Styles) {
 		changed = append(changed, "text")
 	}
 	for _, f := range []struct {
@@ -127,20 +129,29 @@ func ApplyPins(a *archive.Archive, service string) map[string]int {
 	return out
 }
 
-// setText replaces a message's text and its row in the search index (taken out by its rowid and put
-// in again folded, as Archive.AddMessage does).
-func setText(a *archive.Archive, messageID int64, newText string) bool {
+// setText replaces a message's text, with its styles (as Archive.AddMessage keeps them: Styled), and
+// its row in the search index (taken out by its rowid and put in again folded, as AddMessage does).
+func setText(a *archive.Archive, messageID int64, newText string, styles []archive.Style) bool {
 	var old sql.NullString
-	if !a.Row("SELECT text FROM message WHERE id = ?", []any{messageID}, &old) || old.String == newText {
+	var service string
+	if !a.Row("SELECT m.text, s.name FROM message m JOIN service s ON s.id = m.service_id WHERE m.id = ?",
+		[]any{messageID}, &old, &service) {
 		return false
 	}
-	if old.String != "" {
-		a.UnindexText(messageID)
+	newText, styles = archive.Styled(service, newText, styles)
+	if have := a.StylesOf(messageID); old.String == newText && (len(have) == 0 && len(styles) == 0 || reflect.DeepEqual(have, styles)) {
+		return false
 	}
-	a.Exec("UPDATE message SET text = ? WHERE id = ?", archive.NullStr(newText), messageID)
-	if newText != "" {
-		a.IndexText(messageID, text.Fold(newText))
+	if old.String != newText {
+		if old.String != "" {
+			a.UnindexText(messageID)
+		}
+		a.Exec("UPDATE message SET text = ? WHERE id = ?", archive.NullStr(newText), messageID)
+		if newText != "" {
+			a.IndexText(messageID, text.Fold(newText))
+		}
 	}
+	a.SetStyles(messageID, styles)
 	return true
 }
 

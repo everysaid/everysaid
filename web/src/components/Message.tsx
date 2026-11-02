@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { Avatar, Menu, MenuContent, MenuItem, MenuTrigger } from "./ui";
 import { EmojiPicker } from "./EmojiPicker";
 import { copyFile, copyText } from "@/lib/clip";
+import { LOOK, parts as styledParts, type Style } from "@/lib/styles";
 import { Sending } from "./Sending";
 import type { DocumentKind } from "./DocumentViewer";
 import type { AuthStatus } from "@/routes/Root";
@@ -20,10 +21,22 @@ const URL_RE = /(https?:\/\/[^\s<>"')\]]+)/g;
 const BIDI = /[\u202a-\u202e\u2066-\u2069]/g;      // direction marks around a name (Viber writes "\u202a@Name\u202c")
 
 /** Text with its links made clickable (http and https only), the people it names shown by name
- * (a link to them), and search matches marked. */
-export function RichText({ text, marks, mentions }: { text: string; marks?: [string, boolean][]; mentions?: Mention[] }) {
+ * (a link to them), search matches marked, and its styles shown (bold, a link with its own words, a
+ * spoiler hidden until tapped). */
+export function RichText({ text, marks, mentions, styles }: { text: string; marks?: [string, boolean][]; mentions?: Mention[]; styles?: Style[] }) {
   if (marks?.length) {
     return <>{marks.map(([s, m], i) => (m ? <mark key={i} className="mark">{s}</mark> : <span key={i}>{s}</span>))}</>;
+  }
+  if (styles?.length) {
+    return <>{styledParts(text, styles).map((p, i) => {
+      const inner = <RichText text={p.text} mentions={mentions} />;
+      if (!p.kinds.length) return <span key={i}>{inner}</span>;
+      const look = cn(p.kinds.filter((k) => k !== "spoiler").map((k) => LOOK[k]));
+      const shown = p.url && /^https?:\/\//i.test(p.url)
+        ? <a key={i} data-k={p.kinds.join(" ")} href={p.url} target="_blank" rel="noopener noreferrer" title={p.url} className={look}>{p.text}</a>
+        : <span key={i} data-k={p.kinds.join(" ")} className={look}>{inner}</span>;
+      return p.kinds.includes("spoiler") ? <Spoiler key={i}>{shown}</Spoiler> : shown;
+    })}</>;
   }
   const parts = text.split(URL_RE);
   return (
@@ -38,6 +51,17 @@ export function RichText({ text, marks, mentions }: { text: string; marks?: [str
         ),
       )}
     </>
+  );
+}
+
+/** Words hidden until tapped (a spoiler), then shown. */
+function Spoiler({ children }: { children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span data-spoiler={open ? "open" : "closed"} onClick={(e) => { if (!open) { e.stopPropagation(); setOpen(true); } }}
+      className={cn("rounded transition-colors", !open && "cursor-pointer bg-muted text-transparent [&_*]:text-transparent")}>
+      {children}
+    </span>
   );
 }
 
@@ -625,7 +649,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
           )}
           {poll && !m.deleted ? <PollView poll={poll} /> : (m.text || label || m.deleted) && (
             <div className={cn("whitespace-pre-wrap break-words [overflow-wrap:anywhere]", onlyMedia && "px-2 pb-1", BIG[emoji])}>
-              {m.deleted && !m.text ? t("chat.deleted") : m.text ? <RichText text={m.text} marks={m.highlight} mentions={m.mentions} /> : <span className="opacity-70">{label}</span>}
+              {m.deleted && !m.text ? t("chat.deleted") : m.text ? <RichText text={m.text} marks={m.highlight} mentions={m.mentions} styles={m.styles} /> : <span className="opacity-70">{label}</span>}
             </div>
           )}
           {m.preview && !m.deleted && <PreviewCard p={m.preview} out={out} />}

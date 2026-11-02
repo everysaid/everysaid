@@ -293,6 +293,25 @@ func mentions(ranges []*signalpb.BodyRange) []M {
 	return out
 }
 
+// styleNames are Signal's styles of a text as the archive names them.
+var styleNames = map[signalpb.BodyRange_Style]string{signalpb.BodyRange_BOLD: "bold", signalpb.BodyRange_ITALIC: "italic",
+	signalpb.BodyRange_STRIKETHROUGH: "strike", signalpb.BodyRange_MONOSPACE: "code", signalpb.BodyRange_SPOILER: "spoiler"}
+
+// styles are the ranges that style the text (in UTF-16 units, as Signal counts).
+func styles(ranges []*signalpb.BodyRange) []M {
+	var out []M
+	for _, r := range ranges {
+		v, ok := r.GetAssociatedValue().(*signalpb.BodyRange_Style_)
+		if !ok {
+			continue
+		}
+		if name, ok := styleNames[v.Style]; ok {
+			out = append(out, M{"start": r.GetStart(), "length": r.GetLength(), "style": name})
+		}
+	}
+	return out
+}
+
 // pointerText is where Signal keeps a file and its key (its AttachmentPointer), as text: what
 // fetches it again, and keeps it in an edit of the message.
 func pointerText(a *signalpb.AttachmentPointer) string {
@@ -359,6 +378,9 @@ func (c conv) messageFields(ev M, dm *signalpb.DataMessage) []*signalpb.Attachme
 	}
 	if ms := mentions(dm.GetBodyRanges()); len(ms) > 0 {
 		ev["mentions"] = ms
+	}
+	if ss := styles(dm.GetBodyRanges()); len(ss) > 0 {
+		ev["styles"] = ss
 	}
 	if q := dm.GetQuote(); q != nil {
 		quoted := []M{}

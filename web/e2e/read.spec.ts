@@ -41,10 +41,10 @@ test("a chat opens at its first unread, which are read as they are seen", async 
   expect(await unread(page, chat)).toBeGreaterThan(0);
 
   // the field taken changes nothing: the line stays where it was
-  await page.locator("[data-composer-body] textarea").focus();
+  await page.locator("[data-composer-field]").focus();
   await page.waitForTimeout(500);
   await expect(page.locator("[data-cursor]", { has: line }).getByText("unread 0", { exact: true })).toHaveCount(1);
-  await page.locator("[data-composer-body] textarea").blur();
+  await page.locator("[data-composer-field]").blur();
 
   // to the end: all read; the line stays while the chat is open
   for (let i = 0; i < 20; i++) {
@@ -74,7 +74,7 @@ test("a chat opens at its first unread, which are read as they are seen", async 
   await expect(page.locator("[data-cursor]", { has: line }).getByText("unread 0", { exact: true })).toHaveCount(1);
 
   // sending something: the line gone
-  await page.locator("[data-composer-body] textarea").fill(`quiet: answered ${info.project.name}`);
+  await page.locator("[data-composer-field]").fill(`quiet: answered ${info.project.name}`);
   await page.locator("[data-send]").click();
   await expect(line).toHaveCount(0);
 

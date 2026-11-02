@@ -15,6 +15,7 @@ export interface Unsent {
   conversationId?: number | null;   // through this conversation of the chat (their handle, where they have more than one on the service)
   replyTo: number | null;
   mentions: { start: number; length: number; address_id: number }[];
+  styles?: { start: number; length: number; kind: string }[];   // in characters, as mentions
   file: Blob | null;
   fileName: string | null;
   animated?: boolean;               // the file sent as a GIF
@@ -136,12 +137,13 @@ function postUnsent(u: Unsent): Promise<Went> {
     if (u.conversationId) form.append("conversation_id", String(u.conversationId));
     if (u.replyTo) form.append("reply_to", String(u.replyTo));
     if (u.mentions.length) form.append("mentions", JSON.stringify(u.mentions));
+    if (u.styles?.length) form.append("styles", JSON.stringify(u.styles));
     if (u.animated) form.append("animated", "1");
     form.append("file", u.file, u.fileName ?? "file");
     return api.form(`/api/chats/${u.chatId}/send`, form);
   }
   return api.post(`/api/chats/${u.chatId}/send`, { text: u.text, client_id: u.id, service: u.service, conversation_id: u.conversationId ?? undefined, reply_to: u.replyTo ?? undefined,
-    mentions: u.mentions.length ? u.mentions : undefined });
+    mentions: u.mentions.length ? u.mentions : undefined, styles: u.styles?.length ? u.styles : undefined });
 }
 
 let flushing = false;
