@@ -111,7 +111,12 @@ test("styles in the composer: marks turned, the menu, a style taken off in part,
   await field.pressSequentially(`quiet: 😀 *hi* ${info.project.name}`);
   await expect(styled(field, "bold")).toHaveText("hi");
   const sent = page.waitForRequest((r) => r.url().includes("/send") && r.method() === "POST");
-  await page.locator("[data-send]").click();
+  if (info.project.name === "desktop") {     // sent with words selected (Enter): the styles' bar goes with them
+    await select(field, 7, 9);
+    await expect(page.locator("[data-format]")).toBeVisible();
+    await field.press("Enter");
+    await expect(page.locator("[data-format]")).toHaveCount(0);
+  } else await page.locator("[data-send]").click();
   const body = (await sent).postDataJSON();
   expect(body.text).toBe(`quiet: 😀 hi ${info.project.name}`);
   expect(body.styles).toEqual([{ start: 9, length: 2, kind: "bold" }]);

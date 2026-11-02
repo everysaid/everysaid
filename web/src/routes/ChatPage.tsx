@@ -1256,6 +1256,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
     const bodyStyles = follow(text.trim(), body, tidy(styles.map((s) => ({ ...s, start: s.start - lead })), text.trim().length));
     const sent = inCharacters(body, bodyStyles);
     kept.current = turned.current = styled.current = keptMark.current = pending.current = null;
+    setSelection([0, 0]);                // what was selected goes with it (and the styles' bar)
     if (editing) {
       const was = edited.current;
       if (body && (body !== was?.text.trim() || JSON.stringify(bodyStyles) !== JSON.stringify(was?.styles))) onEdit(editing, body, sent);
@@ -1311,11 +1312,12 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
     }
     setDoc(d);
     setCaret(c);
+    setSelection([c, c]);                // typed: nothing selected any more
     setNoList(false);
     if (d.text !== next) caretTo.current = c;
   };
   // the styles' bar: with something selected in the field; a touch screen's behind Aa
-  const selected = can && focused && selection[0] < selection[1];
+  const selected = can && focused && selection[0] < selection[1] && selection[1] <= text.length;
   const touch = window.matchMedia("(pointer: coarse)").matches;
   let barAt: React.CSSProperties | undefined;
   if (selected && !touch) {
@@ -1507,7 +1509,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
             aria-expanded={listOpen || undefined}
             onText={typedIn}
             onSelect={(a, b) => { setCaret(a); setSelection([a, b]); }}
-            onRestore={(d, at) => { styled.current = turned.current = null; setDoc(d); setCaret(at); caretTo.current = at; }}
+            onRestore={(d, at) => { styled.current = turned.current = null; setDoc(d); setCaret(at); setSelection([at, at]); caretTo.current = at; }}
             onKeyDown={(e) => {
               if (gifQuery !== null && !listOpen) {     // "@gif" and words: picked above by the keys, not sent as text
                 if (e.key === "Escape") {
