@@ -31,7 +31,8 @@ const styled = (field: Locator, kind: string) => field.locator(`[data-k~="${kind
 async function styleButton(page: Page, which: string): Promise<Locator> {
   const bar = page.locator("[data-format]");
   const aa = page.locator("[data-format-open]");
-  if (!(await bar.isVisible()) && (await aa.isVisible())) await aa.click();
+  await expect(bar.or(aa).first()).toBeVisible();      // either, once the selection is seen
+  if (!(await bar.isVisible())) await aa.click();
   await expect(bar).toBeVisible();
   return bar.locator(which);
 }
@@ -51,6 +52,17 @@ test("styles in the composer: marks turned, the menu, a style taken off in part,
   await page.goto(`/chat/${chat}`);
   const field = page.locator("[data-composer-field]");
   await field.click();
+  await field.fill("");
+
+  // Shift+Enter breaks the line where the caret is, and the caret goes on after it
+  await field.pressSequentially("ab");
+  await field.press("Shift+Enter");
+  await field.pressSequentially("c");
+  await field.press("ArrowLeft");
+  await field.press("ArrowLeft");
+  await field.press("Shift+Enter");
+  await field.pressSequentially("d");
+  expect(await field.evaluate((el) => el.textContent)).toBe("ab\nd\nc");
   await field.fill("");
 
   // at the edges of a word: turned at once, the marks gone
@@ -75,7 +87,7 @@ test("styles in the composer: marks turned, the menu, a style taken off in part,
   await field.fill("");
   await field.pressSequentially("hello world");
   await select(field, 2, 4);
-  if (!(await page.locator("[data-format-open]").isVisible())) {   // with a mouse: above where the selection starts, nothing moved
+  if (info.project.name === "desktop") {   // with a mouse: above where the selection starts, nothing moved
     const top = (await field.boundingBox())!.y;
     await expect(page.locator("[data-format]")).toBeVisible();
     const bar = (await page.locator("[data-format]").boundingBox())!;
@@ -105,6 +117,20 @@ test("styles in the composer: marks turned, the menu, a style taken off in part,
   await field.pressSequentially(" c");
   await expect(field).toHaveText("a bold c");
   await expect(styled(field, "bold")).toHaveText("bold");
+
+  // a Greek layout: Ctrl with the key of B writes β, and is still bold
+  await field.fill("");
+  await field.pressSequentially("ένα δύο");
+  await select(field, 4, 7);
+  await field.dispatchEvent("keydown", { key: "β", code: "KeyB", ctrlKey: true, bubbles: true, cancelable: true });
+  await expect(styled(field, "bold")).toHaveText("δύο");
+  // Esc closes the styles' bar, the selection kept; a new selection shows it again
+  await styleButton(page, '[data-style="bold"]');
+  await field.press("Escape");
+  await expect(page.locator("[data-format]")).toHaveCount(0);
+  expect(await page.evaluate(() => window.getSelection()!.toString())).toBe("δύο");
+  await select(field, 0, 3);
+  await styleButton(page, '[data-style="bold"]');
 
   // what goes: the text without marks, the styles in characters (an emoji is one)
   await field.fill("");

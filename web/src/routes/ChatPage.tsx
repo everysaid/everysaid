@@ -1057,6 +1057,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   const pending = useRef<{ at: number; kinds: Kind[] } | null>(null);
   const [selection, setSelection] = useState<[number, number]>([0, 0]);
   const [focused, setFocused] = useState(false);
+  const [hidden, setHidden] = useState<[number, number] | null>(null);  // the bar closed by Esc, until the selection changes
   const [formatOpen, setFormatOpen] = useState(false);        // on a touch screen, the styles asked for (Aa)
   useEffect(() => { if (selection[0] === selection[1]) setFormatOpen(false); }, [selection]);
   // the caret where the text was changed under it (an emoji in place of what was typed), as soon as the
@@ -1317,8 +1318,10 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
     if (d.text !== next) caretTo.current = c;
   };
   // the styles' bar: with something selected in the field; a touch screen's behind Aa
-  const selected = can && focused && selection[0] < selection[1] && selection[1] <= text.length;
+  const selected = can && focused && selection[0] < selection[1] && selection[1] <= text.length
+    && !(hidden && hidden[0] === selection[0] && hidden[1] === selection[1]);
   const touch = window.matchMedia("(pointer: coarse)").matches;
+  const shown = selected && (!touch || formatOpen);
   let barAt: React.CSSProperties | undefined;
   if (selected && !touch) {
     const box = ref.current?.rectAt(selection[0]);
@@ -1557,9 +1560,17 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
                 caretTo.current = m.caret;
                 return;
               }
-              // the keys of the styles (those of Telegram's apps): on what is selected, or on what is typed next
+              // Esc with the styles' bar shown: the bar closed (the selection stays), nothing else
+              if (e.key === "Escape" && shown) {
+                e.preventDefault();
+                if (touch) setFormatOpen(false);
+                else setHidden(selection);
+                return;
+              }
+              // the keys of the styles (those of Telegram's apps): on what is selected, or on what is typed
+              // next; by the letter the key writes, or where it writes none in Latin (a Greek layout) by the key
               if ((e.ctrlKey || e.metaKey) && !e.altKey) {
-                const k = e.key.toLowerCase();
+                const k = /^[a-z]$/i.test(e.key) ? e.key.toLowerCase() : e.code.startsWith("Key") ? e.code.slice(3).toLowerCase() : "";
                 const kind: Kind | null | undefined = !e.shiftKey ? ({ b: "bold", i: "italic", u: "underline" } as const)[k as "b" | "i" | "u"]
                   : ({ x: "strike", m: "code" } as const)[k as "x" | "m"];
                 if (kind) {

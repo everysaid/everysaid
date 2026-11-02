@@ -131,6 +131,7 @@ export const RichField = forwardRef<FieldHandle, Props>(function RichField(
   const pointed = useRef(false);               // a click or touch on it: it places the caret itself
   const sel = useRef<[number, number]>([value.length, value.length]);   // kept while the focus is elsewhere (the emoji picker)
   const shown = useRef("");
+  const placed = useRef(false);                // the caret put by the field itself (sel), the browser's not moved yet
   const props = useRef({ onText, onSelect, onRestore, value });
   props.current = { onText, onSelect, onRestore, value };
 
@@ -180,7 +181,8 @@ export const RichField = forwardRef<FieldHandle, Props>(function RichField(
     if (!el || composing.current || (shown.current === want && el.innerHTML === want)) return;
     const focused = document.activeElement === el;
     if (!focused && el.textContent !== value) sel.current = [value.length, value.length];   // a text given while away: the caret at its end, as a textarea's
-    const [a, b] = focused ? selection() : sel.current;
+    const [a, b] = focused && !placed.current ? selection() : sel.current;
+    placed.current = false;
     el.innerHTML = want;
     shown.current = want;
     if (focused) select(Math.min(a, value.length), Math.min(b, value.length));
@@ -221,6 +223,7 @@ export const RichField = forwardRef<FieldHandle, Props>(function RichField(
     const v = props.current.value;
     props.current.onText(v.slice(0, a) + s + v.slice(b), a + s.length);
     sel.current = [a + s.length, a + s.length];
+    placed.current = true;
   };
 
   useEffect(() => {
