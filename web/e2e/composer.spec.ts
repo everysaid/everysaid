@@ -199,9 +199,10 @@ test("a message that cannot go now waits, and goes", async ({ page }, info) => {
   await expect(kept).toHaveAttribute("data-pending-item", /queued|sending/);
   await expect(stream.filter({ hasText: busy })).toHaveCount(1);
   await loaded(kept);
-  // in the bubble, beside its time: a sign (why, on it) and the two things to do, nothing under it
+  // in the bubble, beside its time: a sign and the two things to do; why it waits, in words on it
   await expect(kept.locator("[data-send-warning]")).toBeVisible();
   await expect(kept.getByText(/Σε αναμονή|Waiting/)).toHaveCount(0);
+  await expect(kept.locator("[data-send-why]")).toHaveText(/15/);
   await kept.locator("[data-resend]").click();
   await expect(kept).toHaveCount(0);
   await expect(stream.filter({ hasText: busy })).toHaveCount(1);

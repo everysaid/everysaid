@@ -655,6 +655,7 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
           {m.preview && !m.deleted && <PreviewCard p={m.preview} out={out} />}
           {m.deleted && <div className="mt-0.5 text-xs opacity-70">{t("chat.deleted")}</div>}
           </>}
+          {!onlyMedia && <SendWhy status={m.status} waiting={waiting} />}
           <div className={cn("mt-0.5 flex items-center justify-end gap-1 text-[11px] leading-none", out ? "text-bubble-out-fg/70" : "text-muted", onlyMedia && "absolute bottom-2 right-2.5 rounded-full bg-black/45 px-1.5 py-1 text-white",
             bare && "rounded-full bg-panel/90 px-1.5 py-1 text-muted shadow-sm")}>
             {showService && <span className="flex items-center gap-1"><span className="size-1.5 rounded-full" style={{ background: svc.color }} />{svc.name}{account && ` · ${account}`} ·</span>}
@@ -690,13 +691,14 @@ export const Bubble = memo(function Bubble({ m, group, first, last, above, below
             <SendState status={m.status} waiting={waiting} />
           </div>
         )}
+        {onlyMedia && <SendWhy status={m.status} waiting={waiting} className="max-w-xs rounded-lg bg-panel/90 px-2 py-1 text-muted shadow-sm" />}
       </div>
     </div>
   );
 });
 
 // What became of a message sent from here, beside its time: being sent, waiting, or not sent. One
-// that waits or was refused has a sign (why, on it) and the two things to do with it.
+// that waits or was refused has a sign (why, on it, and in words on the bubble: SendWhy) and the two things to do with it.
 function SendState({ status, waiting }: { status: string | null; waiting?: BubbleProps["waiting"] }) {
   const { t } = useTranslation();
   if (status === "sending") return <span><Sending /> ·</span>;
@@ -713,6 +715,12 @@ function SendState({ status, waiting }: { status: string | null; waiting?: Bubbl
   if (status === "queued" || status === "waiting") return <span className="flex items-center gap-1"><Clock className="size-3" />{t("chat.queued")} ·</span>;
   if (status === "failed") return <span className="text-danger">{t("chat.sendFailed")} ·</span>;
   return null;
+}
+
+// Why a message sent from here waits or was refused, where that is known: said in words on it.
+function SendWhy({ status, waiting, className }: { status: string | null; waiting?: BubbleProps["waiting"]; className?: string }) {
+  if (!waiting?.why || !(status === "queued" || status === "waiting" || status === "failed")) return null;
+  return <div data-send-why className={cn("mt-1 text-xs", status === "failed" && !className && "font-medium", className)}>{waiting.why}</div>;
 }
 
 function groupReactions(m: MessageItem) {
