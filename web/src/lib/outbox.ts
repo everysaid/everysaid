@@ -22,6 +22,7 @@ export interface Unsent {
   createdAt: number;
   state: "waiting" | "failed";      // waiting: for the server; failed: refused by it (error)
   error: string | null;
+  final?: boolean;                  // refused for good: sending it again cannot help
 }
 
 const DB = "everysaid-outbox";
@@ -163,7 +164,7 @@ export async function flushUnsent(only?: string) {
           if (u.state !== "waiting") await keepUnsent({ ...u, state: "waiting", error: null });
           break;                          // still not reached: the rest after it, in order, later
         }
-        await keepUnsent({ ...u, state: "failed", error: (e as Error).message });
+        await keepUnsent({ ...u, state: "failed", error: (e as Error).message, final: e instanceof ApiError && e.final });
       }
     }
   } finally {

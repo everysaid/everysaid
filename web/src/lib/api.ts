@@ -5,7 +5,8 @@ import type { Notice } from "./notice";
 import type { Style } from "./styles";
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  // final: trying again cannot help (the server says so)
+  constructor(public status: number, message: string, public final = false) {
     super(message);
   }
 }
@@ -32,14 +33,16 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   });
   if (!r.ok) {
     let msg = r.statusText;
+    let final = false;
     try {
       const j = await r.json();
       msg = typeof j.detail === "string" ? j.detail : explain(j.detail);
+      final = j.detail?.final === true;
     } catch {
       /* not JSON */
     }
     if (r.status === 401) window.dispatchEvent(new Event("everysaid:logged-out"));
-    throw new ApiError(r.status, msg);
+    throw new ApiError(r.status, msg, final);
   }
   return r.json() as Promise<T>;
 }

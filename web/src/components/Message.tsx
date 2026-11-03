@@ -371,7 +371,7 @@ export interface BubbleProps {
   deleteFor?: DeleteFor;
   onForward?: (m: MessageItem) => void;  // sent on to other chats
   // one waiting to be sent (or refused): why (on its sign), and to send it again or let it go
-  waiting?: { why: string | null; again: () => void; discard: () => void };
+  waiting?: { why: string | null; again?: () => void; discard: () => void };   // again: none where it cannot help
 }
 
 /** The actions of a message: its service's quick reactions, any other it takes, copy, edit,
@@ -707,7 +707,7 @@ function SendState({ status, waiting }: { status: string | null; waiting?: Bubbl
     return (
       <span className="flex items-center gap-1">
         <span data-send-warning title={why} aria-label={why} className={status === "failed" ? "text-danger" : "text-amber-400"}><TriangleAlert className="size-3.5" /></span>
-        <button data-resend onClick={waiting.again} className="font-semibold underline underline-offset-2 hover:opacity-80">{t("chat.resend")}</button> ·
+        {waiting.again && <><button data-resend onClick={waiting.again} className="font-semibold underline underline-offset-2 hover:opacity-80">{t("chat.resend")}</button> ·</>}
         <button data-discard onClick={waiting.discard} className="underline underline-offset-2 hover:opacity-80">{t("chat.discard")}</button> ·
       </span>
     );

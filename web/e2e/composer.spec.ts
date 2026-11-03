@@ -227,6 +227,16 @@ test("a message that cannot go now waits, and goes", async ({ page }, info) => {
   await expect(stream.filter({ hasText: away })).toHaveCount(1);
   await expect(stream.filter({ hasText: away }).locator("button img")).toBeVisible();
 
+  // refused for good: why, in words, and only discarding it (sending it again cannot help)
+  const never = `quiet: nowhere: ${info.project.name} ${Date.now()}`;
+  await field.fill(never);
+  await page.locator("[data-send]").click();
+  const refused = page.locator('[data-pending-item="failed"]').filter({ hasText: never });
+  await expect(refused.locator("[data-send-why]")).toHaveText(/δεν είναι πια|no longer/i);
+  await expect(refused.locator("[data-resend]")).toHaveCount(0);
+  await refused.locator("[data-discard]").click();
+  await expect(stream.filter({ hasText: never })).toHaveCount(0);
+
   // discarded: gone, never sent
   const drop = `quiet: dropped ${info.project.name} ${Date.now()}`;
   await page.route("**/api/chats/*/send", (r) => r.abort("connectionrefused"));

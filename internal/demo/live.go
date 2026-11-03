@@ -411,6 +411,12 @@ func (Sender) Send(ctx context.Context, c *plugins.Context, conv plugins.Convers
 			return nil, errs.Plugin("limit reached: 15 messages a minute", 429)
 		}
 	}
+	// "nowhere:" can never go there (the other side has left the service): refused for good
+	if strings.Contains(text, "nowhere:") {
+		e := errs.Plugin("They are no longer on this service", 0)
+		e.Final = true
+		return nil, e
+	}
 	replyKey := ""
 	if reply != nil {
 		replyKey = reply.Key

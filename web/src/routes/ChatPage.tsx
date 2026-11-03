@@ -428,7 +428,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       discard: () => { api.del(`/api/outbox/${o}`).then(() => { dropPlaced(o); refreshKept(); }, failKept); } };
     const u = unsentHere.find((x) => x.id === o);
     if (u) return { why: u.error,
-      again: () => { flushUnsent(o).then(refreshKept); },
+      again: u.final ? undefined : () => { flushUnsent(o).then(refreshKept); },   // refused for good: not offered
       discard: () => { dropUnsent(o).then(() => dropPlaced(o)); } };
     return undefined;
   };
@@ -489,7 +489,7 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
           mark("waiting");
           toast(t("chat.waitingServerHint"));
         } else {
-          await keepUnsent({ ...unsent, state: "failed", error: (e as Error).message }).catch(() => {});
+          await keepUnsent({ ...unsent, state: "failed", error: (e as Error).message, final: e instanceof ApiError && e.final }).catch(() => {});
           mark("failed");
           toast.error(`${t("chat.sendFailed")}: ${(e as Error).message}`);
         }

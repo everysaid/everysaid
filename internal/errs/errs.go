@@ -2,7 +2,8 @@
 //
 // UserError{Code, Status, Params}: the interface says it in the user's language from the code
 // (web/src/lib/i18n.ts, errors.<code>). A plugin, whose words the interface does not know, gives an
-// English Text instead, which the server says in the user's language (code "plugin").
+// English Text instead, which the server says in the user's language (code "plugin"). Final: trying
+// again cannot help (a message that cannot go there at all): the interface does not offer it.
 package errs
 
 type UserError struct {
@@ -10,6 +11,7 @@ type UserError struct {
 	Status int
 	Text   string
 	Params map[string]any
+	Final  bool
 }
 
 func (e *UserError) Error() string {

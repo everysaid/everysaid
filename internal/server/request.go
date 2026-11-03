@@ -334,6 +334,9 @@ func userErrorDetail(e *errs.UserError, lang string) map[string]any {
 	if e.Text != "" {
 		d["text"] = i18n.Tr(e.Text, lang)
 	}
+	if e.Final {
+		d["final"] = true
+	}
 	return d
 }
 
