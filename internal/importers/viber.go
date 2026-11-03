@@ -489,7 +489,7 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 				extra.Preview = &links.add(key, l).preview
 			}
 			iphoneRecs[pk] = viberMsg{extra, conv, tokenTime(r["ZDATE"], toInt(r["ZTOKEN"])),
-				outgoing, sender, kind, str(r["ZTEXT"]), key}
+				outgoing, sender, kind, viberIphoneText(r), key}
 			iphoneOrder = append(iphoneOrder, pk)
 			if key != "" {
 				iphoneKeys[key] = pk
@@ -521,7 +521,7 @@ func Viber(a *archive.Archive, out func(string), opt ViberOptions) (err error) {
 	}
 	for _, r := range noticed {
 		if mid, ok := a.MessageByKey("viber", r.key, 0); ok && mid != 0 {
-			if setNoticeIfChanged(a, mid, r.extra.Notice) && r.extra.ReplyKey != "" { // what it pinned
+			if viberSetNotice(a, mid, r.extra.Notice) && r.extra.ReplyKey != "" { // what it pinned
 				a.Exec("UPDATE message SET reply_key = ? WHERE id = ? AND reply_key IS NULL", r.extra.ReplyKey, mid)
 			}
 		}

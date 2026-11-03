@@ -26,6 +26,28 @@ func viberPin(md map[string]any, by map[string]any) (*archive.Notice, string) {
 	return &archive.Notice{Code: code, Args: args}, target
 }
 
+// viberSetNotice writes a message's notice from a row of Viber's, but never one of a member removed
+// that does not say whom (the iPhone's) over the notice the message has (another source may say whom).
+func viberSetNotice(a *archive.Archive, mid int64, n *archive.Notice) bool {
+	if n != nil && n.Code == "group" && a.Exists("SELECT 1 FROM notice WHERE message_id = ?", mid) {
+		for _, x := range list(n.Args["actions"]) {
+			if who, ok := obj(x)["who"]; ok && who == nil {
+				return false
+			}
+		}
+	}
+	return setNoticeIfChanged(a, mid, n)
+}
+
+// viberIphoneText is an iPhone row's text: none for a member removed, whose ZTEXT is Viber's own
+// word (in the phone's language) for someone it does not know.
+func viberIphoneText(r row) string {
+	if str(r["ZSYSTEMTYPE"]) == "systemUserRemovedFromGroup" {
+		return ""
+	}
+	return str(r["ZTEXT"])
+}
+
 // viberIphoneNotice is what an iPhone row says as a notice (nil: none), and the message it is about.
 func viberIphoneNotice(r row, by map[string]any) (*archive.Notice, string) {
 	md, cm := jsonObj(r["ZMETADATA"]), jsonObj(r["ZCLIENTMETADATA"])
@@ -36,6 +58,8 @@ func viberIphoneNotice(r row, by map[string]any) (*archive.Notice, string) {
 		return groupNotice(by, map[string]any{"type": "avatar"}), ""
 	case "systemSelfAdded":
 		return groupNotice(by, map[string]any{"type": "added", "who": map[string]any{"self": true}}), ""
+	case "systemUserRemovedFromGroup": // whom is not kept: ZTEXT is only Viber's word for "unknown"
+		return groupNotice(by, map[string]any{"type": "removed", "who": nil}), ""
 	}
 	if poll, ok := cm["Poll"].([]any); ok && len(poll) > 0 {
 		options := []any{}

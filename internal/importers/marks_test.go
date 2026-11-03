@@ -333,6 +333,7 @@ func TestViberNotices(t *testing.T) {
 		js(M{"Poll": []M{{"title": "Mon", "count": 1}, {"title": "Tue", "count": 1}}}))
 	ins(13, 3004, "received", "pollMessageInvisible", 1, "Mon", js(M{"poll": M{"parentToken": 3003}}), nil)
 	ins(14, 3005, "delivered", "pollMessageInvisible", nil, "Tue", js(M{"poll": M{"parentToken": 3003}}), nil)
+	ins(15, 3006, "received", "systemUserRemovedFromGroup", 1, "Unknown", nil, nil)
 	d.Close()
 	must(t, Viber(a, nil, ViberOptions{IphoneDB: path}))
 
@@ -351,6 +352,19 @@ func TestViberNotices(t *testing.T) {
 	code, v = notice("3003")
 	opts, _ := v["options"].([]any)
 	eq(t, "poll", []any{code, len(opts), v["voters"]}, []any{"poll", 2, float64(2)}) // single choice: one each
+	code, v = notice("3006")                                                         // whom is not kept: Viber's own word for "unknown" is no text
+	acts, _ := v["actions"].([]any)
+	eq(t, "removed", []any{code, acts}, []any{"group", []any{map[string]any{"type": "removed", "who": nil}}})
+	eq(t, "removed, no words", msgRow(a, "3006", "text"), []any{nil})
+	// whom, known since from another source, stays whom when the iPhone comes again
+	removed := a.Int("SELECT id FROM message WHERE key = '3006'")
+	known := &archive.Notice{Code: "group", Args: map[string]any{"by": map[string]any{"address": 1},
+		"actions": []any{map[string]any{"type": "removed", "who": map[string]any{"address": 2}}}}}
+	a.SetNotice(removed, known)
+	must(t, Viber(a, nil, ViberOptions{IphoneDB: path}))
+	var args string
+	a.Row("SELECT args FROM notice WHERE message_id = ?", []any{removed}, &args)
+	eq(t, "whom kept", args, archive.NoticeJSON(known))
 	eq(t, "no votes as messages", a.Int("SELECT count(*) FROM message WHERE key IN ('3004', '3005')"), int64(0))
 }
 
