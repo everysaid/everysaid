@@ -21,7 +21,7 @@ const el = {
     objects: "Αντικείμενα", symbols: "Σύμβολα", flags: "Σημαίες" },
   gif: { search: "Αναζήτηση GIF", none: "Κανένα GIF", historyNone: "Δεν υπάρχουν ακόμα GIF στο αρχείο",
     failed: "Το GIF δεν κατέβηκε: δοκίμασε ξανά", setup: "Πηγές", command: "Αναζήτηση GIF" },
-  format: { styles: "Μορφοποίηση", bold: "Έντονα", italic: "Πλάγια", underline: "Υπογράμμιση", strike: "Διακριτή διαγραφή", code: "Σταθερό πλάτος", spoiler: "Απόκρυψη (spoiler)", clear: "Χωρίς μορφοποίηση", notShown: "Δεν φαίνεται στο {{service}}" },
+  format: { styles: "Μορφοποίηση", bold: "Έντονα", italic: "Πλάγια", underline: "Υπογράμμιση", strike: "Διακριτή διαγραφή", code: "Σταθερό πλάτος", spoiler: "Θόλωμα", clear: "Χωρίς μορφοποίηση", notShown: "Δεν φαίνεται στο {{service}}" },
   chat: { state: "Κατάσταση", stateArchived: "Αρχειοθετημένη", archivedFrom: "Αρχειοθετημένη στις υπηρεσίες:", stateMuted: "Σίγαση", statePinned: "Καρφιτσωμένη",
     stateAuto: "Αυτόματα", stateYes: "Ναι", stateNo: "Όχι", stateAlways: "Πάντα έτσι, ό,τι κι αν αλλάξει στις υπηρεσίες",
     stateHint: "Το «Αυτόματα» ακολουθεί τις υπηρεσίες. Μια δική σου επιλογή ισχύει μέχρι να αλλάξει κάτι αργότερα σε μια υπηρεσία.",
