@@ -97,6 +97,11 @@ cd web && EVERYSAID_CMD=/path/to/everysaid pnpm exec playwright test
 ```
 
 (without `EVERYSAID_CMD` the tests run `go run ./cmd/everysaid` from the repository's folder).
+The tests start only against the demo (`/api/health` says `"demo": true`), and the demo does not
+start on the user's own keyring or folders: a server with real accounts behind it would send the
+tests' messages for real. On another port, and beside another demo: write the demo's
+`config.toml` first (`[server]` `port = 8541`; the demo keeps one it finds), then
+`DEMO_DIR=<its folder> BASE_URL=http://localhost:8541`.
 
 ## How the code is written
 

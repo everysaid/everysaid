@@ -5,6 +5,7 @@ import { defineConfig, devices } from "@playwright/test";
 // with EVERYSAID_CMD naming the same everysaid binary (else e2e/demo.ts uses `go run ./cmd/everysaid`).
 export default defineConfig({
   testDir: "e2e",
+  globalSetup: "./e2e/guard.ts",     // the demo, or no test at all
   timeout: 60_000,
   workers: 1,
   use: { baseURL: process.env.BASE_URL ?? "http://localhost:8530", trace: "retain-on-failure", locale: process.env.LOCALE ?? "el-GR" },

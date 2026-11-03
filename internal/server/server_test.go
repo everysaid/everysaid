@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"github.com/coder/websocket/wsjson"
 
 	"everysaid/internal/archive"
+	"everysaid/internal/config"
 	"everysaid/internal/core"
 	"everysaid/internal/db"
 )
@@ -33,7 +35,7 @@ func TestGuards(t *testing.T) {
 	c := newServer(t)
 	must(t, c.get("/api/chats").status == 401, "chats without a session")
 	h := c.get("/api/health")
-	must(t, string(h.body) == `{"ok":true}`, "health: %s", h.body)
+	must(t, string(h.body) == `{"demo":false,"ok":true}`, "health: %s", h.body)
 	must(t, strings.Contains(h.header.Get("Content-Security-Policy"), "frame-ancestors 'none'"), "csp")
 	must(t, h.header.Get("X-Frame-Options") == "DENY", "frame options")
 	must(t, h.header.Get("Cache-Control") == "no-store", "no-store: %q", h.header.Get("Cache-Control"))
@@ -1193,6 +1195,18 @@ func TestMCPOverHTTP(t *testing.T) {
 	must(t, r.status == 200 && strings.Contains(string(r.body), "search"), "tools: %d %s", r.status, r.body)
 	hd["Authorization"] = "Bearer chk_wrong"
 	must(t, c.do("POST", "/mcp", call, hd).status == 401, "a wrong token")
+}
+
+// The demo never starts with the user's own keyring or folders behind it: its sending would go out
+// on their accounts.
+func TestDemoNotOnUsersOwn(t *testing.T) {
+	t.Cleanup(config.Load) // after the variables are given back
+	t.Setenv("EVERYSAID_KEYRING", config.App)
+	config.Load()
+	dir := t.TempDir()
+	_, err := New(Options{Demo: true, Archive: filepath.Join(dir, "archive.db"), AuthDB: filepath.Join(dir, "server.db"),
+		Origin: "http://localhost:8520", ExtraOrigins: []string{}, Out: io.Discard, Logger: quietLogger()})
+	must(t, err != nil && strings.Contains(err.Error(), "keyring"), "the demo on the user's keyring: %v", err)
 }
 
 func TestDemoIncoming(t *testing.T) {

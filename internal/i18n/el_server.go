@@ -3,11 +3,12 @@ package i18n
 // The server's own words (internal/server): its command line and console.
 func init() {
 	for k, v := range map[string]string{
-		"The GIF source did not answer":                    "Η πηγή GIF δεν απάντησε",
-		"First setup: open {url}":                          "Πρώτη ρύθμιση: άνοιξε {url}",
-		"(valid for one hour)":                             "(ισχύει μία ώρα)",
-		"Everysaid: {origin} (listening on {host}:{port})": "Everysaid: {origin} (ακούει στο {host}:{port})",
-		"{n} passkeys":                                     "{n} passkeys",
+		"The GIF source did not answer": "Η πηγή GIF δεν απάντησε",
+		"First setup: open {url}":       "Πρώτη ρύθμιση: άνοιξε {url}",
+		"(valid for one hour)":          "(ισχύει μία ώρα)",
+		"the demo does not start on the user's own {place}: `everysaid demo --serve` gives it its own": "το demo δεν ξεκινά με τα δικά σου ({place}): το `everysaid demo --serve` του δίνει δικά του",
+		"Everysaid: {origin} (listening on {host}:{port})":                                             "Everysaid: {origin} (ακούει στο {host}:{port})",
+		"{n} passkeys": "{n} passkeys",
 		"no user yet: `everysaid serve` prints the link of the first setup": "κανένας χρήστης ακόμα: `everysaid serve` τυπώνει τον σύνδεσμο πρώτης ρύθμισης",
 		"(one use, valid {minutes} minutes)":                                "(μίας χρήσης, ισχύει {minutes} λεπτά)",
 		"(one use, valid {minutes} minutes · a new user)":                   "(μίας χρήσης, ισχύει {minutes} λεπτά · νέος χρήστης)",

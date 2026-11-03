@@ -131,6 +131,21 @@ func env(name, def string) string {
 }
 
 // userDir is the platform's folder of a kind (data, cache, config, state) for the app.
+// UsersOwn names one of the user's own places in use (the keyring or a folder of a run with no
+// EVERYSAID_* set), "" where none is: the demo runs only apart from them, never on the user's
+// accounts.
+func UsersOwn() string {
+	if Keyring == App {
+		return "keyring"
+	}
+	for kind, dir := range map[string]string{"data": Data, "cache": Cache, "config": Config, "state": State} {
+		if filepath.Clean(dir) == filepath.Clean(userDir(kind)) {
+			return kind
+		}
+	}
+	return ""
+}
+
 func userDir(kind string) string {
 	home, _ := os.UserHomeDir()
 	return platformDir(runtime.GOOS, kind, home, os.Getenv)

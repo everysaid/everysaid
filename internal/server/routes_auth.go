@@ -71,7 +71,8 @@ func (s *Server) noPasskeys() error {
 
 func (s *Server) authRoutes() {
 	h := s.handle
-	h("GET /api/health", bodyNone, func(q *req) (any, error) { return M{"ok": true}, nil })
+	// whether this is the demo: the end-to-end tests run only against one
+	h("GET /api/health", bodyNone, func(q *req) (any, error) { return M{"ok": true, "demo": s.opts.Demo}, nil })
 
 	h("GET /api/auth/status", bodyNone, func(q *req) (any, error) {
 		var user any

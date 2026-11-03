@@ -135,6 +135,10 @@ func New(o Options) (*Server, error) {
 	if !o.Demo && os.Getenv("EVERYSAID_DEMO") != "" {
 		o.Demo = true
 	}
+	// the demo sends and receives as if for real: never with the user's accounts behind it
+	if p := config.UsersOwn(); o.Demo && p != "" {
+		return nil, errors.New(i18n.Say("the demo does not start on the user's own {place}: `everysaid demo --serve` gives it its own", M{"place": p}))
+	}
 	if o.Demo && o.DemoIncoming == nil {
 		o.DemoIncoming = func(h *Host, conv int64, text string) (int64, error) {
 			return demo.Message(h, conv, text, false, "", nil, nil)

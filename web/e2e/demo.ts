@@ -6,7 +6,9 @@ import { execFileSync } from "node:child_process";
 // What the end-to-end tests share: the demo's folders, an authenticator's code, and a way in (a
 // one-time link from `everysaid user link`, then a password with an authenticator code).
 const DEMO = process.env.DEMO_DIR ?? "/tmp/chr-demo";
-export const env = { ...process.env, EVERYSAID_DATA: `${DEMO}/data`, EVERYSAID_CACHE: `${DEMO}/cache`, EVERYSAID_CONFIG: `${DEMO}/config` };
+// all of the demo's places, as `everysaid demo` sets them (none of the user's: not their keyring either)
+export const env = { ...process.env, EVERYSAID_DATA: `${DEMO}/data`, EVERYSAID_CACHE: `${DEMO}/cache`, EVERYSAID_CONFIG: `${DEMO}/config`,
+  EVERYSAID_STATE: `${DEMO}/state`, EVERYSAID_KEYRING: "everysaid-demo", EVERYSAID_DEMO: "1" };
 
 /** The everysaid command: EVERYSAID_CMD (e.g. a built binary), else the project's own through `go run`. */
 export function everysaid(...args: string[]) {
