@@ -117,6 +117,30 @@ test("styles in the composer: marks turned, the menu, a style taken off in part,
   await field.pressSequentially(" c");
   await expect(field).toHaveText("a bold c");
   await expect(styled(field, "bold")).toHaveText("bold");
+  // one taken back as it was typed: still on, for what is typed then
+  await field.fill("");
+  await field.press("ControlOrMeta+b");
+  await field.pressSequentially("bolx");
+  await field.press("Backspace");
+  await field.pressSequentially("d");
+  await expect(styled(field, "bold")).toHaveText("bold");
+  await field.press("ControlOrMeta+b");                // off again: what is typed next is not in it
+  await field.pressSequentially(" x");
+  await expect(styled(field, "bold")).toHaveText("bold");
+
+  // on a selection, from the menu: it ends there, what is typed after it is not in it
+  await field.fill("");
+  await field.pressSequentially("a bold");
+  await select(field, 2, 6);
+  await (await styleButton(page, '[data-style="bold"]')).click();
+  await select(field, 6, 6);
+  await field.pressSequentially(" c");
+  await expect(field).toHaveText("a bold c");
+  await expect(styled(field, "bold")).toHaveText("bold");
+  // after "*marks*" too
+  await field.fill("");
+  await field.pressSequentially("*bold* c");
+  await expect(styled(field, "bold")).toHaveText("bold");
 
   // a Greek layout: Ctrl with the key of B writes β, and is still bold
   await field.fill("");

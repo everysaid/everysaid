@@ -31,7 +31,7 @@ import { byCode, emoticonAt, ENDS, findEmoji, shortcodes } from "@/lib/emoji";
 import { dropUnsent, flushUnsent, flying, isFlying, keepUnsent, sendUnsent, unreached, useKept, useUnsent, type Kept, type Unsent, type Went } from "@/lib/outbox";
 import { avatarUrl } from "@/components/ChatList";
 import { isFileLink, pastedFile } from "@/lib/clip";
-import { clear, follow, has, inCharacters, KINDS, marked, tidy, toggle, type Kind, type Style } from "@/lib/styles";
+import { clear, follow, has, inCharacters, KINDS, marked, tidy, toggle, turn, within, type Kind, type Style } from "@/lib/styles";
 
 const START = 1_000_000_000;
 const PAGE = 80;
@@ -1067,7 +1067,9 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   const styled = useRef<{ before: Doc; caret: number; after: string; at: number } | null>(null);
   const keptMark = useRef<number | null>(null);
   // styles to put on what is typed next where the caret is (a key pressed with nothing selected)
-  const pending = useRef<{ at: number; kinds: Kind[] } | null>(null);
+  // the kinds turned on (or off) with nothing selected, for what is typed from there on (the caret
+  // where it goes on); until turned back, or the caret is elsewhere
+  const pending = useRef<{ at: number; kinds: Map<Kind, boolean> } | null>(null);
   const [selection, setSelection] = useState<[number, number]>([0, 0]);
   const [focused, setFocused] = useState(false);
   const [hidden, setHidden] = useState<[number, number] | null>(null);  // the bar closed by Esc, until the selection changes
@@ -1296,11 +1298,14 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
     const a = el?.selectionStart ?? selection[0], b = el?.selectionEnd ?? selection[1];
     if (a === b) {
       if (!kind) return;
-      const p = pending.current?.at === a ? pending.current.kinds : [];
-      pending.current = { at: a, kinds: p.includes(kind) ? p.filter((k) => k !== kind) : [...p, kind] };
+      const p = new Map(pending.current?.at === a ? pending.current.kinds : []);
+      const now = p.get(kind) ?? within(styles, a, kind);    // what would be typed here: in it or not
+      if (now === within(styles, a, kind)) p.set(kind, !now);
+      else p.delete(kind);                                    // turned back: as the text has it there
+      pending.current = p.size ? { at: a, kinds: p } : null;
       return;
     }
-    styled.current = null;
+    styled.current = pending.current = null;   // a part chosen: its style ends with it, nothing left on for typing
     setDoc((d) => ({ ...d, styles: kind ? toggle(d.styles, a, b, kind, d.text.length) : clear(d.styles, a, b, d.text.length) }));
   };
   // what the user typed: emoticons and shortcodes turned, a pair of marks just closed at the edges of
@@ -1312,7 +1317,10 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
     const p = pending.current;
     pending.current = null;
     if (p && turnedText.length > text.length && c - (turnedText.length - text.length) === p.at) {
-      for (const k of p.kinds) d = { ...d, styles: toggle(d.styles, p.at, c, k, d.text.length) };   // on, or off what it took from before it
+      for (const [k, on] of p.kinds) d = { ...d, styles: turn(d.styles, p.at, c, k, on, d.text.length) };
+      pending.current = { at: c, kinds: p.kinds };            // and on for what is typed after it
+    } else if (p && turnedText.length < text.length && c + (text.length - turnedText.length) === p.at) {
+      pending.current = { at: c, kinds: p.kinds };            // what was typed taken back: still on there
     }
     styled.current = null;
     if (next.length === text.length + 1 && turnedText === next) {
@@ -1321,7 +1329,7 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
         styled.current = { before: d, caret: c, after: m.text, at: m.caret };
         d = { text: m.text, styles: m.styles };
         c = m.caret;
-        pending.current = { at: c, kinds: [m.kind] };   // closed by its mark: what is typed next is not in it
+        pending.current = null;          // closed by its mark: what is typed next is not in it
       }
     }
     setDoc(d);

@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { clear, follow, has, inCharacters, marked, parts, tidy, toggle, type Style } from "./styles";
+import { clear, follow, has, inCharacters, marked, parts, tidy, toggle, turn, within, type Style } from "./styles";
 
 const b = (start: number, length: number): Style => ({ start, length, kind: "bold" });
 
 describe("follow", () => {
-  it("goes on at the end of a style, not at its start", () => {
-    expect(follow("ab cd", "abX cd", [b(0, 2)])).toEqual([b(0, 3)]);
+  it("goes on within a style, not at its end nor at its start", () => {
+    expect(follow("ab cd", "aXb cd", [b(0, 2)])).toEqual([b(0, 3)]);
+    expect(follow("ab cd", "abX cd", [b(0, 2)])).toEqual([b(0, 2)]);
     expect(follow("ab cd", "ab Xcd", [b(3, 2)])).toEqual([b(4, 2)]);
   });
   it("moves what is after a change, shrinks what lost text", () => {
@@ -17,12 +18,31 @@ describe("follow", () => {
   });
 });
 
+describe("within and turn", () => {
+  it("text put in takes a kind only within a style of it", () => {
+    expect([within([b(2, 4)], 2, "bold"), within([b(2, 4)], 4, "bold"), within([b(2, 4)], 6, "bold")]).toEqual([false, true, false]);
+  });
+  it("on or off over a part, whatever it had", () => {
+    expect(turn([b(0, 3)], 3, 5, "bold", true, 8)).toEqual([b(0, 5)]);
+    expect(turn([b(0, 8)], 3, 5, "bold", false, 8)).toEqual([b(0, 3), b(5, 3)]);
+    expect(turn([], 3, 5, "bold", false, 8)).toEqual([]);
+  });
+});
+
 describe("toggle and clear", () => {
   it("on over a part, off where all of it has it", () => {
     let s = toggle([], 0, 5, "bold", 11);
     expect(s).toEqual([b(0, 5)]);
     s = toggle(s, 0, 5, "bold", 11);
     expect(s).toEqual([]);
+  });
+  it("one kind over another's part: the other as it was, on both sides", () => {
+    expect(toggle([b(0, 11)], 3, 8, "italic", 11)).toEqual([b(0, 11), { start: 3, length: 5, kind: "italic" }]);
+  });
+  it("off in part, then on again: one style, nothing left between", () => {
+    const off = toggle([b(0, 11)], 3, 8, "bold", 11);
+    expect(toggle(off, 3, 8, "bold", 11)).toEqual([b(0, 11)]);
+    expect(toggle([b(0, 3)], 3, 6, "bold", 11)).toEqual([b(0, 6)]);   // beside it: one with it
   });
   it("off in part: what is left on both sides stays", () => {
     expect(toggle([b(0, 11)], 3, 8, "bold", 11)).toEqual([b(0, 3), b(8, 3)]);

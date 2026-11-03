@@ -49,8 +49,8 @@ export function tidy(styles: Style[], size: number): Style[] {
 }
 
 /** The styles once the text was changed from before to after (one change: what differs between
- * what both begin and end with). What was put in takes the styles of where it was put, as typing
- * at the end of a bold word goes on in bold; not at the start of one. */
+ * what both begin and end with). What was put in within a style takes it; not what was put at its
+ * start or its end: a style is over the part chosen for it, and ends there. */
 export function follow(before: string, after: string, styles: Style[]): Style[] {
   if (before === after || !styles.length) return styles;
   let p = 0;
@@ -61,7 +61,7 @@ export function follow(before: string, after: string, styles: Style[]): Style[] 
   const put = after.length - e;
   const shift = put - gone;
   const at = (i: number, end: boolean) => {
-    if (i === p && gone === p) return put;      // where text was only put in: an end past it (goes on), a start after it
+    if (i === p && gone === p) return end ? p : put;   // where text was only put in: before it an end, after it a start
     if (i <= p) return i;
     if (i >= gone) return i + shift;
     return end ? put : p;                                          // within what was taken: its edge
@@ -82,6 +82,17 @@ export function has(styles: Style[], from: number, to: number, kind: Kind): bool
     if (at >= to) return true;
   }
   return false;
+}
+
+/** Whether text put in at `at` takes the kind: within a style of it (not at its start or its end). */
+export function within(styles: Style[], at: number, kind: Kind): boolean {
+  return styles.some((s) => s.kind === kind && s.start < at && at < s.start + s.length);
+}
+
+/** The kind on over [from, to), or off it. */
+export function turn(styles: Style[], from: number, to: number, kind: Kind, on: boolean, size: number): Style[] {
+  if (to <= from) return styles;
+  return on ? toggleOn(styles, from, to, kind, size) : cut(styles, from, to, (k) => k === kind, size);
 }
 
 /** The kind over [from, to), or off it where all of it has it already. */
