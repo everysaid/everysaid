@@ -38,7 +38,9 @@ const PAGE = 80;
 
 /** Placeholders of messages being sent, gone for the messages themselves among `real`: the one of the
  * same text, else (its text written otherwise by the service: mentions, a file) the oldest of the
- * conversation it went to; `since`: only those sent from then on (ms before the placeholder's time). */
+ * conversation it went to (of its service, before the answer to its sending says which); `since`:
+ * only those sent from then on (ms before the placeholder's time); never one shown before the
+ * placeholder was (its `above`). */
 // the items in the order of their time (stable: those of one time stay as they were): messages come
 // in by more than one way (the answer to a sending, the server's events, the next page), and two
 // sendings may be answered in the other order
@@ -47,6 +49,10 @@ function inOrder(items: StreamItem[]): StreamItem[] {
   return items;
 }
 
+/** Which message or call an item is, whatever its time: a sent message's may change once its service
+ * answers (and with it its cursor), and it is still the one shown. */
+const same = (i: StreamItem) => `${i.type}:${i.id}`;
+
 // `carry`: the picture or video of a placeholder gone, by the cursor of the message that took its place
 function withoutSent(items: StreamItem[], real: StreamItem[], since = Infinity, carry?: Map<string, Local>): StreamItem[] {
   const sent = items.filter((i): i is MessageItem => i.type === "message" && i.id < 0);
@@ -54,9 +60,9 @@ function withoutSent(items: StreamItem[], real: StreamItem[], since = Infinity, 
   const gone = new Set<number>();
   for (const f of real) {
     if (f.type !== "message" || !f.outgoing || f.id < 0) continue;
-    const open = (i: MessageItem) => !gone.has(i.id) && f.ts >= i.ts - since;
+    const open = (i: MessageItem) => !gone.has(i.id) && f.ts >= i.ts - since && f.id > (i.above ?? 0);
     const p = sent.find((i) => open(i) && (i.text ?? "") === (f.text ?? ""))
-      ?? sent.find((i) => open(i) && i.loose && i.conversation_id === f.conversation_id);
+      ?? sent.find((i) => open(i) && i.loose && (i.conversation_id ? i.conversation_id === f.conversation_id : i.service === f.service));
     if (p) {
       gone.add(p.id);
       if (p.local) carry?.set(f.cursor, p.local);
@@ -335,11 +341,17 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       if (!last) return;
       const page = await api.get<StreamPage>(`/api/chats/${chatId}/stream${qs({ after: last.cursor, limit: PAGE, hide })}`);
       setItems((prev) => {
-        const seen = new Set(prev.map((i) => i.cursor));
-        const fresh = page.items.filter((i) => !seen.has(i.cursor));
+        const seen = new Set(prev.map(same));
+        const fresh = page.items.filter((i) => !seen.has(same(i)));
+        // one shown already, come again at another time: in its place, not a second time
+        const again = new Map(page.items.filter((i) => seen.has(same(i))).map((i) => [same(i), i]));
+        const shown = again.size ? prev.map((i) => {
+          const f = again.get(same(i));
+          return f && f.cursor !== i.cursor ? withLocal(f, i.type === "message" ? i.local : undefined) : i;
+        }) : prev;
         // a placeholder goes once the message itself is here, also before the answer to its sending
         const carry = new Map<string, Local>();
-        const kept = withoutSent(prev, fresh, Infinity, carry);
+        const kept = withoutSent(shown, fresh, Infinity, carry);
         return inOrder([...kept, ...fresh.map((i) => withLocal(i, carry.get(i.cursor)))]);
       });
       if (!force) setHasNewer(page.has_newer);
@@ -458,11 +470,12 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
     placed.current.add(unsent.id);
     flying(unsent.id, true);
     toEnd.current = true;
+    const above = itemsRef.current.reduce((n, i) => (i.type === "message" && i.id > n ? i.id : n), 0);
     setItems((prev) => [...prev, {
       type: "message", id, ts: Date.now(), cursor: `tmp:${id}`, service: service ?? "", conversation_id: 0, outgoing: true,
       kind, subtype: animated ? "gif" : null, text: body, sender_id: null, sender: null, reply_to: null, reply_text: null, edited: false,
       deleted: false, forwarded: false, starred: false, status: "sending", location: null, reactions: [], attachments: [],
-      loose: mentions.length > 0 || styles.length > 0 || !!file, local, outbox: unsent.id,
+      loose: mentions.length > 0 || styles.length > 0 || !!file, local, outbox: unsent.id, above,
       reply: answered ? { id: answered.id, text: answered.text ?? "", outgoing: answered.outgoing, sender: answered.sender, kind: answered.kind } : undefined,
     }]);
     try {
@@ -491,9 +504,9 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       mark("sent", went.conversation_id);
       const messages = (went.messages ?? []) as MessageItem[];
       setItems((prev) => {
-        const seen = new Set(prev.map((i) => i.cursor));
+        const seen = new Set(prev.map(same));
         // the file's picture on what went: the one message, or those of it not text alone
-        const real = messages.filter((m) => !seen.has(m.cursor))
+        const real = messages.filter((m) => !seen.has(same(m)))
           .map((m) => (messages.length === 1 || m.kind !== "text" ? withLocal(m, local) : m));
         if (messages.length) return inOrder(prev.flatMap((i) => (i.type === "message" && i.id === id ? real : [i])));
         // where the service cannot say what went: the message itself, if it came before the answer
@@ -539,13 +552,13 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       timer = setTimeout(async () => {
         const page = await api.get<StreamPage>(`/api/chats/${chatId}/stream${qs({ limit: PAGE, hide })}`).catch(() => null);
         if (!page) return;
-        const fresh = new Map(page.items.map((i) => [i.cursor, i]));
-        setItems((prev) => prev.map((i) => {
-          let f = fresh.get(i.cursor);
+        const fresh = new Map(page.items.map((i) => [same(i), i]));
+        setItems((prev) => inOrder(prev.map((i) => {
+          let f = fresh.get(same(i));
           const shown = f?.type === "message" ? waitingOn.current.get(f.id) : undefined;
           if (f?.type === "message" && shown) f = shown(f);
           return f ? withLocal(f, i.type === "message" ? i.local : undefined) : i;
-        }));
+        })));
       }, 300);
     });
     return () => { off(); clearTimeout(timer); };
