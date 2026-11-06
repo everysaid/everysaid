@@ -428,7 +428,14 @@ function ChatView({ chatId, jumpTo, around, hide }: { chatId: string; jumpTo?: n
       discard: () => { api.del(`/api/outbox/${o}`).then(() => { dropPlaced(o); refreshKept(); }, failKept); } };
     const u = unsentHere.find((x) => x.id === o);
     if (u) return { why: u.error,
-      again: u.final ? undefined : () => { flushUnsent(o).then(refreshKept); },   // refused for good: not offered
+      again: u.final ? undefined : () => {                                    // refused for good: not offered
+        // on its way again: said on it, and if it is refused again, said so (else nothing would change)
+        setItems((prev) => prev.map((i) => (i.type === "message" && i.outbox === o ? { ...i, status: "sending" } : i)));
+        flushUnsent(o).then((why) => {
+          if (why) toast.error(`${t("chat.sendFailed")}: ${why}`);
+          refreshKept();
+        });
+      },
       discard: () => { dropUnsent(o).then(() => dropPlaced(o)); } };
     return undefined;
   };

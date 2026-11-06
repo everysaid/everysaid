@@ -1004,6 +1004,7 @@ func (p Plugin) SendStyled(ctx context.Context, c *plugins.Context, conv plugins
 	if err != nil {
 		var ce *ClientError
 		if errors.As(err, &ce) && ce.Code == "failed" {
+			c.Logf("sending failed: %s", ce.Msg) // the user is told only that it failed: why, in the log
 			return nil, errs.Plugin("Sending failed", 0)
 		}
 		return nil, notLinked(err)
@@ -1120,6 +1121,7 @@ func act(ctx context.Context, c *plugins.Context, conv plugins.Conversation, msg
 	if _, err := n.h.Call(ctx, cmd, req); err != nil {
 		var ce *ClientError
 		if errors.As(err, &ce) && ce.Code == "failed" {
+			c.Logf("%s failed: %s", cmd, ce.Msg)
 			return errs.Plugin("Sending failed", 0)
 		}
 		return notLinked(err)

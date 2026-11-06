@@ -149,13 +149,16 @@ function postUnsent(u: Unsent): Promise<Went> {
 
 let flushing = false;
 
-/** Sends again what waits for the server (all chats): once the connection is back, or asked. */
-export async function flushUnsent(only?: string) {
-  if (flushing) return;
+/** Sends again what waits for the server (all chats): once the connection is back, or asked. Asked
+ *  for one, why the server refused it again, if it did. */
+export async function flushUnsent(only?: string): Promise<string | null> {
+  if (flushing) return null;
   flushing = true;
+  let refused: string | null = null;
   try {
     for (const u of await allUnsent()) {
       if ((only ? u.id !== only : u.state !== "waiting") || inFlight.has(u.id)) continue;
+      flying(u.id, true);
       try {
         await sendUnsent(u);
         await dropUnsent(u.id);          // the server has it: sent, or kept by it
@@ -164,10 +167,14 @@ export async function flushUnsent(only?: string) {
           if (u.state !== "waiting") await keepUnsent({ ...u, state: "waiting", error: null });
           break;                          // still not reached: the rest after it, in order, later
         }
-        await keepUnsent({ ...u, state: "failed", error: (e as Error).message, final: e instanceof ApiError && e.final });
+        refused = (e as Error).message;
+        await keepUnsent({ ...u, state: "failed", error: refused, final: e instanceof ApiError && e.final });
+      } finally {
+        flying(u.id, false);
       }
     }
   } finally {
     flushing = false;
   }
+  return refused;
 }

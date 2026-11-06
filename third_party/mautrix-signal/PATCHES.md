@@ -45,3 +45,10 @@ instead of being dropped.
 
 Why: the history brought at link time keeps the calls of before the link, a group's changes and the
 answers to stories, as the messages that arrive later do.
+
+## pkg/signalmeow/attachments.go: the upload's length
+
+The request for an attachment's upload form (`/v4/attachments/form/upload`) carries the encrypted
+upload's length (`uploadLength`), as upstream does since e2e994f99 (4 Nov 2026).
+
+Why: Signal's server answers the request without it with 400, and no file could be sent.
