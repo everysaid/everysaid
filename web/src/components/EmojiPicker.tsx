@@ -1,4 +1,5 @@
 import { EmojiPicker as P } from "frimousse";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Spinner } from "@/components/ui";
 
@@ -23,7 +24,7 @@ export function keepRecent(e: string) {
 
 export function EmojiPicker({ onPick }: { onPick: (emoji: string) => void }) {
   const { t } = useTranslation();
-  const recent = recentEmoji();
+  const [recent] = useState(recentEmoji);     // in the order they had when it opened: what is picked moves only for the next time
   const pick = (e: string) => { keepRecent(e); onPick(e); };
   // the categories as emojibase names them (English), in the user's words
   const categories: Record<string, string> = {

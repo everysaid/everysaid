@@ -1387,7 +1387,9 @@ function Composer({ chatId, services, sendable, replyable, mentionable, fileable
   const listOpen = atCount > 0 || emojiOptions.length > 0;
   const choices = atCount || emojiOptions.length;
   return (
-    <div data-composer className="relative border-t border-line bg-panel px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+    // the right button: the browser's own menu, without the styles' bar over what it selected
+    <div data-composer onContextMenu={() => { if (!touch && ref.current) setHidden([ref.current.selectionStart, ref.current.selectionEnd]); }}
+      className="relative border-t border-line bg-panel px-3 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
       {emojiOptions.length > 0 && (
         <ul data-emoji-list role="listbox" aria-label={t("emoji.choose")}
           className="absolute bottom-full left-3 right-3 z-20 mb-1 max-h-72 overflow-y-auto rounded-2xl border border-line bg-panel p-1 shadow-xl md:right-auto md:w-80">

@@ -153,6 +153,12 @@ test("styles in the composer: marks turned, the menu, a style taken off in part,
   await field.press("Escape");
   await expect(page.locator("[data-format]")).toHaveCount(0);
   expect(await page.evaluate(() => window.getSelection()!.toString())).toBe("δύο");
+  if (info.project.name === "desktop") {     // the right button: the browser's own menu, not the styles' bar
+    await select(field, 0, 3);
+    await expect(page.locator("[data-format]")).toBeVisible();
+    await field.click({ button: "right", position: { x: 4, y: 4 } });
+    await expect(page.locator("[data-format]")).toHaveCount(0);
+  }
   await select(field, 7, 7);
   await expect(page.locator("[data-format-open]")).toHaveCount(0);   // let go: nothing selected seen
   await select(field, 4, 7);

@@ -52,6 +52,14 @@ test("a reaction, an edit and a deletion of the user's own message", async ({ pa
   await expect(page.locator("[data-emoji-recent] button").first()).toHaveText("🦄");
   await page.locator("[data-emoji-recent] button").first().click();
   await expect(field).toHaveText("hi 🦄");
+  // one picked keeps the places as they were while the picker is open; it is first the next time
+  await page.locator("[data-emoji-search]").fill("cat face");
+  await page.locator("[data-emoji-option]:visible", { hasText: "🐱" }).click();
+  await expect(field).toHaveText("hi 🦄🐱");
+  await expect(page.locator("[data-emoji-recent] button").first()).toHaveText("🦄");
+  await page.locator("[data-emoji]").click();
+  await page.locator("[data-emoji]").click();
+  await expect(page.locator("[data-emoji-recent] button").first()).toHaveText("🐱");
   await page.keyboard.press("Escape");
   await field.fill("");
 
