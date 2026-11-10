@@ -137,7 +137,8 @@ export const RichField = forwardRef<FieldHandle, Props>(function RichField(
 
   const selection = (): [number, number] => {
     const el = div.current, s = window.getSelection();
-    if (!el || !s || !s.rangeCount || !el.contains(s.anchorNode) || !el.contains(s.focusNode)) return sel.current;
+    // away from the field (the emoji picker), the browser's selection is no longer its own: the one kept
+    if (!el || document.activeElement !== el || !s || !s.rangeCount || !el.contains(s.anchorNode) || !el.contains(s.focusNode)) return sel.current;
     const a = offsetOf(el, s.anchorNode!, s.anchorOffset), b = offsetOf(el, s.focusNode!, s.focusOffset);
     return [Math.min(a, b), Math.max(a, b)];
   };
